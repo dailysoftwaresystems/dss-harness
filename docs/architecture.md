@@ -4496,8 +4496,9 @@ with why - of which the linker reads the first five; every dynamic mark carries 
 kind (`ExtractDynamic.Kind`), a constant of the reader that makes it, and what an implementation's help says it does not see
 is a limit that names the signs telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, or what the linker
 found of the file's references and imports, each sign one thing it knows and no language named (`CodeGraphLinked.Signs`): a
-reference left candidates (`Candidates`), an import taken as several places and a reference left candidates among them
-(`CandidateImports`), and of a reference counted external why it named nothing - a name or a qualifier's head only imports
+reference left candidates (`Candidates`), an import taken as several places and a reference left candidates through one -
+what it found there one or several, as the place that found it says, never told by the files it lies in (`CandidateImports`),
+and of a reference counted external why it named nothing - a name or a qualifier's head only imports
 naming no file of the tree bind (`OutsideImport`), a name written alone nothing binds in a file that binds its names within
 it (`Unbound`), a fixture no scope or serving import provides (`UnprovidedFixture`) - so that an answer says in full of a
 file the limits it shows, and of none it does not. Every limit a reader marks names the kind of its mark, and every limit
@@ -4867,7 +4868,8 @@ it - and its extract says so (`FolderUnit`), so the linker passes a layout's pla
 the file - the first directory above the file's package is tried first, as a Python import is searched from above its
 package. A file in a directory that is no package marks its own directory's places `Either`: where one names a file and a
 place above names one too, the two are candidates, since the file is its directory's script and a namespace package's module
-alike. Last, a module is tried under the roots of the layout (`CodeImportForms.Rooted`): the directory each outermost unit
+alike, and what a name is found to be through either - a function, a type, a member of that type - is a candidate of each,
+though one place alone declares it. Last, a module is tried under the roots of the layout (`CodeImportForms.Rooted`): the directory each outermost unit
 stands in - `src/` of a project whose packages it holds - and each directory a project file declares
 (`FileExtract.LayoutRoots`); one root that holds it is the module, `unique`, and several are each a candidate. A relative
 import is a path beside the file. What `from m import c` binds is tried at each place as the module `m.c` and else as the
@@ -4888,8 +4890,8 @@ it makes is counted external, and why it bound nothing is the sign of the limit 
 no file of the tree binds (`CodeGraphLimit.OutsideImport`) of the roots the tree does not show, a name nothing binds (`Unbound`) of the
 names a file neither declares nor imports, and a fixture no scope and no serving import provides (`UnprovidedFixture`) of
 the fixtures no `conftest.py` above the test declares - so a call into the standard library shows the first alone; a bare
-import of two places, and a reference left candidates among them, is the sign (`CandidateImports`) of the limit that says
-which module such an import names. `self` and `cls` qualify a
+import of two places, and a reference left candidates through it - one place or both declaring what it names - is the sign
+(`CandidateImports`) of the limit that says which module such an import names. `self` and `cls` qualify a
 `this` reference, `super()` a `base` one; a chain whose head an import binds is qualified by what the import reaches - the
 `prefix` of the module the longest run of its names before the member reaches, else the `type` those names stand for inside
 it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain - and
@@ -4915,14 +4917,19 @@ decorator's head and named by its `name=` where one is given - as pytest finds o
 class's and its module's, else what the nearest `conftest.py` that declares it holds of its directory and each above it - a
 `conftest.py`'s module is a `directory` import that serves the fixture references of every file under its directory alone
 (`ExtractImport.Serves`), which only such an import may do - and nowhere else; a fixture that requires its own name is given
-the one a level out, which it overrides, and never itself, and a name a `parametrize` mark gives a test is no fixture of it.
-A test is what a runner collects: a test file - `test*.py` or `*_test.py`, as unittest and pytest collect them, Django's
-`tests.py` among them - holds tests in its `test*` functions and its `Test*` classes, and no other file's names make one; a
-`TestCase` subclass - built on a class an import reaches by a name ending in `TestCase`, or on a class of the file that is
-one - is a test class wherever it is declared, as unittest runs it by its type, and a type tests are built on
-(`ExtractNode.TestBase`); and a test class's `test*` methods are tests. A class of a test file built on a base another file
-declares says it may be a test class by that base (`ExtractNode.TestByType`), as does each `test*` method it holds, and the
-link makes them tests where a type tests are built on is among its bases, any number of levels up. A method is bound by its name alone, so each carries an `overrides`
+the one a level out, which it overrides, and never itself; and a name a `parametrize` mark gives a test - the test's own, each
+class's around it, its decorators' and its `pytestmark`'s, and the module's `pytestmark`'s, as pytest reads the marks of a test
+and of each node it is collected under, one reader of them all - is no fixture of it, but one the mark's `indirect=` routes to
+the fixture of that name, which the test still requires: every name where it is `True`, those of a list or a tuple of strings.
+A test is what a runner collects: a pytest file - `test_*.py` or `*_test.py`, pytest's default `python_files` - holds tests in
+its `test*` functions and its `Test*` classes, and no other file's names make one, so a `testing.py` or a `testclient.py`
+holds none of them; a `TestCase` subclass - built on a class an import reaches by a name ending in `TestCase`, or on a class
+of the file that is one - is a test class wherever it is declared, as unittest runs it by its type, and a type tests are built
+on (`ExtractNode.TestBase`); and a test class's `test*` methods are tests. A class of a file a runner collects by its name -
+pytest's, and unittest's and Django's `test*.py`, `tests.py` among them - built on a base another file declares, or on one a
+`*` import may bind, says it may be a test class by that base (`ExtractNode.TestByType`), as does each `test*` method it
+holds, and the link makes them tests where a type tests are built on is among its bases, any number of levels up; a base the
+language answers to, or a class of the file that is no test class, makes none. A method is bound by its name alone, so each carries an `overrides`
 reference of its own name with a `base` qualifier, an edge where a base of its type declares it along the chain; no word of
 the language says a method overrides, so the reference is a probe
 (`ExtractReference.Probe`) - it asks whether a declaration is there, and where none is it is no external callee.

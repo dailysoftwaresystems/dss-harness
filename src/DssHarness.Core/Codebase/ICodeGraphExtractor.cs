@@ -110,16 +110,16 @@ public sealed record CodeGraphClaim(string Value, Func<CodeText, bool>? ContentT
 public sealed record CodeGraphLimit(string Name, string Says)
 {
     /// <summary>
-    /// The sign of a file some of whose references the linker left candidates, however few, other than among the places of an
-    /// import of several (<see cref="CandidateImports"/>) - a receiver's members by their name alone, each override of one
+    /// The sign of a file some of whose references the linker left candidates, however few, other than through an import of several
+    /// places (<see cref="CandidateImports"/>) - a receiver's members by their name alone, each override of one
     /// (<see cref="CodeGraphLinked.Signs"/>).
     /// </summary>
     public const string Candidates = "candidates";
 
     /// <summary>
     /// The sign of a file an import of which the linker took as several files - each a candidate: an ending several files of the
-    /// tree end with, two places one name may stand at - or a reference of which it left candidates among the files such an import
-    /// names (<see cref="CodeGraphLinked.Signs"/>).
+    /// tree end with, two places one name may stand at - or a reference of which it left candidates through such an import, what it
+    /// found there one or several, as the place that found it says (<see cref="CodeGraphLinked.Signs"/>).
     /// </summary>
     public const string CandidateImports = "candidate-imports";
 

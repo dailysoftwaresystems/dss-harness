@@ -2087,13 +2087,14 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
     }
 
     /// <summary>
-    /// A test is what a runner collects. A file no runner collects by its name - pytest's <c>test_*.py</c> and <c>*_test.py</c>,
-    /// unittest's and Django's <c>test*.py</c> - holds no test by its name: its <c>Test*</c> classes and <c>test*</c> functions are none,
-    /// as <c>TestClient</c> of a production module is none. A <c>TestCase</c> subclass is a test class wherever it is declared, as
-    /// unittest runs one by its type, with its <c>test*</c> methods. Django's <c>tests.py</c> and a <c>testing.py</c> are test files.
+    /// A test is what a runner collects. A <c>Test*</c> class and a <c>test*</c> function are tests of a pytest file alone - pytest's
+    /// default <c>python_files</c>, <c>test_*.py</c> and <c>*_test.py</c> - never of a file unittest's or Django's <c>test*.py</c> names
+    /// alone, whose runners collect <c>TestCase</c> subclasses and nothing else: Django's <c>tests.py</c>, a <c>testing.py</c>, a
+    /// <c>testclient.py</c> holding a production module's <c>TestClient</c>. A <c>TestCase</c> subclass is a test class wherever it is
+    /// declared, as unittest runs one by its type, with its <c>test*</c> methods.
     /// </summary>
     [Fact]
-    public void ATestNamedOutsideATestFile_IsNoTest()
+    public void ATestNamedOutsideAPytestFile_IsNoTest()
     {
         const string text = """
             import unittest
@@ -2113,11 +2114,13 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
                 pass
             """;
 
-        Assert.Equal(
-            ["python:shop.client.Case", "python:shop.client.Case.test_x"],
-            Read("shop/client.py", text).Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
+        foreach (var path in new[] { "shop/client.py", "polls/tests.py", "pkg/testing.py", "pkg/testclient.py", "pkg/test.py" })
+        {
+            var module = path[..^3].Replace('/', '.');
+            Assert.Equal([$"python:{module}.Case", $"python:{module}.Case.test_x"], Read(path, text).Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
+        }
 
-        foreach (var path in new[] { "polls/tests.py", "pkg/testing.py", "pkg/test_cart.py", "pkg/cart_test.py" })
+        foreach (var path in new[] { "pkg/test_cart.py", "pkg/cart_test.py" })
         {
             var module = path[..^3].Replace('/', '.');
             Assert.Equal(
@@ -2126,6 +2129,128 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         }
 
         Assert.DoesNotContain(Read("tests/helpers.py", "def test_like():\n    pass\n\n\nclass TestLike:\n    pass\n").Nodes, node => node.Test);
+    }
+
+    /// <summary>
+    /// A class of a test file built on a base a <c>*</c> import may bind - a name no import of the file binds by itself - may be a test
+    /// class by that base, as one built on a base an import binds may: it says so with its <c>test*</c> methods, and the link makes them
+    /// tests where it finds a <c>TestCase</c> subclass among its bases; one built on a name the language answers to says nothing.
+    /// </summary>
+    [Fact]
+    public void AClassBuiltOnABaseAStarImportBinds_IsATestOnceTheLinkFindsThatBase()
+    {
+        var orders = Read("tests/test_orders.py", """
+            from .base import *
+            from pkg.orders import create
+
+
+            class OrderTests(APITestBase):
+                def test_create(self):
+                    create()
+
+
+            class Plain(object):
+                def test_not(self):
+                    create()
+            """);
+        var linked = Link(
+            ("tests/base.py", Read("tests/base.py", "import unittest\n\n\nclass APITestBase(unittest.TestCase):\n    pass\n")),
+            ("tests/test_orders.py", orders),
+            ("pkg/orders.py", Read("pkg/orders.py", "def create():\n    return 1\n")));
+
+        Assert.Equal(
+            ["python:tests.test_orders.OrderTests", "python:tests.test_orders.OrderTests.test_create"],
+            orders.Nodes.Where(node => node.TestByType).Select(node => node.Id.Whole()));
+        Assert.DoesNotContain(orders.Nodes, node => node.Test);
+        Assert.Equal(
+            [("python:tests.test_orders.OrderTests.test_create", 7)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Tests).Select(edge => (edge.From, edge.Line)));
+    }
+
+    /// <summary>
+    /// A name a <c>parametrize</c> mark gives a test is given values in place of the fixture of its name - the test's own mark, its
+    /// class's decorator and <c>pytestmark</c>, and the module's <c>pytestmark</c> among a list of marks alike, as pytest reads the marks
+    /// of a test and of each node it is collected under - but one the mark's <c>indirect=</c> routes to that fixture, as its
+    /// <c>request.param</c>, is still the fixture's: every name where it is <c>True</c>, those a list names, none where it is
+    /// <c>False</c>.
+    /// </summary>
+    [Fact]
+    public void AParametrizedName_IsNoFixture_ButOneTheMarkRoutesToIt_AndAClasssAndTheModulesMarksGiveItToo()
+    {
+        var conftest = Read("tests/conftest.py", """
+            import pytest
+
+
+            @pytest.fixture
+            def user(request):
+                return request.param
+
+
+            @pytest.fixture
+            def role():
+                return 1
+
+
+            @pytest.fixture
+            def db():
+                return 2
+            """);
+        var test = Read("tests/test_roles.py", """
+            import pytest
+
+            pytestmark = [pytest.mark.slow, pytest.mark.parametrize("db", [1])]
+
+
+            @pytest.mark.parametrize("user", ["admin"], indirect=True)
+            def test_admin(user, role, db):
+                pass
+
+
+            @pytest.mark.parametrize("user, role", [("a", "b")], indirect=["user"])
+            def test_listed(user, role):
+                pass
+
+
+            @pytest.mark.parametrize("role", [1], indirect=False)
+            class TestRoles:
+                pytestmark = pytest.mark.parametrize("user", ["a"])
+
+                def test_login(self, user, role, db):
+                    pass
+            """);
+        var linked = Link(("tests/conftest.py", conftest), ("tests/test_roles.py", test));
+
+        Assert.Equal(
+            [
+                ("python:tests.test_roles.test_admin", "user", 7), ("python:tests.test_roles.test_admin", "role", 7),
+                ("python:tests.test_roles.test_listed", "user", 12),
+            ],
+            test.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Fixture).Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
+        Assert.Equal(
+            [
+                ("python:tests.test_roles.test_admin", "python:tests.conftest.user"), ("python:tests.test_roles.test_admin", "python:tests.conftest.role"),
+                ("python:tests.test_roles.test_listed", "python:tests.conftest.user"),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.References && edge.To.StartsWith("python:tests.conftest.", StringComparison.Ordinal)).Select(edge => (edge.From, edge.To)));
+    }
+
+    /// <summary>
+    /// A statement a text ends inside - an annotation with no type after its colon, an assignment with no value after its <c>=</c>, as a
+    /// file being edited holds - declares what it writes and reads nothing past the text's end: a function's local and a class's field
+    /// alike, the field's signature the text as written.
+    /// </summary>
+    [Fact]
+    public void AnAnnotationOrAValueTheTextEndsBefore_IsReadAsNone()
+    {
+        Assert.Equal(
+            [("python:pkg.cut", (string?)null), ("python:pkg.cut.f", "def f()")],
+            Read("pkg/cut.py", "def f():\n    x:").Nodes.Select(node => (node.Id.Whole(), node.Kind == CodeNodeKinds.Member ? node.Signature : null)));
+        Assert.Equal(
+            [("python:pkg.cut", (string?)null), ("python:pkg.cut.A", (string?)null), ("python:pkg.cut.A.x", "x =")],
+            Read("pkg/cut.py", "class A:\n    x =").Nodes.Select(node => (node.Id.Whole(), node.Kind == CodeNodeKinds.Member ? node.Signature : null)));
+        Assert.Equal(
+            [("python:pkg.cut", (string?)null), ("python:pkg.cut.A", (string?)null), ("python:pkg.cut.A.x", "x: int =")],
+            Read("pkg/cut.py", "class A:\n    x: int =").Nodes.Select(node => (node.Id.Whole(), node.Kind == CodeNodeKinds.Member ? node.Signature : null)));
     }
 
     /// <summary>
@@ -2394,16 +2519,19 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
     }
 
     /// <summary>
-    /// What <c>from helper import pack</c> binds, where the file's directory is no package and both places a bare import may stand at
-    /// hold the module, is each place's: a call of it a candidate of both, as the file's imports edges are, and never the first alone.
+    /// What <c>from helper import pack</c> and <c>import helper</c> reach, where the file's directory is no package and both places a
+    /// bare import may stand at hold the module, is each place's: a call of a function a candidate of both, as the file's imports edges
+    /// are, and never the first alone; and one place alone declaring it leaves it a candidate all the same - a function, a class, a
+    /// member of the class - since the file cannot tell which module it imports. Each such reference's sign is the import's, never
+    /// a duck-typed receiver's.
     /// </summary>
     [Fact]
-    public void ANameEitherPlaceGives_IsACandidateOfBoth()
+    public void WhatEitherPlaceGives_IsACandidateOfEach_ThoughOnePlaceAloneDeclaresIt()
     {
         var linked = Link(
-            ("tools/helper.py", Read("tools/helper.py", "def pack(): ...\n")),
+            ("tools/helper.py", Read("tools/helper.py", "def pack(): ...\n\n\ndef solo(): ...\n\n\nclass Box:\n    def create(self): ...\n")),
             ("helper.py", Read("helper.py", "def pack(): ...\n")),
-            ("tools/run.py", Read("tools/run.py", "from helper import pack\nimport helper\n\npack()\nhelper.pack()\n")));
+            ("tools/run.py", Read("tools/run.py", "from helper import pack, solo\nimport helper\n\npack()\nhelper.pack()\nsolo()\nhelper.solo()\nhelper.Box.create()\n")));
 
         Assert.Equal(
             [
@@ -2411,8 +2539,15 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
                 new CodeEdge("python:tools.run", "python:tools.helper.pack", CodeEdgeKinds.Calls, 4, CodeConfidences.Candidates),
                 new CodeEdge("python:tools.run", "python:helper.pack", CodeEdgeKinds.Calls, 5, CodeConfidences.Candidates),
                 new CodeEdge("python:tools.run", "python:tools.helper.pack", CodeEdgeKinds.Calls, 5, CodeConfidences.Candidates),
+                new CodeEdge("python:tools.run", "python:tools.helper.solo", CodeEdgeKinds.Calls, 6, CodeConfidences.Candidates),
+                new CodeEdge("python:tools.run", "python:tools.helper.solo", CodeEdgeKinds.Calls, 7, CodeConfidences.Candidates),
+                new CodeEdge("python:tools.run", "python:tools.helper.Box.create", CodeEdgeKinds.Calls, 8, CodeConfidences.Candidates),
             ],
             linked.Edges.Where(edge => edge.From == "python:tools.run" && edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal(
+            [new CodeEdge("python:tools.run", "python:tools.helper.Box", CodeEdgeKinds.Uses, 8, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.From == "python:tools.run" && edge.Kind == CodeEdgeKinds.Uses));
+        Assert.Equal([CodeGraphLimit.CandidateImports], linked.Signs["python:tools.run"]);
     }
 
     /// <summary>

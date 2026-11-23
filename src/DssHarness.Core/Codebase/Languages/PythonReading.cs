@@ -19,8 +19,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>isinstance</c>, an <c>except</c> or a <c>case</c>'s class pattern names, each attribute and name a body reads without
 /// calling it and does not bind - a local, a parameter, a lambda's, a comprehension's or a closure's being the code's own -
 /// each decorator's code, the name it calls with what it decorates a call, and each string literal the file holds; and the tests the
-/// runners collect - a test file's <c>test*</c> functions and <c>Test*</c> classes, a <c>TestCase</c> subclass wherever it is
-/// declared, a test class's <c>test*</c> methods - each fixture a parameter of a test or of a fixture names a reference of it.
+/// runners collect - a pytest file's <c>test*</c> functions and <c>Test*</c> classes, a <c>TestCase</c> subclass wherever it is
+/// declared, a test class's <c>test*</c> methods - each fixture a parameter of a test or of a fixture names a reference of it, but
+/// a name a parameter set gives in its place.
 /// </summary>
 /// <remarks>
 /// Python's blocks are made by indentation, which is no token: each token says its line, and the reader finds its column
@@ -113,11 +114,17 @@ internal sealed class PythonReading
     private readonly string _path;
 
     /// <summary>
-    /// Whether a test runner collects the file by its name: pytest's <c>test_*.py</c> and <c>*_test.py</c>, and unittest's and
-    /// Django's <c>test*.py</c> - <c>tests.py</c> among them - its <c>test*</c> functions, <c>Test*</c> classes and the classes that
-    /// may be tests by a base another file declares the file's tests (<see cref="TestFile"/>).
+    /// Whether pytest collects the file by its name - its default <c>python_files</c>, <c>test_*.py</c> and <c>*_test.py</c>
+    /// (<see cref="PytestFile"/>): the one file whose <c>test*</c> functions and <c>Test*</c> classes are tests.
     /// </summary>
-    private readonly bool _testFile;
+    private readonly bool _pytestFile;
+
+    /// <summary>
+    /// Whether a runner collects the file by its name - pytest's files, and unittest's and Django's <c>test*.py</c>, <c>tests.py</c>
+    /// among them (<see cref="CollectedFile"/>): where a class built on a base another file declares may be a <c>TestCase</c> subclass
+    /// a runner finds by its type.
+    /// </summary>
+    private readonly bool _collectedFile;
 
     /// <summary>Whether the file is a package's <c>__init__.py</c>: the one that says its directory is a unit of the layout (<see cref="FileExtract.FolderUnit"/>).</summary>
     private readonly bool _package;
@@ -194,6 +201,19 @@ internal sealed class PythonReading
 
     /// <summary>The type parameters the code of each node sees - its own and those of every declaration around it - by its key, found once a node (<see cref="TypeParametersOf"/>).</summary>
     private readonly Dictionary<QualifiedName, ImmutableHashSet<string>> _typeScopes = [];
+
+    /// <summary>
+    /// What a class and the module assign to <c>pytestmark</c> - the marks pytest applies to every test under it, one or a list or a tuple
+    /// of them - by the node's key: each mark's tokens, the last assignment's, as Python keeps it (<see cref="Parametrized"/>).
+    /// </summary>
+    private readonly Dictionary<QualifiedName, List<(int From, int To)>> _pytestmarks = [];
+
+    /// <summary>
+    /// What the parameter sets of the module and of each class give every test under it, by the node's key: the module's
+    /// <c>pytestmark</c>'s, and a class's decorators' and <c>pytestmark</c>'s with those of the node around it - found once a node, as
+    /// its head is read, each from the one around it (<see cref="Parametrized"/>).
+    /// </summary>
+    private readonly Dictionary<QualifiedName, ParameterNames> _parameterNames = [];
 
     /// <summary>
     /// Whether the code read around a declaration (<see cref="ScanExtract.Around"/>) runs in its type parameters' scope - a class's bases
@@ -283,17 +303,26 @@ internal sealed class PythonReading
         _path = path;
         var name = CodeGraphIds.FileName(path);
         _package = name is "__init__.py" or "__init__.pyi";
-        _testFile = TestFile(name);
+        _pytestFile = PytestFile(name);
+        _collectedFile = CollectedFile(name);
         (_lineOf, _lineStarts, _blockEnd) = Lines();
     }
 
     /// <summary>
-    /// Whether a test runner collects the file named <paramref name="name"/> by its name: pytest's <c>test_*.py</c> and
-    /// <c>*_test.py</c>, and unittest's and Django's <c>test*.py</c> - so <c>tests.py</c>, the module Django's <c>startapp</c>
-    /// writes - and no other; a directory's name makes no file one.
+    /// Whether pytest collects the file named <paramref name="name"/> by its name: its default <c>python_files</c>, <c>test_*.py</c>
+    /// and <c>*_test.py</c>, and no other - so neither a <c>testing.py</c> nor a <c>testclient.py</c>, whose names unittest's pattern
+    /// takes; a directory's name makes no file one.
     /// </summary>
-    private static bool TestFile(string name)
-        => name.EndsWith(".py", StringComparison.Ordinal) && name[..^3] is var stem && (stem.StartsWith("test", StringComparison.Ordinal) || stem.EndsWith("_test", StringComparison.Ordinal));
+    private static bool PytestFile(string name)
+        => name.EndsWith(".py", StringComparison.Ordinal) && name[..^3] is var stem && (stem.StartsWith("test_", StringComparison.Ordinal) || stem.EndsWith("_test", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Whether a runner collects the file named <paramref name="name"/> by its name: pytest's (<see cref="PytestFile"/>), and unittest's
+    /// and Django's <c>test*.py</c> - so <c>tests.py</c>, the module Django's <c>startapp</c> writes - which those runners search for
+    /// <c>TestCase</c> subclasses alone; a directory's name makes no file one.
+    /// </summary>
+    private static bool CollectedFile(string name)
+        => PytestFile(name) || (name.EndsWith(".py", StringComparison.Ordinal) && name.StartsWith("test", StringComparison.Ordinal));
 
     /// <summary>A class the file declares: its key, its qualified name - its scope - and the names it declares, each once.</summary>
     private sealed record ClassInfo(QualifiedName Key, QualifiedName Qualified, HashSet<string> Names);
@@ -340,6 +369,9 @@ internal sealed class PythonReading
             }
 
             Walk(statements, ScanFrame.Top.Inside(module, module, key, null));
+
+            // What the module's pytestmark gives every test of the file, read in the module's code once its imports are bound.
+            _parameterNames[key] = Parametrized(_pytestmarks.GetValueOrDefault(key) ?? [], key, ParameterNames.None);
 
             // Each body is read once every declaration of the file is made, as Python runs a body once the module is: a name it
             // reads that the file declares or imports below it is the file's, not a builtin's or a value's.
@@ -1004,14 +1036,18 @@ internal sealed class PythonReading
         }
     }
 
-    /// <summary>The annotation and the assignment of the name at <paramref name="at"/>, where its line annotates it or assigns it before <paramref name="to"/>; <see langword="null"/> where it does neither.</summary>
+    /// <summary>
+    /// The annotation and the assignment of the name at <paramref name="at"/>, where its line annotates it or assigns it before
+    /// <paramref name="to"/>; <see langword="null"/> where it does neither. A value is none where no token follows the <c>=</c> before
+    /// <paramref name="to"/> - <c>x =</c>, which a text ends after (<see cref="ValueAfter"/>).
+    /// </summary>
     private Assigned? Assignment(int at, int to)
     {
         var next = _scan.Next(at);
 
         if (_scan.Is(next, "="))
         {
-            return new Assigned(-1, next, _scan.Next(next));
+            return new Assigned(-1, next, ValueAfter(next, to));
         }
 
         if (!_scan.Is(next, ":"))
@@ -1022,8 +1058,11 @@ internal sealed class PythonReading
         // The annotation ends at the = of the assignment, where one stands; else at the statement's end, and no value is given.
         var equal = ScanCalls.TopLevel(_scan, _scan.Next(next), to, "=", null);
 
-        return equal < to ? new Assigned(equal, equal, _scan.Next(equal)) : new Assigned(to, -1, -1);
+        return equal < to ? new Assigned(equal, equal, ValueAfter(equal, to)) : new Assigned(to, -1, -1);
     }
+
+    /// <summary>Where the value an <c>=</c> at <paramref name="equal"/> assigns begins: the token after it, where one is written before <paramref name="to"/>; -1 where none is.</summary>
+    private int ValueAfter(int equal, int to) => _scan.Next(equal) is var value && value < to && value < _scan.Count ? value : -1;
 
     /// <summary>An assignment of the name at its head: where its annotation ends, its <c>=</c> where one is written, and where its value begins; -1 where a member is none.</summary>
     private sealed record Assigned(int AnnotationEnd, int Assign, int Value);
@@ -1096,7 +1135,7 @@ internal sealed class PythonReading
         var equal = close > at ? _scan.Next(close) : cursor;
 
         return names.Count > 0 && (close > at || commas > 0) && equal < to && _scan.Is(equal, "=")
-            ? new Targets(names, -1, equal, _scan.Next(equal))
+            ? new Targets(names, -1, equal, ValueAfter(equal, to))
             : null;
     }
 
@@ -1180,6 +1219,13 @@ internal sealed class PythonReading
         var pieces = Pieces(value, end);
         var given = keys.ToList();
         var apart = given.Count > 1 && given.Count == pieces.Count && !last.Names.Any(target => target.Starred);
+
+        // pytestmark, at the module's top or in a class: the marks pytest applies to every test under it - one, or each of a list's or
+        // a tuple's - the last assignment's, as Python keeps it (<see cref="Parametrized"/>).
+        if (groups.Any(group => group.Names.Any(target => !target.Attribute && Text(target.At) == "pytestmark")))
+        {
+            _pytestmarks[frame.Parent!] = pieces;
+        }
 
         // The module's own code is read now, as Python runs it; a class's with the class's (<see cref="Body"/>), where the functions
         // around the class are open, by the run of the class's code as it reaches the value - a name the class declares there the
@@ -1495,10 +1541,16 @@ internal sealed class PythonReading
     /// <paramref name="read"/> where the code runs it: at the module's top now, as Python runs the module in the order the text writes
     /// it; in a declaration, by the run of the declaration's code when it reaches <paramref name="from"/> (<see cref="_deferred"/>), once
     /// every name of the file is bound and the functions around it are open, so a name imported or declared below the statement - at the
-    /// module's top, in a function around it - is the one it reads.
+    /// module's top, in a function around it - is the one it reads. Nothing where the statement writes no token there - an annotation
+    /// a text ends before, <c>x:</c> - since no run reaches a token that is not written.
     /// </summary>
     private void Defer(int from, int to, ScanFrame frame, Action read)
     {
+        if (from >= to)
+        {
+            return;
+        }
+
         if (frame.Depth == 1)
         {
             read();
@@ -1660,9 +1712,6 @@ internal sealed class PythonReading
         _declared[first] = end;
         Own(key, types);
 
-        // The names a parameter set of pytest's gives the function in place of a fixture of each name.
-        var parametrized = Parametrized(decorators, holder);
-
         if (!method)
         {
             _free.Add(defined);
@@ -1701,16 +1750,23 @@ internal sealed class PythonReading
         _bodies.Add(new Body(outer, qualified, key,
             () =>
             {
-                // A test is what a runner collects: a test* function at a collected file's top, and a test* method of a test class -
+                // A test is what a runner collects: a test* function at a pytest file's top, and a test* method of a test class -
                 // one a test by a base another file declares a test by its type; a fixture never.
                 var named = fixture is null && defined.StartsWith("test", StringComparison.Ordinal);
-                var test = named && (method ? _testTypes.Contains(holder) : _testFile && frame.Depth == 1);
+                var test = named && (method ? _testTypes.Contains(holder) : _pytestFile && frame.Depth == 1);
                 var byType = named && !test && method && _maybeTestTypes.Contains(holder);
 
                 if (test || byType)
                 {
                     _extract.Change(key, node => node with { Test = test, TestByType = byType });
                 }
+
+                // The names the parameter sets of pytest's give a test in place of a fixture of each name: its own decorators', read
+                // where it is defined, and those of each class it is written in and of the module. A fixture is given none: pytest
+                // parametrizes the tests alone.
+                var parametrized = test || byType
+                    ? Parametrized(decorators, holder, _parameterNames.GetValueOrDefault(holder) ?? ParameterNames.None)
+                    : ParameterNames.None;
 
                 _extract.Around = true;
 
@@ -1742,8 +1798,8 @@ internal sealed class PythonReading
                     {
                         // Each parameter a test or a fixture requires names the fixture that provides it, by its name alone: as pytest
                         // finds it, the test's own class's or module's, else a conftest.py's of its directory or of one above it, the
-                        // nearest first, which no test imports - but one a parameter set of the function gives, which no fixture does.
-                        foreach (var (needed, line) in parameters.Required.Where(required => required.Name is not ("self" or "cls") && !parametrized.Contains(required.Name)))
+                        // nearest first, which no test imports - but one a parameter set gives in its place, which no fixture does.
+                        foreach (var (needed, line) in parameters.Required.Where(required => required.Name is not ("self" or "cls") && !parametrized.Instead(required.Name)))
                         {
                             _extract.Reference(key, CodeEdgeKinds.References, needed, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Fixture));
                         }
@@ -1858,35 +1914,83 @@ internal sealed class PythonReading
     }
 
     /// <summary>
-    /// The names the parameter sets among <paramref name="decorators"/> give the function (<see cref="ParameterSets"/>), read where it
-    /// is defined: each its first argument - or its <c>argnames=</c> - names, a string of names a comma parts or a list or a tuple of
-    /// strings, as pytest reads them; a parameter of one of those names is given its values, and no fixture.
+    /// What the parameter sets among <paramref name="marks"/> give a test (<see cref="ParameterSets"/>), on top of what
+    /// <paramref name="around"/> gives - the marks of the node it is written in, read in the code of the node of <paramref name="code"/>,
+    /// where pytest's import binds them: a decorator's where its declaration is defined, a <c>pytestmark</c>'s where it is assigned. The one
+    /// reader of a parameter set, as pytest reads a test's marks and those of each class and the module it is collected under: each names
+    /// by its first argument - or its <c>argnames=</c> - a string of names a comma parts, or a list or a tuple of strings; a test's parameter
+    /// of one of those names is given its values, and no fixture - but one its <c>indirect=</c> routes to the fixture of that name, as
+    /// <c>request.param</c>, whose fixture it still requires: those a list or a tuple of strings names, where it is one, and else every
+    /// name of the set where it is anything but <c>False</c> - <c>True</c>, or a value the code computes.
     /// </summary>
-    private HashSet<string> Parametrized(List<(int From, int To)> decorators, QualifiedName holder)
+    private ParameterNames Parametrized(IEnumerable<(int From, int To)> marks, QualifiedName code, ParameterNames around)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var given = around.Given;
+        var routed = around.Routed;
 
-        foreach (var decorator in decorators)
+        foreach (var mark in marks)
         {
-            if (Packaged(decorator, holder) != ParameterSets || _scan.Next(Callee(decorator)) is var open && !_scan.Is(open, "("))
+            if (Packaged(mark, code) != ParameterSets || _scan.Next(Callee(mark)) is var open && !_scan.Is(open, "("))
             {
                 continue;
             }
 
             var arguments = ScanCalls.Split(_scan, _scan.Next(open), _scan.Match(open), null);
-            var keyword = arguments.FindIndex(argument => Is(argument.Start, "argnames") && _scan.Is(_scan.Next(argument.Start), "="));
-            var (from, to) = keyword >= 0 ? (_scan.Next(_scan.Next(arguments[keyword].Start)), arguments[keyword].End) : arguments.Count > 0 ? arguments[0] : (-1, -1);
+            var names = Strings(Argument(arguments, "argnames", 0)).SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToList();
+            given = given.Union(names);
 
-            for (var at = from; at >= 0 && at < to; at = _scan.Next(at))
+            if (Argument(arguments, "indirect", 2) is { } indirect && !(indirect.To - indirect.From == 1 && Is(indirect.From, "False")))
             {
-                if (_scan[at].Kind == ScanTokenKind.Text && _scan.Value(at) is { } value)
-                {
-                    names.UnionWith(value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-                }
+                routed = routed.Union(IsStringList(indirect) ? Strings(indirect) : names);
             }
         }
 
-        return names;
+        return new ParameterNames(given, routed);
+    }
+
+    /// <summary>
+    /// The argument of a call's <paramref name="arguments"/> given by the keyword <paramref name="keyword"/>, its value's tokens; else the
+    /// one at <paramref name="position"/> where it and each before it is given by its place; <see langword="null"/> where none is.
+    /// </summary>
+    private (int From, int To)? Argument(List<(int Start, int End)> arguments, string keyword, int position)
+    {
+        bool Keyword((int Start, int End) argument) => _scan.IsName(argument.Start) && _scan.Is(_scan.Next(argument.Start), "=");
+
+        if (arguments.FindIndex(argument => Is(argument.Start, keyword) && Keyword(argument)) is var at and >= 0)
+        {
+            return (_scan.Next(_scan.Next(arguments[at].Start)), arguments[at].End);
+        }
+
+        return position < arguments.Count && !arguments.Take(position + 1).Any(Keyword) ? arguments[position] : null;
+    }
+
+    /// <summary>The values of the string literals the tokens of <paramref name="argument"/> hold, in order: none where it is none.</summary>
+    private IEnumerable<string> Strings((int From, int To)? argument)
+    {
+        for (var at = argument?.From ?? 0; argument is { } held && at < held.To && at < _scan.Count; at = _scan.Next(at))
+        {
+            if (_scan[at].Kind == ScanTokenKind.Text && _scan.Value(at) is { } value)
+            {
+                yield return value;
+            }
+        }
+    }
+
+    /// <summary>Whether the tokens of <paramref name="argument"/> are a list or a tuple of string literals alone, in their brackets: <c>["user"]</c>, <c>("a", "b")</c>.</summary>
+    private bool IsStringList((int From, int To) argument)
+        => (_scan.Is(argument.From, "[") || _scan.Is(argument.From, "(")) && _scan.Match(argument.From) is var close && close > argument.From && _scan.Next(close) >= argument.To
+            && ScanCalls.Split(_scan, _scan.Next(argument.From), close, null).All(piece => _scan.Next(piece.Start) >= piece.End && piece.Start < _scan.Count && _scan[piece.Start].Kind == ScanTokenKind.Text);
+
+    /// <summary>
+    /// The names the parameter sets that apply to a test give it (<see cref="Parametrized"/>): each given its values in place of a
+    /// fixture of its name, but those routed to that fixture (<see cref="Routed"/>), which it still requires.
+    /// </summary>
+    private sealed record ParameterNames(ImmutableHashSet<string> Given, ImmutableHashSet<string> Routed)
+    {
+        public static ParameterNames None { get; } = new(ImmutableHashSet.Create<string>(StringComparer.Ordinal), ImmutableHashSet.Create<string>(StringComparer.Ordinal));
+
+        /// <summary>Whether a parameter named <paramref name="name"/> is given values in place of the fixture of its name.</summary>
+        public bool Instead(string name) => Given.Contains(name) && !Routed.Contains(name);
     }
 
     /// <summary>Whether <paramref name="text"/> is a name Python may give a function: a letter or an underscore, then letters, digits and underscores.</summary>
@@ -1982,6 +2086,11 @@ internal sealed class PythonReading
             () =>
             {
                 var cases = Cases.None;
+
+                // What the class's parameter sets give every test it holds, on top of what the node it is written in gives: its
+                // decorators', read where it is defined, and its pytestmark's, its own code.
+                var around = _parameterNames.GetValueOrDefault(frame.Parent!) ?? ParameterNames.None;
+                _parameterNames[key] = Parametrized(_pytestmarks.GetValueOrDefault(key) ?? [], key, Parametrized(decorators, frame.Parent!, around));
                 _extract.Around = true;
 
                 try
@@ -2150,9 +2259,10 @@ internal sealed class PythonReading
     /// <summary>
     /// What the base <paramref name="named"/> makes a class built on it by its type, as unittest runs one: a <c>TestCase</c> subclass
     /// where it names a class whose name ends so through an import - <c>unittest.TestCase</c>, <c>django.test.TestCase</c>,
-    /// <c>from unittest import TestCase</c> - or one written so that nothing of the file binds, or a class of the file that is one; one that
-    /// may be one where it names any other class an import reaches, or a class of the file that may be; neither where it names a class of
-    /// the file that is neither, a name the language answers to, or one nothing binds.
+    /// <c>from unittest import TestCase</c> - or one written so that nothing of the file binds, or a class of the file that is one; neither
+    /// where it names a class of the file that is neither, or a name the language answers to; and one that may be one where it names
+    /// anything else - a class an import reaches, a class of the file that may be, a name a <c>*</c> import may bind, which binds no name
+    /// the file can read - for the link to decide.
     /// </summary>
     private Cases CasesOf(BaseNamed named)
     {
@@ -2165,22 +2275,24 @@ internal sealed class PythonReading
 
         return _cases.TryGetValue(last, out var cases) ? cases
             : last.EndsWith("TestCase", StringComparison.Ordinal) ? Cases.Case
-            : Cases.None;
+            : Builtins.Contains(named.Written) ? Cases.None
+            : Cases.Maybe;
     }
 
     /// <summary>
     /// Says what the class of <paramref name="key"/>, named <paramref name="name"/>, is by its bases' <paramref name="cases"/>: a
     /// <c>TestCase</c> subclass is a test class wherever it is declared, as unittest runs it by its type, and a type every class built on
-    /// it is a test class by (<see cref="ExtractNode.TestBase"/>); a test file's <c>Test*</c> class is a test class, as pytest collects
-    /// one; any other class of a test file that may be one by a base another file declares says so (<see cref="ExtractNode.TestByType"/>),
-    /// for the linker to decide. Its methods named <c>test*</c> are tests, or tests by their type, as it is.
+    /// it is a test class by (<see cref="ExtractNode.TestBase"/>); a pytest file's <c>Test*</c> class is a test class, as pytest collects
+    /// one there alone; any other class of a file a runner collects by its name that may be one by a base another file declares says so
+    /// (<see cref="ExtractNode.TestByType"/>), for the linker to decide. Its methods named <c>test*</c> are tests, or tests by their
+    /// type, as it is.
     /// </summary>
     private void Tested(QualifiedName key, string name, Cases cases)
     {
         _cases[name] = cases;
         var testBase = cases == Cases.Case;
-        var test = testBase || (_testFile && name.StartsWith("Test", StringComparison.Ordinal));
-        var byType = !test && _testFile && cases == Cases.Maybe;
+        var test = testBase || (_pytestFile && name.StartsWith("Test", StringComparison.Ordinal));
+        var byType = !test && _collectedFile && cases == Cases.Maybe;
 
         if (test)
         {

@@ -2118,8 +2118,9 @@ public sealed class CodeGraphLinkerTests
     /// that names no file of the tree binds; a name written alone nothing binds, in a file that binds its names within it - none in a
     /// file that does not, and none where an import naming a file of the tree binds the name, though each is counted external
     /// alike - a directory's import, which every file of its language is given, naming a scope and no file, binds none of them;
-    /// candidates among the places of an import of two places, as that import's file's own node is signed beside its edges;
-    /// and any other candidates. A use, which is recall, and a probe that found nothing, which misses nothing, give none.
+    /// candidates through an import of two places, both places declaring the name or one alone, as that import's file's own node is
+    /// signed beside its edges; and any other candidates. A use, which is recall, and a probe that found nothing, which misses nothing,
+    /// give none.
     /// </summary>
     [Fact]
     public void AFinding_GivesItsNodeTheSignOfWhyItFoundNothingOrSeveral()
@@ -2142,10 +2143,10 @@ public sealed class CodeGraphLinkerTests
             File("lib.t", [Member("Other", 0)]),
             Within(File(
                 "tools/run.t",
-                [Member("Run", 0)],
-                [Call("Run", "pack", 0, Prefix("h"))],
+                [Member("Run", 0), Member("Solo", 0)],
+                [Call("Run", "pack", 0, Prefix("h")), Call("Solo", "solo", 0, Prefix("h"))],
                 imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true }])),
-            File("tools/helper.t", [Member("pack", 0) with { Id = "t:near.pack" }]),
+            File("tools/helper.t", [Member("pack", 0) with { Id = "t:near.pack" }, Member("solo", 0) with { Id = "t:near.solo" }]),
             File("helper.t", [Member("pack", 0) with { Id = "t:far.pack" }]),
             File("duck.t", [Member("Duck", 0)], [Call("Duck", "quack", 0, new ExtractQualifier(CodeQualifierKinds.Value))]),
             File("ducks/a.t", [Member("quack", 0) with { Id = "t:a.quack" }]),
@@ -2159,6 +2160,7 @@ public sealed class CodeGraphLinkerTests
                 "t:Outside: outside-import",
                 "t:Prefixed: outside-import",
                 "t:Run: candidate-imports",
+                "t:Solo: candidate-imports",
                 "t:Unbound: unbound",
                 "t:UsesFixture: unprovided-fixture",
             ],
@@ -2172,12 +2174,14 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(
             [Edge("t:Run", "t:far.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates), Edge("t:Run", "t:near.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
             linked.Edges.Where(edge => edge.From == "t:Run").OrderBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal([Edge("t:Solo", "t:near.solo", CodeEdgeKinds.Calls, CodeConfidences.Candidates)], linked.Edges.Where(edge => edge.From == "t:Solo"));
     }
 
     /// <summary>
     /// A chain written as links is bound where its head is: a link that found nothing past a head only an import naming no file of
     /// the tree binds gives outside-import, though its own qualifier writes no name - here past a probe that found nothing, which
-    /// gives none - and one left candidates among the places of an import taken as several gives candidate-imports, as its head does.
+    /// gives none - and one left candidates through an import taken as several gives candidate-imports, as its head does, both places
+    /// declaring the type or one alone: a member of a type an import of two places reaches is a candidate as the type is.
     /// </summary>
     [Fact]
     public void AChainWrittenAsLinks_GivesTheSignItsHeadsImportGives()
@@ -2192,16 +2196,70 @@ public sealed class CodeGraphLinkerTests
                 imports: [Import(CodeImportForms.Relative, "vendor/numpy.t") with { Prefix = "np" }])),
             Within(File(
                 "tools/run.t",
-                [Member("Run", 0)],
-                [Ref("Run", CodeEdgeKinds.Uses, "Box") with { Qualifier = Prefix("h") }, Call("Run", "pack", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 })],
+                [Member("Run", 0), Member("Solo", 0)],
+                [
+                    Ref("Run", CodeEdgeKinds.Uses, "Box") with { Qualifier = Prefix("h") }, Call("Run", "pack", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 }),
+                    Ref("Solo", CodeEdgeKinds.Uses, "Crate") with { Qualifier = Prefix("h") }, Call("Solo", "pack", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 2 }),
+                ],
                 imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true }])),
-            File("tools/helper.t", [Type("Box") with { Id = "t:near.Box" }, Member("Box.pack", 0) with { Id = "t:near.Box.pack", Parent = "t:near.Box" }]),
+            File(
+                "tools/helper.t",
+                [
+                    Type("Box") with { Id = "t:near.Box" }, Member("Box.pack", 0) with { Id = "t:near.Box.pack", Parent = "t:near.Box" },
+                    Type("Crate") with { Id = "t:near.Crate" }, Member("Crate.pack", 0) with { Id = "t:near.Crate.pack", Parent = "t:near.Crate" },
+                ]),
             File("helper.t", [Type("Box") with { Id = "t:far.Box" }, Member("Box.pack", 0) with { Id = "t:far.Box.pack", Parent = "t:far.Box" }]));
 
-        Assert.Equal(["file:tools/run.t: candidate-imports", "t:Outside: outside-import", "t:Run: candidate-imports"], SignsOf(linked));
+        Assert.Equal(["file:tools/run.t: candidate-imports", "t:Outside: outside-import", "t:Run: candidate-imports", "t:Solo: candidate-imports"], SignsOf(linked));
         Assert.Equal(
             [Edge("t:Run", "t:far.Box.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates), Edge("t:Run", "t:near.Box.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
             linked.Edges.Where(edge => edge is { From: "t:Run", Kind: CodeEdgeKinds.Calls }).OrderBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal(
+            [Edge("t:Solo", "t:near.Crate", CodeEdgeKinds.Uses, CodeConfidences.Candidates), Edge("t:Solo", "t:near.Crate.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.From == "t:Solo"));
+    }
+
+    /// <summary>
+    /// What an import of two places reaches is a candidate of each, though one place alone declares it, by every way a reference
+    /// reaches through one: a name written alone it lets, a member of a type a qualifier names through its prefix, and a member of the
+    /// value a chain of names reaches from a type it lets - the type's doubt carried along the chain to what is found on its value. Each
+    /// gives the sign of the import, never of a name bound alone.
+    /// </summary>
+    [Fact]
+    public void WhatAnImportOfTwoPlacesReaches_IsACandidate_ANameATypesMemberAndAValuesMemberAlike()
+    {
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+
+        var linked = Link(
+            Within(File(
+                "tools/run.t",
+                [Member("Bare", 0), Member("Named", 0), Member("Valued", 0)],
+                [Call("Bare", "solo", 0), Call("Named", "make", 0, new ExtractQualifier(CodeQualifierKinds.Type, "h.Box")), Call("Valued", "go", 0, new ExtractQualifier(CodeQualifierKinds.Value, "Box.inner"))],
+                imports:
+                [
+                    Import(CodeImportForms.Relative, "helper.t") with { Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Fallback = true },
+                    Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true },
+                ])),
+            File(
+                "tools/helper.t",
+                [
+                    Member("solo", 0) with { Id = "t:near.solo" },
+                    Type("Box") with { Id = "t:near.Box" }, Member("Box.make", 0) with { Id = "t:near.Box.make", Parent = "t:near.Box" },
+                    Value("Box.inner", "Inner") with { Id = "t:near.Box.inner", Parent = "t:near.Box" },
+                    Type("Inner") with { Id = "t:near.Inner" }, Member("Inner.go", 0) with { Id = "t:near.Inner.go", Parent = "t:near.Inner" },
+                ]),
+            File("helper.t", [Member("other", 0) with { Id = "t:far.other" }]));
+
+        Assert.Equal(
+            [
+                Edge("t:Bare", "t:near.solo", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Named", "t:near.Box.make", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Valued", "t:near.Inner.go", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+            ],
+            linked.Edges.Where(edge => edge.From is "t:Bare" or "t:Named" or "t:Valued"));
+        Assert.Equal(
+            ["file:tools/run.t: candidate-imports", "t:Bare: candidate-imports", "t:Named: candidate-imports", "t:Valued: candidate-imports"],
+            SignsOf(linked));
     }
 
     /// <summary>The signs each node of <paramref name="linked"/> gave, a line a node, in the order of their ids.</summary>

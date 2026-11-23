@@ -438,9 +438,9 @@ public sealed partial class CodebaseGraphToolTests
 
         // A file whose bracket never closes; one whose call reaches through an import that names no file of the tree; one whose
         // call names what nothing the file says binds; a test given a fixture no conftest.py provides; a script whose bare import
-        // stands at two places, its call through it a candidate of each; and a page another template engine writes. Each shows
-        // the limits its own sign names, of its own language, and no other: a library's call shows no name nothing binds and no
-        // fixture, and a call through an import of two places no duck-typed receiver.
+        // stands at two places, its call through it a candidate of each though one place alone declares it; and a page another
+        // template engine writes. Each shows the limits its own sign names, of its own language, and no other: a library's call shows
+        // no name nothing binds and no fixture, and a call through an import of two places no duck-typed receiver.
         using var signed = await TreeAsync(
             ("shop/total.py", "def total(cart):\n    return sum(\n"),
             ("shop/rates.py", "from vendor.rates import convert\n\n\ndef rate():\n    return convert(1)\n"),
@@ -448,7 +448,7 @@ public sealed partial class CodebaseGraphToolTests
             ("tests/test_rates.py", "def test_rate(tmp_path):\n    assert tmp_path\n"),
             ("tools/run.py", "import helper\n\n\ndef run():\n    return helper.pack()\n"),
             ("tools/helper.py", "def pack():\n    return 1\n"),
-            ("helper.py", "def pack():\n    return 2\n"),
+            ("helper.py", "def other():\n    return 2\n"),
             ("web/page.html", "<main>\n  <p>{% if user %}Hello{% endif %}</p>\n</main>\n"));
         var signedQueries = await QueriesAsync(signed);
         var shown = Tail((await AskAsync(Tool(signed, signedQueries), """{"op":"sites","data":"total"}""")).Text.Split('\n'));
