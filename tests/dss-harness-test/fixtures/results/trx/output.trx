@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="2ce50b0c-cc33-4785-92a6-9e0f4f5a3a06" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010" name="runner@ci 2026-11-23 00:40:00">
+  <Results>
+    <UnitTestResult executionId="11111111-1111-1111-1111-111111111111" testId="22222222-2222-2222-2222-222222222222" testName="DssHarness.Tests.ParserTests.FoldsDuplicates" computerName="ci" duration="00:00:00.0240000" startTime="2026-11-23T00:40:01.0000000+00:00" endTime="2026-11-23T00:40:01.0240000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc5a4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57aaf7b0e5e2">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure: Collections differ at index 0</Message>
+          <StackTrace>  at DssHarness.Tests.ParserTests.FoldsDuplicates() in D:/tests/ParserTests.cs:line 45&#xD;  at DssHarness.Tests.ParserTests.RunAll() in D:/tests/ParserTests.cs:line 12</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="33333333-3333-3333-3333-333333333333" testId="44444444-4444-4444-4444-444444444444" testName="DssHarness.Tests.ParserTests.HoldsToItsBound" computerName="ci" duration="00:00:00.0080000" outcome="NotExecuted" />
+    <UnitTestResult executionId="55555555-5555-5555-5555-555555555555" testId="66666666-6666-6666-6666-666666666666" testName="DssHarness.Tests.ParserTests.ReadsItsForm" computerName="ci" duration="00:00:00.0110000" outcome="Passed" />
+  </Results>
+</TestRun>
