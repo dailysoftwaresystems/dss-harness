@@ -826,6 +826,8 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         { """X = f"{NAME + rb'x\n'}" """, ["x\\n"], ["uses NAME"] },
         { """X = f"{V:.{DIGITS}f}" """, [], ["uses V", "uses DIGITS"] },
         { """X = f"{V:{W}.{P}}" """, [], ["uses V", "uses W", "uses P"] },
+        { """X = f"{V:{W}}}}" """, ["}"], ["uses V", "uses W"] },
+        { """X = f"{V:>3} {{x}} {W} end" """, [" {x} ", " end"], ["uses V", "uses W"] },
         { """X = f"{RETRIES=}" """, [], ["uses RETRIES"] },
         { """X = f"{TOTAL = }" """, [], ["uses TOTAL"] },
         { """X = f"{A + B=!r:>{W}}" """, [], ["uses A", "uses B", "uses W"] },
@@ -917,11 +919,12 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
     }
 
     /// <summary>
-    /// A line is continued by a backslash that ends its code alone: one a trailing comment ends with is the comment's, and a line a
-    /// backslash joins to a comment ends with that comment, so the class on the next line is a statement of its own in each.
+    /// A backslash continues a line where it ends the line's code alone, and into the next line alone: one a trailing comment ends
+    /// with is the comment's; a line a backslash joins to a comment ends with that comment; and a line a backslash joins to a blank
+    /// one ends there - so the class after each is a statement of its own.
     /// </summary>
     [Fact]
-    public void ABackslashAtACommentsEnd_ContinuesNoLine()
+    public void ABackslash_ContinuesALineWhereItEndsItsCode_AndIntoTheNextLineAlone()
     {
         var extract = Read("pkg/config.py", """
             TIMEOUT = 30  # see C:\
@@ -933,10 +936,19 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
             # the backslash above joins this comment to its line
             class Server:
                 pass
+
+
+            LIMIT = 1 \
+
+            class Store:
+                pass
             """);
 
         Assert.Equal(
-            [("python:pkg.config", 1, 9), ("python:pkg.config.TIMEOUT", 1, 1), ("python:pkg.config.Client", 2, 3), ("python:pkg.config.RETRIES", 6, 6), ("python:pkg.config.Server", 8, 9)],
+            [
+                ("python:pkg.config", 1, 15), ("python:pkg.config.TIMEOUT", 1, 1), ("python:pkg.config.Client", 2, 3), ("python:pkg.config.RETRIES", 6, 6),
+                ("python:pkg.config.Server", 8, 9), ("python:pkg.config.LIMIT", 12, 12), ("python:pkg.config.Store", 14, 15),
+            ],
             extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
     }
 
