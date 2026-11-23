@@ -315,6 +315,8 @@ public static class WorkflowStepTypes
             [
                 new("in", "the create-agent step whose agent's item the closure ledger is of, which it waits for through dependsOn") { Required = true },
                 new("findings", "an expression yielding the review's findings, each classed introduced or reopened") { Required = true },
+                new("classes", "an expression yielding the classes the item's plan declares, whose ids a reopened finding names") { Required = true },
+                new("record", "an expression yielding the closing record the builder answered, whose classes a reopened finding may name too") { Required = true },
             ],
             [],
             null,
@@ -670,11 +672,20 @@ public static class WorkflowStepTypes
         ("hotspots", ListOf(ObjectOf(("class", Text), ("path", Text), ("touches", WholeNumber)))),
         ("touches", ListOf(ObjectOf(("class", Text), ("path", Text), ("byOthers", WholeNumber), ("all", WholeNumber)))));
 
-    /// <summary>What routing the review's findings answers: the send-backs - every introduced finding, and one whole class a first reopening - the classes whose second reopening asks for a home audit, and how often each class was reopened.</summary>
+    /// <summary>
+    /// What routing the review's findings answers: the send-backs - every introduced finding as the review gave it, and one
+    /// whole class a first reopening, named by its own member - the classes reopened twice or more, whose send-back asks for
+    /// a home audit, and how many rounds reopened each class. <c>rework</c> is a list nothing types: its introduced
+    /// findings hold whatever members the repository's review schema gives a finding, which a closed shape here could not
+    /// name; a send-back among them is told apart by <see cref="FindingRoutes.SendBackMember"/>.
+    /// </summary>
     private static string RouteOutput => ObjectOf(
         ("rework", UntypedList),
-        ("homeAudit", ListOf(ObjectOf(("class", Text), ("reopens", WholeNumber), ("severity", Text), ("findings", UntypedList)))),
-        ("reopened", ListOf(ObjectOf(("class", Text), ("reopens", WholeNumber)))));
+        ("homeAudit", ListOf(SendBackOutput)),
+        ("reopened", ListOf(ObjectOf((FindingRoutes.ClassMember, Text), (FindingRoutes.RoundsMember, WholeNumber)))));
+
+    /// <summary>One class sent back by the route: the class, how many rounds reopened it, the worst severity of its findings, and its findings.</summary>
+    private static string SendBackOutput => ObjectOf((FindingRoutes.SendBackMember, Text), (FindingRoutes.RoundsMember, WholeNumber), ("severity", Text), ("findings", UntypedList));
 
     /// <summary>How many touches of a home by other work require a home audit, where a workflow says nothing.</summary>
     public const int DefaultTouches = 1;

@@ -1468,6 +1468,8 @@ public static class WorkflowFileParser
                 step = step with
                 {
                     Findings = ScalarIn(keys, $"{where}.findings", problems),
+                    Classes = ScalarIn(keys, $"{where}.classes", problems),
+                    Record = ScalarIn(keys, $"{where}.record", problems),
                 };
                 break;
 

@@ -745,8 +745,11 @@ public static class WorkflowValidator
 
                     case "route-findings":
                         // The findings are read where the step starts, as an expression the engine resolves: the review's
-                        // own, each classed introduced or reopened by the reviewers that found them.
+                        // own, each classed introduced or reopened by the reviewers that found them - and the item's classes
+                        // and its record, whose ids are the classes a reopened finding may name.
                         Expression(entry, entry.Step.Findings ?? string.Empty, "findings");
+                        Expression(entry, entry.Step.Classes ?? string.Empty, "classes");
+                        Expression(entry, entry.Step.Record ?? string.Empty, "record");
 
                         break;
 

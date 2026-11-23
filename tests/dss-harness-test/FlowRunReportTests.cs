@@ -195,7 +195,7 @@ public sealed class FlowRunReportTests
             new(1, Began, FlowEvent.KindOf(FlowChangeKind.SessionBegan), null, null, null, null, null, null),
             new(2, Began.AddSeconds(100), FlowEvent.KindOf(FlowChangeKind.SessionEnded), null, null, null, null, null, "done"),
         };
-        var ledger = new FlowClosureLedgerFile(1, "item-1", [new FlowClosureReopens("c-rate", 2)]);
+        var ledger = new FlowClosureLedgerFile(1, "item-1", [new FlowClosureReopens("c-rate", ["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"])]);
 
         return new FlowRunReportSource(layout, flow, questions, null, events, [("item-1", ledger)], definition);
     }

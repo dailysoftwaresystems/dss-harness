@@ -7,17 +7,17 @@ aspect that reported it, the place, what is wrong, how much it matters and wheth
 
 {route.rework}
 
-Each entry of the list above that holds a class is not one finding but a class reopened: the class, how many rounds
-have reopened it, and all its findings.
+Each entry of the list above that names a `reopenedClass` is not one finding but a class reopened for the first time:
+the class, how many rounds have reopened it (`rounds`), how much its worst finding matters, and all its findings.
 
 ## The classes reopened
 
 {route.homeAudit}
 
-Where this list holds a class of yours, it was reopened a second time: the fix the last round made was wrong at its
-root. Do not edit the code for it first - make the home audit, reading the whole home and every consumer the graph
-gives you, and deliver what makes its invariants structural, one decision, one place; record it in `homeAudit` of the
-record. The check refuses the record of a reopened-twice class that carries none.
+Each class this list holds was reopened twice or more - its count is in `rounds`: the fix an earlier round made was
+wrong at its root. Do not edit the code for it first - make the home audit, reading the whole home and every consumer
+the graph gives you, and deliver what makes its invariants structural, one decision, one place; record it in
+`homeAudit` of the record. The check refuses the record of a class reopened twice or more that carries none.
 
 ## The class you are closing
 

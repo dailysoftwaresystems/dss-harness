@@ -13,8 +13,9 @@ The record of each class so far, as the last report gave it:
 
 A finding of yours that is another instance of a class the item closes - the same data decided again somewhere the
 change or its class's sites reach - is not a new defect: class it `reopened`, and name the class id in `reopens`,
-exactly as the classes above name it. Every other finding is `introduced`, a defect the diff made. Where the item
-declares no class, every finding of yours is `introduced`, and `reopens` is empty.
+exactly as the classes or the record above name it. Every other finding is `introduced`, a defect the diff made. Where
+the item declares no class, every finding of yours is `introduced`, and `reopens` is empty. A `reopens` that names no
+class of the item's, or a severity off the schema's scale, is sent back to you to answer again.
 
 ## The item
 

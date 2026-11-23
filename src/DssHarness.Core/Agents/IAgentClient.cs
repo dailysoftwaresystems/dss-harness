@@ -193,6 +193,14 @@ public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2,
     public int? AskRounds { get; init => field = value is { } rounds ? Counted(rounds, nameof(AskRounds)) : null; } = AskRounds is { } rounds ? Counted(rounds, nameof(AskRounds)) : null;
 
     /// <summary>
+    /// What the step's own rules refuse of an output that reads against its schema - the rules no schema can say, such as
+    /// which classes a reviewer's reopened finding may name - each problem a path in the output and what is wrong there;
+    /// null where the step has none. The gate asks the agent again for each, in the same conversation and under the same
+    /// count of repairs as a schema's problem (<see cref="StructuredOutputGate"/>).
+    /// </summary>
+    public Func<System.Text.Json.Nodes.JsonNode, IReadOnlyList<string>>? Holds { get; init; }
+
+    /// <summary>
     /// Why <see cref="Schema"/> is no schema an answer can be held to, as <see cref="Schemas.JsonSchemaSubset.TextProblems"/>
     /// says it, or nothing where it is one: checked before any client is taken, so no model is paid for an answer
     /// nothing could read.

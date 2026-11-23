@@ -215,6 +215,14 @@ public sealed record FlowStepRun(
     /// every other step. A subset of <see cref="WorkedFrom"/>, whose working sets seed its pack.
     /// </summary>
     public IReadOnlyList<FlowWorkedFrom> GoesOnWith { get; init; } = [];
+
+    /// <summary>
+    /// A reason step's: what its answer's output is held to beyond its schema, where a step of the flow reads it by rules
+    /// of its own - a reviewer whose findings a <c>route-findings</c> step routes is held to the classes the item closes
+    /// (<see cref="FindingRoutes.HeldTo"/>) - asked again in its own conversation where it does not hold. Null for every
+    /// other step.
+    /// </summary>
+    public Func<JsonNode, IReadOnlyList<string>>? AnswerHolds { get; init; }
 }
 
 /// <summary>

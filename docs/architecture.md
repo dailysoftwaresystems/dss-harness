@@ -3087,8 +3087,10 @@ every answer of it on all three clients: the members by the subset's check, the 
 `$.output` (`JsonSchemaSubset.Problems` from a path, `JsonSchemaSubset.Respelled` for an enum's spelling), what no
 schema says (the notes not empty, a null output only where the answer asks, and each assumption and question by its
 record's own rule - `AgentAssumption.Problems`, `AgentQuestion.Problems`: every text written, options no two alike, a
-recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), and the
-run's end - `Completed` or `Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
+recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), an
+output that reads against its schema held to the step's own rules where it has any (`AgentOutput.Holds`, each problem a
+path under `$.output`, sent back as a schema's is and counted with its repairs), and the run's end - `Completed` or
+`Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
 the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
 before an attempt begins, for the step's directory is every attempt's; it writes the first user message as sent, masked,
 as `user.md` (`OrchestratorLayout.StepUserFileName`) before the client is taken - the parts the attempt was given, held
@@ -3320,14 +3322,22 @@ each request `ByRun` - are held to no `closure.json`, for the builder's answer i
 After a review's gather and before its revise stands the `route-findings` step (`RouteFindingsStepRunner`, the one owner
 of the routing), reading the findings expression the review's gather collected - each finding classed `introduced` or
 `reopened` by its reviewers, a reopened one naming its class in `reopens` - and writing the item's ledger
-(`closure-ledger.json` in its agent's directory, `FlowClosureLedgerFile`): how often each class was reopened, one
-send-back a round, kept across the fix loop's iterations and across a resume, where no reviewer could carry it - for
-reviewers are fresh each round and `previous.*` is refused in every prompt. Every introduced finding goes back in
-`rework` as itself; the reopened findings of one class go back as one send-back - the class, its count and all its
-findings, graded by the worst of them, so the loop's `blocking` reads `route.rework` as it read `review.findings`; and a
-class reopened a second time goes to `homeAudit` instead, which the loop's `until` reads beside `rework` and the
-`class-closure` check asks its home audit for - the one mechanism, whichever cause asks. A finding with no class, and a
-reopened one that names none, fail it. The shipped flow's fix loop decides after `route` (`decideAfter`), and its
+(`closure-ledger.json` in its agent's directory, `FlowClosureLedgerFile`): for each class the routings that reopened
+it, one send-back a round, kept across the fix loop's iterations and across a resume, where no reviewer could carry it -
+for reviewers are fresh each round and `previous.*` is refused in every prompt. A class's count is how many routings
+name it (`FlowClosureLedgerFile.Counting`), so a routing run again after a crash, a stop or a resume counts nothing
+more and a first reopening is never read as a second. Every introduced finding goes back in `rework` as itself; the
+reopened findings of one class go back as one send-back - the class (`reopenedClass`, never a finding's own `class`),
+the rounds that reopened it and all its findings, graded by the worst of them, so the loop's `blocking` reads
+`route.rework` as it read `review.findings`; and a class reopened twice or more goes to `homeAudit` instead, which the
+loop's `until` reads beside `rework` and the `class-closure` check asks its home audit for - the one mechanism, whichever
+cause asks. What a finding must say to be routed has one owner, `FindingRoutes`: an object, classed `introduced` or
+`reopened`, graded on the route's scale, and a reopened one naming a class of the item's - its `classes`' or its
+`record`'s, exactly, compared ordinally on every machine, for a class id is no path. The reviewers whose answers a
+route reads (a reason step its `findings` names, or each reason step of a group that gathers the member it reads) are
+held to the same rules at their own answer (`FlowStepRun.AnswerHolds`, `AgentOutput.Holds`): the gate asks a reviewer
+again in its own conversation, under the same repairs as a schema's problem, for the recovery cannot change a
+reviewer's answer; findings that still do not hold fail the route (12), nothing routed and the ledger untouched. The shipped flow's fix loop decides after `route` (`decideAfter`), and its
 `rework.md` reads `route.rework` and `route.homeAudit`. A pre-existing issue the triage answers `next` for - a defect in
 code the run's change does not touch that blocks nothing - is owed the run's next round instead: `FlowCoordinator` sizes
 it from the triage's answer (`size`: its files, what must be built, what measured first - an answer whose size names no

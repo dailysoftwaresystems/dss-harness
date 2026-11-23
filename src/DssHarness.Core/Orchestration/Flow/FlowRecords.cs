@@ -289,7 +289,6 @@ public sealed record FlowStepRecord(
     FlowStepMeasure? Measure = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
-    /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
 
     /// <summary>How the record names <paramref name="failure"/>: its name in camelCase, <c>passedOver</c>, <c>endedRun</c>, <c>owed</c>, <c>takenByGroup</c>.</summary>
@@ -934,14 +933,14 @@ public sealed record FlowNextIssue(
 }
 
 /// <summary>
-/// One item's closure ledger, <c>closure-ledger.json</c> in its agent's directory: how often each of its classes was
-/// reopened by a review, kept by the engine across the fix loop's iterations and across a resume. The
-/// <c>route-findings</c> step writes it and the <c>class-closure</c> check reads it: a class reopened a second time is
-/// the check's own cause for a home audit, whichever course asks for it.
+/// One item's closure ledger, <c>closure-ledger.json</c> in its agent's directory: which rounds of review reopened each
+/// of its classes, kept by the engine across the fix loop's iterations and across a resume. The <c>route-findings</c>
+/// step writes it and the <c>class-closure</c> check reads it: a class reopened a second time is the check's own cause
+/// for a home audit, whichever course asks for it.
 /// </summary>
 /// <param name="Schema">The file's schema; 1.</param>
 /// <param name="Agent">The agent whose item the ledger is of.</param>
-/// <param name="Classes">Each class of the item's record the run's reviews have reopened, with how often.</param>
+/// <param name="Classes">Each class of the item's record the run's reviews have reopened, with the routings that counted it.</param>
 public sealed record FlowClosureLedgerFile(int Schema, string Agent, IReadOnlyList<FlowClosureReopens> Classes)
 {
     /// <summary>What is wrong with this file; null when nothing is.</summary>
@@ -952,17 +951,65 @@ public sealed record FlowClosureLedgerFile(int Schema, string Agent, IReadOnlyLi
             : Classes.GroupBy(entry => entry.Class, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice
                 ? $"it holds the class '{twice.Key}' twice, and a class holds one entry"
             : null;
+
+    /// <summary>
+    /// The ledger with <paramref name="routing"/> counted for each of <paramref name="reopened"/>: a routing already
+    /// counted for a class - the same instance run again, after a crash, a stop or a resume - adds nothing, so a round
+    /// reopens a class once however often its routing runs. A class met for the first time joins after those the ledger
+    /// holds, in the order given.
+    /// </summary>
+    /// <param name="routing">The <c>route-findings</c> instance that routed the round.</param>
+    /// <param name="reopened">The classes its round reopened, by id.</param>
+    public FlowClosureLedgerFile Counting(string routing, IEnumerable<string> reopened)
+    {
+        ArgumentNullException.ThrowIfNull(reopened);
+
+        var classes = Classes.ToList();
+
+        foreach (var id in reopened)
+        {
+            var at = classes.FindIndex(entry => string.Equals(entry.Class, id, StringComparison.Ordinal));
+
+            if (at < 0)
+            {
+                classes.Add(new FlowClosureReopens(id, [routing]));
+            }
+            else if (!classes[at].By.Contains(routing, StringComparer.Ordinal))
+            {
+                classes[at] = classes[at] with { By = [.. classes[at].By, routing] };
+            }
+        }
+
+        return this with { Classes = classes };
+    }
+
+    /// <summary>The classes reopened twice or more, by id: those the class-closure check asks a home audit of.</summary>
+    public IReadOnlySet<string> ReopenedTwice()
+        => Classes.Where(entry => entry.Reopens >= FlowClosureReopens.HomeAuditAt).Select(entry => entry.Class).ToHashSet(StringComparer.Ordinal);
 }
 
-/// <summary>One class of an item's record, and how often the run's reviews reopened it.</summary>
-/// <param name="Class">The class, by the id the item's plan knows it by.</param>
-/// <param name="Reopens">How many rounds of review found another instance of it, one send-back a round.</param>
-public sealed record FlowClosureReopens(string Class, int Reopens)
+/// <summary>
+/// One class of an item's record, and the routings - each a <c>route-findings</c> instance, one a round of review - that
+/// found another instance of it. A class's count is how many routings name it, so the routing of one round run twice is
+/// counted once.
+/// </summary>
+/// <param name="Class">The class, by the id the item's plan or record knows it by, compared ordinally: an id is no path.</param>
+/// <param name="By">The routings that reopened it, each once, in the order they were counted.</param>
+public sealed record FlowClosureReopens(string Class, IReadOnlyList<string> By)
 {
+    /// <summary>The reopenings at which a class is sent to its home audit instead of back to its builder: the second.</summary>
+    public const int HomeAuditAt = 2;
+
+    /// <summary>How many rounds of review reopened the class, one send-back a round.</summary>
+    [JsonIgnore]
+    public int Reopens => By.Count;
+
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()
         => string.IsNullOrWhiteSpace(Class) ? "an entry names no class"
-            : Reopens < 1 ? $"the class '{Class}' is reopened {Reopens.ToString(CultureInfo.InvariantCulture)} times"
+            : By.Count == 0 ? $"the class '{Class}' names no routing that reopened it"
+            : By.FirstOrDefault(routing => !FlowInstanceId.IsWellFormed(routing)) is { } wrong ? $"the class '{Class}' names '{wrong}', which is not an instance id"
+            : By.Distinct(StringComparer.Ordinal).Count() != By.Count ? $"the class '{Class}' names one routing twice"
             : null;
 }
 

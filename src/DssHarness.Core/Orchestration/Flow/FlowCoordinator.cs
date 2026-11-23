@@ -631,6 +631,13 @@ public sealed class FlowCoordinator
     private readonly List<FlowNextIssue> _nextRound = [];
 
     /// <summary>
+    /// The <c>route-findings</c> step that routes each reason step's answer, by the reason step's declaration path, with
+    /// the member of its output the route reads: read from the definition once, where a reviewer first asks
+    /// (<see cref="RouteOf"/>).
+    /// </summary>
+    private Dictionary<string, (WorkflowStep Route, string Member)>? _routes;
+
+    /// <summary>
     /// The run's record of affected tests as it stands: each key a test step kept its units under, in the order each key
     /// was first written, the one owner of what <c>run.affectedTests</c> reads (<see cref="KeepUnits"/>).
     /// </summary>
@@ -7272,9 +7279,25 @@ public sealed class FlowCoordinator
                     }
                 }
 
+                // A reason step whose answer a route-findings step routes is held at its own answer to what the route
+                // refuses - a reopened finding names a class of the item's, exactly - read here as the route will read
+                // it, so a wrong answer is asked again in the reviewer's conversation and never reaches the route.
+                Func<JsonNode, IReadOnlyList<string>>? holds = null;
+
+                if (step.Type == "reason")
+                {
+                    holds = HoldsOf(instance, out var unheld);
+
+                    if (unheld is not null)
+                    {
+                        _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, unheld), null, Attempt: attempt));
+                        return;
+                    }
+                }
+
                 // The run's share of its dollars is reckoned here, as the run is built, under the grant that stands now.
                 instance.ShareGrant = _budgetGranted;
-                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text) with { Prompts = prompts.Count > 0 ? prompts : null }, token).ConfigureAwait(false);
+                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text) with { Prompts = prompts.Count > 0 ? prompts : null, AnswerHolds = holds }, token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
             }
@@ -8061,6 +8084,102 @@ public sealed class FlowCoordinator
             .Any(item => item.GroupInstance is { State: FlowInstanceState.Done }
                 && TextOf(item.Item.ToNode()?["settles"]) is { Length: > 0 } settles
                 && string.Equals(settles, issue.Id, StringComparison.Ordinal)))];
+
+    /// <summary>
+    /// What a reason step's answer is held to where a <c>route-findings</c> step routes it (<see cref="RouteOf"/>): the
+    /// findings it gives, by the route's own rules (<see cref="FindingRoutes.HeldTo"/>), over the classes the route reads -
+    /// its <c>classes</c> and its <c>record</c>, read from the reviewer's scope as the route will read them from its own.
+    /// Null where no route reads the step's answer, or where they cannot be read: <paramref name="unreadable"/> then says
+    /// why, and the step fails as a key of its own that cannot be read does.
+    /// </summary>
+    /// <param name="instance">The reason step about to start.</param>
+    /// <param name="unreadable">Why the route's classes could not be read; null where they could, or none were asked.</param>
+    private Func<JsonNode, IReadOnlyList<string>>? HoldsOf(FlowInstance instance, out string? unreadable)
+    {
+        unreadable = null;
+
+        if (RouteOf(instance.Path) is not { } routed)
+        {
+            return null;
+        }
+
+        JsonNode? classes = null;
+        JsonNode? record = null;
+
+        foreach (var (key, expression, mayReadNothing) in new[] { ("classes", routed.Route.Classes, false), ("record", routed.Route.Record, true) })
+        {
+            if (expression is null)
+            {
+                continue;
+            }
+
+            var value = Evaluate(expression, instance.DeclaredScope!, out var problem, reader: instance, mayReadNothing: mayReadNothing);
+
+            if (problem is not null)
+            {
+                unreadable = Unreadable(key, routed.Route.Name, problem);
+                return null;
+            }
+
+            if (key == "classes")
+            {
+                classes = value.IsMissing ? null : value.ToNode();
+            }
+            else
+            {
+                record = value.IsMissing ? null : value.ToNode();
+            }
+        }
+
+        return FindingRoutes.HeldTo(routed.Member, FindingRoutes.ClassesOf(classes, record));
+    }
+
+    /// <summary>
+    /// The <c>route-findings</c> step that routes the answer of the reason step declared at <paramref name="path"/>, with the
+    /// member of its output the route reads; null where none does. A route's <c>findings</c> reads a step declared beside
+    /// it: that step's own member where it is a reason step, or - where it is a group that gathers the member - the member
+    /// of each reason step the group holds directly, as a review's reviewers are gathered. Read from the definition once.
+    /// </summary>
+    /// <param name="path">The reason step's declaration path.</param>
+    private (WorkflowStep Route, string Member)? RouteOf(string path)
+    {
+        if (_routes is null)
+        {
+            _routes = new Dictionary<string, (WorkflowStep Route, string Member)>(StringComparer.Ordinal);
+            var declared = FlowScope.Declared(_definition).ToList();
+            var byPath = declared.GroupBy(entry => entry.Path, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.First().Step, StringComparer.Ordinal);
+
+            foreach (var (routePath, route) in declared.Where(entry => entry.Step.Type == "route-findings" && entry.Step.Findings is not null))
+            {
+                var scope = FlowUpdateGates.ParentOf(routePath);
+
+                foreach (var read in WorkflowExpressions.ReadsOf(route.Findings!))
+                {
+                    if (read.Names is not [var root, var member, ..]
+                        || !byPath.TryGetValue(scope is null ? root : $"{scope}.{root}", out var named))
+                    {
+                        continue;
+                    }
+
+                    var namedPath = scope is null ? root : $"{scope}.{root}";
+
+                    if (named.Type == "reason")
+                    {
+                        _routes.TryAdd(namedPath, (route, member));
+                    }
+                    else if (named.IsGroup && named.Gather.Contains(member, StringComparer.Ordinal))
+                    {
+                        foreach (var reviewer in named.Steps.Where(child => child.Type == "reason"))
+                        {
+                            _routes.TryAdd($"{namedPath}.{reviewer.Name}", (route, member));
+                        }
+                    }
+                }
+            }
+        }
+
+        return _routes.TryGetValue(path, out var routes) ? routes : null;
+    }
 
     /// <summary>Writes what an ending owes its handlers, without raising anything: a pause finds it owed, and the resume makes it. Answers whether it owes any.</summary>
     private bool OweHandlers(FlowInstance instance)
@@ -12235,7 +12354,7 @@ public sealed class FlowCoordinator
             "check-mutations" => [("arms", step.Arms?.Expression, true, StartRead.Names)],
             "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
             "class-closure" => [("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value)],
-            "route-findings" => [("findings", step.Findings, false, StartRead.Value)],
+            "route-findings" => [("findings", step.Findings, false, StartRead.Value), ("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value)],
             "fold" or "delete-agent" =>
             [
                 ("within", step.Within?.Expression, false, StartRead.Names),

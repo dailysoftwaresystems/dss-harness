@@ -72,7 +72,7 @@
           },
           "reopens": {
             "type": "string",
-            "description": "For reopened, the class id, exactly as the item's classes name it; empty otherwise."
+            "description": "For reopened, the class id, exactly as the item's classes or its record name it; empty otherwise."
           }
         }
       }

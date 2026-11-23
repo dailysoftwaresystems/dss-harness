@@ -1172,4 +1172,70 @@ public sealed class FlowStepStartTests
         Assert.Equal(HarnessExit.ConfigInvalid, step.Exit);
         Assert.Equal("expression 'labels' of 'verify': '{input.missing}' reads nothing", step.Error);
     }
+
+    /// <summary>
+    /// Each reviewer whose answer a route-findings step routes - every reason step of the group its findings read, which
+    /// gathers the member it reads - is handed, where it starts, what the route will refuse of that member, over the
+    /// classes the route reads from the item's plan and its record: so a wrong class is asked again at the reviewer's own
+    /// answer. A reason step no route reads is handed nothing.
+    /// </summary>
+    [Fact]
+    public async Task AReviewerWhoseFindingsARouteRoutes_IsHeldToWhatTheRouteTakes()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: made
+                type: create-agent
+                agent: worker.md
+              - name: plan
+                type: orient
+              - name: review
+                gather: [findings]
+                dependsOn: [plan]
+                steps:
+                  - name: correctness
+                    type: reason
+                    prompt: review.md
+                    outputs: review.json
+                    independent: true
+                  - name: tests
+                    type: reason
+                    prompt: review.md
+                    outputs: review.json
+                    independent: true
+              - name: route
+                type: route-findings
+                in: made
+                findings: 'review.findings'
+                classes: 'plan.classes'
+                record: 'plan.record'
+                dependsOn: [review, made]
+              - name: other
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [route]
+            """);
+        var runner = new Runner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"classes":[{"id":"c-rate","home":{"path":"src/Home.cs","symbol":"Home"}}],"record":[{"class":"N1"}]}""")))
+            .On("correctness", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"findings":[]}""")))
+            .On("tests", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"findings":[]}""")));
+
+        var coordinator = Coordinator(definition, runner);
+        var end = await coordinator.RunAsync(Token);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        var answer = JsonNode.Parse("""{"findings":[{"class":"reopened","reopens":"C9","severity":"high"},{"class":"reopened","reopens":"N1","severity":"low"}]}""")!;
+
+        foreach (var reviewer in new[] { "review.correctness", "review.tests" })
+        {
+            var holds = runner.Runs.Single(run => run.Instance == reviewer).AnswerHolds;
+
+            Assert.NotNull(holds);
+            Assert.Equal(["findings[0].reopens: 'C9' is no class of the item: the item's are 'c-rate', 'N1'; name one exactly, or class the finding introduced"], holds(answer));
+        }
+
+        Assert.Null(runner.Runs.Single(run => run.Instance == "other").AnswerHolds);
+    }
 }

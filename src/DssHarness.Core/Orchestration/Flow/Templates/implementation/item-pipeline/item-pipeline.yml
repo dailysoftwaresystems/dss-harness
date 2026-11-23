@@ -526,6 +526,8 @@ steps:
         type: route-findings
         in: item-agent
         findings: 'review.findings'
+        classes: 'input.item.classes'
+        record: 'implement.latest.closure'
         dependsOn: [review]
         onFailure: '{input.failTo}'
       - name: revise

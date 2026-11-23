@@ -2017,14 +2017,15 @@ public sealed class ImplementationFlowTests
             // findings, the second's the home audit the second reopening asked for.
             Assert.Contains("c-frame", kit.Agents.Of("implementer")[1].Prompt, StringComparison.Ordinal);
             Assert.Contains("the frame is decided again in the report", kit.Agents.Of("implementer")[1].Prompt, StringComparison.Ordinal);
-            Assert.Contains("reopened a second time", kit.Agents.Of("implementer")[2].Prompt, StringComparison.Ordinal);
-            Assert.Contains("\"reopens\":2", kit.Agents.Of("implementer")[2].Prompt, StringComparison.Ordinal);
+            Assert.Contains("reopened twice or more", kit.Agents.Of("implementer")[2].Prompt, StringComparison.Ordinal);
+            Assert.Contains("\"rounds\":2", kit.Agents.Of("implementer")[2].Prompt, StringComparison.Ordinal);
 
             // The item's ledger kept both reopenings, in its agent's directory.
             var ledger = kit.Harness.OrchestrationStore.ReadClosureLedger(kit.RunOf(), AgentWorkingTheItem(kit));
 
             Assert.NotNull(ledger);
-            Assert.Equal(new FlowClosureReopens("c-frame", 2), Assert.Single(ledger.Classes));
+            var reopened = Assert.Single(ledger.Classes);
+            Assert.Equal(("c-frame", 2), (reopened.Class, reopened.Reopens));
         }
 
         /// <summary>The name of the agent the item pipeline's item-agent step made for the run's one item.</summary>
@@ -2250,7 +2251,8 @@ public sealed class ImplementationFlowTests
             var ledger = kit.Harness.OrchestrationStore.ReadClosureLedger(kit.RunOf(), agent);
 
             Assert.NotNull(ledger);
-            Assert.Equal(new FlowClosureReopens("c-rate", 2), Assert.Single(ledger.Classes));
+            var reopened = Assert.Single(ledger.Classes);
+            Assert.Equal(("c-rate", 2), (reopened.Class, reopened.Reopens));
 
             // The report carries the counts.
             Assert.True(File.Exists(kit.RunOf().ReportFile), "the report was written");

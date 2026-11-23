@@ -276,11 +276,9 @@ public sealed class ClassClosureStepRunner(
         var touches = await TouchesAsync(place, layout, store, run, homes, cancellationToken).ConfigureAwait(false);
 
         // The classes the run's reviews reopened a second time, from the item's ledger - what route-findings keeps and
-        // the home audit is asked for again here, whichever course sent the class back.
-        var reopened = store.ReadClosureLedger(layout, agent)?.Classes
-            .Where(entry => entry.Reopens >= 2)
-            .Select(entry => entry.Class)
-            .ToHashSet(platform.PathComparer());
+        // the home audit is asked for again here, whichever course sent the class back - by their ids, compared
+        // ordinally on every machine: a class id is no path.
+        var reopened = store.ReadClosureLedger(layout, agent)?.ReopenedTwice();
 
         var judged = ClassClosureRules.Judge(planned, entries, new ClassClosureProof(
             changed,

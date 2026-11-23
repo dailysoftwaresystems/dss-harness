@@ -851,7 +851,8 @@ public sealed class ReasonStepRunner(
     /// references share with the schema files beside it taken in (<see cref="Schemas.JsonSchemaSubset.Shared"/>), so
     /// the schema the client is sent and the schema the answer is held to are one and hold - the step's own name the
     /// name its output is read by, and - where the step may ask - the rounds it may ask in one attempt, less what its
-    /// answers already spent: after the last the agent is offered no questions and told so. A schema no answer could
+    /// answers already spent: after the last the agent is offered no questions and told so; and what a step of the flow
+    /// that reads its answer holds it to beyond the schema (<see cref="FlowStepRun.AnswerHolds"/>). A schema no answer could
     /// be held to is refused (13) naming why: the definition's check said its problems when the run began, and this
     /// says where they are again.
     /// </summary>
@@ -867,6 +868,9 @@ public sealed class ReasonStepRunner(
                 SchemaWholeOf(files, layout, workflow, step, named),
                 MaxRepairs: 2,
                 AskRounds: step.Ask == true ? Math.Max(0, (step.AskRounds ?? 2) - run.Answers.Count(given => given.Kind == "ask" && given.Attempt == run.Attempt)) : null)
+            {
+                Holds = run.AnswerHolds,
+            }
             : null;
 
     /// <summary>

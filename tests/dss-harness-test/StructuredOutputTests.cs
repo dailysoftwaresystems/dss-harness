@@ -300,6 +300,34 @@ public sealed class StructuredOutputTests
     }
 
     /// <summary>
+    /// An output that reads against its schema is held to the step's own rules too, where it has any: each problem the
+    /// rules find is sent back under <c>$.output</c> as a schema's is, under the same count of repairs - a reviewer naming
+    /// a class the item does not have is asked again in its own conversation, never passed on - and an answer the rules
+    /// hold completes the run. The rules are asked only of an output the schema holds.
+    /// </summary>
+    [Fact]
+    public async Task AnOutputTheStepsOwnRulesRefuse_IsSentBack_AsASchemasProblemIs()
+    {
+        var asked = new List<JsonNode>();
+        var gate = new StructuredOutputGate(
+            new AgentOutput("o", Step, MaxRepairs: 1) { Holds = output => { asked.Add(output.DeepClone()); return output["findings"]![1]!["at"]!.GetValue<string>() == "b.cs" ? ["findings[1].at: 'b.cs' is no file of the item's"] : []; } },
+            new Masking());
+
+        Assert.Null(await Checked(gate, Envelopes.Of(Output), "t"));
+        Assert.Equal([StructuredOutputGate.Repair(["$.output.findings[1].at: 'b.cs' is no file of the item's"])], _sentBack);
+        Assert.Equal(["$.output.findings[1].at: 'b.cs' is no file of the item's"], Assert.IsType<OutputRepair>(Assert.Single(_events)).Problems);
+
+        // What the schema refuses is said alone: the rules read only an output the schema holds.
+        Assert.Equal(["$.output.findings: holds 1 item and at least 2 are asked"], gate.Problems(Envelopes.Of(JsonNode.Parse("""{"severity":"high","findings":[{"at":"b.cs"}]}"""))));
+        Assert.Single(asked);
+
+        var ended = await Checked(gate, Envelopes.Of(JsonNode.Parse("""{"severity":"high","findings":[{"at":"a.cs"},{"at":"c.cs"}]}""")), "t");
+
+        Assert.Equal((AgentRunStatus.Completed, """{"severity":"high","findings":[{"at":"a.cs"},{"at":"c.cs"}]}"""), (ended!.Status, ended.StructuredOutput));
+        Assert.Equal(2, asked.Count);
+    }
+
+    /// <summary>
     /// The copy the Claude API is sent moves each array bound structured outputs do not take - a minItems above one, and
     /// every maxItems - into that array's description in words, keeping a minItems of one; every other word stays.
     /// </summary>

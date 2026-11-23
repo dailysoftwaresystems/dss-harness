@@ -745,11 +745,15 @@ every reviewer reads the record first and classes each finding `introduced`, a d
 or `reopened`, another instance of a class the item closes, naming the class. After the review's
 gather the `route-findings` step routes the findings by that class: every introduced finding goes
 back as itself, the reopened findings of one class go back as one send-back carrying them all -
-never the one finding alone, for the class is swept whole - and a class reopened a second time goes
-to a home audit instead, the fix before it having been wrong at its root. How often each class was
-reopened the engine keeps in the item's ledger, across the review loop's rounds and across a resume
-- counts no reviewer could carry, fresh each round as reviewers are - and the class-closure check
-asks the home audit of a reopened-twice class, the one mechanism whichever cause asks. Each item's
+never the one finding alone, for the class is swept whole - and a class reopened twice or more goes
+to a home audit instead, the fix before it having been wrong at its root. Which rounds reopened each
+class the engine keeps in the item's ledger, across the review loop's rounds and across a resume, a
+round counted once by the routing that made it however often that routing runs - counts no reviewer
+could carry, fresh each round as reviewers are - and the class-closure check asks the home audit of
+a reopened-twice class, the one mechanism whichever cause asks. A reopened finding names a class of
+the item's, exactly as its plan or its record spells it, and every finding is graded on the route's
+scale: a reviewer whose finding does not is asked again in its own conversation, never sent to the
+recovery. Each item's
 own arms are swept too, beside its review and never holding it: `item-arms` runs the arms the
 builder's answer lists, pending only, on a copy of the commit its fold landed as - made and taken
 away under the main tree's lock, so other items folding at the same time never move the bytes under
@@ -2285,8 +2289,8 @@ directory, the work of each leg this machine runs held inside the isolation of t
 `isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `class-closure`, which judges
 an item's closing record before its fold with no model, as the class-closure paragraph above says; `route-findings`, which
 routes the review's findings by their class - every `introduced` finding back as itself, the reopened findings of one class
-back as one send-back carrying them all, and a class reopened a second time to a home audit instead - keeping how often
-each class was reopened in the item's ledger, which the class-closure check reads; `ci-read`,
+back as one send-back carrying them all, and a class reopened twice or more to a home audit instead - keeping the rounds
+that reopened each class in the item's ledger, which the class-closure check reads; `ci-read`,
 the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
 last pushed where it names none - ends at the first red one with its job's failing step and whole
 log, given by reference with the page of it where the job failed (`failing`) and its lines counted
