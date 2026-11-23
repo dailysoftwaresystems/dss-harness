@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Help;
 using DssHarness.Core.Output;
 using DssHarness.Core.Pages;
 using DssHarness.Core.Text;
@@ -472,7 +473,7 @@ public sealed class CodebaseGraphTool(
             [GraphOp.Related] = $"related - the nodes a relation reaches, as many hops as you ask, {RelatedLines} a page",
             [GraphOp.Outline] = $"outline - a file's or a type's declarations, or the repository's, {OutlineLines} a page",
             [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
-            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path, a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read, a limit some file shows the sign of marked with how many",
+            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path, a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
@@ -1095,10 +1096,12 @@ public sealed class CodebaseGraphTool(
     /// <summary>
     /// Every limit of each language whose files the answer read from the graph - each file the view holds that an
     /// implementation of a language read (<see cref="CodebaseGraphQueries.ReadByALanguage"/>) and the step may read - for each
-    /// language once, in order, every limit as its help says them (<see cref="CodeGraphLimit"/>), one rule for every language:
-    /// a limit whose sign (<see cref="CodeGraphLimit.Signs"/>) some of those files give - the kind of a dynamic mark one holds,
-    /// a reference the linker left candidates, or one it counted external (<see cref="CodebaseGraphQueries.SignsOf"/>) - marked with how
-    /// many give it.
+    /// language once, in order, one rule for every language (<see cref="CodeGraphLimit"/>): a limit whose sign
+    /// (<see cref="CodeGraphLimit.Signs"/>) some of those files give - the kind of a dynamic mark one holds, a reference the linker
+    /// left candidates, or one it counted external (<see cref="CodebaseGraphQueries.SignsOf"/>) - said in full, as its help says it,
+    /// with how many give it; and every other limit of the language by its short name (<see cref="CodeGraphLimit.Name"/>), on one
+    /// line for the language that points to the help topic that says each in full under its name
+    /// (<see cref="HelpTopics.CodebaseGraphLanguages"/>) - none left unsaid, and the answer small.
     /// What a <c>sites</c> answer ends with, read before what it says of those files is trusted. A file no implementation of
     /// a language read is said by the coverage lines: nothing is assumed of a language with no extractor.
     /// </summary>
@@ -1118,17 +1121,37 @@ public sealed class CodebaseGraphTool(
             }
 
             var signs = language.Select(view.SignsOf).ToList();
+            var named = new List<string>();
 
             foreach (var limit in extractor.Help.DoesNotSee)
             {
                 var shown = limit.Signs.Count == 0 ? 0 : signs.Count(file => file.Any(limit.Signs.Contains));
 
-                yield return shown == 0
-                    ? $"{extractor.Language} does not see {limit.Says}."
-                    : $"{extractor.Language} does not see {limit.Says} - shown by {ReportText.Counted(shown, "file")} read.";
+                if (shown == 0)
+                {
+                    named.Add(limit.Name);
+                    continue;
+                }
+
+                yield return $"{extractor.Language} does not see {limit.Says} - shown by {ReportText.Counted(shown, "file")} read.";
+            }
+
+            if (named.Count > 0)
+            {
+                yield return OtherLimits(extractor.Language, named);
             }
         }
     }
+
+    /// <summary>
+    /// The one line a <c>sites</c> answer says the limits of <paramref name="language"/> no file it read shows the sign of by:
+    /// each by its short name, <paramref name="names"/> in the order its help says them, and the help topic that says each in full
+    /// under that name.
+    /// </summary>
+    /// <param name="language">The language's name.</param>
+    /// <param name="names">The short names of its limits no file shows the sign of.</param>
+    internal static string OtherLimits(string language, IReadOnlyList<string> names)
+        => $"{language} also does not see ('help {HelpTopics.CodebaseGraphLanguages}' says each): {string.Join(", ", names)}.";
 
     /// <summary>
     /// The value a quoted <paramref name="data"/> asks by - its first and its last character one quote mark, single or

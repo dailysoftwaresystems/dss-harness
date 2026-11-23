@@ -34,9 +34,9 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Dart packages (pubspec.yaml): a project node for each, named by its name, its summary from its description, a projectReference to each package it depends on by a path: that the repository holds, and the address root package:<name>/ its lib/ directory is",
         [
-            "a dependency from a package host, from git or from an SDK: no project of the repository",
-            "a workspace's members (workspace:), and resolution: workspace: what a root pubspec lists is not read as references",
-            "a file that is no mapping of keys - one that does not parse, holds an alias, is empty or holds several documents: nothing in it is read, the line it stops at marked dynamic; a file is read however deep it nests",
+            ("hosted-packages", "a dependency from a package host, from git or from an SDK: no project of the repository"),
+            ("workspaces", "a workspace's members (workspace:), and resolution: workspace: what a root pubspec lists is not read as references"),
+            ("non-mapping-files", "a file that is no mapping of keys - one that does not parse, holds an alias, is empty or holds several documents: nothing in it is read, the line it stops at marked dynamic; a file is read however deep it nests"),
         ]);
 
     /// <inheritdoc/>

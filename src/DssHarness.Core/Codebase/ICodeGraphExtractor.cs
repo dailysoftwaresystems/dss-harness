@@ -41,7 +41,7 @@ public interface ICodeGraphExtractor
     /// </summary>
     bool Outlines { get; }
 
-    /// <summary>What it reads, and what it does not see, as <c>help codebase-graph</c> says them for it.</summary>
+    /// <summary>What it reads, and what it does not see, as <c>help codebase-graph-languages</c> says them for it.</summary>
     CodeGraphExtractorHelp Help { get; }
 
     /// <summary>
@@ -95,12 +95,19 @@ public sealed record CodeGraphClaims(IReadOnlyList<CodeGraphClaim> Names, IReadO
 public sealed record CodeGraphClaim(string Value, Func<CodeText, bool>? ContentTest = null);
 
 /// <summary>
-/// What an implementation does not see: a clause the help prints after <c>does not see</c>, a line a person reads before trusting
-/// an answer of the graph, and the signs by which a file shows the limit applies to it (<see cref="Signs"/>): a <c>sites</c> answer
-/// says every limit of each language whose files it read, and marks a limit with how many of those files show its sign.
+/// What an implementation does not see: its short name, a clause the help prints after <c>does not see</c>, a line a person reads
+/// before trusting an answer of the graph, and the signs by which a file shows the limit applies to it (<see cref="Signs"/>). A
+/// <c>sites</c> answer says each limit of each language whose files it read: one some of those files show the sign of in full, with
+/// how many show it, and every other by its name alone, on one line for the language that points to
+/// <c>help codebase-graph-languages</c>, which says each in full under its name - so nothing is left unsaid, and an answer stays
+/// small.
 /// </summary>
+/// <param name="Name">
+/// Its short name, the one the help lists it under and a <c>sites</c> answer names it by: lower-case letters, digits and dashes,
+/// beginning with a letter, one implementation's limits each named once (<see cref="IsName"/>).
+/// </param>
 /// <param name="Says">What it does not see: a clause with no final stop.</param>
-public sealed record CodeGraphLimit(string Says)
+public sealed record CodeGraphLimit(string Name, string Says)
 {
     /// <summary>The sign of a file some of whose references the linker left candidates, however few (<see cref="CodebaseGraphQueries.SignsOf"/>).</summary>
     public const string Candidates = "candidates";
@@ -121,13 +128,21 @@ public sealed record CodeGraphLimit(string Says)
     /// </summary>
     public IReadOnlyList<string> Signs { get; init; } = [];
 
-    /// <summary>A limit no sign is named for: its clause alone.</summary>
-    public static implicit operator CodeGraphLimit(string says) => new(says);
+    /// <summary>A limit no sign is named for: its short name and its clause.</summary>
+    public static implicit operator CodeGraphLimit((string Name, string Says) limit) => new(limit.Name, limit.Says);
+
+    /// <summary>Whether <paramref name="name"/> is a limit's short name: lower-case letters, digits and dashes, beginning with a letter and ending with no dash.</summary>
+    /// <param name="name">A limit's name.</param>
+    public static bool IsName(string? name)
+        => name is { Length: > 0 }
+            && char.IsAsciiLetterLower(name[0])
+            && name[^1] != '-'
+            && name.All(character => char.IsAsciiLetterLower(character) || char.IsAsciiDigit(character) || character == '-');
 }
 
-/// <summary>What <c>help codebase-graph</c> says of one implementation.</summary>
+/// <summary>What <c>help codebase-graph-languages</c> says of one implementation.</summary>
 /// <param name="Reads">One line: what it reads, and through what.</param>
-/// <param name="DoesNotSee">What it does not see, each a line a person reads before trusting an answer of the graph, with the signs that tell where it applies.</param>
+/// <param name="DoesNotSee">What it does not see, each, under its short name, a line a person reads before trusting an answer of the graph, with the signs that tell where it applies.</param>
 public sealed record CodeGraphExtractorHelp(string Reads, IReadOnlyList<CodeGraphLimit> DoesNotSee)
 {
     /// <summary>

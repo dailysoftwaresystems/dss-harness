@@ -21,7 +21,7 @@ public sealed class ListedExtractor : ICodeGraphExtractor
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
         "every file no other implementation claims: a node with its size and its lines, nothing in it read",
-        ["anything inside such a file: an agent reads it whole, or searches it"]);
+        [("contents", "anything inside such a file: an agent reads it whole, or searches it")]);
 
     /// <inheritdoc/>
     public FileExtract Extract(CodeFileInput input)

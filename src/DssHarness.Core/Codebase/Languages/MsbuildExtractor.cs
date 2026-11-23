@@ -42,12 +42,12 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "MSBuild projects (.csproj) and solutions (.slnx): a project node for each, named by its file name, a project's summary from its Description, a projectReference to each project it names that the repository holds, each property its own PropertyGroup declares a key of the project's alone with its value as its summary, each $(Name) an attribute or an element's text writes a uses of the property it reads - the project's own of that name, those declared before it where it is read as properties are (in a PropertyGroup or an Import), every one elsewhere, else the key of that name an XML file declares, a .props or .targets PropertyGroup's property - and each Import Project an import of the file it names",
         [
-            "what MSBuild evaluates: a reference under a condition is taken whatever the condition, a property in a path is left as written, and a property declared under several conditions is an edge of candidates to each declaration a use may read",
-            "a project's own property from any other file - another project, a C# literal of its name: it is the project's alone, and the keys' join never reaches it",
-            "a $(Name) a comment writes, and a name neither the project nor an XML file declares as a key - a property of the SDK's, one only a C# member or a JSON key is named by: no use",
-            "a project named by a wildcard, and two projects of one file name, which a reference names both of",
-            "a solution in the older .sln form",
-            "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason",
+            ("evaluation", "what MSBuild evaluates: a reference under a condition is taken whatever the condition, a property in a path is left as written, and a property declared under several conditions is an edge of candidates to each declaration a use may read"),
+            ("foreign-properties", "a project's own property from any other file - another project, a C# literal of its name: it is the project's alone, and the keys' join never reaches it"),
+            ("unkeyed-names", "a $(Name) a comment writes, and a name neither the project nor an XML file declares as a key - a property of the SDK's, one only a C# member or a JSON key is named by: no use"),
+            ("wildcard-projects", "a project named by a wildcard, and two projects of one file name, which a reference names both of"),
+            ("sln-files", "a solution in the older .sln form"),
+            ("broken-xml", "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason"),
         ]);
 
     /// <inheritdoc/>

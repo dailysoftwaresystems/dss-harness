@@ -40,13 +40,13 @@ public sealed class XmlExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "XML data files (.xml, .config, .props, .targets, .resx, .xaml, .manifest, .nuspec), every element however deep: the root element as a section, each element with a name, key, id or x:Name attribute as an element node named by its path and that attribute, a .resx's data name=, a .props or .targets's PropertyGroup children and a .config's appSettings <add key> and connectionStrings <add name> as keys named by the key they are (appSettings.Timeout, connectionStrings.Main), their value or connection string as the summary, a .props or .targets's Import Project= as an import of the file it names, a .xaml root's x:Class as a part of that C# type, and each element the view names by x:Name as a field of that type, of the element's type, which its code-behind reaches by the field's name",
         [
-            "MSBuild projects and solutions (.csproj, .slnx), which the msbuild extractor reads",
-            "a file with a DTD: refused, nothing in it read",
-            "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason",
-            "an attribute named otherwise than name, key, id or x:Name, and an element with none of them: no node of its own, its lines its parent's",
-            "a key that is no .resx's data, .props's property or .config's appSettings or connectionStrings entry - an <add key> of a custom configuration section among them: an element node, which the keys' join does not reach",
-            "an element a XAML view names by Name alone, without the x: prefix, and an x:Name of a view with no x:Class: an element node, which no code reaches",
-            "an Import Project= of any file but a .props or a .targets: no import",
+            ("msbuild-files", "MSBuild projects and solutions (.csproj, .slnx), which the msbuild extractor reads"),
+            ("dtd", "a file with a DTD: refused, nothing in it read"),
+            ("broken-xml", "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason"),
+            ("unnamed-elements", "an attribute named otherwise than name, key, id or x:Name, and an element with none of them: no node of its own, its lines its parent's"),
+            ("other-keys", "a key that is no .resx's data, .props's property or .config's appSettings or connectionStrings entry - an <add key> of a custom configuration section among them: an element node, which the keys' join does not reach"),
+            ("xaml-names", "an element a XAML view names by Name alone, without the x: prefix, and an x:Name of a view with no x:Class: an element node, which no code reaches"),
+            ("other-imports", "an Import Project= of any file but a .props or a .targets: no import"),
         ]);
 
     /// <inheritdoc/>

@@ -97,16 +97,16 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "C# (.cs), through the compiler's own parser and its syntax alone, nothing built: every namespace, type and member with its signature, summary and body; usings, base lists, overrides and test attributes; each call with what its receiver is where the file says; each member a member reads or writes without calling it - a field, a property, a constant, an enum member, and any name a nameof names - and each string literal the file holds, an interpolated string's constant parts each one of its own, by its value as the compiler reads it, its line and the node it is written in",
         [
-            "code under a preprocessor branch the parse does not take: it defines no symbol, so code under #if DEBUG is out",
-            "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone",
-            "local functions and lambdas as nodes of their own: what they call, the member they are written in calls",
-            "a call on a dynamic value, a member named by a string to reflection, Activator.CreateInstance and a delegate's invocation: marked dynamic, and not linked",
-            "a generic extension method on a type parameter with no constraint, found by its name alone; a constructor's base(...) in a part of a partial class whose base list is in another file",
-            "a read of a member through a value no declaration types, linked by the member's name alone; a read of another file's field or property whose name its type's members also carry, linked to each of them",
-            "code a source generator writes while the project builds, which is in no file of the tree",
-            "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's",
-            "what an assembly's or a module's attribute names or reads - [assembly: InternalsVisibleTo(...)] - which no node of the file declares: only its strings are kept, held by the file",
-            "a file of more than 2,147,483,647 characters, past the Int32 the compiler counts a text's characters in (SourceText.Length): nothing in it parsed, the line its count ends on marked dynamic, with why",
+            ("preprocessor-branches", "code under a preprocessor branch the parse does not take: it defines no symbol, so code under #if DEBUG is out"),
+            ("untyped-values", "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone"),
+            ("local-functions", "local functions and lambdas as nodes of their own: what they call, the member they are written in calls"),
+            ("dynamic-calls", "a call on a dynamic value, a member named by a string to reflection, Activator.CreateInstance and a delegate's invocation: marked dynamic, and not linked"),
+            ("generic-extensions", "a generic extension method on a type parameter with no constraint, found by its name alone; a constructor's base(...) in a part of a partial class whose base list is in another file"),
+            ("untyped-reads", "a read of a member through a value no declaration types, linked by the member's name alone; a read of another file's field or property whose name its type's members also carry, linked to each of them"),
+            ("generated-sources", "code a source generator writes while the project builds, which is in no file of the tree"),
+            ("same-named-types", "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's"),
+            ("assembly-attributes", "what an assembly's or a module's attribute names or reads - [assembly: InternalsVisibleTo(...)] - which no node of the file declares: only its strings are kept, held by the file"),
+            ("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the compiler counts a text's characters in (SourceText.Length): nothing in it parsed, the line its count ends on marked dynamic, with why"),
         ])
     {
         Holds = "the compiler's syntax tree of the file, whole by the compiler's design - as Roslyn's documentation has it, a syntax tree holds every bit of the text it was parsed from: every token and every run of trivia is an entry of it, its text kept where it is 42 characters or more and a shorter one shared - so reading a file holds as much as its code writes, though the text itself is given the compiler by position (SourceText over the core's text), never as one string",

@@ -183,7 +183,7 @@ public sealed class CodebaseGraphServingTests
     /// that only spans it - and the bytes it serves are a pinned share of the whole files those places stand in. A change that
     /// drops a use, a literal's place, a key's join, a selector's reach or an override from the answer turns it red. The share is
     /// of the whole answer, the lines that end it among them: every limit of each language whose files the answer read, those a
-    /// file shows the sign of marked with how many.
+    /// file shows the sign of in full with how many, every other by its short name on one line a language.
     /// </summary>
     [Fact]
     public async Task EverySiteTask_IsAnsweredWithEveryPlaceThatDecides_AtFullRecall_ForAPinnedShareOfTheWholeFiles()
@@ -219,37 +219,37 @@ public sealed class CodebaseGraphServingTests
 
         Assert.Equal(
             [
-                ("csharp", "Largest", 45.0),
-                ("csharp", "Describe", 47.6),
-                ("csharp", "Items", 42.5),
-                ("c", "largest_area", 22.7),
-                ("c", "area_circle", 40.1),
-                ("dart", "largest", 45.9),
-                ("dart", "describe", 38.9),
-                ("web", "money", 154.8),
-                ("web", "total", 153.3),
-                ("web", ".btn-primary", 154.4),
-                ("web", "\"Your receipt\"", 142.2),
-                ("vue", "total", 354.9),
-                ("vue", "add", 355.7),
-                ("vue", ".btn-primary", 361.9),
-                ("vue", "lineText", 350.7),
-                ("angular", "total", 350.9),
-                ("angular", "app-line", 356.3),
-                ("angular", ".btn-primary", 359.7),
-                ("angular", "lineText", 351.9),
-                ("razor-blazor", "Total", 267.2),
-                ("razor-blazor", "AddTea", 259.2),
-                ("razor-blazor", "Add", 283.0),
-                ("razor-blazor", ".btn-primary", 265.5),
-                ("config", "TimeoutSeconds", 168.2),
-                ("config", "Retries", 162.7),
-                ("config", "MaxItems", 158.1),
-                ("config", "freeOverCents", 161.5),
-                ("config", "rules", 155.5),
-                ("python", "largest", 101.5),
-                ("python", "describe", 96.5),
-                ("python", "Shape.name", 99.3),
+                ("csharp", "Largest", 22.1),
+                ("csharp", "Describe", 24.7),
+                ("csharp", "Items", 19.6),
+                ("c", "largest_area", 10.3),
+                ("c", "area_circle", 27.8),
+                ("dart", "largest", 25.9),
+                ("dart", "describe", 18.8),
+                ("web", "money", 40.5),
+                ("web", "total", 39.0),
+                ("web", ".btn-primary", 40.1),
+                ("web", "\"Your receipt\"", 27.9),
+                ("vue", "total", 68.0),
+                ("vue", "add", 68.8),
+                ("vue", ".btn-primary", 75.0),
+                ("vue", "lineText", 63.7),
+                ("angular", "total", 68.5),
+                ("angular", "app-line", 73.9),
+                ("angular", ".btn-primary", 77.3),
+                ("angular", "lineText", 69.5),
+                ("razor-blazor", "Total", 91.8),
+                ("razor-blazor", "AddTea", 83.7),
+                ("razor-blazor", "Add", 107.5),
+                ("razor-blazor", ".btn-primary", 90.0),
+                ("config", "TimeoutSeconds", 61.6),
+                ("config", "Retries", 56.1),
+                ("config", "MaxItems", 51.5),
+                ("config", "freeOverCents", 54.9),
+                ("config", "rules", 48.9),
+                ("python", "largest", 37.4),
+                ("python", "describe", 32.5),
+                ("python", "Shape.name", 35.3),
             ],
             ratios);
     }

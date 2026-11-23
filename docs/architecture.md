@@ -4580,11 +4580,13 @@ An implementation is registered by being written: the one scan of the core (`Cor
 `CodeGraphExtractors.Implementations` reads) finds each, `AddDssHarness` registers each type of it
 (`AddCoreImplementationsOf<T>`), and the registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
-extension no file has, and a version below 1 - so a clash is a red test, never an order. A file goes to the
+extension no file has, a version below 1, and a limit (`CodeGraphLimit`) with no short name - lower-case letters, digits and
+dashes - or one whose name another limit of its implementation bears - so a clash is a red test, never an order. A file goes to the
 claimants of its exact name, else of an ending `codebaseGraph.claims` maps, else of its extension, else to the fallback
 (`listed`); their content tests decide among
 several, and none or several saying yes lists it `ambiguous`. Everything else about the graph - `codebaseGraph.languages`,
-V52's names and `help codebase-graph`'s table - is read from the registry. A test keeps the core from mentioning
+V52's names and `help codebase-graph-languages`, which says each implementation and each of its limits under its short
+name - is read from the registry. A test keeps the core from mentioning
 anything under `Codebase\Languages\`. Every span counts lines as `CodeFileText.Lines` cuts them - CR LF, LF and CR
 alone, as an editor and git count - and an implementation that reads a parser's positions turns each into a line by
 `CodeFileText.LineIndex`, since a parser may also break lines at NEL and the Unicode separators.
@@ -5294,9 +5296,12 @@ their hits, the kinds of them named, the files it lists only and those it is uns
 selector was searched in; and, where any file the graph lists only was searched, that nothing is assumed of a language with no
 extractor, its files read by text alone - so a plan's site list is never read as covered where the graph was silent. Where none
 of it holds a place, the answer says only what was searched: no line of the files searched by text, never no line at all. It
-ends besides with every limit of each language whose files the graph read, one rule for every language (`CodebaseGraphTool.Unseen`),
+ends besides with every limit of each language whose files the graph read, one rule for every language (`CodebaseGraphTool.Unseen`):
 a limit some of those files show the sign of - the kind of a dynamic mark it holds, a reference the linker left candidates, or
-one it counted external (`CodebaseGraphQueries.SignsOf`) - marked with how many show it. The prompts that search for a class's sites - `plan.md`,
+one it counted external (`CodebaseGraphQueries.SignsOf`) - said in full, with how many show it, and every other limit of the
+language by its short name (`CodeGraphLimit.Name`), on one line for the language that points to `help codebase-graph-languages`,
+which says each in full under its name - so nothing is left unsaid, and an answer about a few small files is not outweighed by
+the limits of the languages it read. The prompts that search for a class's sites - `plan.md`,
 `plan-audit.md`, `item-audit.md` and the plan's `searches` - name `sites` first; the plan's text search after it for what the
 graph does not see, each said in `notCovered`, and each audit's own text search across every tier, format, target and file
 kind beside it, never the plan's searches.

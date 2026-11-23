@@ -44,12 +44,12 @@ public sealed class YamlExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "YAML data files (.yml, .yaml): each scalar key anywhere in the file, however deep, as a key node named by its path with its value as its summary, each member that holds others as a section over its lines inside the one that holds it, an alias as a key whose value is the alias with a uses edge to the node its anchor names, a mapping with a merge key as a uses edge to each mapping it merges - what an anchor names read once, where it is written - each document of a file of several as a section by its place ([0] the first), a GitHub Actions workflow's steps named by their name:, a step's uses: naming a local action as an import of its action.yml, and a job's uses: naming a reusable workflow of the repository as an import of its file",
         [
-            "pubspec.yaml, which the pubspec extractor reads",
-            "a key reached only through an alias or a merge, as a node of its own where the alias is written: it is the anchor's node, which the uses edge reaches, and a key path written through the alias reaches it through that edge",
-            "a merge key at a file's top, which no node holds: what it merges is reached by its keys' names alone",
-            "a key that is no scalar - a list or a mapping written as a key: no node of it",
-            "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic",
-            "a uses: that names an action or a workflow of a marketplace or of another repository by its owner: no import of it",
+            ("pubspec", "pubspec.yaml, which the pubspec extractor reads"),
+            ("alias-keys", "a key reached only through an alias or a merge, as a node of its own where the alias is written: it is the anchor's node, which the uses edge reaches, and a key path written through the alias reaches it through that edge"),
+            ("top-merges", "a merge key at a file's top, which no node holds: what it merges is reached by its keys' names alone"),
+            ("complex-keys", "a key that is no scalar - a list or a mapping written as a key: no node of it"),
+            ("broken-yaml", "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic"),
+            ("foreign-actions", "a uses: that names an action or a workflow of a marketplace or of another repository by its owner: no import of it"),
         ]);
 
     /// <inheritdoc/>

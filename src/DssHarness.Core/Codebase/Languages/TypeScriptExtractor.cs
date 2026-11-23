@@ -26,10 +26,10 @@ public sealed class TypeScriptExtractor : ICodeGraphExtractor
         "TypeScript (.ts, .mts, .cts, .tsx), through the reader JavaScript is read by, with its types: every class, interface, enum, type alias, namespace, function, variable, constructor and its parameter properties, method, accessor and field with its signature, summary and body - a declaration file's (.d.ts) each a prototype; imports and exports, each tried as TypeScript tries it, a module one scope whose own names no importer sees; extends, implements and override; each member a member reads or writes without calling it, and each string literal the file holds - a template's constant parts each one of its own, a JSX attribute's text, a regular expression none - by its value as JavaScript reads its escapes, a String.raw template's as written, its line and the node it is written in; each call with what its receiver is where the file says, a JSX element's component among them, and a JSX attribute's className, class and id a use of each rule it names; " + JsHelp.Frameworks + "; a value typed any marked dynamic; describe, it and test calls in test files",
         [
             .. JsHelp.Unseen,
-            "an overload chosen by its argument types: a call binds each overload of its name that takes its arguments' count",
-            "a type TypeScript infers, or one a union, an intersection or a generic's argument says: a call on such a value is bound by its name alone",
-            "a declaration a decorator or a code generator adds, and a module or a global another file augments (declare module, declare global): read where the augmenting file declares it, as its own",
-            "a call whose type arguments hold a conditional type (f<T extends U ? A : B>()): not seen as a call",
+            ("overloads", "an overload chosen by its argument types: a call binds each overload of its name that takes its arguments' count"),
+            ("union-types", "a type TypeScript infers, or one a union, an intersection or a generic's argument says: a call on such a value is bound by its name alone"),
+            ("augmentations", "a declaration a decorator or a code generator adds, and a module or a global another file augments (declare module, declare global): read where the augmenting file declares it, as its own"),
+            ("conditional-type-calls", "a call whose type arguments hold a conditional type (f<T extends U ? A : B>()): not seen as a call"),
         ]);
 
     /// <inheritdoc/>

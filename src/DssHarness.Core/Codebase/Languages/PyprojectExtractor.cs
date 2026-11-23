@@ -54,9 +54,9 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Python projects (pyproject.toml and setup.cfg): a project node for each, named by its name, and the roots of the layout it names - setuptools' package-dir root and packages.find's where, Poetry's packages' from, the directory of each of Hatch's wheel packages, PDM's package-dir and pytest's pythonpath - each a directory beside the file under which Python's bare imports are looked for",
         [
-            "dependencies, optional dependencies, the build backend, scripts and entry points, and every tool's configuration but the roots: not read - no key of the file is a node and no value a literal, so the sites operation searches the file by its text",
-            "a root a value computes - a setup.cfg's interpolation, a setup.py's code - and a directory package-dir maps one package to: no root",
-            "a value whose bracket or string never closes: the rest of the file is read as that value - a one-line string's, the rest of its line - and the line it begins on is marked dynamic",
+            ("other-keys", "dependencies, optional dependencies, the build backend, scripts and entry points, and every tool's configuration but the roots: not read - no key of the file is a node and no value a literal, so the sites operation searches the file by its text"),
+            ("computed-roots", "a root a value computes - a setup.cfg's interpolation, a setup.py's code - and a directory package-dir maps one package to: no root"),
+            ("unclosed-values", "a value whose bracket or string never closes: the rest of the file is read as that value - a one-line string's, the rest of its line - and the line it begins on is marked dynamic"),
         ]);
 
     /// <inheritdoc/>

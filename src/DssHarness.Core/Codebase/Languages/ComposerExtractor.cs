@@ -30,9 +30,9 @@ public sealed class ComposerExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Composer packages (composer.json): a project node for each, named by its name, its summary from its description, and a projectReference to each package it requires that the repository holds - a path repository's",
         [
-            "a package from Packagist, from git or from an archive: no project of the repository, unless one of the repository's packages has its name",
-            "the autoload's psr-4, classmap and files: a class is found by its namespace, whichever directory holds it, and the files are no imports",
-            "what repositories, replace, provide, conflict and suggest name: not read as references",
+            ("registry-packages", "a package from Packagist, from git or from an archive: no project of the repository, unless one of the repository's packages has its name"),
+            ("autoload", "the autoload's psr-4, classmap and files: a class is found by its namespace, whichever directory holds it, and the files are no imports"),
+            ("other-links", "what repositories, replace, provide, conflict and suggest name: not read as references"),
             JsonOutline.Unread,
         ]);
 

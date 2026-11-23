@@ -29,8 +29,8 @@ public sealed class MarkdownExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Markdown (.md): each heading, marked with # or underlined, as a section holding its lines up to the next heading of its level or above",
         [
-            "a heading inside a fenced block, which is code",
-            "a heading written in HTML (<h1>), and links between documents",
+            ("fenced-headings", "a heading inside a fenced block, which is code"),
+            ("html-headings", "a heading written in HTML (<h1>), and links between documents"),
         ]);
 
     /// <inheritdoc/>

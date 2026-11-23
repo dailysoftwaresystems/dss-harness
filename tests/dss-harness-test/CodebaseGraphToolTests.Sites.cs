@@ -3,6 +3,7 @@ using System.Text;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
+using DssHarness.Core.Help;
 
 namespace DssHarness.Tests;
 
@@ -351,9 +352,10 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// Every limit of each language whose files a <c>sites</c> answer read is said where the answer ends, one rule for every
-    /// language, as its help says them: a limit whose sign the files read show - the kind of a dynamic mark one holds, a reference
-    /// the linker left candidates, or one it counted external - marked with how many show it, and every other said plain; read
-    /// before what the answer says of their files is trusted.
+    /// language: a limit whose sign the files read show - the kind of a dynamic mark one holds, a reference the linker left
+    /// candidates, or one it counted external - in full, as its help says it, with how many show it; and every other by its short
+    /// name, on one line for the language that points to <c>help codebase-graph-languages</c>, which says each in full under that
+    /// name - nothing left unsaid, and the answer small. Read before what the answer says of their files is trusted.
     /// </summary>
     [Fact]
     public async Task Sites_EndWithEveryLimitOfEachLanguageRead_TheOnesItsFilesShowMarkedWithHowMany()
@@ -381,11 +383,23 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal([.. LimitsOf("csharp", [CodeGraphLimit.Candidates]), .. LimitsOf("markdown"), .. LimitsOf("python", [CodeGraphLimit.Candidates])], Tail(duck));
         Assert.Equal("coverage: 3 file(s) the graph is unsure of, searched by text too - 2 hit(s)", computed.Single(line => line.Contains("unsure of", StringComparison.Ordinal)));
 
-        // The marks themselves, as the answer writes them: by the limit's words, never by the sign, so a limit that loses its sign
-        // is seen to lose its mark.
+        // The marks themselves, as the answer writes them: a limit shown by its words in full, never by the sign, so a limit that
+        // loses its sign is seen to lose its mark; every other by its name alone, on one line a language that points to where each is
+        // said in full - a limit no file shows is never said in full, and none is left unsaid.
         Assert.Contains($"python does not see {Says("computed attribute access")} - shown by 1 file(s) read.", Tail(computed));
         Assert.Contains($"python does not see {Says("a duck-typed receiver")} - shown by 1 file(s) read.", Tail(duck));
-        Assert.Contains($"python does not see {Says("a duck-typed receiver")}.", Tail(computed));
+        Assert.DoesNotContain(Tail(computed), line => line.Contains(Says("a duck-typed receiver"), StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                "csharp also does not see ('help codebase-graph-languages' says each): preprocessor-branches, untyped-values, local-functions, dynamic-calls, generic-extensions, untyped-reads, generated-sources, same-named-types, assembly-attributes, huge-files.",
+                "markdown also does not see ('help codebase-graph-languages' says each): fenced-headings, html-headings.",
+                $"python does not see {Says("computed attribute access")} - shown by 1 file(s) read.",
+                "python also does not see ('help codebase-graph-languages' says each): dynamic-imports, unseen-roots, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unclosed, module-getattr, unbound-names, outside-fixtures, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
+            ],
+            Tail(computed));
+        Assert.All(
+            CodeGraphExtractors.OfThisBuild.Find("python")!.Help.DoesNotSee.Where(limit => !limit.Says.StartsWith("computed attribute access", StringComparison.Ordinal)),
+            limit => Assert.Contains($"    {limit.Name}: does not see", HelpTopics.Render(HelpTopics.CodebaseGraphLanguages), StringComparison.Ordinal));
 
         // What makes each shown: the signs the limits name - the kind of the mark the one file holds, candidates the other is left.
         var limits = CodeGraphExtractors.OfThisBuild.Find("python")!.Help.DoesNotSee;
@@ -422,20 +436,31 @@ public sealed partial class CodebaseGraphToolTests
         => Assert.Single(CodeGraphExtractors.OfThisBuild.Find("python")!.Help.DoesNotSee, limit => limit.Says.Contains(names, StringComparison.Ordinal)).Says;
 
     /// <summary>
-    /// The lines a <c>sites</c> answer ends with for <paramref name="language"/>: each limit of its implementation's help, in its
-    /// order, marked with how many of the files read - each by the signs it gives, <paramref name="files"/> - show a sign of it.
+    /// The lines a <c>sites</c> answer ends with for <paramref name="language"/>: each limit of its implementation's help that some
+    /// of the files read - each by the signs it gives, <paramref name="files"/> - show a sign of, in its order and in full, with how
+    /// many show it; then every other by its short name, in its order, on one line that points to the help topic saying each.
     /// </summary>
     private static IEnumerable<string> LimitsOf(string language, params IReadOnlyList<string>[] files)
     {
         var extractor = CodeGraphExtractors.OfThisBuild.Find(language)!;
+        var named = new List<string>();
 
         foreach (var limit in extractor.Help.DoesNotSee)
         {
             var shown = files.Count(signs => signs.Any(sign => limit.Signs.Contains(sign, StringComparer.Ordinal)));
 
-            yield return shown == 0
-                ? $"{extractor.Language} does not see {limit.Says}."
-                : $"{extractor.Language} does not see {limit.Says} - shown by {shown.ToString(CultureInfo.InvariantCulture)} file(s) read.";
+            if (shown == 0)
+            {
+                named.Add(limit.Name);
+                continue;
+            }
+
+            yield return $"{extractor.Language} does not see {limit.Says} - shown by {shown.ToString(CultureInfo.InvariantCulture)} file(s) read.";
+        }
+
+        if (named.Count > 0)
+        {
+            yield return $"{extractor.Language} also does not see ('help codebase-graph-languages' says each): {string.Join(", ", named)}.";
         }
     }
 
