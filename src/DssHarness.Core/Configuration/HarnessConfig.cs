@@ -349,6 +349,13 @@ public sealed class HarnessDefaults
     public AdmissionSettings? Admission { get; init; }
 
     /// <summary>
+    /// The thresholds a report's signals are computed by (<see cref="Orchestration.Flow.FlowReportThresholds"/>,
+    /// which also names the shipped values each field takes where the config says nothing); <see langword="null"/> for
+    /// every one of them.
+    /// </summary>
+    public Orchestration.Flow.FlowReportThresholds? Report { get; init; }
+
+    /// <summary>
     /// Seconds without output after which a phase is treated as hung; zero disables
     /// the check. A stall bound is used rather than a wall clock budget because
     /// output cadence stays stable even when total duration does not.

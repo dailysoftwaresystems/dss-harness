@@ -113,20 +113,12 @@ public sealed class FlowReportsTests
 
         _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch);
 
-        var report = harness.FileSystem.ReadAllText(layout.ReportFile).Split('\n');
+        var report = harness.FileSystem.ReadAllText(layout.ReportFile).Replace("\r\n", "\n");
 
-        Assert.Equal(
-            "- 'c-rate': the rate holds over every format",
-            report[Array.IndexOf(report, "## The classes this run closed") + 1]);
-        Assert.Equal(
-            "- 'c-frame': the frame is decided once",
-            report[Array.IndexOf(report, "## The classes this run closed") + 2]);
-        Assert.Equal(
-            "- 'c-rate', reopened 2 time(s)",
-            report[Array.IndexOf(report, "## Classes the reviews reopened") + 1]);
-        Assert.Equal(
-            "- 'c-rate' home 'src/Rates/Home.cs', touched 6 time(s)",
-            report[Array.IndexOf(report, "## Homes the run touched often enough to name") + 1]);
+        Assert.Contains("- 'c-rate': the rate holds over every format", report, StringComparison.Ordinal);
+        Assert.Contains("- 'c-frame': the frame is decided once", report, StringComparison.Ordinal);
+        Assert.Contains("- 'c-rate', reopened 2 time(s)", report, StringComparison.Ordinal);
+        Assert.Contains("- 'c-rate' home 'src/Rates/Home.cs', touched 6 time(s)", report, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -146,12 +138,13 @@ public sealed class FlowReportsTests
 
         _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch);
 
-        var report = harness.FileSystem.ReadAllText(layout.ReportFile).Split('\n');
-        Assert.Equal(
-            "- at least 1.25 USD (the rest is not known: no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)), 1500 tokens, 2.5 minutes of reasoning",
-            report[Array.IndexOf(report, "## Spent") + 1]);
+        var report = harness.FileSystem.ReadAllText(layout.ReportFile);
+        Assert.Contains(
+            "- budget: at least 1.25 USD (the rest is not known: no price for 'glm-5.3' (providers 'z', model 'glm-5.3': priceOutput)), 1500 tokens, 2.5 minutes of reasoning",
+            report.Replace("\r\n", "\n"),
+            StringComparison.Ordinal);
 
-        var written = JsonNode.Parse(harness.FileSystem.ReadAllText(layout.ReportJsonFile))!["spent"]!;
+        var written = JsonNode.Parse(harness.FileSystem.ReadAllText(layout.ReportJsonFile))!["theRun"]!["budget"]!;
         var answered = JsonNode.Parse(FlowReports.Document(new FlowRunResult("Done", "r1", "done", [], [], [], [], [], spent, 0, [])))!["spent"]!;
         var counted = JsonNode.Parse(FlowReports.Document(new FlowRunResult("Done", "r1", "done", [], [], [], [], [], spent with { Uncounted = null }, 0, [])))!["spent"]!;
 

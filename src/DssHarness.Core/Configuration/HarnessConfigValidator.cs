@@ -165,6 +165,11 @@ public static partial class HarnessConfigValidator
         }
 
         ValidateAdmission(defaults.Admission, "defaults.admission", problems);
+
+        if (defaults.Report is { } report && report.Problem() is { } wrong)
+        {
+            problems.Add($"defaults.report: {wrong}");
+        }
     }
 
     /// <summary>Checks one admission section: every field it declares is one a machine can admit legs by.</summary>

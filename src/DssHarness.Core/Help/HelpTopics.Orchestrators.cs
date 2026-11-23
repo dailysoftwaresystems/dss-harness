@@ -61,7 +61,7 @@ public static partial class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.EvidenceDirectoryName}/", "its evidence roots' files, kept when it is deleted"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/", "API clients only: one conversation with the provider, in the provider's own form"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
-                ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included"),
+                ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included; every step's own record holds what its work measured (`measure` in step.json and flow.json: when it was ready, its waits by cause whole across sessions, its run time, its pause, and one entry per attempt - what served it, the price copied as its cost was counted, the tokens by kind, the dollars, the turns, the tools, the compactions - with the advisor's spend beside them; the run's `spent` is the sum of its steps'), and an attempt a crash cut off has its measure completed at the resume from the step's stored stream"),
                 ($"  {HarnessLayout.OrchestratorTempDirectoryName}/<launch>/", "every temporary directory a run's launch and its children keep, one directory a launch - its children's and Claude Code's own process's beside it - made with the launch, held for the run's life and never in the user's own places; taken away whole with the run's directory"),
                 ($"  {HarnessLayout.OrchestratorArtifactsDirectoryName}/", "the run's artifacts, made with the run and kept for its life: read and copied wherever they are asked for while it runs, and taken away with the run's directory"),
                 ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it"),
@@ -133,6 +133,8 @@ public static partial class HelpTopics
         builder.AppendLine("      [--again] [--json]");
         builder.AppendLine($"  {command} {FlowService.PauseCommand} <run> [--all] [--json]");
         builder.AppendLine($"  {command} {FlowService.StopCommand} <run> [--now] [--json]");
+        builder.AppendLine($"  {command} {FlowService.ReadReportCommand} <run> [--steps <instance>...] [--by step|agent|model|provider|type]");
+        builder.AppendLine("      [--top <n>] [--markdown] [--json]");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -289,6 +291,25 @@ public static partial class HelpTopics
             + "command installs Claude Code or brings one up to date: that is a run's to do, and these only read. An orchestrator "
             + "made by hand, which no flow runs, has no reporter and fewer facts: its status prints what list-orchestrator has of it "
             + "and says so, and the person's question is refused (12).");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
+            + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+            + "sessions and its times and its budget; the totals of its tokens by kind and its dollars by model; one row per step "
+            + "instance with its state, its attempts, its waits by cause, its run time, its model, its tokens and its dollars; the "
+            + "critical path, the chain of steps a faster run must shorten, each with what it waited for; every attempt that "
+            + "failed; every question a person answered, how long each waited and what was recommended; what its reviews "
+            + "converged to - the classes closed and reopened, the hotspots, what its loops left - and the signals a reader "
+            + "starts from: the slowest and most expensive steps, the most retried, every fallback, the longest wait for a "
+            + "person, queue waits over a share of a step's own time, a cache share of input under the bound on an attempt "
+            + "whose input reaches past it, a review at its bound, a class reopened twice, a hotspot, spend that could not be "
+            + "counted. Their thresholds are keys of defaults.report in config.json. The rows can be kept to named instances "
+            + "(--steps), the dollars regrouped (--by step, agent, model, provider or type) and the signal lists bounded "
+            + "(--top). A run still going is answered too, said so at the time of its last record and marked partial; the "
+            + "command only reads, and the report the session's end writes (report.md, report.json) is this same report. "
+            + "--markdown answers the same as Markdown for a pull request, a ticket or the clipboard, and --json as one "
+            + "JSON document.");
         builder.AppendLine();
         AppendWrapped(
             builder,

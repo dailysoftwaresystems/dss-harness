@@ -86,7 +86,13 @@ public static partial class HelpTopics
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
-            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included"),
+            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included; every "
+            + "step's own record holds what its work measured (`measure` in `step.json` and `flow.json`: when it was "
+            + "ready, its waits by cause whole across sessions, its run time, its pause, and one entry per attempt - "
+            + "what served it, the price copied as its cost was counted, the tokens by kind, the dollars, the turns, "
+            + "the tools, the compactions - with the advisor's spend beside them; the run's `spent` is the sum of its "
+            + "steps'), and an attempt a crash cut off has its measure completed at the resume from the step's stored "
+            + "stream"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorTempDirectoryName}/<launch>/",
             "ignored; every temporary directory a run's launch and its children keep, one directory a launch (its "
             + "children's and Claude Code's own process's beside it), made with the launch, held for the run's life "

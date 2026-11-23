@@ -37,12 +37,13 @@ public static partial class HelpTopics
 
         builder.AppendLine("config.json");
         builder.AppendLine();
-        builder.AppendLine($"  defaults       buildCores and testCores ({HarnessDefaults.DefaultCores} each), maxParallelLegs (per");
+        builder.AppendLine("  defaults       buildCores and testCores (6 each), maxParallelLegs (per");
         builder.AppendLine("                 machine) and maxParallelLegsTotal (the whole fleet), default project,");
         builder.AppendLine("                 localCopy, where this machine's own legs work for every leg at once");
         builder.AppendLine("                 ('help legs'), stallSeconds, the stall bound nothing more specific replaces");
-        builder.AppendLine("                 ('help runners'), and admission, how heavy legs share a machine");
-        builder.AppendLine("                 ('help admission')");
+        builder.AppendLine("                 ('help runners'), admission, how heavy legs share a machine");
+        builder.AppendLine("                 ('help admission'), and report, the thresholds a run report's");
+        builder.AppendLine("                 signals are computed by ('help orchestrators')");
         builder.AppendLine("  toolchains     compilers, as environment and cache variables (msvc, gcc, clang)");
         builder.AppendLine("  sanitizers     instrumentation overlays composed onto a build");
         builder.AppendLine("  buildConfigs   named configurations (debug, release, o1, o2)");

@@ -106,6 +106,9 @@ public static class FlowReports
     /// <param name="exitCode">The session's exit code.</param>
     /// <param name="endedAt">When the session ended.</param>
     /// <param name="updates">The run's plan updates, as the session left them.</param>
+    /// <param name="events">The run's events, as the session left them; null where they were not read.</param>
+    /// <param name="ledgers">The closure ledgers of the run's item agents; null where they were not read.</param>
+    /// <param name="definition">The definition the run ran, frozen as it began; null where it cannot be read.</param>
     /// <returns>What is left for a person, the report's last section, one line each.</returns>
     public static IReadOnlyList<string> Write(
         IFileSystem fileSystem,
@@ -115,36 +118,25 @@ public static class FlowReports
         string summary,
         int exitCode,
         DateTimeOffset endedAt,
-        FlowUpdatesFile? updates = null)
+        FlowUpdatesFile? updates = null,
+        IReadOnlyList<FlowEvent>? events = null,
+        IReadOnlyList<(string Agent, FlowClosureLedgerFile Ledger)>? ledgers = null,
+        WorkflowDefinition? definition = null)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(flow);
         ArgumentException.ThrowIfNullOrWhiteSpace(summary);
 
+        // The report of the run is built by its one owner from the records alone; this, the session's end, writes it
+        // with the session's own words at its head and its questions, updates, handoffs and what is left for a person
+        // said in full - the detail a person reads - after the sections every form of the report holds.
+        var report = FlowRunReport.Of(new FlowRunReportSource(layout, flow, questions, updates, events, ledgers, definition));
         var left = LeftForAPerson(layout, flow, questions, updates);
         var handoffs = HandoffsOf(layout, flow);
 
-        var json = new JsonObject
-        {
-            ["schema"] = 1,
-            ["run"] = flow.Run,
-            ["definition"] = flow.Definition,
-            ["status"] = flow.Status,
-            ["summary"] = summary,
-            ["exitCode"] = exitCode,
-            ["endedAt"] = FlowTimeConverter.Written(endedAt),
-            ["spent"] = SpentOf(flow.Spent),
-            ["steps"] = new JsonArray([.. flow.Steps.Select(StepOf)]),
-            ["graph"] = GraphOf(flow.Steps),
-            ["handoffs"] = new JsonArray([.. handoffs.Select(HandoffOf)]),
-            ["questions"] = questions is null ? [] : new JsonArray([.. questions.Questions.Select(QuestionOf)]),
-            ["updates"] = updates is null ? [] : new JsonArray([.. updates.Updates.Select(UpdateOf)]),
-            ["leftForAPerson"] = new JsonArray([.. left.Select(line => JsonValue.Create(line))]),
-        };
-
-        JsonStateFile.Write(fileSystem, layout.ReportJsonFile, json);
-        fileSystem.WriteAllTextAtomic(layout.ReportFile, MarkdownOf(flow, questions, handoffs, summary, exitCode, left, updates) + "\n");
+        JsonStateFile.Write(fileSystem, layout.ReportJsonFile, report);
+        fileSystem.WriteAllTextAtomic(layout.ReportFile, MarkdownOf(report, flow, questions, handoffs, summary, exitCode, left, updates) + "\n");
 
         return left;
     }
@@ -262,6 +254,15 @@ public static class FlowReports
     public static string AskStopped(int exitCode, string summary)
         => ReportJson.Stopped(exitCode, summary, AskDocument(string.Empty, null, null, null, null, null, string.Empty));
 
+    /// <summary>
+    /// The report document a stopped-early read holds: the same members, holding nothing but the code it exits with
+    /// and the line it ends on - the shape every answer of the read keeps.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line the command ends on.</param>
+    public static string ReportStopped(int exitCode, string summary)
+        => ReportJson.Stopped(exitCode, summary, new JsonObject { ["report"] = null });
+
     /// <summary>Every handoff a run's steps hold, each by its step, who wrote it and its file in the step's own directory.</summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state in one file.</param>
@@ -371,7 +372,8 @@ public static class FlowReports
         };
 
     /// <summary>What a run spent, as the documents hold it: its dollars as far as they were counted, and why the rest is not known where a part's cost could not be.</summary>
-    private static JsonObject SpentOf(FlowBudgetRecord spent) => WithUncounted(
+    /// <summary>What the run has spent of its budget, as every document says it.</summary>
+    internal static JsonObject SpentOf(FlowBudgetRecord spent) => WithUncounted(
         new JsonObject
         {
             ["usd"] = spent.Usd,
@@ -389,7 +391,7 @@ public static class FlowReports
     };
 
     /// <summary>One plan update as the report's JSON document holds it: what raised it, word for word, and where it stands.</summary>
-    private static JsonObject UpdateOf(FlowUpdateEntry update) => new()
+    internal static JsonObject UpdateOf(FlowUpdateEntry update) => new()
     {
         ["id"] = update.Id,
         ["cause"] = update.Cause,
@@ -556,94 +558,16 @@ public static class FlowReports
         })]),
     };
 
-    /// <summary>The report as a person reads it.</summary>
-    private static string MarkdownOf(FlowFile flow, FlowQuestionsFile? questions, IReadOnlyList<FlowHandoffNamed> handoffs, string summary, int exitCode, IReadOnlyList<string> left, FlowUpdatesFile? updates = null)
+    /// <summary>The report as a person reads it: the run's report - the sections every form holds - with the session's own words at its head, and its questions, its plan updates, its handoffs and what is left for a person said in full.</summary>
+    private static string MarkdownOf(JsonNode report, FlowFile flow, FlowQuestionsFile? questions, IReadOnlyList<FlowHandoffNamed> handoffs, string summary, int exitCode, IReadOnlyList<string> left, FlowUpdatesFile? updates = null)
     {
         var text = new List<string>
         {
             $"# Run '{flow.Run}' - {flow.Definition}",
             $"{summary} (exit {exitCode.ToString(CultureInfo.InvariantCulture)})",
-            string.Empty,
-            "## Steps",
         };
 
-        foreach (var step in flow.Steps)
-        {
-            var said = $"- {step.Instance}: {step.State.ToLower(CultureInfo.InvariantCulture)}{(step.Visit > 1 ? $" (visit {step.Visit.ToString(CultureInfo.InvariantCulture)})" : string.Empty)}";
-            var why = step.SkippedBecause ?? step.NotRunBecause
-                ?? (step.Failure == "passedOver" ? "its failure was passed over (onFailure: continue)" : null)
-                ?? (step.HandledBy is not null ? $"its failure was handled by {step.HandledBy}" : null)
-                ?? step.Error;
-            text.Add(why is null ? said : $"{said} - {why}");
-        }
-
-        var handled = flow.Steps.Where(step => step.HandledBy is not null).ToList();
-
-        if (handled.Count > 0)
-        {
-            text.Add(string.Empty);
-            text.Add("## Failures a handler took");
-            text.AddRange(handled.Select(step => $"- {step.Step}, by {step.HandledBy}"));
-        }
-
-        var leftover = flow.Steps.Where(step => step.Leftover is not null).ToList();
-
-        if (leftover.Count > 0)
-        {
-            text.Add(string.Empty);
-            text.Add("## What the run's loops left");
-            text.AddRange(leftover.Select(step => $"- {step.Instance}: {FlowValue.Of(step.Leftover!.DeepClone()).AsTemplateText()}"));
-        }
-
-        // What the run's items closed, so a repository can see whether its rounds converge: each item's newest record,
-        // the classes its reviews reopened with how often, and the homes touched often enough to name.
-        var records = flow.Steps
-            .Where(step => step.Output?["closure"] is JsonArray && step.State == nameof(FlowInstanceState.Done))
-            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .ToList();
-
-        if (records.Count > 0)
-        {
-            text.Add(string.Empty);
-            text.Add("## The classes this run closed");
-
-            foreach (var record in records)
-            {
-                foreach (var entry in (record.Output!["closure"] as JsonArray)!.OfType<JsonObject>())
-                {
-                    text.Add($"- '{TextOf(entry["class"])}': {TextOf(entry["claim"])}");
-                }
-            }
-        }
-
-        var reopened = flow.Steps
-            .Where(step => step.Output?["reopened"] is JsonArray { Count: > 0 } && step.State == nameof(FlowInstanceState.Done))
-            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .SelectMany(step => (step.Output!["reopened"] as JsonArray)!.OfType<JsonObject>())
-            .ToList();
-
-        if (reopened.Count > 0)
-        {
-            text.Add(string.Empty);
-            text.Add("## Classes the reviews reopened");
-            text.AddRange(reopened.Select(entry => $"- '{TextOf(entry["class"])}', reopened {TextOf(entry["reopens"])} time(s)"));
-        }
-
-        var hotspots = flow.Steps
-            .Where(step => step.Output?["hotspots"] is JsonArray { Count: > 0 } && step.State == nameof(FlowInstanceState.Done))
-            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .SelectMany(step => (step.Output!["hotspots"] as JsonArray)!.OfType<JsonObject>())
-            .ToList();
-
-        if (hotspots.Count > 0)
-        {
-            text.Add(string.Empty);
-            text.Add("## Homes the run touched often enough to name");
-            text.AddRange(hotspots.Select(hotspot => $"- '{TextOf(hotspot["class"])}' home '{TextOf(hotspot["path"])}', touched {TextOf(hotspot["touches"])} time(s)"));
-        }
+        FlowRunReport.MarkdownCore(report, text);
 
         if (handoffs.Count > 0)
         {
@@ -726,10 +650,6 @@ public static class FlowReports
                 }
             }
         }
-
-        text.Add(string.Empty);
-        text.Add("## Spent");
-        text.Add($"- {flow.Spent.Dollars.Said()}, {flow.Spent.Tokens.ToString(CultureInfo.InvariantCulture)} tokens, {flow.Spent.Minutes.ToString("0.0", CultureInfo.InvariantCulture)} minutes of reasoning");
 
         if (left.Count > 0)
         {

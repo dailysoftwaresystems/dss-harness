@@ -3731,6 +3731,27 @@ its measure completed at the resume from its own stored stream (`IFlowHandoffRun
 replayed through the engine's own count of a run's spending, priced as the configuration stands now), and the run's
 budget charged with the same numbers there, for the session that crashed never read them.
 
+The report of a run is built from its records alone by their one owner (`FlowRunReport`, from `flow.json`,
+`questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition): the same
+records give the same bytes in every form - text for a terminal, `--json` as one document, `--markdown` for a pull
+request or the clipboard - with the steps in one order of its own (by instance id), every number in one fixed form
+(durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word of now:
+a run still going is said so at the time of its last record, marked partial. Its sections are the run (its sessions,
+its wall and active and paused times, its waits for a person, its budget), the totals (tokens by kind, the cache's
+share of input, dollars by model, the retries and the fallbacks), one row per step (its state, attempts, waits by
+cause, run time, model, tokens, dollars, exit), the critical path (the longest road through the run's instances by
+wall time over the definition's `dependsOn`, each link with what it waited for - what a faster run must shorten), the
+failed attempts, the questions people answered with their waits and recommendations, the convergence (classes closed
+and reopened, hotspots, what loops left) and the signals a reader starts from - the slowest and most expensive steps,
+the most retried, every fallback, the longest wait for a person, queue waits past a share of a step's own time, a
+cache share under its bound on an attempt whose input reaches past it, a review at its bound, a class reopened twice,
+a hotspot, spend that could not be counted - each naming its steps and its numbers, their thresholds keys of
+`defaults.report`. The session's end writes this same report (`FlowReports.Write` keeps its place; `report.json` is
+the document, `report.md` its sections with the session's own words at its head and its questions, updates, handoffs
+and what is left for a person said in full), and `read-orchestrator-report <run>` answers it any time - reads only,
+with `--steps` keeping the rows to named instances, `--by` regrouping the dollars and `--top` bounding the signal
+lists.
+
 A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back

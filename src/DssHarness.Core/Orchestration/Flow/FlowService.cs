@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -99,6 +100,21 @@ public interface IFlowService : IUseCase
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="cancellationToken">Stops the command.</param>
     Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The run's report, built from its records alone - the same bytes for the same records, whether the run has ended
+    /// or is still going (said so at the time of its last record, marked partial): the deterministic report the
+    /// session's end writes, in text, as one JSON document or as Markdown. Reads only: nothing of the run is written.
+    /// </summary>
+    /// <param name="startDirectory">The directory the command acts on.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="steps">The instances whose rows alone are wanted; null or empty for every one.</param>
+    /// <param name="by">How the dollars are regrouped - <c>step</c>, <c>agent</c>, <c>model</c>, <c>provider</c> or <c>type</c>; null for the model, as the report holds it.</param>
+    /// <param name="top">How many of the slowest, the most expensive and the most retried steps the signals name; null for the configured bound.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="markdown">Whether to answer as Markdown.</param>
+    /// <param name="cancellationToken">Stops the command.</param>
+    Task<CommandOutcome> ReadReportAsync(string startDirectory, string run, IReadOnlyList<string>? steps = null, string? by = null, int? top = null, bool json = false, bool markdown = false, CancellationToken cancellationToken = default);
 }
 
 /// <summary>How often the commands of a run look at what another process asked or recorded.</summary>
@@ -180,6 +196,9 @@ public sealed class FlowService(
 
     /// <summary>The command that asks a person's question of a run.</summary>
     public const string AskCommand = "ask-orchestrator";
+
+    /// <summary>The command that reads a run's report, built from its records alone.</summary>
+    public const string ReadReportCommand = "read-orchestrator-report";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
@@ -969,6 +988,116 @@ public sealed class FlowService(
         => AskAsync(startDirectory, run, question: null, json, cancellationToken);
 
     /// <inheritdoc/>
+    public async Task<CommandOutcome> ReadReportAsync(string startDirectory, string run, IReadOnlyList<string>? steps = null, string? by = null, int? top = null, bool json = false, bool markdown = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+
+        if (OrchestrationRules.NameProblem(run) is { } shape)
+        {
+            return CommandOutcome.Usage(shape);
+        }
+
+        if (by is not null && by is not ("step" or "agent" or "model" or "provider" or "type"))
+        {
+            return CommandOutcome.Usage($"--by takes 'step', 'agent', 'model', 'provider' or 'type', not '{by}'");
+        }
+
+        if (top is < 1)
+        {
+            return CommandOutcome.Usage($"--top takes how many of the signal lists to name, from 1, not '{top?.ToString(System.Globalization.CultureInfo.InvariantCulture)}'");
+        }
+
+        // The command only reads: the report is built from the records as they stand, and nothing is written - not
+        // even the report the session's end writes, which this answers as the same builder would.
+        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
+        var layout = OrchestratorLayout.Of(context.Layout, run);
+
+        if (_store.ReadOrchestrator(layout) is null)
+        {
+            return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
+        }
+
+        if (_store.ReadFlow(layout) is not { } flow)
+        {
+            return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to report on");
+        }
+
+        var thresholds = new FlowReportThresholds(
+            Top: top ?? context.Config.Defaults.Report?.Top ?? 5,
+            QueueSharePercent: context.Config.Defaults.Report?.QueueSharePercent ?? 10,
+            CacheSharePercent: context.Config.Defaults.Report?.CacheSharePercent ?? 30,
+            CacheInputTokens: context.Config.Defaults.Report?.CacheInputTokens ?? 50_000);
+        var report = FlowRunReport.Of(new FlowRunReportSource(
+            layout,
+            flow,
+            _store.ReadFlowQuestions(layout),
+            _store.ReadFlowUpdates(layout),
+            FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
+            LedgersOf(layout, flow),
+            _store.ReadDefinition(layout),
+            thresholds));
+        var wanted = steps is { Count: > 0 } named ? named.ToHashSet(StringComparer.Ordinal) : null;
+        var document = ReportOf(report, flow, wanted, by);
+
+        if (json)
+        {
+            return CommandOutcome.Ok("the report of run '" + run + "'")
+                with { Data = [document.ToJsonString(ReportJson.Options)], Quiet = true };
+        }
+
+        var text = markdown ? FlowRunReport.Markdown(document) : FlowRunReport.Text(document);
+        return CommandOutcome.Ok(text);
+    }
+
+    /// <summary>
+    /// The report's document with the command's filters applied: the steps' rows kept to the instances it names, and
+    /// the dollars regrouped as it asks - the regrouping over the same attempts the report holds, nothing recomputed.
+    /// </summary>
+    /// <param name="report">The report as the builder answered it.</param>
+    /// <param name="flow">The run's state, whose steps name their agents and types.</param>
+    /// <param name="steps">The instances whose rows alone are wanted; null for every one.</param>
+    /// <param name="by">The grouping of the dollars; null for the model's, as the report holds it.</param>
+    private static JsonNode ReportOf(JsonNode report, FlowFile flow, IReadOnlySet<string>? steps, string? by)
+    {
+        if (steps is not null)
+        {
+            report["steps"] = new JsonArray([.. report["steps"]!.AsArray().Where(row => steps.Contains(row!["step"]!.GetValue<string>()))]);
+        }
+
+        if (by is null || by == "model")
+        {
+            return report;
+        }
+
+        var groups = flow.Steps
+            .SelectMany(step => (step.Measure?.Attempts ?? []).Select(attempt => (step, attempt)))
+            .Where(spent => spent.attempt.Usd > 0)
+            .GroupBy(spent => KeyOf(spent.step, spent.attempt, by))
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => new JsonObject
+            {
+                ["key"] = group.Key,
+                ["usd"] = group.Sum(spent => spent.attempt.Usd ?? 0),
+                ["tokens"] = group.Sum(spent => spent.attempt.Tokens?.AllTokens ?? 0),
+            })
+            .ToList();
+        report["totals"]!["dollarsByModel"] = new JsonArray([.. groups]);
+
+        return report;
+
+        static string KeyOf(FlowStepRecord step, FlowStepAttempt attempt, string by)
+            => by switch
+            {
+                "step" => step.Instance,
+                "agent" => step.Agent ?? "-",
+                "provider" => attempt.Provider ?? "-",
+                "type" => step.Type ?? "-",
+                _ => attempt.Model ?? "-",
+            };
+    }
+
+    /// <inheritdoc/>
     public async Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
@@ -1524,7 +1653,18 @@ public sealed class FlowService(
             FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
             var questions = _store.ReadFlowQuestions(layout);
             var exit = ExitOf(end, flow);
-            var left = FlowReports.Write(_fileSystem, layout, flow, questions, end.Summary, exit, _clock.GetUtcNow(), _store.ReadFlowUpdates(layout));
+            var left = FlowReports.Write(
+                _fileSystem,
+                layout,
+                flow,
+                questions,
+                end.Summary,
+                exit,
+                _clock.GetUtcNow(),
+                _store.ReadFlowUpdates(layout),
+                FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
+                LedgersOf(layout, flow),
+                _store.ReadDefinition(layout));
             var named = RecordsOf(layout, inbox);
 
             var result = new FlowRunResult(
@@ -2026,6 +2166,21 @@ public sealed class FlowService(
     private static bool IncompleteEnding(FlowFile flow, string id)
         => flow.Steps.FirstOrDefault(step => string.Equals(step.Instance, id, StringComparison.Ordinal)) is { Exit: { } exit } step
             && FlowRetry.RunsAgain(exit, step.Cause is { } cause ? FlowRecordNames.Of<OutcomeCause>(cause) : OutcomeCause.None);
+
+    /// <summary>
+    /// Each item agent's closure ledger the run's records name, read where each lies - for the report's convergence
+    /// and its reopened-twice signal; empty where none reads.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="flow">The run's state, whose steps name the agents they worked in.</param>
+    private List<(string Agent, FlowClosureLedgerFile Ledger)> LedgersOf(OrchestratorLayout layout, FlowFile flow)
+        => [.. flow.Steps
+            .Where(step => step.Agent is { Length: > 0 })
+            .Select(step => step.Agent!)
+            .Distinct(StringComparer.Ordinal)
+            .Select(agent => (Agent: agent, Ledger: _store.ReadClosureLedger(layout, agent)))
+            .Where(read => read.Ledger is not null)
+            .Select(read => (read.Agent, read.Ledger!))];
 
     /// <summary>
     /// Every record a session of the run writes, by what it is and its path - the inbox where the session took or left an
