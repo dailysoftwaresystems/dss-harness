@@ -60,8 +60,12 @@ public sealed class AdmissionSettings
     /// <summary>Minutes a waiting unit's tenant ages for, when a section says nothing: past it, the tenant's share doubles each further period.</summary>
     public const double DefaultAgeAfterMinutes = 10;
 
-    /// <summary>The most minutes a tenant's aging bound may be: a week, the same as a wait's own bound.</summary>
-    public const double MostAgeAfterMinutes = 10080;
+    /// <summary>
+    /// The most minutes a span of time holds (<see cref="TimeSpan.MaxValue"/>): the range of <c>ageAfterMinutes</c>, a fact
+    /// of the time the aging bound is kept as, never a choice of the tool's - an aging bound longer than any wait is one
+    /// under which no share ages, which a machine may ask for.
+    /// </summary>
+    public static readonly double MostAgeAfterMinutes = TimeSpan.MaxValue.TotalMinutes;
 
     /// <summary>
     /// The GiB a count of bytes holds: 2^33, past which <see cref="MinFreeGiB"/> in bytes would pass a 64-bit count's

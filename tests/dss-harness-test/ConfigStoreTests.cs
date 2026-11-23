@@ -2333,6 +2333,30 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// The dispatch queue's aging bound is any number of minutes from none to all a span of time holds - one longer than
+    /// any wait asks that no share age, which a machine may ask - and only a number outside that is refused: the range is
+    /// the time the bound is kept as, never a choice of the tool's.
+    /// </summary>
+    [Fact]
+    public void AnAgingBound_IsAnyNumberOfMinutesASpanOfTimeHolds()
+    {
+        var month = LoadValid("""{ "defaults": { "admission": { "ageAfterMinutes": 43200 } } }""");
+
+        Assert.Equal(TimeSpan.FromDays(30), AdmissionSettings.RuleFor(null, month.Defaults.Admission)!.AgeAfter);
+        Assert.Equal(TimeSpan.Zero, AdmissionSettings.RuleFor(null, new AdmissionSettings { AgeAfterMinutes = 0 })!.AgeAfter);
+        Assert.Equal(TimeSpan.MaxValue, AdmissionSettings.RuleFor(null, new AdmissionSettings { AgeAfterMinutes = AdmissionSettings.MostAgeAfterMinutes })!.AgeAfter);
+
+        foreach (var (given, said) in new[] { ("-1", "-1"), ("1e300", "1E+300") })
+        {
+            Assert.Contains(
+                $"defaults.admission ageAfterMinutes must be from 0 and no more minutes than a span of time holds "
+                    + $"({AdmissionSettings.MostAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)}), found {said}",
+                LoadInvalid($$"""{ "defaults": { "admission": { "ageAfterMinutes": {{given}} } } }""").Message,
+                StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// A rule built from sections no file was read into is held to the bounds a file is: refused, naming what is out of
     /// them, rather than waited by - a count of none would hold every leg back, and a settle whose least passes its most
     /// would fail the leg picking it.

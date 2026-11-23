@@ -230,10 +230,15 @@ public static partial class HarnessConfigValidator
                 + $"found {Number(floor)}");
         }
 
-        // The dispatch queue's own capacities and aging bound: at least one of anything, and an aging bound no wait outgrows.
+        // The dispatch queue's own capacities and aging bound: at least one of anything, and an aging bound of any number of
+        // minutes a span of time holds - one longer than any wait is a machine's asking that no share age.
         RequireAtLeastOne(admission.Processes, $"{owner} processes", problems);
         RequireAtLeastOne(admission.Agents, $"{owner} agents", problems);
-        RequireAtLeastZeroAtMost(admission.AgeAfterMinutes, AdmissionSettings.MostAgeAfterMinutes, $"{owner} ageAfterMinutes", problems);
+
+        if (admission.AgeAfterMinutes is { } ageAfter && !(double.IsFinite(ageAfter) && ageAfter >= 0 && ageAfter <= AdmissionSettings.MostAgeAfterMinutes))
+        {
+            problems.Add($"{owner} ageAfterMinutes must be from 0 and no more minutes than a span of time holds ({Number(AdmissionSettings.MostAgeAfterMinutes)}), found {Number(ageAfter)}");
+        }
     }
 
     /// <summary>A number as a problem says it, the same on every machine.</summary>
@@ -245,15 +250,6 @@ public static partial class HarnessConfigValidator
         if (value is { } given && !(double.IsFinite(given) && given > 0 && given <= most))
         {
             problems.Add($"{setting} must be above 0 and at most {Number(most)}, found {Number(given)}");
-        }
-    }
-
-    /// <summary>Refuses a number given that is not at least 0 and at most <paramref name="most"/>; one left out is not checked.</summary>
-    private static void RequireAtLeastZeroAtMost(double? value, double most, string setting, List<string> problems)
-    {
-        if (value is { } given && !(double.IsFinite(given) && given >= 0 && given <= most))
-        {
-            problems.Add($"{setting} must be at least 0 and at most {Number(most)}, found {Number(given)}");
         }
     }
 

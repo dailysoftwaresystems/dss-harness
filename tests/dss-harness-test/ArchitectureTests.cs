@@ -467,7 +467,11 @@ public sealed class ArchitectureTests
         [@"DssHarness.Core\Web\Search\WebSearchSources.cs|MostMaxPerStep"] = "P17: maxPerStep 1-1,000",
         [@"DssHarness.Core\Web\Search\WebSearchSources.cs|DefaultMaxPerStep"] = "P17: maxPerStep's default, 60",
         [@"DssHarness.Core\Web\Search\Kinds\SitemapKind.cs|MostRefreshDays"] = "a Range: the clock's whole span, refreshDays any number of days",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|MostAgeAfterMinutes"] = "a Range: the clock's whole span, ageAfterMinutes any number of minutes",
         [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|MostMapTokens"] = "P16: the repository map's tokens 0-2,000",
+        [@"DssHarness.Core\Results\ResultDigest.cs|Bound"] = "plan 2.0 part 04, section 1 and the user's 2026-11-23 decision in section 3: a digest keeps the first 50 distinct diagnostics and 50 failures, its counts over the whole output",
+        [@"DssHarness.Core\Results\StackFrame.cs|FrameBound"] = "plan 2.0 README decision 25 and part 04's bounds: a stack keeps at most 64 frames, the first 48 and the last 16",
+        [@"DssHarness.Core\Results\StackFrame.cs|CauseBound"] = "plan 2.0 part 04's bounds: causedBy is followed at most 8 deep",
 
         // Page sizes and partitions: every entry stays reachable, so none bounds anything.
         [@"DssHarness.Core\Agents\Runtime\CodebaseGraphTool.cs|MostCharacters"] = "paging: PageRoom.GraphAnswer, the graph answer's page size",

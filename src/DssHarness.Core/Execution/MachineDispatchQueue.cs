@@ -122,12 +122,17 @@ public sealed class MachineDispatchQueue(
             $"{RunLock.TreeNamed(entry.Host, entry.Tree, entry.Variant)} (leg '{entry.Leg}', {entry.Command}, {ProcessHolders.Describe(entry.ProcessId, entry.RunId, entry.AskedUtc)})");
     }
 
-    /// <summary>A tenant's charge against its share: the cost of what its holders hold, over its weight, its priority and its aging.</summary>
+    /// <summary>
+    /// A tenant's charge against its share: the cost of what its holders hold, over its weight, its priority and its aging -
+    /// doubled for each whole period of the aging bound the unit has waited, every period counted: a bound of no minutes
+    /// ages a waiting unit's share past any charge at once, so the tenants' turns are their arrival's, and one longer than
+    /// any wait ages none.
+    /// </summary>
     private static double ChargeOf(SlotEntry entry, List<SlotEntry> holding, DateTimeOffset now)
     {
         var charged = holding.Where(held => string.Equals(held.Tenant, entry.Tenant, StringComparison.Ordinal)).Sum(held => held.Cost);
-        var oldest = now - entry.AskedUtc;
-        var periods = (int)(oldest.TotalMinutes / Math.Max(0.1, entry.AgeAfterMinutes));
+        var waited = Math.Max(0, (now - entry.AskedUtc).TotalMinutes);
+        var periods = entry.AgeAfterMinutes > 0 ? Math.Floor(waited / entry.AgeAfterMinutes) : double.PositiveInfinity;
 
         return charged / (entry.Weight * Math.Max(1, entry.Priority) * Math.Pow(2, periods));
     }

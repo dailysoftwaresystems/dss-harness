@@ -119,6 +119,27 @@ public sealed class MachineDispatchQueueTests
         Assert.Equal(["rich-1", "starved-1", "starved-2", "light-2"], holding.Select(entry => entry.Leg));
     }
 
+    /// <summary>
+    /// An aging bound of no minutes ages every waiting unit's share past any charge at once, so the units are served in
+    /// the order they arrived: every period is counted, none floored to a fraction of a minute of the code's own.
+    /// </summary>
+    [Fact]
+    public void AnAgingBoundOfNoMinutes_ServesTheUnitsInTheOrderTheyArrived()
+    {
+        var queue = Queue();
+
+        // A's first holds; A's second asked before B's first. Charged by cost alone, B - holding nothing - would go
+        // first; aged at once, both shares are past any charge, and arrival decides.
+        var line = new List<SlotEntry>
+        {
+            Entry("a-1", "a", cost: 5, minutesWaited: 3, ageAfter: 0),
+            Entry("a-2", "a", cost: 5, minutesWaited: 2, ageAfter: 0),
+            Entry("b-1", "b", cost: 5, minutesWaited: 1, ageAfter: 0),
+        };
+
+        Assert.Equal(["a-1", "a-2", "b-1"], queue.HoldingOf(line, machine: 3, Now).Select(entry => entry.Leg));
+    }
+
     /// <summary>The slots' own room rule is kept whole: no unit runs beside more than the fewest any holder or it allows.</summary>
     [Fact]
     public void TheSlotsOwnRoomRule_KeptWhole()
