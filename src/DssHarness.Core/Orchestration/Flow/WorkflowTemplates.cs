@@ -78,7 +78,6 @@ public static class WorkflowTemplates
     [
         "prioritizer", "triage", "planner", "plan-auditor",
         "scribe", "auditor", "diagnostician", "pre-existing-triage", "advisor", "reporter",
-        "report-analyst",
     ];
 
     /// <summary>The prompt files the implementation workflow names at its own levels.</summary>
@@ -89,7 +88,6 @@ public static class WorkflowTemplates
         "self-audit", "pr-body",
         "diagnose", "rediagnose", "redirect", "remedy-revise", "pre-existing",
         "recommend", "status", "ask",
-        "analyze",
     ];
 
     /// <summary>The schema files the implementation workflow names at its own levels.</summary>
@@ -97,7 +95,20 @@ public static class WorkflowTemplates
     [
         "priority", "triage", "plan", "plan-audit",
         "self-audit", "summary", "diagnosis", "pre-existing",
-        "analysis",
+    ];
+
+    /// <summary>
+    /// The files this build embeds as its own, apart from the workflow's: the report analyst's agent, prompt and
+    /// schema, read from the build alone (<see cref="TextOf(string)"/>) wherever the analyst runs, never a repository's - so
+    /// an analysis of one repository's run is the same analyst every repository's gets, and a copy in a repository is
+    /// never read. Embedded beside the workflow's files, but not one of them: <see cref="Files"/> is what a workflow's
+    /// definition names, and no export writes them, no init gives them back.
+    /// </summary>
+    public static IReadOnlyList<string> ToolOwnFiles =>
+    [
+        $"agents/{AnalystAgent}.md",
+        $"prompts/{AnalystPrompt}.md",
+        $"schemas/{AnalystSchema}.schema.json",
     ];
 
     /// <summary>The agent files the item pipeline names: the workflow its rounds and its recovery both use.</summary>

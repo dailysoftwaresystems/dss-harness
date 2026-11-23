@@ -271,9 +271,15 @@ public sealed class WorkflowTemplatesTests
     {
         var carried = DirectoryDeclarations();
 
+        // Every file the workflow names is embedded, and nothing the workflow does not name rides its set: the only
+        // files embedded beyond the workflow's own are the tool's own analyst's - read from the build alone, never
+        // written into a repository, exported or given back.
+        var carriedSet = carried.ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(WorkflowTemplates.Files, file => carriedSet.Contains(file));
+
         Assert.Equal(
-            [.. WorkflowTemplates.Files.Order(StringComparer.Ordinal)],
-            [.. carried.Order(StringComparer.Ordinal)]);
+            [.. WorkflowTemplates.ToolOwnFiles.Order(StringComparer.Ordinal)],
+            [.. carried.Where(file => !WorkflowTemplates.Files.Contains(file, StringComparer.Ordinal)).Order(StringComparer.Ordinal)]);
 
         return;
 
@@ -555,7 +561,7 @@ public sealed class WorkflowTemplatesTests
         var agents = WorkflowTemplates.Files.Where(file =>
             file.StartsWith("agents/", StringComparison.Ordinal) || file.StartsWith("item-pipeline/agents/", StringComparison.Ordinal)).ToList();
 
-        Assert.Equal(20, agents.Count);
+        Assert.Equal(19, agents.Count);
 
         foreach (var agent in agents)
         {
@@ -642,7 +648,7 @@ public sealed class WorkflowTemplatesTests
             .Where(resource => resource.Replace('\\', '/').Contains(".WorkflowTemplates/", StringComparison.Ordinal))
             .ToList();
 
-        Assert.Equal(WorkflowTemplates.Files.Count, shipped.Count);
+        Assert.Equal(WorkflowTemplates.Files.Count + WorkflowTemplates.ToolOwnFiles.Count, shipped.Count);
         Assert.DoesNotContain(shipped, resource =>
         {
             using var reader = new StreamReader(assembly.GetManifestResourceStream(resource)!);
