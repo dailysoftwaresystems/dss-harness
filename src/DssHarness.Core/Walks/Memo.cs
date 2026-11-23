@@ -17,6 +17,12 @@ namespace DssHarness.Core.Walks;
 /// recorded in <see cref="Cycles"/>. Its own answer is still given once its frame closes.
 /// </para>
 /// <para>
+/// Given <see cref="Makings"/> it shares with other stores, a memo answers each key as a making of theirs, and keeps its answers
+/// by their rule (<see cref="MadeOnce{TKey, TAnswer}"/>): an answer that read a cycle's placeholder - its own cycle's or one
+/// through any of those stores - is held for the making of the outermost key it leans on and answered again after it, never
+/// kept, where a memo of its own keeps every answer it gives.
+/// </para>
+/// <para>
 /// One memo serves one walker at a time: it is not safe for use from several threads at once, and a caller that shares
 /// one across threads holds a lock around <see cref="Of"/>.
 /// </para>
@@ -33,13 +39,16 @@ public sealed class Memo<TKey, TAnswer>
     private readonly HashSet<TKey> _open;
     private readonly HashSet<TKey> _cycled;
     private readonly List<TKey> _cycles = [];
+    private readonly Makings? _makings;
+    private readonly MadeOnce<TKey, TAnswer>? _made;
 
     /// <summary>A memo of the answers <paramref name="answer"/> gives.</summary>
     /// <param name="dependsOn">The keys a key depends on, in order: asked once a key, when it is first answered.</param>
     /// <param name="answer">A key's answer, from its dependencies' answers in the order they were named.</param>
     /// <param name="onCycle">The answer given in place of a key's where that key is met again while it is being answered.</param>
     /// <param name="comparer">What makes two keys one; the key's own equality where none is given.</param>
-    public Memo(Func<TKey, IEnumerable<TKey>> dependsOn, Func<TKey, IReadOnlyList<TAnswer>, TAnswer> answer, Func<TKey, TAnswer> onCycle, IEqualityComparer<TKey>? comparer = null)
+    /// <param name="makings">The makings it shares with other stores, whose rule keeps its answers; none for a memo of its own.</param>
+    public Memo(Func<TKey, IEnumerable<TKey>> dependsOn, Func<TKey, IReadOnlyList<TAnswer>, TAnswer> answer, Func<TKey, TAnswer> onCycle, IEqualityComparer<TKey>? comparer = null, Makings? makings = null)
     {
         ArgumentNullException.ThrowIfNull(dependsOn);
         ArgumentNullException.ThrowIfNull(answer);
@@ -51,6 +60,8 @@ public sealed class Memo<TKey, TAnswer>
         _answers = new Dictionary<TKey, TAnswer>(comparer);
         _open = new HashSet<TKey>(comparer);
         _cycled = new HashSet<TKey>(comparer);
+        _makings = makings;
+        _made = makings is null ? null : new MadeOnce<TKey, TAnswer>(comparer);
     }
 
     /// <summary>Every key met again while it was being answered, each once, in the order first met so.</summary>
@@ -67,13 +78,13 @@ public sealed class Memo<TKey, TAnswer>
     /// <param name="key">The key.</param>
     public TAnswer Of(TKey key)
     {
-        if (_answers.TryGetValue(key, out var known))
+        if (Known(key, out var known))
         {
             return known;
         }
 
         // Asked from inside an answer for a key still being answered: the key depends on itself, as any cycle does.
-        if (_open.Contains(key))
+        if (Met(key))
         {
             return Cycle(key);
         }
@@ -92,11 +103,11 @@ public sealed class Memo<TKey, TAnswer>
                 {
                     var dependency = frame.Dependencies.Current;
 
-                    if (_answers.TryGetValue(dependency, out var answered))
+                    if (Known(dependency, out var answered))
                     {
                         frame.Gathered.Add(answered);
                     }
-                    else if (_open.Contains(dependency))
+                    else if (Met(dependency))
                     {
                         frame.Gathered.Add(Cycle(dependency));
                     }
@@ -117,12 +128,13 @@ public sealed class Memo<TKey, TAnswer>
                 {
                     answer = _answer(frame.Key, frame.Gathered);
                 }
-                finally
+                catch
                 {
-                    _open.Remove(frame.Key);
+                    Close(frame.Key);
+                    throw;
                 }
 
-                _answers.Add(frame.Key, answer);
+                Answered(frame.Key, answer);
 
                 if (!frames.TryPeek(out var dependent))
                 {
@@ -136,7 +148,7 @@ public sealed class Memo<TKey, TAnswer>
         {
             while (frames.TryPop(out var unanswered))
             {
-                _open.Remove(unanswered.Key);
+                Close(unanswered.Key);
                 unanswered.Dependencies.Dispose();
             }
         }
@@ -158,8 +170,50 @@ public sealed class Memo<TKey, TAnswer>
     {
         var dependencies = _dependsOn(key).GetEnumerator();
 
-        _open.Add(key);
+        if (_made is null)
+        {
+            _open.Add(key);
+        }
+        else
+        {
+            _made.Begin(_makings!, key);
+        }
+
         frames.Push(new MemoFrame<TKey, TAnswer>(key, dependencies, []));
+    }
+
+    /// <summary>Whether <paramref name="key"/> was answered, and its answer: the one given, or - shared makings' - the one kept or held.</summary>
+    private bool Known(TKey key, out TAnswer answer)
+        => _made is null ? _answers.TryGetValue(key, out answer!) : _made.Known(_makings!, key, out answer);
+
+    /// <summary>Whether <paramref name="key"/> is being answered: a cycle met.</summary>
+    private bool Met(TKey key) => _made is null ? _open.Contains(key) : _made.Met(_makings!, key);
+
+    /// <summary>Closes <paramref name="key"/>'s frame with its answer, given to every later question - shared makings' kept or held by their rule.</summary>
+    private void Answered(TKey key, TAnswer answer)
+    {
+        if (_made is null)
+        {
+            _open.Remove(key);
+            _answers.Add(key, answer);
+        }
+        else
+        {
+            _made.End(_makings!, key, answer);
+        }
+    }
+
+    /// <summary>Closes <paramref name="key"/>'s frame unanswered.</summary>
+    private void Close(TKey key)
+    {
+        if (_made is null)
+        {
+            _open.Remove(key);
+        }
+        else
+        {
+            _made.Abandon(_makings!, key);
+        }
     }
 }
 

@@ -77,6 +77,87 @@ public sealed class MadeOnceTests
         Assert.Equal("z(x(1(z(none:x,2))),2)", Kept(names, "z"));
     }
 
+    /// <summary>
+    /// Cycles nested five hundred deep, each key asking the next, the one before and one key all of them share, which asks the
+    /// innermost: each key is made once in the outermost key's making - a making that ends leaning further out hands what leans on
+    /// it to the one it leans on, never forgetting it at once - so the makings are as many as the keys, never their square; and the
+    /// outermost key alone is kept.
+    /// </summary>
+    [Fact]
+    public void NestedCycles_MakeEachKeyOnce_InTheOutermostKeysMaking()
+    {
+        const int Depth = 500;
+        var makings = new Makings();
+        var store = new MadeOnce<int, int>();
+        var made = new int[Depth + 2];
+
+        // Keys 1 to Depth nest; key 0 is the one they share, which asks the innermost.
+        int Of(int key) => store.Of(makings, key, -1, () =>
+        {
+            made[key]++;
+
+            if (key == 0)
+            {
+                Of(Depth);
+                return key;
+            }
+
+            if (key < Depth)
+            {
+                Of(key + 1);
+            }
+
+            if (key > 1)
+            {
+                Of(key - 1);
+            }
+
+            Of(0);
+            return key;
+        });
+
+        Assert.Equal(1, Of(1));
+        Assert.Equal(Depth + 1, made.Sum());
+        Assert.All(made[..(Depth + 1)], count => Assert.Equal(1, count));
+        Assert.Equal([1], Enumerable.Range(0, Depth + 1).Where(key => store.TryKept(key, out _)));
+    }
+
+    /// <summary>
+    /// A memo given the makings a store shares answers each key as one of their makings: its answer to a key whose answer asks the
+    /// store for a key whose making asked the memo - a cycle through both - is held, never kept, and answered again once the
+    /// store's key is made; where a memo of its own would keep the answer it made from the store's placeholder.
+    /// </summary>
+    [Fact]
+    public void AMemoGivenTheMakings_HoldsAnAnswerMadeFromAStoresPlaceholder_AndAnswersItAgain()
+    {
+        var makings = new Makings();
+        var store = new MadeOnce<string, string>(StringComparer.Ordinal);
+        var answered = 0;
+        Memo<string, string>? memo = null;
+
+        string Store(string key) => store.Of(makings, key, $"none:{key}", () => $"{key}({memo!.Of("m")})");
+
+        memo = new Memo<string, string>(
+            _ => [],
+            (key, _) =>
+            {
+                answered++;
+                return $"{key}({Store("s")})";
+            },
+            key => $"cycle:{key}",
+            StringComparer.Ordinal,
+            makings);
+
+        Assert.Equal("s(m(none:s))", Store("s"));
+        Assert.Equal(1, answered);
+
+        Assert.Equal("m(s(m(none:s)))", memo.Of("m"));
+        Assert.Equal(2, answered);
+        Assert.Equal("m(s(m(none:s)))", memo.Of("m"));
+        Assert.Equal(2, answered);
+        Assert.Empty(memo.Cycles);
+    }
+
     /// <summary>A making that throws leaves its key unmade and not open, so a later ask makes it afresh, never as a cycle.</summary>
     [Fact]
     public void AMakingThatThrows_LeavesItsKeyUnmade_AndNotOpen()

@@ -688,8 +688,9 @@ public static class CodeGraphLinker
         private Reading? _reads;
 
         /// <summary>
-        /// The makings under way of every cache a finding asks (<see cref="Cached"/>): one for them all, so a making that asks for
-        /// its own key through another cache is told as one that asks it directly.
+        /// The makings under way of every cache a finding asks - each <see cref="Cached"/> store, the chains' and the aliases' memos,
+        /// the links of chains stepped: one for them all, so a making that asks for its own key through another cache is told as one
+        /// that asks it directly, and no cache keeps an answer made from a placeholder but the cycle's outermost key's.
         /// </summary>
         private readonly Makings _makings = new();
 
@@ -697,7 +698,7 @@ public static class CodeGraphLinker
         private Memo<ChainKey, ChainAnswer> _chains;
 
         /// <summary>Each link of a chain stepped, by its declaration, the chain before it and its names (<see cref="NewChains"/>).</summary>
-        private readonly Dictionary<ChainLink, ChainAnswer> _chainSteps = new(ChainLink.Comparer);
+        private readonly MadeOnce<ChainLink, ChainAnswer> _chainSteps = new(ChainLink.Comparer);
 
         /// <summary>How many links of chains were stepped (<see cref="CodeGraphLinked.ChainLinks"/>).</summary>
         private int _chainLinks;
@@ -2021,8 +2022,12 @@ public static class CodeGraphLinker
                 && member.Node.Parent is { } parent && _owners[member.File].TryGetValue(parent, out var holder) && holder.Node.Kind == CodeNodeKinds.Type;
 
         /// <summary>
-        /// The modifier a member's own code says it is its type's own and no instance's by, as every language whose types hold both
-        /// writes it and its reader names it (<see cref="ExtractNode.Modifiers"/>).
+        /// The modifier a member's own code says it is its type's own and no instance's by, as the readers of the languages that
+        /// write it name it (<see cref="ExtractNode.Modifiers"/>): JavaScript's and TypeScript's - a class's <c>static</c> members,
+        /// and Backbone's second object - Dart's, PHP's and C#'s. Python's reader writes none - its <c>@staticmethod</c> is read as a
+        /// call that takes no receiver - and a chain never reaches a Python member through it: a chain is read so
+        /// (<see cref="FunctionsCalled"/>) for what an extension extends, and only C#, Dart and JavaScript declare extensions, or
+        /// for the receivers a value's chain gives an extension of those languages, which no Python member is the type of.
         /// </summary>
         private const string StaticModifier = "static";
 
@@ -2221,40 +2226,39 @@ public static class CodeGraphLinker
                 var prefix = before.Count > 0 ? before[0] : null;
                 var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name?.Whole() : null, prefix is null && reference.Qualifier?.Kind is CodeQualifierKinds.Type or CodeQualifierKinds.This ? reference.Qualifier.Kind : null, reference.Name);
 
-                if (_chainSteps.TryGetValue(link, out var stepped))
+                return _chainSteps.Of(_makings, link, ChainAnswer.None, () =>
                 {
-                    return stepped;
-                }
+                    var outer = _reads;
+                    var reads = _reads = new Reading();
 
-                var outer = _reads;
-                var reads = _reads = new Reading();
-
-                try
-                {
-                    // A first link's qualifier of a type - a variable's declared type, which no lookup of the variable finds -
-                    // begins the chain at that type's value; one of this at what this is, its names read on it; any other at
-                    // what its names come to.
-                    var head = link.HeadKind == CodeQualifierKinds.This ? OfThis(key.From, Selves(key.From), link.Head)
-                        : link.Head is not { } written ? Chained.None
-                        : link.HeadKind == CodeQualifierKinds.Type ? Typing(Containers(key.From, written))
-                        : Fold(key.From, written);
-                    var state = Step(key.From, prefix?.State ?? head, reference.Name);
-                    _chainLinks++;
-
-                    if (prefix is not null)
+                    try
                     {
-                        reads.Through.Add(prefix.Reads);
-                    }
+                        // A first link's qualifier of a type - a variable's declared type, which no lookup of the variable finds -
+                        // begins the chain at that type's value; one of this at what this is, its names read on it; any other at
+                        // what its names come to.
+                        var head = link.HeadKind == CodeQualifierKinds.This ? OfThis(key.From, Selves(key.From), link.Head)
+                            : link.Head is not { } written ? Chained.None
+                            : link.HeadKind == CodeQualifierKinds.Type ? Typing(Containers(key.From, written))
+                            : Fold(key.From, written);
+                        var state = Step(key.From, prefix?.State ?? head, reference.Name);
+                        _chainLinks++;
 
-                    return _chainSteps[link] = new ChainAnswer(state, reads.Kept());
-                }
-                finally
-                {
-                    _reads = outer;
-                }
+                        if (prefix is not null)
+                        {
+                            reads.Through.Add(prefix.Reads);
+                        }
+
+                        return new ChainAnswer(state, reads.Kept());
+                    }
+                    finally
+                    {
+                        _reads = outer;
+                    }
+                });
             },
-            _ => new ChainAnswer(Chained.None, KeptReads.None),
-            ChainKey.Comparer);
+            _ => ChainAnswer.None,
+            ChainKey.Comparer,
+            _makings);
 
         /// <summary>What the chain of names <paramref name="written"/> comes to from where <paramref name="from"/> stands, a name at a time.</summary>
         private Chained Fold(Declaration from, string written)
@@ -2472,7 +2476,8 @@ public static class CodeGraphLinker
                     _reads = outer;
                 }
             },
-            _ => new AliasAnswer([], [], KeptReads.None));
+            _ => new AliasAnswer([], [], KeptReads.None),
+            makings: _makings);
 
         /// <summary>
         /// Where <paramref name="state"/> stands one name - <paramref name="name"/> - further: a scope import's, at that name under
@@ -2977,7 +2982,11 @@ public static class CodeGraphLinker
         }
 
         /// <summary>What a chain a link ends comes to, with everything reading it read.</summary>
-        private sealed record ChainAnswer(Chained State, KeptReads Reads);
+        private sealed record ChainAnswer(Chained State, KeptReads Reads)
+        {
+            /// <summary>Nothing known: a chain no value is, which read nothing - what a link is while it is being stepped, and a cycle's.</summary>
+            public static ChainAnswer None { get; } = new(Chained.None, KeptReads.None);
+        }
 
         /// <summary>
         /// What a chain of names stands for past the prefixes of its file's imports (<see cref="AliasedBy"/>): where it stands past
@@ -4526,10 +4535,11 @@ public static class CodeGraphLinker
         /// What <paramref name="cache"/> holds for <paramref name="key"/>, made once by <paramref name="make"/>: the finding
         /// under way reads what making it read, whether it made it or found it made - those reads kept once, with the answer,
         /// and read through whole (<see cref="KeptReads"/>), so a check every finding makes costs each of them a reference.
-        /// Every cache shares the link's makings (<see cref="_makings"/>), so a making that asks for its own key again, through
+        /// Every cache of the link shares its makings (<see cref="_makings"/>), so a making that asks for its own key again, through
         /// any other cache, is given <paramref name="none"/> - what is known of it then, nothing, which reads nothing - and never
-        /// makes it inside itself; and an answer made from that placeholder is never kept, but made again from the key's own
-        /// answer once it is known (<see cref="MadeOnce{TKey, TAnswer}"/>), what it read read again with it.
+        /// makes it inside itself. An answer made from that placeholder is held for the making of the key met again, made once there,
+        /// and made again after it from that key's answer, what it read read again with it; that key's own answer, made from those,
+        /// is kept - the one answer kept that a placeholder reached (<see cref="MadeOnce{TKey, TAnswer}"/>).
         /// </summary>
         private T Cached<TKey, T>(MadeOnce<TKey, (T Value, KeptReads Reads)> cache, TKey key, T none, Func<T> make)
             where TKey : notnull
