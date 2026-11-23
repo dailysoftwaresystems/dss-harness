@@ -19,6 +19,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="MaxInstances">The most step instances a run of this workflow may have, where the file says.</param>
 /// <param name="PushCheckpoints">Whether checkpoint commits are pushed as they are made.</param>
 /// <param name="HandoffSeconds">How long a paused reasoning step is given to write its handoff.</param>
+/// <param name="Priority">
+/// The run's priority, 1 where the file says nothing: what multiplies its tenant's share of the dispatch queue's fair
+/// order, so a run the repository needs first is taken first without taking the machine.
+/// </param>
 /// <param name="Budget">What a whole run's reasoning may cost, and the reserve that pauses the run first.</param>
 /// <param name="Recommendations">The file holding the repository's bar for recommendations, relative to the workflow's directory.</param>
 /// <param name="Advisor">The agent that recommends an answer to a question the engine raises itself.</param>
@@ -51,6 +55,7 @@ public sealed record WorkflowDefinition(
     int? MaxInstances = null,
     bool? PushCheckpoints = null,
     int? HandoffSeconds = null,
+    int? Priority = null,
     FlowBudget? Budget = null,
     string? Recommendations = null,
     FlowAdvisor? Advisor = null,

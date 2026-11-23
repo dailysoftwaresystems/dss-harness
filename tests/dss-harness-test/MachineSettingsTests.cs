@@ -102,6 +102,9 @@ public sealed class MachineSettingsTests
             new AdmissionRule(3, 80, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 4L << 30)
             {
                 ReclaimIdleBuilds = true,
+                Processes = Environment.ProcessorCount,
+                Agents = AdmissionSettings.DefaultAgents,
+                AgeAfter = TimeSpan.FromMinutes(AdmissionSettings.DefaultAgeAfterMinutes),
             },
             inForce.Rule);
         Assert.Equal(
@@ -113,11 +116,15 @@ public sealed class MachineSettingsTests
                 new AdmissionField("maxWaitMinutes", "60", AdmissionSettings.BuiltIn),
                 new AdmissionField("minFreeGiB", "4", "config.json's hosts.local admission"),
                 new AdmissionField("reclaimIdleBuilds", "true", "the machine's settings file '/u/settings.json'"),
+                new AdmissionField("processes", Environment.ProcessorCount.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
+                new AdmissionField("agents", AdmissionSettings.DefaultAgents.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
+                new AdmissionField("ageAfterMinutes", AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
             ],
             inForce.Fields);
         Assert.Equal(
             "heavyLegs 3, reclaimIdleBuilds true from the machine's settings file '/u/settings.json'; maxMemoryPercent 80 from config.json's "
-            + "defaults.admission; settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60 built in; minFreeGiB 4 from config.json's hosts.local admission",
+            + $"defaults.admission; settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, processes {Environment.ProcessorCount}, agents {AdmissionSettings.DefaultAgents}, "
+            + $"ageAfterMinutes {AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)} built in; minFreeGiB 4 from config.json's hosts.local admission",
             inForce.Describe());
     }
 
@@ -185,7 +192,7 @@ public sealed class MachineSettingsTests
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 3, maxWaitMinutes: 1), said), TestContext.Current.CancellationToken);
 
         Assert.False(refused.Fact.Admitted);
-        Assert.StartsWith("waits for one of this machine's 3 heavy-leg slot(s), 3 leg(s) ahead; held by '/src/first'", said[0], StringComparison.Ordinal);
+        Assert.StartsWith("waits for one of this machine's 3 heavy-leg slot(s) as tenant 'local/src/mine', 3 leg(s) ahead; held by '/src/first'", said[0], StringComparison.Ordinal);
         Assert.Equal([true, true, true], slots.Line().Select(inLine => inLine.HoldsSlot));
     }
 
@@ -301,7 +308,8 @@ public sealed class MachineSettingsTests
         Assert.Equal(
             [
                 "local: admission: heavyLegs 3 from the machine's settings file '/u/settings.json'; maxMemoryPercent 76, settleSeconds [15, 90], "
-                    + "pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission",
+                    + $"pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false, processes {Environment.ProcessorCount}, agents {AdmissionSettings.DefaultAgents}, "
+                    + $"ageAfterMinutes {AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)} built in; minFreeGiB 4 from config.json's hosts.local admission",
                 $"ssh vps: admission: {unread}",
             ],
             text.Details);
@@ -313,7 +321,7 @@ public sealed class MachineSettingsTests
         Assert.Equal("/u/settings.json", hosts[0].GetProperty("settingsFile").GetString());
         Assert.Equal(("heavyLegs", "3", "the machine's settings file '/u/settings.json'"), fields[0]);
         Assert.Equal(("minFreeGiB", "4", "config.json's hosts.local admission"), fields[5]);
-        Assert.Equal(7, fields.Count);
+        Assert.Equal(10, fields.Count);
         Assert.False(hosts[0].TryGetProperty("admissionUnread", out _));
         Assert.Equal(unread, hosts[1].GetProperty("admissionUnread").GetString());
         Assert.False(hosts[1].TryGetProperty("admission", out _));

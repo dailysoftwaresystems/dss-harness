@@ -229,6 +229,11 @@ public static partial class HarnessConfigValidator
                 $"{owner} minFreeGiB must be from 0 and under {Number(AdmissionSettings.CountedGiB)}, the GiB a count of bytes holds, "
                 + $"found {Number(floor)}");
         }
+
+        // The dispatch queue's own capacities and aging bound: at least one of anything, and an aging bound no wait outgrows.
+        RequireAtLeastOne(admission.Processes, $"{owner} processes", problems);
+        RequireAtLeastOne(admission.Agents, $"{owner} agents", problems);
+        RequireAtLeastZeroAtMost(admission.AgeAfterMinutes, AdmissionSettings.MostAgeAfterMinutes, $"{owner} ageAfterMinutes", problems);
     }
 
     /// <summary>A number as a problem says it, the same on every machine.</summary>
@@ -240,6 +245,15 @@ public static partial class HarnessConfigValidator
         if (value is { } given && !(double.IsFinite(given) && given > 0 && given <= most))
         {
             problems.Add($"{setting} must be above 0 and at most {Number(most)}, found {Number(given)}");
+        }
+    }
+
+    /// <summary>Refuses a number given that is not at least 0 and at most <paramref name="most"/>; one left out is not checked.</summary>
+    private static void RequireAtLeastZeroAtMost(double? value, double most, string setting, List<string> problems)
+    {
+        if (value is { } given && !(double.IsFinite(given) && given >= 0 && given <= most))
+        {
+            problems.Add($"{setting} must be at least 0 and at most {Number(most)}, found {Number(given)}");
         }
     }
 

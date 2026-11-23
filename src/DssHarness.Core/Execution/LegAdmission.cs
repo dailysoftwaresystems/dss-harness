@@ -132,6 +132,7 @@ public sealed class Admission : IDisposable
 /// What its build needs of the machine's room, where something says; <see langword="null"/> where nothing does, or where
 /// its build needs nothing more than its directory holds.
 /// </param>
+/// <param name="Priority">The run's priority, as its workflow declared it; 1 where none was declared.</param>
 public sealed record AdmissionRequest(
     AdmissionRule Rule,
     string RunId,
@@ -141,7 +142,8 @@ public sealed record AdmissionRequest(
     string Tree,
     string? Variant,
     Action<string> Progress,
-    RoomNeed? Room = null)
+    RoomNeed? Room = null,
+    int Priority = 1)
 {
     /// <summary>
     /// Whether, where another leg holds a slot, the memory is read again after a settle before this one starts, so two
@@ -199,12 +201,14 @@ public sealed record AdmissionRequest(
 /// of day, which a host this serves steps by 25 seconds every few seconds.
 /// </remarks>
 /// <param name="slots">The machine's heavy-leg slots.</param>
+/// <param name="fileSystem">Reads the records a leg's estimated cost comes from.</param>
 /// <param name="gauge">Reads the memory in use.</param>
 /// <param name="clock">Measures the wait.</param>
 /// <param name="wait">Waits as long as it is given; production waits on <paramref name="clock"/>.</param>
 /// <param name="settle">Picks a settle between the least and the most; production picks at random.</param>
 public sealed class LegAdmission(
     HeavyLegSlots slots,
+    DssHarness.Core.FileSystem.IFileSystem fileSystem,
     IMemoryGauge gauge,
     TimeProvider clock,
     Func<TimeSpan, CancellationToken, Task> wait,
@@ -228,6 +232,7 @@ public sealed class LegAdmission(
     public static readonly TimeSpan DropsAtMostEvery = TimeSpan.FromMinutes(1);
 
     private readonly HeavyLegSlots _slots = slots;
+    private readonly DssHarness.Core.FileSystem.IFileSystem _fileSystem = fileSystem;
     private readonly IMemoryGauge _gauge = gauge;
 
     /// <summary>The machine's heavy-leg records it admits by: what a leg making room on the machine is held to one at a time by.</summary>
@@ -243,10 +248,12 @@ public sealed class LegAdmission(
 
     /// <summary>What production admits by: waits on the system's clock, and settles for a time picked at random.</summary>
     /// <param name="slots">The machine's heavy-leg slots.</param>
+    /// <param name="fileSystem">Reads the records a leg's estimated cost comes from.</param>
     /// <param name="gauge">Reads the memory in use.</param>
-    public LegAdmission(HeavyLegSlots slots, IMemoryGauge gauge)
+    public LegAdmission(HeavyLegSlots slots, DssHarness.Core.FileSystem.IFileSystem fileSystem, IMemoryGauge gauge)
         : this(
             slots,
+            fileSystem,
             gauge,
             TimeProvider.System,
             (delay, token) => Task.Delay(delay, TimeProvider.System, token),
@@ -271,7 +278,22 @@ public sealed class LegAdmission(
 
         var rule = request.Rule;
         var started = _clock.GetTimestamp();
-        var place = _slots.Ask(request.RunId, request.Command, request.Leg, request.Host, request.Tree, request.Variant, rule.HeavyLegs, request.WorkBegunBy);
+
+        // The queue's own account of the leg: its tenant - a local command's repository - what its history says it
+        // costs, its run's priority, and the aging bound its rule declares.
+        var place = _slots.Ask(
+            request.RunId,
+            request.Command,
+            request.Leg,
+            request.Host,
+            request.Tree,
+            request.Variant,
+            rule.HeavyLegs,
+            request.WorkBegunBy,
+            tenant: TenantOf(request.Tree),
+            priority: request.Priority,
+            cost: DispatchCosts.Of(_fileSystem, request.Tree, request.Leg),
+            ageAfterMinutes: rule.AgeAfter.TotalMinutes);
 
         // The room as this wait last read it, the legs claiming it as a line last named them, and whether it stopped being
         // readable since.
@@ -329,7 +351,7 @@ public sealed class LegAdmission(
 
                     if (heldBy is null || !heldBy.SequenceEqual(standing.Holders) || ownSaid != own)
                     {
-                        Say($"waits for {Slots(standing)}, {ReportText.Counted(standing.Ahead, "leg")} ahead{whose}; held by {Holders(standing)}");
+                        Say($"waits for {Slots(standing)} as tenant '{place.Entry.Tenant}', {ReportText.Counted(standing.Ahead, "leg")} ahead{whose}; held by {Holders(standing)}");
                         (heldBy, ownSaid) = (standing.Holders, own);
                     }
                     else if (Due())
@@ -759,6 +781,14 @@ public sealed class LegAdmission(
     private static string Slots(SlotStanding standing) => $"one of this machine's {ReportText.Counted(standing.Slots, "heavy-leg slot")}";
 
     private static string Holders(SlotStanding standing) => string.Join("; ", standing.Holders.Select(holder => holder.Describe()));
+
+    /// <summary>
+    /// The tenant a tree's legs are charged to, as the dispatch queue groups them: a local command's repository,
+    /// <c>local/&lt;tree&gt;</c> with the tree's path forward-slashed - until environments name a finer one.
+    /// </summary>
+    /// <param name="tree">The tree the leg works in.</param>
+    private static string TenantOf(string tree)
+        => $"local/{(tree ?? string.Empty).Replace('\\', '/').Trim('/')}";
 
     /// <summary>The machine's limit, as a line gives it: <c>76%</c>.</summary>
     private static string Limit(AdmissionRule rule) => string.Create(CultureInfo.InvariantCulture, $"{rule.MaxMemoryPercent:0.#}%");

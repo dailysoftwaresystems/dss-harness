@@ -54,6 +54,15 @@ public sealed class AdmissionSettings
     /// <summary>The room, in GiB, a heavy leg's build leaves free on each filesystem it fills when a section says nothing.</summary>
     public const double DefaultMinFreeGiB = 2;
 
+    /// <summary>Reasoning agents the machine runs at once when a section says nothing.</summary>
+    public const int DefaultAgents = 8;
+
+    /// <summary>Minutes a waiting unit's tenant ages for, when a section says nothing: past it, the tenant's share doubles each further period.</summary>
+    public const double DefaultAgeAfterMinutes = 10;
+
+    /// <summary>The most minutes a tenant's aging bound may be: a week, the same as a wait's own bound.</summary>
+    public const double MostAgeAfterMinutes = 10080;
+
     /// <summary>
     /// The GiB a count of bytes holds: 2^33, past which <see cref="MinFreeGiB"/> in bytes would pass a 64-bit count's
     /// range - the type's own bound, not one of the tool's, for no filesystem is weighed in more bytes than a count holds.
@@ -105,6 +114,25 @@ public sealed class AdmissionSettings
     /// disk lacks, and else as many as that takes, one leg at a time on a filesystem. Off where nothing says.
     /// </summary>
     public bool? ReclaimIdleBuilds { get; init; }
+
+    /// <summary>
+    /// Machine steps the machine runs at once, of the process class - every process a step starts, heavy or not - when a
+    /// section says nothing: the machine's logical processors. Each run's own <c>maxParallelProcesses</c> keeps capping its
+    /// counted types within it.
+    /// </summary>
+    public int? Processes { get; init; }
+
+    /// <summary>
+    /// Reasoning agents the machine runs at once, of every run and side-task on it, at least one. Each run's own
+    /// <c>maxReasoningAgents</c> keeps capping its agents within it.
+    /// </summary>
+    public int? Agents { get; init; }
+
+    /// <summary>
+    /// Minutes a unit waits before its tenant's share of the dispatch queue begins to age - doubled for each further
+    /// period - so no weight setting starves a tenant. The default where a section says nothing.
+    /// </summary>
+    public double? AgeAfterMinutes { get; init; }
 
     /// <summary>
     /// The rule a machine admits heavy legs by: each field its own section declares, or else the defaults' section's,
@@ -171,6 +199,9 @@ public sealed class AdmissionSettings
             MaxWaitMinutes = Value("maxWaitMinutes", settings => settings.MaxWaitMinutes, DefaultMaxWaitMinutes, Number),
             MinFreeGiB = Value("minFreeGiB", settings => settings.MinFreeGiB, DefaultMinFreeGiB, Number),
             ReclaimIdleBuilds = Value("reclaimIdleBuilds", settings => settings.ReclaimIdleBuilds, false, reclaim => reclaim ? "true" : "false"),
+            Processes = Value("processes", settings => settings.Processes, Environment.ProcessorCount, count => Number(count)),
+            Agents = Value("agents", settings => settings.Agents, DefaultAgents, count => Number(count)),
+            AgeAfterMinutes = Value("ageAfterMinutes", settings => settings.AgeAfterMinutes, DefaultAgeAfterMinutes, Number),
         };
 
         var problems = new List<string>();
@@ -193,6 +224,9 @@ public sealed class AdmissionSettings
                 (long)Math.Round(merged.MinFreeGiB.Value * DiskSpace.Gibibyte))
             {
                 ReclaimIdleBuilds = merged.ReclaimIdleBuilds.Value,
+                Processes = merged.Processes,
+                Agents = merged.Agents,
+                AgeAfter = TimeSpan.FromMinutes(merged.AgeAfterMinutes.Value),
             },
             fields);
     }
@@ -371,4 +405,13 @@ public sealed record AdmissionRule(
     /// (<see cref="AdmissionSettings.ReclaimIdleBuilds"/>).
     /// </summary>
     public bool ReclaimIdleBuilds { get; init; }
+
+    /// <summary>Machine steps of the process class the machine runs at once (<see cref="AdmissionSettings.Processes"/>).</summary>
+    public int? Processes { get; init; }
+
+    /// <summary>Reasoning agents of every run the machine runs at once (<see cref="AdmissionSettings.Agents"/>).</summary>
+    public int? Agents { get; init; }
+
+    /// <summary>How long a unit waits before its tenant's share of the dispatch queue begins to age (<see cref="AdmissionSettings.AgeAfterMinutes"/>).</summary>
+    public TimeSpan AgeAfter { get; init; } = TimeSpan.FromMinutes(AdmissionSettings.DefaultAgeAfterMinutes);
 }

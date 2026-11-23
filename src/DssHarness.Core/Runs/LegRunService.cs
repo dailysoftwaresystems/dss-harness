@@ -47,6 +47,12 @@ public sealed record LegRunRequest(
     IReadOnlyList<string>? RemoteArguments = null)
 {
     /// <summary>
+    /// The run's priority, as a workflow declared it: what multiplies its tenant's share of the dispatch queue's fair
+    /// order, 1 where nothing declared one.
+    /// </summary>
+    public int Priority { get; init; } = 1;
+
+    /// <summary>
     /// What the command has each leg do, which decides the programs a host must have to be given
     /// one. Said by every command, because what one needs is not what another does.
     /// </summary>
@@ -1190,7 +1196,8 @@ public sealed class LegRunService(
                     leg.HostTreeRoot,
                     leg.Variant.DirectoryName,
                     message => ledger.Transition(leg.Name, message),
-                    room)
+                    room,
+                    request.Priority)
                 {
                     Settle = settle,
                     WorkBegunBy = workBegunBy,

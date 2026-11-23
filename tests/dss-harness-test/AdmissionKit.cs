@@ -139,6 +139,7 @@ internal static class AdmissionKit
 
         return new(
             slots,
+            new DssHarness.Core.FileSystem.PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create()),
             gauge,
             clock,
             (delay, token) =>

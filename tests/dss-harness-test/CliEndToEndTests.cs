@@ -1750,8 +1750,7 @@ public sealed partial class CliEndToEndTests
 
         Assert.Equal(HarnessExit.Success, served.ExitCode);
         Assert.Contains(
-            "sent-here: waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead, each its own command's, which does not "
-            + "count against the",
+            "sent-here: waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/", 
             served.StandardError,
             StringComparison.Ordinal);
 

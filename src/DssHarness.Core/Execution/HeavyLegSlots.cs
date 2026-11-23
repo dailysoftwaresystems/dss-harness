@@ -39,6 +39,27 @@ public sealed record SlotEntry(
     string? ProcessStamp = null,
     string? Variant = null) : IHeldByProcess
 {
+    /// <summary>
+    /// The tenant the unit is charged to, as the dispatch queue groups it: a local command's repository - <c>local/&lt;tree&gt;</c> -
+    /// until environments name a finer one. An entry an older build wrote reads as <c>local</c>.
+    /// </summary>
+    public string Tenant { get; init; } = "local";
+
+    /// <summary>The tenant's weight, as it was set when the unit asked; 1 for every tenant a local command names.</summary>
+    public double Weight { get; init; } = 1;
+
+    /// <summary>The run's priority, as its workflow declared it when the unit asked; 1 where none was declared.</summary>
+    public int Priority { get; init; } = 1;
+
+    /// <summary>
+    /// The unit's estimated cost, in minutes: the median of the last ten durations the records hold for the same leg, or
+    /// one quantum where none is known - what a tenant's burst is charged against its share by.
+    /// </summary>
+    public double Cost { get; init; } = 1;
+
+    /// <summary>How many minutes a unit waits before its tenant's share begins to age, as the asking leg's rule said; the default where an older build wrote the entry.</summary>
+    public double AgeAfterMinutes { get; init; } = 10;
+
     /// <summary>The entry as a waiting leg names who holds a slot: its tree, as a lock names it, then the process.</summary>
     public string Describe()
         => $"{RunLock.TreeNamed(Host, Tree, Variant)} (leg '{Leg}', {Command}, {ProcessHolders.Describe(ProcessId, RunId, AskedUtc)})";
@@ -243,7 +264,7 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// declares none; none is read where left out. Refused with the file's <see cref="Configuration.ConfigException"/> where
 /// the file cannot be read.
 /// </param>
-public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, Func<string> path, Func<int?>? machineSlots = null)
+public class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, Func<string> path, Func<int?>? machineSlots = null)
 {
     /// <summary>The command name this reports under.</summary>
     public const string CommandName = "admission";
@@ -390,11 +411,11 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// </summary>
     /// <param name="place">The place looked at; <see langword="null"/> for a reading of the whole line.</param>
     /// <exception cref="HarnessException">This machine's settings file could not be read, and no leg's work began by it.</exception>
-    private int? MachineSlots(SlotPlace? place)
+    protected internal int? MachineSlots(SlotPlace? place)
     {
         try
         {
-            var read = _machineSlots();
+            var read = _machineSlots?.Invoke();
 
             Volatile.Write(ref _unreadSaid, null);
             return read;
@@ -431,8 +452,13 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// The reading of the machine's rule the leg's work began by, where what asks is a unit of that work; see
     /// <see cref="SlotPlace.WorkBegunBy"/>.
     /// </param>
+    /// <param name="tenant">The tenant the unit is charged to, as the dispatch queue groups it; <c>local</c> where left out.</param>
+    /// <param name="weight">The tenant's weight; 1 where left out.</param>
+    /// <param name="priority">The run's priority; 1 where left out.</param>
+    /// <param name="cost">The unit's estimated cost in minutes; one quantum where left out.</param>
+    /// <param name="ageAfterMinutes">How many minutes a unit waits before its tenant's share ages; the default where left out.</param>
     /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
-    internal SlotPlace Ask(string runId, string command, string leg, string host, string tree, string? variant, int slots, AdmissionReading? workBegunBy = null)
+    internal SlotPlace Ask(string runId, string command, string leg, string host, string tree, string? variant, int slots, AdmissionReading? workBegunBy = null, string? tenant = null, double weight = 1, int priority = 1, double? cost = null, double? ageAfterMinutes = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(slots, 1);
 
@@ -447,7 +473,14 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
             tree,
             slots,
             _identity.Current,
-            variant);
+            variant)
+        {
+            Tenant = tenant ?? "local",
+            Weight = weight,
+            Priority = priority,
+            Cost = cost ?? 1,
+            AgeAfterMinutes = ageAfterMinutes ?? Configuration.AdmissionSettings.DefaultAgeAfterMinutes,
+        };
 
         File.Change((entries, afterwards) => [.. Live(entries, entry => entry, "a heavy-leg slot", afterwards), entry]);
 
@@ -476,7 +509,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
             var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards);
             var line = live.Contains(place.Entry) ? live : [.. live, place.Entry];
             var ahead = line.IndexOf(place.Entry);
-            var holders = Holding(line, machine);
+            var holders = HoldingOf(line, machine, DateTimeOffset.UtcNow);
 
             return (
                 line.SequenceEqual(entries) ? null : line,
@@ -578,9 +611,10 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <summary>
     /// The legs holding slots: the front of the line, each fewer legs from the front than the fewest any leg up to it
     /// allows at once - or, where the machine declares its own count (<paramref name="machine"/>), than that count, whatever
-    /// any entry's command allowed.
+    /// any entry's command allowed. The dispatch queue re-reads this rule fairly, by tenant; this is its arrival-order
+    /// form, and the base of the seam.
     /// </summary>
-    private static List<SlotEntry> Holding(IReadOnlyList<SlotEntry> line, int? machine)
+    protected internal virtual List<SlotEntry> HoldingOf(IReadOnlyList<SlotEntry> line, int? machine, DateTimeOffset now)
     {
         var holding = new List<SlotEntry>();
         var fewest = int.MaxValue;
@@ -614,7 +648,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
         return File.Update<IReadOnlyList<SlotInLine>>((entries, _) =>
         {
             var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards: null);
-            var holding = new HashSet<SlotEntry>(Holding(live, machine));
+            var holding = new HashSet<SlotEntry>(HoldingOf(live, machine, DateTimeOffset.UtcNow));
 
             return ((IReadOnlyList<SlotEntry>?)null, (IReadOnlyList<SlotInLine>)[.. live.Select(entry => new SlotInLine(entry, holding.Contains(entry)))]);
         });

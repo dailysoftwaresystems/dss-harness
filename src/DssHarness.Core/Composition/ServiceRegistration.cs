@@ -434,18 +434,21 @@ public static class ServiceRegistration
         services.AddSingleton(provider => new MachineSettingsFile(
             provider.GetRequiredService<IFileSystem>(),
             () => MachineSettingsFile.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
-        services.AddSingleton(provider => new HeavyLegSlots(
+        services.AddSingleton<MachineDispatchQueue>(provider => new MachineDispatchQueue(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHarnessOutput>(),
             provider.GetRequiredService<IProcessIdentity>(),
             () => HeavyLegSlots.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>()),
-            () => provider.GetRequiredService<MachineSettingsFile>().Read().Admission?.HeavyLegs));
+            () => provider.GetRequiredService<MachineSettingsFile>().Read().Admission?.HeavyLegs,
+            settings: () => provider.GetRequiredService<MachineSettingsFile>()));
+        services.AddSingleton(provider => provider.GetRequiredService<MachineDispatchQueue>() as HeavyLegSlots);
         services.AddSingleton(provider => new TreeHolders(
             provider.GetRequiredService<RunLock>(),
             provider.GetRequiredService<HeavyLegSlots>(),
             provider.GetRequiredService<IProcessIdentity>()));
         services.AddSingleton(provider => new LegAdmission(
             provider.GetRequiredService<HeavyLegSlots>(),
+            provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IMemoryGauge>()));
         services.AddSingleton<IWslPageCache, WslPageCache>();
         services.AddSingleton<RunStops>();

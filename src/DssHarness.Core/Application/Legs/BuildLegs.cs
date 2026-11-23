@@ -48,6 +48,12 @@ public abstract record LegCommandRequest
     /// step of an orchestrator run holds what its agents wrote in it.
     /// </summary>
     public ILegIsolation? Isolation { get; init; }
+
+    /// <summary>
+    /// The run's priority, as a workflow declared it: what multiplies its tenant's share of the dispatch queue's fair
+    /// order, 1 where nothing declared one. A command line gives none.
+    /// </summary>
+    public int Priority { get; init; } = 1;
 }
 
 /// <summary>
@@ -136,6 +142,7 @@ public sealed class BuildLegs(IBuildService builds, LegRunService runs) : IBuild
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
                 Watch = request.Watch,
                 Isolation = request.Isolation,
+                Priority = request.Priority,
                 KeepGoing = request.KeepGoing,
             },
             (work, token) => BuildLegAsync(_builds, work, token),

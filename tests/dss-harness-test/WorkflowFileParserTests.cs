@@ -278,7 +278,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(
-            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'texts', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover', 'codebaseGraph'."],
+            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'priority', 'budget', 'recommendations', 'texts', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover', 'codebaseGraph'."],
             problems);
     }
 

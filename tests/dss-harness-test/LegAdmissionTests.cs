@@ -76,7 +76,7 @@ public sealed class LegAdmissionTests
 
         var waiting = Assert.Single(said, line => line.StartsWith("waits for", StringComparison.Ordinal));
 
-        Assert.Contains("one of this machine's 2 heavy-leg slot(s), 2 leg(s) ahead", waiting, StringComparison.Ordinal);
+        Assert.Contains("one of this machine's 2 heavy-leg slot(s) as tenant 'local/src/mine', 2 leg(s) ahead", waiting, StringComparison.Ordinal);
         Assert.Contains($"'/src/first' variant 'x86_64-gcc-release' on local (leg 'first', test, pid {harness.Identity.CurrentId}, run run-first, since 2026-09-30 16:29:42Z)", waiting, StringComparison.Ordinal);
         Assert.Contains("'/src/second'", waiting, StringComparison.Ordinal);
 
@@ -313,7 +313,7 @@ public sealed class LegAdmissionTests
         Assert.False(admitted.Fact.Admitted);
         Assert.Collection(
             said,
-            line => Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
+            line => Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/mine', 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
             line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 5m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
             line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 10m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal));
     }
@@ -508,6 +508,7 @@ public sealed class LegAdmissionTests
 
         var admission = new LegAdmission(
             AdmissionKit.Slots(harness, record),
+            harness.FileSystem,
             new ScriptedGauge(30),
             clock,
             (delay, _) =>
@@ -848,7 +849,7 @@ public sealed class LegAdmissionTests
         Assert.False(admitted.Fact.Admitted);
         Assert.StartsWith("not admitted after 2m00s waiting for one of this machine's 1 heavy-leg slot(s), held by '/src/newcomer'", admitted.Refusal, StringComparison.Ordinal);
         Assert.Contains(said, line => line.StartsWith("holds a heavy-leg slot", StringComparison.Ordinal));
-        Assert.Contains(said, line => line.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead", StringComparison.Ordinal));
+        Assert.Contains(said, line => line.StartsWith("waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/mine', 1 leg(s) ahead", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -1160,8 +1161,8 @@ public sealed class LegAdmissionTests
 
         Assert.True(admitted.Fact.Admitted);
         Assert.Equal(2 * AdmissionSettings.DefaultPollSeconds, admitted.Fact.WaitedSeconds);
-        Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 2 leg(s) ahead; held by '/src/holding'", said[0], StringComparison.Ordinal);
-        Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead; held by '/src/waiting'", said[1], StringComparison.Ordinal);
+        Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/mine', 2 leg(s) ahead; held by '/src/holding'", said[0], StringComparison.Ordinal);
+        Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/mine', 1 leg(s) ahead; held by '/src/waiting'", said[1], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1186,7 +1187,7 @@ public sealed class LegAdmissionTests
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: mine, maxWaitMinutes: 1), said), TestContext.Current.CancellationToken);
 
         Assert.False(refused.Fact.Admitted);
-        Assert.StartsWith($"waits for one of this machine's {inForce} heavy-leg slot(s), {legsAhead} leg(s) ahead", said[0], StringComparison.Ordinal);
+        Assert.StartsWith($"waits for one of this machine's {inForce} heavy-leg slot(s) as tenant 'local/src/mine', {legsAhead} leg(s) ahead", said[0], StringComparison.Ordinal);
         Assert.Equal(ahead.Length, AdmissionKit.Read(record).Count);
     }
 
@@ -1219,6 +1220,7 @@ public sealed class LegAdmissionTests
         var record = temp.Combine("admission.json");
         var admission = new LegAdmission(
             AdmissionKit.Slots(harness, record),
+            harness.FileSystem,
             new ScriptedGauge(10),
             TimeProvider.System,
             (_, token) => Task.Delay(TimeSpan.FromMilliseconds(5), token),

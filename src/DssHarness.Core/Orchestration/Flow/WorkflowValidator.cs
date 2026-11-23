@@ -368,6 +368,8 @@ public static class WorkflowValidator
                     HandoffSeconds: _definition.HandoffSeconds),
                 lead: string.Empty);
 
+            Within(_definition.Priority, 1, 32, "priority");
+
             if (_definition.Budget is { } budget)
             {
                 if (budget.Usd is null && budget.Tokens is null && budget.Minutes is null)

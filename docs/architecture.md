@@ -1120,6 +1120,27 @@ it lasts (`Waits.SaidEvery`), as it is for a host agent running it for another m
 way is a worktree nobody can check again. Only a second interruption, the hard stop, ends it, the process with it; that
 can leave it partly done on any platform, and running `delete-worktree <name> --force` then finishes it.
 
+## The dispatch queue
+
+The admission owner is the machine's dispatch queue (`Execution\MachineDispatchQueue.cs`, `HeavyLegSlots` grown, not
+replaced beside): one queue per machine, three classes of unit each with its own capacity - heavy legs (the slots this
+topic's admission keys have always governed, `heavyLegs`, 2), machine steps of the process class (`processes`, the
+machine's logical processors) and reasoning agents of every run (`agents`, 8) - and every unit charged to a tenant: a
+local command's repository, `local/<tree>`, until environments name a finer one. The order is fair by tenant:
+of the units waiting, the one whose tenant is charged the least against its share goes next, ties by arrival - its
+share its weight times its run's priority (a workflow's `priority` key, 1 where none), the charge what its running
+units were estimated to cost, the median of the last ten durations the tree's records hold for the same leg (`DispatchCosts`,
+one quantum where none is known) - so a tenant with a burst of short arms and a tenant with one long build each get
+the machine in proportion, and neither waits for the other's whole burst. A unit waiting past `ageAfterMinutes` (10)
+has its tenant's share doubled for each further period, so no weight setting starves a tenant. Nothing is pre-empted:
+a started unit runs to its end, and a WSL sweep - one unit whole, one worker - is charged its whole estimated cost.
+The slots' own room rules are kept whole inside the fair order (no unit runs beside more than the fewest any holder or
+it allows, and the machine's own count, where its settings file declares one, overrides every entry's). The record is
+the one the slots kept, extended with each entry's tenant, weight, priority, cost and aging bound; the crash rule with
+it. `queue` shows it - each class's capacity, holders and waiting units, by tenant - and changes nothing; the process
+and agent classes are configured and shown, and nothing asks them yet (a server queues every unit it runs; the agent
+class arrives with its wiring). A machine shared by several users is not seen whole: each user's queue is their own.
+
 ## Orchestrators and agents
 
 An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its

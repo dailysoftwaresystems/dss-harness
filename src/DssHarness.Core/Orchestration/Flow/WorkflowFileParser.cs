@@ -79,6 +79,7 @@ public static class WorkflowFileParser
         int? maxInstances = null;
         bool? pushCheckpoints = null;
         int? handoffSeconds = null;
+        int? priority = null;
         FlowBudget? budget = null;
         string? recommendations = null;
         IReadOnlyDictionary<string, string>? texts = null;
@@ -135,6 +136,10 @@ public static class WorkflowFileParser
 
                 case "handoffSeconds":
                     handoffSeconds = RequireInt(value, "handoffSeconds", problems);
+                    break;
+
+                case "priority":
+                    priority = RequireInt(value, "priority", problems);
                     break;
 
                 case "budget":
@@ -230,6 +235,7 @@ public static class WorkflowFileParser
                 maxInstances,
                 pushCheckpoints,
                 handoffSeconds,
+                priority,
                 budget,
                 recommendations,
                 advisor,

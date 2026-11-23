@@ -20,6 +20,7 @@ var root = new RootCommand(
 
 root.Subcommands.Add(InitCommand.Create());
 root.Subcommands.Add(VerifyGitCommand.Create());
+root.Subcommands.Add(QueueCommand.Create());
 root.Subcommands.Add(CreateWorktreeCommand.Create());
 root.Subcommands.Add(DeleteWorktreeCommand.Create());
 root.Subcommands.Add(ListWorktreeCommand.Create());
