@@ -2024,7 +2024,7 @@ public static class CodeGraphLinker
         /// <summary>
         /// The modifier a member's own code says it is its type's own and no instance's by, as the readers of the languages that
         /// write it name it (<see cref="ExtractNode.Modifiers"/>): JavaScript's and TypeScript's - a class's <c>static</c> members,
-        /// and Backbone's second object - Dart's, PHP's, C#'s, and C's and C++'s (<see cref="Languages.CFamilyReading"/>), whose
+        /// and Backbone's second object - Dart's, PHP's, C#'s, and C's and C++'s, whose
         /// <c>static</c> a function or variable outside any type carries too, no type's member to be its own. Python's reader writes
         /// none - its <c>@staticmethod</c> is read as a call that takes no receiver - and a chain never reaches a Python member
         /// through it: a chain is read so (<see cref="FunctionsCalled"/>) for what an extension extends, and only C#, Dart and
