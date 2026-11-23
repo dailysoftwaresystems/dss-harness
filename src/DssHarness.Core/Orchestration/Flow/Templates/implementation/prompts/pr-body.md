@@ -43,7 +43,9 @@ The homes the run touched often enough to name, with how often:
 ## Issues found that were there before
 
 Each was proven on the commit the run began from. One marked fixed was in this work's way, related to it or critical,
-and was fixed at its root in this run; one marked listed was none of these, and is left for a person.
+and was fixed at its root in this run; one marked next round blocked nothing, and is owed the run's next round as its
+first work item; one marked fixed in a later round was owed one, and a later round's work item fixed it; one marked
+listed was none of these, and is left for a person.
 
 {run.preExisting}
 

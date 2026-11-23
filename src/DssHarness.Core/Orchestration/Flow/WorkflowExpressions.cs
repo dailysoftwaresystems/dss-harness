@@ -82,26 +82,8 @@ public static class WorkflowExpressions
         ["stopped"] = JsonSchemaSubset.Reading.Of("boolean"),
         ["passedOver"] = JsonSchemaSubset.Reading.Of("integer"),
         [AffectedTests] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("string")),
-        [NextRound] = JsonSchemaSubset.Read(new System.Text.Json.Nodes.JsonObject
-        {
-            ["type"] = "array",
-            ["items"] = new System.Text.Json.Nodes.JsonObject
-            {
-                ["type"] = "object",
-                ["additionalProperties"] = false,
-                ["required"] = new System.Text.Json.Nodes.JsonArray("id", "title", "description", "where", "files", "build", "measureFirst"),
-                ["properties"] = new System.Text.Json.Nodes.JsonObject
-                {
-                    ["id"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
-                    ["title"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
-                    ["description"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
-                    ["where"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "array", ["items"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" } },
-                    ["files"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "array", ["items"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" } },
-                    ["build"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
-                    ["measureFirst"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "array", ["items"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" } },
-                },
-            },
-        }),
+        // Each issue as the engine gives it (FlowNextIssue.Value), typed by the schema made from the same members.
+        [NextRound] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Read(FlowNextIssue.ValueSchema())),
     };
 
     /// <summary>

@@ -873,9 +873,10 @@ public sealed record PreExistingProof(string Kind, string At, string? File = nul
 
 /// <summary>
 /// The run's record of the issues its triages sent to its next round, <c>next-round.json</c>: each a defect the run
-/// took from a round's work and owes its next round as its first item, with its size. What <c>run.nextRound</c> reads:
-/// the issues no ended work item of the run has settled, for the rounds to go on while one is left. Nothing else writes
-/// the file, and it holds nothing but the issue and its size.
+/// took from a round's work and owes its next round as its first item, with its size, and - once a work item settled
+/// it - that item. What <c>run.nextRound</c> reads: the issues no work item of the run has settled, for the rounds to
+/// go on while one is left. Nothing else writes the file, and it holds nothing but the issue, its size and what settled
+/// it.
 /// </summary>
 /// <param name="Schema">The file's schema; 1.</param>
 /// <param name="Run">The run's name.</param>
@@ -899,7 +900,9 @@ public sealed record FlowNextRoundFile(
 
 /// <summary>
 /// One issue the run owes its next round, with its size: what the self-audit is told to make the round's first item of,
-/// which names it in <c>settles</c>, and what item-check holds the round to.
+/// which names it in <c>settles</c>, and what the check that opens the round holds its items to. It is settled by the
+/// work item that names it, once that item ended done with its work landed - a commit of its own made - never by one
+/// that ended done with nothing landed, as an item a person skipped does.
 /// </summary>
 /// <param name="Id">The issue's id: <c>nx-&lt;n&gt;</c>, in the order added.</param>
 /// <param name="Title">What it is, in a line.</param>
@@ -921,14 +924,61 @@ public sealed record FlowNextIssue(
     string FoundBy,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset FoundAt)
 {
+    /// <summary>
+    /// The work item that settled it - the instance of its <c>forEach</c> item that named it in <c>settles</c> and ended
+    /// done with a commit of its own made - or null while it is owed still.
+    /// </summary>
+    public string? SettledBy { get; init; }
+
+    /// <summary>
+    /// Each member of the value <c>run.nextRound</c> and a round's plan check read of an issue, in order, with what it
+    /// holds of the issue: a text, or a list of texts. The one owner of that value's shape - its value
+    /// (<see cref="Value"/>) and the schema an expression reading it is typed by (<see cref="ValueSchema"/>) are both
+    /// made from it, so neither holds a member the other does not.
+    /// </summary>
+    private static readonly IReadOnlyList<(string Name, Func<FlowNextIssue, string>? Text, Func<FlowNextIssue, IReadOnlyList<string>>? Texts)> ValueMembers =
+    [
+        ("id", issue => issue.Id, null),
+        ("title", issue => issue.Title, null),
+        ("description", issue => issue.Description, null),
+        ("where", null, issue => issue.Where),
+        ("files", null, issue => issue.Files),
+        ("build", issue => issue.Build, null),
+        ("measureFirst", null, issue => issue.MeasureFirst),
+    ];
+
+    /// <summary>
+    /// The issue as <c>run.nextRound</c> and a round's plan check read it: its id, what it is, where it is, and its size -
+    /// the files the fix touches, what must be built, and what must be measured first.
+    /// </summary>
+    public JsonObject Value()
+        => new(ValueMembers.Select(member => KeyValuePair.Create(
+            member.Name,
+            member.Text is { } text ? (JsonNode?)JsonValue.Create(text(this)) : new JsonArray([.. member.Texts!(this).Select(path => (JsonNode?)path)]))));
+
+    /// <summary>The schema of one issue's <see cref="Value"/>: a closed object holding each of its members, every one required.</summary>
+    public static JsonObject ValueSchema()
+        => new()
+        {
+            ["type"] = "object",
+            ["additionalProperties"] = false,
+            ["required"] = new JsonArray([.. ValueMembers.Select(member => (JsonNode?)member.Name)]),
+            ["properties"] = new JsonObject(ValueMembers.Select(member => KeyValuePair.Create(
+                member.Name,
+                (JsonNode?)(member.Text is not null
+                    ? new JsonObject { ["type"] = "string" }
+                    : new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } })))),
+        };
+
     /// <summary>What is wrong with this issue; null when nothing is.</summary>
     public string? Problem()
         => string.IsNullOrWhiteSpace(Id) || !Id.StartsWith("nx-", StringComparison.Ordinal) ? "its id is nx-<n>"
             : string.IsNullOrWhiteSpace(Title) ? "it names nothing in its title"
             : string.IsNullOrWhiteSpace(Description) ? "it says nothing in its description"
             : Where.Count == 0 || Where.Any(path => string.IsNullOrWhiteSpace(path)) ? "it names no file it is in"
-            : Files.Count == 0 || Files.Any(path => string.IsNullOrWhiteSpace(path)) ? "its size names no file it touches"
+            : Files.Count == 0 || Files.Any(path => string.IsNullOrWhiteSpace(path)) ? "its size names no file the fix touches: a next round's item is sized by its files"
             : !FlowInstanceId.IsWellFormed(FoundBy) ? $"'{FoundBy}' is not an instance id"
+            : SettledBy is { } settled && !FlowInstanceId.IsWellFormed(settled) ? $"it says it was settled by '{settled}', which is not an instance id"
             : null;
 }
 

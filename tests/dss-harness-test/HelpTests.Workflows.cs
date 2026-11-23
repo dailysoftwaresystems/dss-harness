@@ -350,6 +350,27 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The workflows topic says which check holds a round's items to the issues the run owes its next round, and what
+    /// settles one - an item that ends done with a commit of its own made, never one a person skipped - and where a
+    /// listed issue is shown.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowsTopic_SaysWhichCheckHoldsTheIssuesOwedTheNextRound_AndWhatSettlesOne()
+    {
+        Assert.Contains(
+            "in next-round.json, which run.nextRound reads as the issues no work item has settled, and the check that opens a round - "
+                + "a validate-plan in an iteration of a repeat, beside the forEach that expands from it, and no other check - holds its "
+                + "items to: each issue named in an item's settles, none left unsettled, the settling items first, and the rounds going on "
+                + "while one is left - never holding the round the issue came from. A forEach item that names an issue in settles settles "
+                + "it once it ends done with a commit of its own made, whatever the run takes plan updates by, and next-round.json says "
+                + "which item did; one that ends done with nothing committed - an item a person skipped - settles nothing, and the issue "
+                + "stays owed. It lists the rest, proven, with a title and a description, in the run's pre-existing-issues.json, shown in "
+                + "the pull request's body and the handoff.",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows topic says what a workflow is, where it lives, what this build does with one and what it does not,
     /// and lists every key from the tables the reader itself reads - so what is listed is what is read.
     /// </summary>

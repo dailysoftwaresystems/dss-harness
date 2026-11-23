@@ -2115,6 +2115,9 @@ public sealed class ImplementationFlowTests
             Assert.Equal("nx-1", issue.Id);
             Assert.Equal("the frame is decided twice in the parser", issue.Title);
             Assert.Equal(["src/tool.cs"], issue.Files);
+
+            // The round after's item settled it, its commit made: the file names it.
+            Assert.Equal("rounds#2.items[0]", issue.SettledBy);
             Assert.Empty(kit.Harness.OrchestrationStore.ReadPreExistingIssues(kit.RunOf())!.Issues);
         }
 

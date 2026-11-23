@@ -772,8 +772,11 @@ commit subjects, a hotspot's path, a pin that lists the case by hand - each disp
 item. A pre-existing
 issue the triage answers `next` for - a defect in code the run's change does not touch that blocks
 nothing - is owed the run's next round as its first item, sized by its files: the self-audit makes
-it one with its class, the round's check refuses a round whose items leave one unsettled, and the
-rounds go on while one is left - never the round the issue came from, which no fold waits for.
+it one with its class, the check that opens a round - and no other check - refuses a round whose
+items leave one unsettled, and the rounds go on while one is left - never the round the issue came
+from, which no fold waits for. The item that names the issue settles it once it ends done with a
+commit of its own made; one a person skipped lands nothing and settles nothing, and the issue stays
+owed.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its

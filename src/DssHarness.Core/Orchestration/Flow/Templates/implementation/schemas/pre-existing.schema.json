@@ -24,7 +24,7 @@
         "duplicate",
         "unproven"
       ],
-      "description": "fix: it blocks the reporting step, is related or is critical - the run's recovery fixes it at its root now. next: a defect in code the run's change does not touch that blocks nothing - it becomes the first work item of the run's next round, and nothing of this round is held for it. list: none of these holds - it is given to the work sync at the end. duplicate: the list already holds it, and duplicates names its id. unproven: you could not reproduce it on the base commit - it is not listed."
+      "description": "fix: it blocks the reporting step, is related or is critical - the run's recovery fixes it at its root now. next: a defect in code the run's change does not touch that blocks nothing - it becomes the first work item of the run's next round, and nothing of this round is held for it. list: none of these holds - it is listed, proven, and shown in the pull request's body and the handoff. duplicate: the list already holds it, and duplicates names its id. unproven: you could not reproduce it on the base commit - it is not listed."
     },
     "title": {
       "type": "string",

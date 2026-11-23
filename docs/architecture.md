@@ -2286,7 +2286,7 @@ recovery, the step it was in the way of running again after), `next` (a defect i
 change does not touch that blocks nothing: owed the run's next round, sized - its files, what must
 be built, what measured first, an answer whose size names no file refused - never holding the round
 it came from; see the routing paragraph below), `list` (added, proven, to the run's
-`pre-existing-issues.json`, given to the work sync, a quote or an output
+`pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
 kept whole), `duplicate` (naming in `duplicates` the listed issue it
 repeats) or `unproven`; an answer whose course is none of the five, or whose issue to list or send
 to the next round does not read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
@@ -3341,12 +3341,20 @@ reviewer's answer; findings that still do not hold fail the route (12), nothing 
 `rework.md` reads `route.rework` and `route.homeAudit`. A pre-existing issue the triage answers `next` for - a defect in
 code the run's change does not touch that blocks nothing - is owed the run's next round instead: `FlowCoordinator` sizes
 it from the triage's answer (`size`: its files, what must be built, what measured first - an answer whose size names no
-file refused) into `next-round.json` (`FlowNextRoundFile`, written as the run's issues are), which `run.nextRound` reads
-as the issues no ended work item of the run has settled - an item settles one by naming its id in `settles`, and the
-round's plan check (`PlanCheckRunner`, handed the owed issues under `next`) refuses a round whose items leave one
-unsettled, refuses an item that names an issue the run does not owe, and orders the settling items first - and the
-rounds' `until` reads `empty(run.nextRound)`, so a clean self-audit does not end them while one is left; never holding
-the round the issue came from, for the triage never holds a loop.
+file refused, by the record's own rules: `FlowNextIssue.Problem`) into `next-round.json` (`FlowNextRoundFile`, written
+as the run's issues are, and read again from the triage's own answer by a resume that finds the file without it), which
+`run.nextRound` reads as the issues no work item of the run has settled. A `forEach` item settles one by naming its id
+in `settles`, once it ends done with a commit of its own made - a `commit` step within it done with `committed` true;
+an item a person skipped, done with nothing landed, settles nothing - and the file names the item
+(`FlowNextIssue.SettledBy`, `FlowCoordinator.SettleTheIssueOf`, called as the item ends and again for every ended item
+a resume finds), whatever the run takes plan updates by. The check that opens a round (`OpensARound`: a `validate-plan`
+in an iteration of a `repeat`, beside the `forEach` that expands from it) is handed the owed issues under `next`, and
+`PlanCheckRunner` refuses a round whose items leave one unsettled, refuses an item that names an issue the run does not
+owe, and orders the settling items first; no other check - the plan's, a plan update's, a recovery's - is handed any,
+and an item of one that names an issue is refused. The rounds' `until` reads `empty(run.nextRound)`, so a clean
+self-audit does not end them while one is left; never holding the round the issue came from, for the triage never holds
+a loop. The value an issue is read as and the schema typing `run.nextRound` are made from one list of its members
+(`FlowNextIssue.Value`, `ValueSchema`).
 After the checkpoint of an item's first fold, holding no tree (`FlowClaims`: a sweep whose `base` names a commit
 claims none), `item-arms` sweeps the arms the builder's answer lists (`arms: 'implement.latest.arms'`, read where the
 step starts, `pending: true`) on a copy of the commit the item's fold landed as - `base: item` is the newest commit the

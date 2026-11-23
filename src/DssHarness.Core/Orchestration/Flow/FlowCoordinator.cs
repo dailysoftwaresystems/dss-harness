@@ -626,7 +626,8 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The issues the run owes its next round, as its own file holds them: each a defect a triage took from a round's
-    /// work with its size, the one owner of what <c>run.nextRound</c> reads (<see cref="UnsettledNext"/>).
+    /// work with its size, and the work item that settled it once one did (<see cref="SettleTheIssueOf"/>) - the one
+    /// owner of what <c>run.nextRound</c> reads (<see cref="UnsettledNext"/>).
     /// </summary>
     private readonly List<FlowNextIssue> _nextRound = [];
 
@@ -659,10 +660,11 @@ public sealed class FlowCoordinator
     private FlowInstance? _heldPlanner;
 
     /// <summary>One pre-existing issue and what became of it, as <c>{run.preExisting}</c> says it and the run counts it.</summary>
-    /// <param name="State">What became of it: <c>listed</c>, <c>being fixed</c>, <c>fixed</c>, <c>duplicate of pe-&lt;n&gt;</c> or <c>unproven</c>.</param>
+    /// <param name="State">What became of it: <c>listed</c>, <c>being fixed</c>, <c>fixed</c>, <c>next round</c>, <c>duplicate of pe-&lt;n&gt;</c> or <c>unproven</c>.</param>
     /// <param name="Line">The issue as a person reads it: its title and where it is.</param>
     /// <param name="Triage">The triage instance that took it; null for none.</param>
-    private sealed record PreExistingTally(string State, string Line, FlowInstance? Triage = null);
+    /// <param name="Next">The id of the issue the run owes its next round, where it was sent there; its state is then <c>fixed in a later round</c> once a work item settled it.</param>
+    private sealed record PreExistingTally(string State, string Line, FlowInstance? Triage = null, string? Next = null);
 
     /// <summary>One ending whose handlers are raised and not all settled: the source, and what each handler did.</summary>
     /// <param name="Source">The step whose ending raised them.</param>
@@ -2579,13 +2581,32 @@ public sealed class FlowCoordinator
 
         if (group?.ForEach is not { } items
             || !string.Equals(check.DeclaredScope?.GroupPath, FlowUpdateGates.ParentOf(groupPath), StringComparison.Ordinal)
-            || WorkflowExpressions.ReadsOf(items).Select(read => read.Root).All(root => !string.Equals(root, check.Step.Name, StringComparison.Ordinal)))
+            || !ExpandsFrom(group, check))
         {
             return null;
         }
 
         return items;
     }
+
+    /// <summary>
+    /// Whether <paramref name="check"/> opens a round of the run's work: a <c>validate-plan</c> step declared in an
+    /// iteration of a <c>repeat</c> - a round - beside a <c>forEach</c> group whose items expand from it. The rounds'
+    /// check in the shipped flow; never the plan's check, a plan update's or a recovery's, whose items are no round's,
+    /// and whatever the run takes plan updates by.
+    /// </summary>
+    /// <param name="check">The check about to start.</param>
+    private bool OpensARound(FlowInstance check)
+        => check.Step.Type == "validate-plan"
+            && check.DeclaredScope is { LoopOf.Step.Repeat: not null } round
+            && DeclarationsOf(round).Any(declared => ExpandsFrom(declared, check));
+
+    /// <summary>Whether <paramref name="group"/> is a <c>forEach</c> group whose items its expression reads from <paramref name="check"/>.</summary>
+    /// <param name="group">A step declared beside the check.</param>
+    /// <param name="check">The check.</param>
+    private static bool ExpandsFrom(WorkflowStep group, FlowInstance check)
+        => group.ForEach is { } items
+            && WorkflowExpressions.ReadsOf(items).Any(read => string.Equals(read.Root, check.Step.Name, StringComparison.Ordinal));
 
     /// <summary>
     /// The work items plan updates owe to the round that opens next: each piece of an update done that is owed still
@@ -7878,18 +7899,11 @@ public sealed class FlowCoordinator
             return $"its answer's issue does not read back: {listed}";
         }
 
-        if (course == "next")
+        // What the run's next round would hold of the issue is read back by the record's own rules, so the triage is
+        // refused for whatever the record would refuse - never ended done with an issue the next write cannot keep.
+        if (course == "next" && (IssueOf(instance).Problem() ?? NextIssueOf(instance).Problem()) is { } next)
         {
-            if (IssueOf(instance).Problem() is { } next)
-            {
-                return $"its answer's issue does not read back: {next}";
-            }
-
-            if ((instance.Output?["size"] as JsonObject)?["files"] is not JsonArray { Count: > 0 } files
-                || files.Any(file => TextOf(file) is not { Length: > 0 }))
-            {
-                return "its answer's size names no file the fix touches: a next round's item is sized by its files";
-            }
+            return $"its answer's issue does not read back: {next}";
         }
 
         return null;
@@ -8031,8 +8045,25 @@ public sealed class FlowCoordinator
     {
         var issue = NextIssueOf(instance);
         _nextRound.Add(issue);
-        _tally.Add(new PreExistingTally("next round", $"{issue.Title} ({string.Join(", ", issue.Where)})"));
+        _tally.Add(new PreExistingTally(NextRoundState, $"{issue.Title} ({string.Join(", ", issue.Where)})", Next: issue.Id));
     }
+
+    /// <summary>What <c>{run.preExisting}</c> says became of an issue the run owes its next round, while it is owed.</summary>
+    private const string NextRoundState = "next round";
+
+    /// <summary>What <c>{run.preExisting}</c> says became of an issue the run owed its next round, once a work item settled it.</summary>
+    private const string SettledState = "fixed in a later round";
+
+    /// <summary>
+    /// What became of a pre-existing issue, as <c>{run.preExisting}</c> says it: its tally's state, save that one the
+    /// run owed its next round is fixed in a later round once a work item settled it - read from the run's list of them,
+    /// the one owner of whether it was.
+    /// </summary>
+    /// <param name="entry">The issue's tally.</param>
+    private string StateOf(PreExistingTally entry)
+        => entry.Next is { } id && _nextRound.Any(issue => issue.SettledBy is not null && string.Equals(issue.Id, id, StringComparison.Ordinal))
+            ? SettledState
+            : entry.State;
 
     /// <summary>
     /// The issue a triage instance answered <c>next</c> for, as the run's next round would hold it next: its title, its
@@ -8065,25 +8096,63 @@ public sealed class FlowCoordinator
     {
         var issue = NextIssueOf(triage);
 
-        return _nextRound.Any(held => held with { Id = issue.Id, FoundAt = issue.FoundAt, Where = issue.Where, Files = issue.Files, MeasureFirst = issue.MeasureFirst } == issue
+        return _nextRound.Any(held => held with { Id = issue.Id, FoundAt = issue.FoundAt, Where = issue.Where, Files = issue.Files, MeasureFirst = issue.MeasureFirst, SettledBy = issue.SettledBy } == issue
             && held.Where.SequenceEqual(issue.Where, StringComparer.Ordinal)
             && held.Files.SequenceEqual(issue.Files, StringComparer.Ordinal)
             && held.MeasureFirst.SequenceEqual(issue.MeasureFirst, StringComparer.Ordinal));
     }
 
     /// <summary>
-    /// The issues the run owes its next round and no ended work item has settled: what <c>run.nextRound</c> reads, what
-    /// a plan check holds a round's items to, and what the rounds go on while one is left. An issue is settled by a work
-    /// item of a round that ended done naming it in <c>settles</c> - the run's own records say both, so a resume reads
-    /// them as this session did.
+    /// The issues the run owes its next round and no work item has settled: what <c>run.nextRound</c> reads, what the
+    /// check that opens a round holds its items to, and what the rounds go on while one is left. What settled each is
+    /// the list's own (<see cref="FlowNextIssue.SettledBy"/>, <see cref="SettleTheIssueOf"/>).
     /// </summary>
     private IReadOnlyList<FlowNextIssue> UnsettledNext()
-        => [.. _nextRound.Where(issue => !_created
-            .Where(group => group.Step.IsGroup && _definition.Amend is { } amend && group.Path == FlowUpdateGates.ParentOf(amend.WhenAddScope))
-            .SelectMany(round => LiveItemsOf(round))
-            .Any(item => item.GroupInstance is { State: FlowInstanceState.Done }
-                && TextOf(item.Item.ToNode()?["settles"]) is { Length: > 0 } settles
-                && string.Equals(settles, issue.Id, StringComparison.Ordinal)))];
+        => [.. _nextRound.Where(issue => issue.SettledBy is null)];
+
+    /// <summary>
+    /// Settles the issue the run owes its next round that the work item <paramref name="group"/> carries names in its
+    /// <c>settles</c>, where the item ended done and its work landed: a <c>commit</c> step within the item ended done
+    /// having committed. An item that ended done with nothing landed - one a person answered skip, whose use ends done
+    /// with no fold - settles nothing, and the issue stays owed. Any <c>forEach</c> item settles, whatever group it is
+    /// of and whether the run takes plan updates or not. Called as the item ends, before its end is written, so that
+    /// write carries the settling; and again for every item a resume finds ended, for a crash between that end and the
+    /// run's file of the issues leaves the file without it. An issue settled already keeps what settled it.
+    /// </summary>
+    /// <param name="group">An instance that ended; one that carries no work item settles nothing.</param>
+    private void SettleTheIssueOf(FlowInstance group)
+    {
+        if (group is not { State: FlowInstanceState.Done, ScopeOf: { } item }
+            || item.Item.IsMissing
+            || TextOf((item.Item.ToNode() as JsonObject)?["settles"]) is not { Length: > 0 } settles
+            || _nextRound.FindIndex(issue => issue.SettledBy is null && string.Equals(issue.Id, settles, StringComparison.Ordinal)) is not (>= 0 and var at)
+            || !_created.Any(commit => commit is { Step.Type: "commit", State: FlowInstanceState.Done }
+                && (commit.Output as JsonObject)?["committed"] is JsonValue committed
+                && committed.TryGetValue<bool>(out var made)
+                && made
+                && Within(commit.DeclaredScope, item)))
+        {
+            return;
+        }
+
+        _nextRound[at] = _nextRound[at] with { SettledBy = group.Id };
+    }
+
+    /// <summary>Whether <paramref name="scope"/> is <paramref name="around"/> or a scope within it.</summary>
+    /// <param name="scope">The scope; null for none.</param>
+    /// <param name="around">The scope it may be within.</param>
+    private static bool Within(Scope? scope, Scope around)
+    {
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if (ReferenceEquals(at, around))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// What a reason step's answer is held to where a <c>route-findings</c> step routes it (<see cref="RouteOf"/>): the
@@ -10067,6 +10136,7 @@ public sealed class FlowCoordinator
         instance.Stoppable?.Dispose();
         instance.Stoppable = null;
         DisarmTimeLimit(instance);
+        SettleTheIssueOf(instance);
         Record(FlowChangeKind.Step, instance, from: was, to: state, attempt: instance.Attempt);
         SayHowThePieceEnded(instance, state);
 
@@ -11531,7 +11601,7 @@ public sealed class FlowCoordinator
             .Where(instance => instance.Step.Repeat?.Leftover is not null && instance.Leftover is not null)
             .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}")
             .ToList();
-        var preExisting = _tally.Select(entry => $"{entry.State} - {entry.Line}").ToList();
+        var preExisting = _tally.Select(entry => $"{StateOf(entry)} - {entry.Line}").ToList();
         var assumed = _created
             .Where(instance => instance.Assumptions is [_, ..])
             .SelectMany(instance => instance.Assumptions.Select(one => $"'{instance.Step.Name}' assumed about {one.About}: {one.Assumed} ({one.Why})"))
@@ -11563,7 +11633,7 @@ public sealed class FlowCoordinator
             ["stopped"] = _stopping,
             ["passedOver"] = main.Count(instance => instance.PassedOver),
             [WorkflowExpressions.AffectedTests] = new JsonArray([.. FlowAffectedTestsFile.UnitsOf(_affected).Select(unit => (JsonNode?)unit)]),
-            [WorkflowExpressions.NextRound] = new JsonArray([.. UnsettledNext().Select(issue => NextRoundValues(issue))]),
+            [WorkflowExpressions.NextRound] = new JsonArray([.. UnsettledNext().Select(issue => (JsonNode?)issue.Value())]),
             ["leftover"] = leftover.Count > 0 ? string.Join("; ", leftover) : FlowChecks.None,
             ["preExisting"] = preExisting.Count > 0 ? string.Join("; ", preExisting) : FlowChecks.None,
             // What the run's agents assumed without asking, of every step that did: a person reads it and corrects it.
@@ -11575,23 +11645,6 @@ public sealed class FlowCoordinator
             [WorkflowExpressions.RunHotspots] = hotspots.Count > 0 ? string.Join("; ", hotspots) : FlowChecks.None,
         };
     }
-
-    /// <summary>
-    /// One issue the run owes its next round, as <c>run.nextRound</c> and a plan check read it: its id, what it is,
-    /// where it is, and its size - the files the fix touches, what must be built, and what must be measured first.
-    /// </summary>
-    /// <param name="issue">The issue.</param>
-    private static JsonObject NextRoundValues(FlowNextIssue issue)
-        => new()
-        {
-            ["id"] = issue.Id,
-            ["title"] = issue.Title,
-            ["description"] = issue.Description,
-            ["where"] = new JsonArray([.. issue.Where.Select(path => (JsonNode?)path)]),
-            ["files"] = new JsonArray([.. issue.Files.Select(path => (JsonNode?)path)]),
-            ["build"] = issue.Build,
-            ["measureFirst"] = new JsonArray([.. issue.MeasureFirst.Select(path => (JsonNode?)path)]),
-        };
 
     /// <summary>
     /// The plan update under way, as <c>update</c> reads it: what raised it - the request as it stood with its earlier
@@ -12412,12 +12465,14 @@ public sealed class FlowCoordinator
             read["commit"] = FlowValue.Of(pushed);
         }
 
-        if (step.Type == "validate-plan")
+        if (step.Type == "validate-plan" && OpensARound(instance))
         {
-            // The issues the run owes its next round, which this check holds a round's items to: each named in an
-            // item's settles, none left unsettled, the settling items ordered first. Live at the start, as run.nextRound
-            // reads it, so a round that opens after one was taken reads it whatever moved meanwhile.
-            read["next"] = FlowValue.Of(new JsonArray([.. UnsettledNext().Select(issue => (JsonNode?)NextRoundValues(issue))]));
+            // The issues the run owes its next round, which the check that opens a round holds its items to: each named
+            // in an item's settles, none left unsettled, the settling items ordered first. Live at the start, as
+            // run.nextRound reads it, so a round that opens after one was taken reads it whatever moved meanwhile. A
+            // check of any other list - the plan's, a plan update's, a recovery's remedies - is given none: no issue is
+            // owed it, and an item of it that names one in settles is refused.
+            read["next"] = FlowValue.Of(new JsonArray([.. UnsettledNext().Select(issue => (JsonNode?)issue.Value())]));
         }
 
         if (step.Type == "validate-plan" && _definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)
@@ -13683,7 +13738,7 @@ public sealed class FlowCoordinator
 
             foreach (var owedIssue in _nextRound)
             {
-                _tally.Add(new PreExistingTally("next round", $"{owedIssue.Title} ({string.Join(", ", owedIssue.Where)})"));
+                _tally.Add(new PreExistingTally(NextRoundState, $"{owedIssue.Title} ({string.Join(", ", owedIssue.Where)})", Next: owedIssue.Id));
             }
 
             foreach (var triage in _created.Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting && created.State == FlowInstanceState.Done))
@@ -13715,6 +13770,13 @@ public sealed class FlowCoordinator
                         _tally.Add(SettledTally(triage, CourseOf(triage)!));
                         break;
                 }
+            }
+
+            // Each work item the records say ended done settles what it names again, as its end did: that end is
+            // written, and the run's file of the issues - written after it in the same change - may not be.
+            foreach (var carried in _created.Where(created => created is { ScopeOf: not null, State: FlowInstanceState.Done }))
+            {
+                SettleTheIssueOf(carried);
             }
 
             // Every question the run raised is its file's, restored whole - answered, withdrawn and open alike, each
