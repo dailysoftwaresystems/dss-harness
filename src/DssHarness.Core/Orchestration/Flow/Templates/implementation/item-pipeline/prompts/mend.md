@@ -6,7 +6,10 @@ The engine built your work and ran its tests, and the result is red. Repair it.
 
 The whole logs are under `{source.runDirectory}`. This is visit {visit} of this repair.
 
-Each entry names a leg, the phase that did not pass - the build, or the tests - and the last lines that phase printed.
+Each entry names a leg, the phase that did not pass - the build, or the tests - and what that phase printed,
+digested: in `digest`, the first error whole - its stack rendered to the frames inside the tree, its `log` naming the
+lines of the log it was read from - the next distinct errors to four as one line each, every test failure of the four
+with its stack, and the rest counted by code and by file; the `tail` then holds only the lines no parser held.
 
 How the engine runs the tests, leg by leg: {input.orient.tests}
 
@@ -29,7 +32,9 @@ while one of its sites is left.
 
 ## What to do
 
-1. Read the output and find the first thing that went wrong.
+1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The log
+   lines its `log` names are one read away, under `{source.runDirectory}`, where the cause needs more than the digest
+   says.
 2. Find the cause in your change. Put the cause right; do not make the test pass by weakening it.
 3. Where a leg says it found no test to run, a unit your task gave or your answer added names tests that are not
    there: where your work was to write them, write them; a unit your answer added that names none, leave out of your

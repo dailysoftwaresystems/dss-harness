@@ -1100,8 +1100,9 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The red legs of the agent's newest build or test that was red, as the record says them: each red leg, its phase
-    /// and the ledger's line for it, and where the copied ledger and its logs are. Empty where none was red.
+    /// The red legs of the agent's newest build or test that was red, as the record says them: each red leg, its phase,
+    /// the ledger's line for it, and what the phase printed digested - the digest instead of a pointer to logs, so the
+    /// step that goes on starts from the first error. Empty where none was red.
     /// </summary>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as, whose steps ran them.</param>
@@ -1118,7 +1119,6 @@ public sealed class ReasonStepRunner(
                 && step.Output?["red"] is JsonArray { Count: > 0 })
             .OrderByDescending(step => step.FinishedAt))
         {
-            var directory = layout.InstanceDirectory(step.Instance, step.Agent);
             var legs = new List<AgentRedLeg>();
 
             foreach (var red in step.Output!["red"]!.AsArray().OfType<JsonObject>())
@@ -1127,7 +1127,12 @@ public sealed class ReasonStepRunner(
                     && red["detail"] is JsonValue detail && detail.GetValueKind() == JsonValueKind.String)
                 {
                     var phase = red["phase"] is JsonValue named && named.GetValueKind() == JsonValueKind.String ? named.GetValue<string>() : null;
-                    legs.Add(new AgentRedLeg(leg.GetValue<string>(), phase ?? string.Empty, detail.GetValue<string>(), directory));
+
+                    // The digest instead of a pointer to logs: what a red result printed, typed and said for a model,
+                    // so the step that goes on starts from the first error and not from a directory to search.
+                    var digest = red["digest"] is { } typed && typed.GetValueKind() == JsonValueKind.Object ? typed.ToJsonString() : null;
+
+                    legs.Add(new AgentRedLeg(leg.GetValue<string>(), phase ?? string.Empty, detail.GetValue<string>(), digest));
                 }
             }
 

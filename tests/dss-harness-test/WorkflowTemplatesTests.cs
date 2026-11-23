@@ -19,6 +19,25 @@ public sealed class WorkflowTemplatesTests
     private static StringComparison PathComparison => new HostPlatform().PathComparison;
 
     /// <summary>
+    /// The repair prompts start from the digest: mend's first instruction names the digest's first - the first error
+    /// in the order the tool met it, its log one read away - and says what a red entry holds of it, and diagnose and
+    /// rediagnose say the same, so no model is told to search a log for what a file already holds.
+    /// </summary>
+    [Fact]
+    public void TheRepairPrompts_StartFromTheDigestsFirst_NeverALogToSearch()
+    {
+        var mend = WorkflowTemplates.TextOf("item-pipeline/prompts/mend.md")!;
+        var diagnose = WorkflowTemplates.TextOf("prompts/diagnose.md")!;
+        var rediagnose = WorkflowTemplates.TextOf("prompts/rediagnose.md")!;
+
+        Assert.Contains("1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The log", mend, StringComparison.Ordinal);
+        Assert.Contains("the `tail` then holds only the lines no parser held.", mend, StringComparison.Ordinal);
+        Assert.Contains("1. Start from the digest's `first` - the first thing that went wrong, in the order the tool met it - and read the", diagnose, StringComparison.Ordinal);
+        Assert.Contains("each red entry's digest, its", rediagnose, StringComparison.Ordinal);
+        Assert.DoesNotContain("Read the output and find the first thing that went wrong", mend + diagnose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// This build's own implementation workflow holds: parsed and validated against every rule a repository's is held to -
     /// a build whose own workflow does not hold is a build that says so, never one that writes a definition it refuses.
     /// </summary>

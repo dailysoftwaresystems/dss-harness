@@ -29,7 +29,8 @@ Where a line says that a step left no output, that thing was not read or did not
 ## What to do
 
 1. Read the failure as it is now, against what you diagnosed before and what you set out to do: did your remedy reach
-   the cause, was it built at all, or did it fail on its way - and why?
+   the cause, was it built at all, or did it fail on its way - and why? Start from each red entry's digest, its
+   `first` the first thing that went wrong in the order the tool met it.
 2. Find the cause again where the last one was wrong, or the part of it the remedy missed.
 3. Decide the course by what you found, and never set out again a remedy or a retry that already failed for the same
    cause:

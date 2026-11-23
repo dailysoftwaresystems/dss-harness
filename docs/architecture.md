@@ -9709,6 +9709,11 @@ toolchain chose and a test's by its runner's, with the configured matchers every
 console only where they gave nothing); every frame is marked by whether its file is inside the tree where the digest
 is made (`ResultDigest.WithInTree`, the one place a frame is marked).
 
+The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names
+are one read away" in place of "read the output and find the first thing that went wrong" - `diagnose.md` and
+`rediagnose.md` say the same, and the continuation record carries each red leg's digest instead of a pointer to logs
+(`ReasonStepRunner.RedLegsOf`), so a step that goes on starts from the first error and not from a directory to search.
+
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.

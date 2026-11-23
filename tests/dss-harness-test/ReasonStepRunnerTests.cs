@@ -1052,7 +1052,12 @@ public sealed class ReasonStepRunnerTests
             nameof(FlowRunStatus.Running),
             new FlowBudgetRecord(0, 0, 0),
             0,
-            [new FlowStepRecord("verify", "verify", false, "Failed", 1, 1, [], [], Type: "test", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow, Output: JsonNode.Parse("""{"passed": false, "red": [{"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": []}]}"""))],
+            [new FlowStepRecord("verify", "verify", false, "Failed", 1, 1, [], [], Type: "test", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow, Output: JsonNode.Parse("""
+                {"passed": false, "red": [
+                  {"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": [], "digest": {"errors": 1, "first": {"kind": "diagnostic", "tool": "msbuild", "code": "CS0103", "message": "no x", "file": "a.cs", "line": 1, "column": 2, "count": 1, "stack": [], "said": "msbuild CS0103 a.cs(1,2): no x"}}},
+                  {"leg": "tools", "verdict": "failed", "phase": "build", "detail": "the build failed", "tail": []}
+                ]}
+                """))],
             [],
             DateTimeOffset.UtcNow));
 
@@ -1066,7 +1071,13 @@ public sealed class ReasonStepRunnerTests
         Assert.Contains("The files changed so far, by name:", continuation, StringComparison.Ordinal);
         Assert.Contains("src/one.cs", continuation, StringComparison.Ordinal);
         Assert.Contains("The last build or test in this worktree was red:", continuation, StringComparison.Ordinal);
-        Assert.Contains($"leg 'unit', phase 'test': 2 tests failed (the ledger and its logs: {kit.Layout.AgentStepDirectory("reader", "verify")})", continuation, StringComparison.Ordinal);
+
+        // The digest instead of a pointer to logs: what the phase printed, said for a model after the ledger's line,
+        // and a red entry with none leaves the line alone.
+        Assert.Contains("leg 'unit', phase 'test': 2 tests failed", continuation, StringComparison.Ordinal);
+        Assert.Contains("\"said\":\"msbuild CS0103 a.cs(1,2): no x\"", continuation, StringComparison.Ordinal);
+        Assert.Contains("leg 'tools', phase 'build': the build failed", continuation, StringComparison.Ordinal);
+        Assert.DoesNotContain("the ledger and its logs:", continuation, StringComparison.Ordinal);
     }
 
     /// <summary>

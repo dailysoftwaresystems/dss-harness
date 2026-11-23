@@ -17,8 +17,12 @@ public sealed record AgentContinuedStep(string Instance, string Ended, string Di
 /// <param name="Leg">The leg's name.</param>
 /// <param name="Phase">The phase that was red.</param>
 /// <param name="LedgerLine">The ledger's line for it.</param>
-/// <param name="Where">Where the copied ledger and its logs are.</param>
-public sealed record AgentRedLeg(string Leg, string Phase, string LedgerLine, string Where);
+/// <param name="Digest">
+/// What the phase that did not pass printed, digested and said for a model - the first error whole with its stack
+/// rendered to the frames inside the tree, the next distinct errors to four, the rest counted - as the red entry
+/// holds it; null where the entry carries none, the ledger's line alone then.
+/// </param>
+public sealed record AgentRedLeg(string Leg, string Phase, string LedgerLine, string? Digest);
 
 /// <summary>
 /// The work a continuation record is the record of, as the engine resolved it: which step goes on, the chain of steps
@@ -131,7 +135,9 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             record.Part(
                 "the last red build or test",
                 "The last build or test in this worktree was red:" + NL + NL
-                    + string.Join(NL, work.RedLegs.Select(leg => $"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine} (the ledger and its logs: {leg.Where})")));
+                    + string.Join(NL, work.RedLegs.Select(leg => leg.Digest is { Length: > 0 } digested
+                        ? $"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine}" + NL + "  " + digested
+                        : $"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine}")));
         }
 
         // The steps so far, the newest first, each with its notes and its output whole.
