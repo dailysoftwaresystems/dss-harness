@@ -1,6 +1,7 @@
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
+using DssHarness.Core.Application.Dispatch;
 using DssHarness.Core.Application.Hosting;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
@@ -442,6 +443,7 @@ public static class ServiceRegistration
             () => provider.GetRequiredService<MachineSettingsFile>().Read().Admission?.HeavyLegs,
             settings: () => provider.GetRequiredService<MachineSettingsFile>()));
         services.AddSingleton(provider => provider.GetRequiredService<MachineDispatchQueue>() as HeavyLegSlots);
+        services.AddSingleton<IShowQueue, ShowQueue>();
         services.AddSingleton(provider => new TreeHolders(
             provider.GetRequiredService<RunLock>(),
             provider.GetRequiredService<HeavyLegSlots>(),

@@ -2,6 +2,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
 
@@ -173,6 +174,43 @@ public sealed class MachineDispatchQueueTests
         Assert.Equal(3, holder.Cost);
 
         place.Dispose();
+    }
+
+    /// <summary>
+    /// The queue command's answer: asked for <c>--json</c>, its one document whole - every class with its capacity, its
+    /// holders and its waiting units - after the code and the line it ends on, and nothing else on standard output; as
+    /// text, a listing of a line a unit under its class, the counts the line it ends on. The stopped document is the same
+    /// shape, holding no classes.
+    /// </summary>
+    [Fact]
+    public void TheQueueCommandsAnswer_IsItsDocumentWhole_WhereAsked_ElseItsListing()
+    {
+        IReadOnlyList<DispatchClass> classes =
+        [
+            new("heavy", 2, [new DispatchUnit("local/a", 1, 1, 4, null, "tree a")], [new DispatchUnit("local/b", 2, 3, 1.5, TimeSpan.FromSeconds(185), "tree b")]),
+            new("agent", 8, [], []),
+        ];
+        const string Summary = "1 unit(s) holding and 1 unit(s) waiting, in 2 class(es)";
+
+        var json = QueueReports.Render(classes, json: true);
+        var text = QueueReports.Render(classes, json: false);
+
+        Assert.Equal((HarnessExit.Success, Summary, true), (json.ExitCode, json.Message, json.Quiet));
+        Assert.Equal(
+            """{"exitCode":0,"summary":"1 unit(s) holding and 1 unit(s) waiting, in 2 class(es)","queue":[{"class":"heavy","capacity":2,"holding":[{"tenant":"local/a","weight":1,"priority":1,"cost":4,"waited":null,"unit":"tree a"}],"waiting":[{"tenant":"local/b","weight":2,"priority":3,"cost":1.5,"waited":"3m05s","unit":"tree b"}]},{"class":"agent","capacity":8,"holding":[],"waiting":[]}]}""",
+            System.Text.Json.Nodes.JsonNode.Parse(Assert.Single(json.Data))!.ToJsonString());
+        Assert.Equal((HarnessExit.Success, Summary, false), (text.ExitCode, text.Message, text.Quiet));
+        Assert.Equal(
+            [
+                "heavy: 2 unit(s) at once",
+                "  holding (tenant 'local/a'): tree a",
+                "  waiting (tenant 'local/b', cost 1.5, weight 2, priority 3, waited 3m05s): tree b",
+                "agent: 8 unit(s) at once",
+            ],
+            text.Data);
+        Assert.Equal(
+            """{"exitCode":13,"summary":"stopped","queue":null}""",
+            System.Text.Json.Nodes.JsonNode.Parse(QueueReports.Stopped(HarnessExit.Refused, "stopped"))!.ToJsonString());
     }
 
     /// <summary>A waiting leg's line names its tenant, so a reader sees who the queue serves.</summary>

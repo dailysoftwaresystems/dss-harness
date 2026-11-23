@@ -570,6 +570,7 @@ public sealed class ArchitectureTests
         ["DssHarness.Core.Agents.SideTasks.SideTaskReports"] = "renders the report the side-task commands' use case answers",
         ["DssHarness.Core.Runs.RunStopReports"] = "renders the report the stop-run command's use case answers",
         ["DssHarness.Core.Worktrees.WorktreeReports"] = "renders the report the worktree commands' use case answers",
+        ["DssHarness.Core.Execution.QueueReports"] = "renders the report the queue command's use case answers",
 
         // The hidden process commands the program starts for its own machinery.
         ["DssHarness.Core.Processes.ContainExec"] = "the hidden command that places a contained child, which the program runs for itself",

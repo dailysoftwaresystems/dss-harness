@@ -16,11 +16,11 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `class-closure`, `route-findings`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`, `read-orchestrator-report`, `analyze-orchestrator-report`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `class-closure`, `route-findings`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-arms`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
-`down` and `help`.
+`down`, `queue` and `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -7325,7 +7325,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run`, `query-codebase-graph`, `read-orchestrator-report`, `analyze-orchestrator-report` and `queue` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty

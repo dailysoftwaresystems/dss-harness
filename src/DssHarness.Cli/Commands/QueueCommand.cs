@@ -1,7 +1,6 @@
 using System.CommandLine;
+using DssHarness.Core.Application.Dispatch;
 using DssHarness.Core.Execution;
-using DssHarness.Core.Output;
-using DssHarness.Core.Reports;
 
 namespace DssHarness.Cli.Commands;
 
@@ -14,9 +13,6 @@ internal static class QueueCommand
     {
         Description = "Answer the queue as one JSON document.",
     };
-
-    /// <summary>Its --json, which a queue that stops before it reads answers with its own shape for, holding nothing.</summary>
-    private static readonly JsonAnswer JsonAnswerOfQueue = new(JsonOption, (_, exitCode, summary, _, _) => QueueReports.Document(exitCode, summary, null));
 
     internal static Command Create()
     {
@@ -32,8 +28,8 @@ internal static class QueueCommand
 
         CommandRunner.Wire(
             command,
-            (context, cancellationToken) => Task.FromResult(QueueReports.Render(context.Get<MachineDispatchQueue>().Queue())),
-            JsonAnswerOfQueue);
+            (context, cancellationToken) => Task.FromResult(QueueReports.Render(context.Get<IShowQueue>().Show(), context.Json)),
+            new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => QueueReports.Stopped(exitCode, summary)));
 
         return command;
     }

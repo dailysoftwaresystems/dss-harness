@@ -465,7 +465,7 @@ public sealed class StoppedDocumentTests
             "Every other command asked for `--json` that stops before it has anything of its own to say answers in its own document's "
                 + "shape, never the ledger's: the agent verbs with the agent document, empty; `list-orchestrator`, `list-worktree`, `legs`, "
                 + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, "
-                + "`export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs "
+                + "`export-workflow`, `up`, `down`, `stop-run`, `query-codebase-graph`, `read-orchestrator-report`, `analyze-orchestrator-report` and `queue` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs "
                 + "(`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`, "
                 + "`stop-orchestrator`) with the flow document - the session they would have run, empty "
                 + "(`OrchestrationReports.FlowStopped`); `check-mutations --list` with "
