@@ -215,6 +215,12 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// <summary>How many braces the interpolation's code the reading is in holds open: a closing brace stands at none of them ends it.</summary>
         public int Depth => _frames[^1].Depth;
 
+        /// <summary>
+        /// Whether the reading is in the tail of a field of the literal it is in - what stands between where <see cref="EndCode"/>
+        /// ended the field's code and the field's closer, an f-string's conversion and format - none of it the value's constant text.
+        /// </summary>
+        public bool InTail => _frames[^1] is { Code: false, Tails: > 0 };
+
         /// <summary>The constant parts of the literal's own value read so far.</summary>
         public IReadOnlyList<ScanLiteralPart> Parts => _outermost?.Parts ?? [];
 
@@ -296,9 +302,11 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
         /// <summary>
         /// Ends the interpolation's code the reading is in at <paramref name="at"/>, where the language's own syntax ends it
-        /// short of its closer - an f-string's <c>!</c> before a conversion and <c>:</c> before its format - recorded as the
-        /// code of the literal that holds it; what stands from there to the closer is the field's own, none of it the value's
-        /// constant text, which <see cref="CloseCode"/> says goes on.
+        /// short of its closer - an f-string's <c>=</c> of a debugging field, <c>!</c> before a conversion and <c>:</c> before
+        /// its format - recorded as the code of the literal that holds it; what stands from there to the closer is the field's
+        /// tail (<see cref="InTail"/>), none of it the value's constant text, which <see cref="CloseCode"/> says goes on. A
+        /// field the tail holds - a format's own - is opened as any interpolation is (<see cref="OpenCode"/>), and closing it
+        /// leaves the reading in the tail.
         /// </summary>
         public void EndCode(long at)
         {
@@ -309,15 +317,24 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
             var holder = _frames[^1];
             Span(holder, top.Start, at);
             holder.Part = -1;
+            holder.Tails++;
         }
 
         /// <summary>
         /// The closer at <paramref name="at"/> of an interpolation whose code <see cref="EndCode"/> ended short of it: the
-        /// constant text of the literal's value goes on past it.
+        /// reading leaves its tail, and the constant text of the literal's value goes on past it - where it is in the tail of
+        /// no field around it, a field a format holds being closed in the tail of the field it is the format of.
         /// </summary>
         public void CloseCode(long at)
         {
-            _frames[^1].Part = at + 1;
+            var holder = _frames[^1];
+
+            holder.Tails = Math.Max(0, holder.Tails - 1);
+
+            if (holder.Tails == 0)
+            {
+                holder.Part = at + 1;
+            }
         }
 
         /// <summary>Ends the constant part of <paramref name="holder"/>'s value being read at <paramref name="at"/>.</summary>
@@ -384,7 +401,8 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
         /// <summary>
         /// A brace in an interpolation's code at <paramref name="at"/>: an opening one held open; a closing one closing the
-        /// last held open, else the code itself - recorded as the code of the literal that holds it.
+        /// last held open, else the code itself - recorded as the code of the literal that holds it, whose value's constant
+        /// text goes on past it but in a field's tail (<see cref="InTail"/>), where the code was a format's own field.
         /// </summary>
         private void Brace(bool opens, long at)
         {
@@ -400,7 +418,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
             var holder = _frames[^1];
             Span(holder, top.Start, at);
-            holder.Part = at + 1;
+            holder.Part = holder.Tails > 0 ? -1 : at + 1;
         }
 
         /// <summary>
@@ -458,6 +476,12 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
             /// <summary>Whether a literal holds holes of its own.</summary>
             public bool Holes { get; set; }
+
+            /// <summary>
+            /// How many fields a literal's reading is in the tail of (<see cref="InTail"/>): the field whose code ended short of
+            /// its closer, and each a format of it holds whose own code did, the innermost last.
+            /// </summary>
+            public int Tails { get; set; }
         }
     }
 

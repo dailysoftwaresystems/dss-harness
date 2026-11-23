@@ -81,6 +81,10 @@ internal sealed class ScannedText
     public string? Value(int at)
         => at >= 0 && at < Tokens.Count && Tokens[at].Kind == ScanTokenKind.Text && _literals.TryGetValue(Tokens[at].Start, out var literal) ? literal.Whole(Source) : null;
 
+    /// <summary>Whether the token at <paramref name="at"/> is a string literal whose closer never came: its line or the text ended first (<see cref="ScanLiteral.LeftOpen"/>).</summary>
+    public bool LeftOpen(int at)
+        => at >= 0 && at < Tokens.Count && Tokens[at].Kind == ScanTokenKind.Text && _literals.TryGetValue(Tokens[at].Start, out var literal) && literal.LeftOpen;
+
     /// <summary>The indices of the brackets a conditional's branch left open that stand for none after it, in order.</summary>
     public IReadOnlyList<int> Stranded { get; }
 
@@ -376,6 +380,9 @@ internal sealed class ScannedText
         run.Reverse();
         return run;
     }
+
+    /// <summary>Whether a comment begins from <paramref name="start"/> to before <paramref name="end"/>.</summary>
+    public bool HoldsComment(long start, long end) => LastCommentBefore(end) is var last and >= 0 && Comments[last].Start >= start;
 
     /// <summary>The index of the last comment that begins before <paramref name="position"/>; -1 where none does.</summary>
     private int LastCommentBefore(long position)

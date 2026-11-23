@@ -715,7 +715,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         var extract = Read("pkg/blocks.py", """
             def outer(items):
                 total = 0
-                for item in \\
+                for item in \
                         items:
                     total += item
                 if total: return total
@@ -785,6 +785,173 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
             (extract.Literals ?? []).Select(literal => (literal.Places[0].Node?.Whole(), literal.Places[0].Line)));
         Assert.Equal([("money", CodeEdgeKinds.Calls, 6, (string?)null)], References(extract, "python:pkg.strings.FIELDS").Where(reference => reference.Kind == CodeEdgeKinds.Calls));
         Assert.Equal([("cents", CodeEdgeKinds.Uses, 6, (string?)null), ("NAME", CodeEdgeKinds.Uses, 6, (string?)null)], References(extract, "python:pkg.strings.FIELDS").Where(reference => reference.Kind == CodeEdgeKinds.Uses));
+    }
+
+    /// <summary>
+    /// Each lexical rule of a string is read as Python reads it, one row each: what the string's value is - the constant parts kept,
+    /// each decoded by its prefix's escapes - and the names its fields read as code. A prefix in any case and of two letters, <c>u</c>
+    /// and <c>t</c> among them; three single quotes; doubled braces a brace; a field's code to its closer through <c>!=</c>, through a
+    /// colon a group or a dictionary holds and through a nested string, and to a debugging <c>=</c>, a conversion or a format, whose
+    /// own fields are code; a backslash before a field's brace, and <c>\N{...}</c> no field; Python's escapes - a character's name kept
+    /// as written, a code past every character's the replacement character, a line break a backslash joins dropped, one Python does not
+    /// know kept with its backslash, a bytes string's its own - and a raw string's escaped quote, which closes nothing.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(LexedStrings))]
+    public void EachLexicalRuleOfAString_IsReadAsPythonReadsIt(string source, string[] values, string[] references)
+    {
+        var extract = Read("pkg/lex.py", source);
+
+        Assert.Equal(values, (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal(references, References(extract, "python:pkg.lex.X").Select(reference => $"{reference.Kind} {reference.Name}"));
+
+        // Every string of a row closes, so no line is marked as one that never does.
+        Assert.Empty(extract.Dynamic);
+    }
+
+    /// <summary>The rows of <see cref="EachLexicalRuleOfAString_IsReadAsPythonReadsIt"/>: a module's source, its literals' values, and what its constant's value reads.</summary>
+    public static TheoryData<string, string[], string[]> LexedStrings() => new()
+    {
+        { """X = U"cart" """, ["cart"], [] },
+        { """X = rb"\n" """, ["\\n"], [] },
+        { """X = Rb'\t' """, ["\\t"], [] },
+        { """X = BR"\d" """, ["\\d"], [] },
+        { """X = Fr"{NAME}\d" """, ["\\d"], ["uses NAME"] },
+        { """X = '''a cart's''' """, ["a cart's"], [] },
+        { """X = f"{{id}}: {NAME}" """, ["{id}: "], ["uses NAME"] },
+        { """X = f"{A != B}" """, [], ["uses A", "uses B"] },
+        { """X = f"{ITEMS[1:N]}" """, [], ["uses ITEMS", "uses N"] },
+        { """X = f"{ {'k': V}['k'] }" """, ["k"], ["uses V"] },
+        { """X = f"{D["key"]}" """, ["key"], ["uses D"] },
+        { """X = f"{NAME + rb'x\n'}" """, ["x\\n"], ["uses NAME"] },
+        { """X = f"{V:.{DIGITS}f}" """, [], ["uses V", "uses DIGITS"] },
+        { """X = f"{V:{W}.{P}}" """, [], ["uses V", "uses W", "uses P"] },
+        { """X = f"{RETRIES=}" """, [], ["uses RETRIES"] },
+        { """X = f"{TOTAL = }" """, [], ["uses TOTAL"] },
+        { """X = f"{A + B=!r:>{W}}" """, [], ["uses A", "uses B", "uses W"] },
+        { """X = t"Hello {USER}" """, ["Hello "], ["uses USER"] },
+        { """X = Rt"\d{USER}" """, ["\\d"], ["uses USER"] },
+        { """X = f"\N{EM DASH} {TITLE}" """, ["\\N{EM DASH} "], ["uses TITLE"] },
+        { """X = f"\{NAME}" """, ["\\"], ["uses NAME"] },
+        { """X = "\x41\u0042\U00000043\101\N{EM DASH}" """, ["ABCA\\N{EM DASH}"], [] },
+        { """X = "\U00110000" """, ["\uFFFD"], [] },
+        { "X = \"ab\\\ncd\"\n", ["abcd"], [] },
+        { """X = "\d+\." """, ["\\d+\\."], [] },
+        { """X = "\\ \' \"" """, ["\\ ' \""], [] },
+        { """X = b"\u0041\N{DASH}" """, ["\\u0041\\N{DASH}"], [] },
+        { """X = b"\xc3\xa9" """, ["\u00e9"], [] },
+        { """X = r'\'' """, ["\\'"], [] },
+        { """X = r"\"" """, ["\\\""], [] },
+        { """X = r'[\'"]' """, ["[\\'\"]"], [] },
+        { """X = rf"\"{NAME}" """, ["\\\""], ["uses NAME"] },
+    };
+
+    /// <summary>
+    /// A raw string's escaped quote closes nothing, as Python's tokenizer reads a raw string - the backslash kept in its value - so the
+    /// brackets around it close where the code closes them, and every statement after it is read as its own: the functions and the
+    /// class past a pattern that holds a quote are declared, nothing is marked.
+    /// </summary>
+    [Fact]
+    public void ARawStringsEscapedQuote_ClosesNothing_AndTheStatementsAfterItAreRead()
+    {
+        var extract = Read("pkg/raw.py", """
+            import re
+            QUOTE = re.compile(r'[\'"]')
+            APOSTROPHE = r'\''
+            DOUBLE = r"\""
+
+
+            def strip(text):
+                return QUOTE.sub("", text)
+
+
+            class Parser:
+                pass
+            """);
+
+        Assert.Equal(
+            [("python:pkg.raw", 1, 12), ("python:pkg.raw.QUOTE", 2, 2), ("python:pkg.raw.APOSTROPHE", 3, 3), ("python:pkg.raw.DOUBLE", 4, 4), ("python:pkg.raw.strip", 7, 8), ("python:pkg.raw.Parser", 11, 12)],
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
+        Assert.Equal(["[\\'\"]", "\\'", "\\\""], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Empty(extract.Dynamic);
+    }
+
+    /// <summary>
+    /// A bracket or a string that never closes - text Python refuses, which a file being edited may hold - marks the line it opens on
+    /// dynamic, of the kind that tells its limit, since what follows it is read as held in it: a call left open, a string of one line
+    /// left open at its end and a triple-quoted one left open to the file's; a file whose brackets and strings all close is marked
+    /// nowhere.
+    /// </summary>
+    [Fact]
+    public void ABracketOrAStringThatNeverCloses_MarksTheLineItOpensOn()
+    {
+        var bracket = Read("pkg/edited.py", """
+            import re
+
+
+            def broken(text):
+                return re.sub("x", "", text
+
+
+            class After:
+                pass
+            """);
+        var strings = Read("pkg/strings.py", """"
+            NAME = 'cart
+            LIMIT = """open
+
+
+            def after():
+                pass
+            """");
+
+        Assert.Equal([(5, "a bracket that never closes: what follows it is read as held in it")], bracket.Dynamic.Select(mark => (mark.Line, mark.Why)));
+        Assert.Equal(
+            [(1, "a string that never closes: what follows its quote is read as its text"), (2, "a string that never closes: what follows its quote is read as its text")],
+            strings.Dynamic.Select(mark => (mark.Line, mark.Why)));
+        Assert.All(bracket.Dynamic.Concat(strings.Dynamic), mark => Assert.Equal(PythonReading.Unclosed, mark.Kind));
+        Assert.Empty(Read("pkg/whole.py", "def f(x):\n    return (x, [1, {2: 3}], f\"{x}\", '''a\nb''')\n").Dynamic);
+
+        // The kind is the sign of the one limit of the help that says it, so an answer that searched such a file says that limit.
+        Assert.StartsWith("a bracket or a string that never closes", Assert.Single(new PythonExtractor().Help.DoesNotSee, limit => limit.Signs.Contains(PythonReading.Unclosed)).Says, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A line is continued by a backslash that ends its code alone: one a trailing comment ends with is the comment's, and a line a
+    /// backslash joins to a comment ends with that comment, so the class on the next line is a statement of its own in each.
+    /// </summary>
+    [Fact]
+    public void ABackslashAtACommentsEnd_ContinuesNoLine()
+    {
+        var extract = Read("pkg/config.py", """
+            TIMEOUT = 30  # see C:\
+            class Client:
+                pass
+
+
+            RETRIES = 3 \
+            # the backslash above joins this comment to its line
+            class Server:
+                pass
+            """);
+
+        Assert.Equal(
+            [("python:pkg.config", 1, 9), ("python:pkg.config.TIMEOUT", 1, 1), ("python:pkg.config.Client", 2, 3), ("python:pkg.config.RETRIES", 6, 6), ("python:pkg.config.Server", 8, 9)],
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
+    }
+
+    /// <summary>
+    /// A form feed among the blanks a line begins with begins its column again, as Python's tokenizer counts it - a page break written
+    /// before a declaration - so the declaration stands at the module's column and the declarations after it are read.
+    /// </summary>
+    [Fact]
+    public void AFormFeedALineBeginsWith_BeginsItsColumnAgain()
+    {
+        var extract = Read("pkg/paged.py", "\fdef helper():\n    return 1\n\n\ndef after():\n    return 2\n");
+
+        Assert.Equal(
+            [("python:pkg.paged", 1, 6), ("python:pkg.paged.helper", 1, 2), ("python:pkg.paged.after", 5, 6)],
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
     }
 
     /// <summary>

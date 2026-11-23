@@ -55,11 +55,24 @@ internal enum ScanEscapes
     Css,
 
     /// <summary>
-    /// Python's, in a string no prefix makes raw: a backslash before a line break dropping both; <c>\n</c> and the other
-    /// letters, an octal of up to three digits, <c>\x</c> of two, <c>\u</c> of four and <c>\U</c> of eight, and any other
-    /// character after a backslash itself - <c>\N</c> and what follows it kept as written, <c>\'</c> a quote.
+    /// Python's, in a string no prefix makes raw, bytes or formatted: a backslash before a line break dropping both;
+    /// <c>\\</c>, <c>\'</c> and <c>\"</c> the character, <c>\n</c> and the other letters, an octal of up to three digits,
+    /// <c>\x</c> of two, <c>\u</c> of four and <c>\U</c> of eight, and <c>\N{...}</c> kept as written; any other backslash
+    /// kept, with the character after it, as Python keeps one it does not know - <c>"\d"</c> two characters.
     /// </summary>
     Python,
+
+    /// <summary>
+    /// Python's in a bytes string no prefix makes raw: as in any other string, but an octal's and a <c>\x</c>'s bytes - a
+    /// run of them read as UTF-8 - and <c>\u</c>, <c>\U</c> and <c>\N</c> no escape of bytes, each kept with its backslash.
+    /// </summary>
+    PythonBytes,
+
+    /// <summary>Python's in an f-string or a t-string no prefix makes raw: as in any other string, and <c>{{</c> and <c>}}</c> a brace.</summary>
+    PythonFormatted,
+
+    /// <summary>Python's in an f-string or a t-string a prefix makes raw: the text as written, but <c>{{</c> and <c>}}</c> a brace.</summary>
+    PythonRawFormatted,
 }
 
 /// <summary>One constant part of a literal's value as its text writes it.</summary>
@@ -123,9 +136,16 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     internal static string Decode(CodeText source, long start, long end, ScanEscapes escapes, long indent, bool lineStart)
     {
         // A value with nothing to decode is its text.
-        var marker = escapes switch { ScanEscapes.None => (char?)null, ScanEscapes.Html => '&', _ => '\\' };
+        var markers = escapes switch
+        {
+            ScanEscapes.None => "",
+            ScanEscapes.Html => "&",
+            ScanEscapes.PythonFormatted => "\\{}",
+            ScanEscapes.PythonRawFormatted => "{}",
+            _ => "\\",
+        };
 
-        if (indent == 0 && (marker is not { } escape || source.Find(escape, start, end) < 0))
+        if (indent == 0 && (markers.Length == 0 || source.FindAny(markers, start, end) < 0))
         {
             return source.Slice(start, end);
         }
@@ -157,8 +177,11 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
 
             at = source[at] switch
             {
-                '\\' when escapes is not (ScanEscapes.None or ScanEscapes.Html) && at + 1 < end => Escape(source, at, end, escapes, value),
+                '\\' when escapes is not (ScanEscapes.None or ScanEscapes.Html or ScanEscapes.PythonRawFormatted) && at + 1 < end => Escape(source, at, end, escapes, value),
                 '&' when escapes == ScanEscapes.Html => Reference(source, at, end, value),
+
+                // A brace a formatted string doubles is one brace of its value.
+                '{' or '}' when escapes is (ScanEscapes.PythonFormatted or ScanEscapes.PythonRawFormatted) && at + 1 < end && source[at + 1] == source[at] => value.Char(source[at], at + 2),
                 _ => value.Char(source[at], at + 1),
             };
         }
@@ -318,15 +341,18 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
                 };
             }
 
-            case ScanEscapes.Python:
+            case ScanEscapes.Python or ScanEscapes.PythonBytes or ScanEscapes.PythonFormatted:
             {
                 if (ScanLexing.LineBreakAt(source, at + 1, end) is var spliced and > 0)
                 {
                     return at + 1 + spliced;
                 }
 
+                var bytes = escapes == ScanEscapes.PythonBytes;
+
                 return next switch
                 {
+                    '\\' or '\'' or '"' => value.Char(next, after),
                     'a' => value.Char('\a', after),
                     'b' => value.Char('\b', after),
                     'f' => value.Char('\f', after),
@@ -334,13 +360,15 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
                     'r' => value.Char('\r', after),
                     't' => value.Char('\t', after),
                     'v' => value.Char('\v', after),
-                    >= '0' and <= '7' => Number(source, at + 1, end, 8, 3, value, asByte: false),
-                    'x' when Hex(source, after, end, 2) is { } code => value.Code(code, after + 2),
-                    'u' when Hex(source, after, end, 4) is { } code => value.Code(code, after + 4),
-                    'U' when Hex(source, after, end, 8) is { } code => value.Code(code is > 0x10FFFF or (>= 0xD800 and <= 0xDFFF) ? 0xFFFD : code, after + 8),
+                    >= '0' and <= '7' => Number(source, at + 1, end, 8, 3, value, asByte: bytes),
+                    'x' when Hex(source, after, end, 2) is not null => Number(source, after, end, 16, 2, value, asByte: bytes),
+                    'u' when !bytes && Hex(source, after, end, 4) is { } code => value.Code(code, after + 4),
+                    'U' when !bytes && Hex(source, after, end, 8) is { } code => value.Code(code is > 0x10FFFF or (>= 0xD800 and <= 0xDFFF) ? 0xFFFD : code, after + 8),
                     // \N{LATIN SMALL LETTER A} names a character as no number: kept as written, the graph reads no name of one.
-                    'N' when after < end && source[after] == '{' && source.Find('}', after, end) is var named && named > 0 => Kept(source, at, named + 1, value),
-                    _ => value.Char(next, after),
+                    'N' when !bytes && after < end && source[after] == '{' && source.Find('}', after, end) is var named && named > 0 => Kept(source, at, named + 1, value),
+
+                    // An escape Python does not know - and in bytes \u, \U and \N - is kept: the backslash, and the character after it read as any.
+                    _ => value.Char('\\', at + 1),
                 };
             }
 

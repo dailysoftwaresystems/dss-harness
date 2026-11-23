@@ -4763,17 +4763,22 @@ platform's: `php`, `ext-*`, `lib-*`, `composer-plugin-api` - none; it declares n
 its namespace.
 
 Python's reader (`PythonReading`, over `PythonLexer`) reads by indentation, which is no token: each token says its line, and
-the reader finds its column from where it begins. A statement ends where the next logical line begins - the first token on a
-later line outside every bracketed group, one a backslash does not continue - that starts no deeper than the statement's own
-column; a header's suite is deeper than its header and is passed over whole however deep it nests, and a decorator's line is
+the reader finds its column from where it begins - counted, as Python's tokenizer counts it, from past the last form feed among
+the blanks its line begins with. A statement ends where the next logical line begins - the first token on a later line outside
+every bracketed group, one a backslash ending its line's code does not continue (a comment's backslash is the comment's) - that
+starts no deeper than the statement's own column; a header's suite is deeper than its header and is passed over whole however deep it nests, and a decorator's line is
 the declaration's it stands above. The module is a namespace named by its dotted path - `pkg/sub/mod.py` is `pkg.sub.mod`, an
 `__init__.py` its directory's package - one open scope that every name it declares is reachable from and that its own
 top-level code is looked up in. A class is a type and a scope; a function is no scope of the model's - what it declares is
 declared in the scope the function itself is, its class or the module, and held by the function as its `Parent`. The lexer
-keeps a string whole with its prefix - raw, bytes, formatted, combined, in any case - a triple-quoted one over lines, and
-says where an f-string's fields hold code (`LiteralStack`, as Dart's, JavaScript's and PHP's lexers do): a field's code ends
-at the `!` of a conversion or the `:` of a format, which are passed over to the brace that closes the field, none of them the
-value's; its escapes are Python's. Each `import a.b` and `from a.b import c, d as e` is looked for by the package layout,
+keeps a string whole with its prefix - raw, bytes, formatted (an f-string or a t-string), combined, in any case - a
+triple-quoted one over lines, a backslash escaping the character after it for where the string ends, a raw one's too, as
+Python's tokenizer reads one; and it says where an f-string's fields hold code (`LiteralStack`, as Dart's, JavaScript's and
+PHP's lexers do): a field's code ends at the `=` of a debugging field, the `!` of a conversion or the `:` of a format, and what
+follows to the brace that closes the field is the field's tail (`LiteralStack.InTail`), none of it the value's, each field a
+format holds code of its own. Its escapes are Python's - one Python does not know kept with its backslash, a bytes string's
+the escapes of bytes, a formatted one's doubled braces a brace. A bracket or a string that never closes, which Python refuses,
+marks its line `dynamic` (`unclosed`, a limit's sign), since what follows it is read as held in it. Each `import a.b` and `from a.b import c, d as e` is looked for by the package layout,
 which the extract says and the linker reads without knowing the language: the module is tried in the file's own directory and
 in each one above it to the tree's root, the nearest first, as the package's `__init__.py` and else the module's `.py`, every
 place an import marked `Layout` that stands in for the one before it (`Fallback`); a package's `__init__.py` is the one file

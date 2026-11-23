@@ -19,8 +19,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </summary>
 /// <remarks>
 /// Python's blocks are made by indentation, which is no token: each token says its line, and the reader finds its column
-/// from where it begins. A statement ends where the next logical line begins - the first token on a later line outside every
-/// bracketed group, one a backslash does not continue - that starts no deeper than the statement's own column: the next
+/// from where it begins, past the last form feed its line's blanks hold (<see cref="Margin"/>). A statement ends where the next
+/// logical line begins - the first token on a later line outside every bracketed group, one a backslash ending its line's code
+/// does not continue (<see cref="Continued"/>) - that starts no deeper than the statement's own column: the next
 /// statement of its block, or the dedent that ends the block. A header's suite is deeper than its header, and so is passed
 /// over whole, however deep it nests; the suite itself is the statements that begin at one column, or the simple statements
 /// of the header's own line. A decorator's line belongs to the declaration it stands above. Each block's statements are read
@@ -75,7 +76,8 @@ internal sealed class PythonReading
         DynamicImport = "dynamic-import",
         ComputedCode = "computed-code",
         FunctionValue = "function-value",
-        ComputedExports = "computed-exports";
+        ComputedExports = "computed-exports",
+        Unclosed = "unclosed";
 
     /// <summary>The keywords a compound statement begins with: its header to a colon, then its suite.</summary>
     private static readonly HashSet<string> Compound = new(StringComparer.Ordinal) { "if", "elif", "else", "while", "for", "try", "except", "finally", "with", "match", "case" };
@@ -95,6 +97,9 @@ internal sealed class PythonReading
 
     /// <summary>The walks of the file's blocks.</summary>
     private readonly ScanStack _walks = new();
+
+    /// <summary>Where each line's indentation is counted from, by its number, one past it once found (<see cref="Margin"/>); 0 for a line not yet asked about.</summary>
+    private long[]? _margins;
 
     /// <summary>Where each token begins that no run of the body it stands in reads: a declaration's own, read by its own reading.</summary>
     private readonly HashSet<long> _kept = [];
@@ -172,16 +177,68 @@ internal sealed class PythonReading
             _extract.BoundWithin = true;
             _extract.Published = Published();
             _extract.FolderUnit = _package;
+            MarkUnclosed();
         }
 
         _extract.Generated = ScanComments.Generated(_scan);
         return _extract.Build();
     }
 
+    /// <summary>
+    /// Marks dynamic, once each, every line a bracket that never closes opens on and every line a string that never closes begins
+    /// on - text Python refuses, which a file being edited may hold: what follows it the reading takes as held in the bracket or as
+    /// the string's text, so no statement it takes in is read as its own - each mark of the kind that tells the limit it shows
+    /// (<see cref="Unclosed"/>).
+    /// </summary>
+    private void MarkUnclosed()
+    {
+        var marked = new HashSet<int>();
+
+        for (var at = 0; at < _scan.Count; at++)
+        {
+            var bracket = _scan.Opens(at) && _scan.Match(at) < 0 && !_scan.IsStranded(at);
+
+            if ((bracket || _scan.LeftOpen(at)) && marked.Add(_scan[at].Line))
+            {
+                _extract.Dynamic(_scan[at].Line, bracket ? "a bracket that never closes: what follows it is read as held in it" : "a string that never closes: what follows its quote is read as its text", Unclosed);
+            }
+        }
+    }
+
     // ---- Blocks ----
 
-    /// <summary>The column the token at <paramref name="at"/> begins at: where it begins, less where its line does.</summary>
-    private int Column(int at) => (int)(_scan[at].Start - _text.Lines.StartOf(_scan[at].Line));
+    /// <summary>
+    /// The column the token at <paramref name="at"/> begins at: where it begins, less where its line's indentation is counted from
+    /// (<see cref="Margin"/>).
+    /// </summary>
+    private int Column(int at) => (int)(_scan[at].Start - Margin(_scan[at].Line));
+
+    /// <summary>
+    /// Where the indentation of <paramref name="line"/> is counted from: past the last form feed among the blanks the line begins
+    /// with, where Python's tokenizer counts the column from nothing again, else where the line begins - each line's found once.
+    /// </summary>
+    private long Margin(int line)
+    {
+        _margins ??= new long[_text.Lines.Count + 1];
+
+        if (_margins[line] == 0)
+        {
+            var margin = _text.Lines.StartOf(line);
+
+            for (var at = margin; at < _scan.Source.Length && _scan.Source[at] is ' ' or '\t' or '\f'; at++)
+            {
+                if (_scan.Source[at] == '\f')
+                {
+                    margin = at + 1;
+                }
+            }
+
+            // Kept one past the margin, so a line not yet asked about is told by none.
+            _margins[line] = margin + 1;
+        }
+
+        return _margins[line] - 1;
+    }
 
     /// <summary>
     /// The statements of the block that begins at <paramref name="from"/>, each beginning at <paramref name="column"/>, in the order
@@ -253,7 +310,8 @@ internal sealed class PythonReading
 
     /// <summary>
     /// Whether the line that holds the token at <paramref name="next"/> continues the one that holds the token at <paramref name="previous"/>:
-    /// the two are on different lines, and the line before ends with a backslash.
+    /// the two are on different lines, and each line break between them follows a backslash that ends its line's code - so a line
+    /// whose break follows a comment, whose backslash is the comment's own, is continued by none, and neither is a blank line.
     /// </summary>
     private bool Continued(int previous, int next)
     {
@@ -262,17 +320,32 @@ internal sealed class PythonReading
             return false;
         }
 
-        for (var at = _scan[previous].End; at < _scan[next].Start;)
-        {
-            if (ScanLexing.LineBreakAt(_scan.Source, at, _scan[next].Start) is var width and > 0)
-            {
-                return at > _scan[previous].End && _scan.Source[at - 1] == '\\';
-            }
+        var start = _scan[previous].End;
+        var stop = _scan[next].Start;
 
-            at++;
+        // A comment between them runs to the end of its line, whose break no backslash of the code goes before.
+        if (_scan.HoldsComment(start, stop))
+        {
+            return false;
         }
 
-        return false;
+        var joined = false;
+
+        for (var at = start; at < stop; at++)
+        {
+            if (ScanLexing.LineBreakAt(_scan.Source, at, stop) is var width and > 0)
+            {
+                if (at == start || _scan.Source[at - 1] != '\\')
+                {
+                    return false;
+                }
+
+                joined = true;
+                at += width - 1;
+            }
+        }
+
+        return joined;
     }
 
     /// <summary>
