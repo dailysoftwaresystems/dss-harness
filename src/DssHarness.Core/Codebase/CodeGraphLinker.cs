@@ -218,6 +218,12 @@ public static class CodeGraphLinker
         /// (<see cref="CodeImportForms.Rooted"/>).
         /// </summary>
         LayoutRoots,
+
+        /// <summary>
+        /// The members declared to extend a type of one name (<see cref="ExtractNode.Extends"/>), by the name's last part: what tells a
+        /// function their prototype's members extend - a constructor function - from any other.
+        /// </summary>
+        Extending,
     }
 
     /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
@@ -562,8 +568,14 @@ public static class CodeGraphLinker
         /// <summary>Every member declared to extend a type, by its name: what a call a type does not hold may be.</summary>
         private readonly Dictionary<string, List<Declaration>> _extensions = new(StringComparer.Ordinal);
 
-        /// <summary>The types each extension extends, by id, as its own file names the type: found once.</summary>
-        private readonly Dictionary<Declaration, (IReadOnlyList<QualifiedName> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
+        /// <summary>Every member declared to extend a type, by the last part of the name it extends: what a constructor function's prototype holds (<see cref="Constructs"/>).</summary>
+        private readonly Dictionary<string, List<Declaration>> _extending = new(StringComparer.Ordinal);
+
+        /// <summary>What each extension extends, as its own file names it (<see cref="Extended"/>): found once.</summary>
+        private readonly Dictionary<Declaration, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Whether each function is a constructor function another file writes the prototype of (<see cref="Constructs"/>): found once.</summary>
+        private readonly Dictionary<Declaration, (bool Value, KeptReads Reads)> _constructs = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file's references found, by the file.</summary>
         private readonly Dictionary<CodeGraphFile, FileFound> _found = new(ReferenceEqualityComparer.Instance);
@@ -605,9 +617,9 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, List<Declaration>> _templates = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// The scopes whose members are reached by a receiver alone (<see cref="ExtractNode.MembersByReceiver"/>) - a type's own,
-        /// and the one a member added to a type from outside its body is declared in: what a name written alone is not looked
-        /// for in, nor in their bases.
+        /// The scopes that hold members reached by a receiver alone (<see cref="ExtractNode.MembersByReceiver"/>) - a type's own,
+        /// and the one a member added to a type from outside its body is declared in: where a name written alone passes those
+        /// members over (<see cref="ByReceiver"/>), and their type's bases, and finds the rest the scope holds.
         /// </summary>
         private readonly HashSet<ScopeKey> _byReceiver = [];
 
@@ -739,10 +751,11 @@ public static class CodeGraphLinker
                     if (node.Extends is not null)
                     {
                         Add(_extensions, node.Name, declaration);
+                        Add(_extending, SimpleName(node.Extends), declaration);
                     }
 
                     // Members reached by a receiver alone: a type's own scope, or the one a member added from outside its type's
-                    // body is declared in, is passed over by a name written alone.
+                    // body is declared in, holds members a name written alone passes over.
                     if (node.MembersByReceiver && (node.Kind == CodeNodeKinds.Type ? KeyOf(file, node.Qualified, closed) : declaration.ScopeKey) is { } passed)
                     {
                         _byReceiver.Add(passed);
@@ -1138,6 +1151,7 @@ public static class CodeGraphLinker
             _containersFound.Clear();
             _chainContainersFound.Clear();
             _extended.Clear();
+            _constructs.Clear();
             _chains = NewChains();
             _chainSteps.Clear();
         }
@@ -1213,10 +1227,13 @@ public static class CodeGraphLinker
         /// </summary>
         private (IReadOnlyList<Declaration> Found, string Confidence) Found(Declaration from, ExtractReference reference, ReferenceAt place)
         {
-            bool Accepts(Declaration target) => Takes(from, reference, target, imported: false) && Sees(from, target);
+            bool Accepts(Declaration target) => (Takes(from, reference, target, imported: false) || Made(target)) && Sees(from, target);
 
             // What an import of the file that declares it makes visible: a name it binds may be data the file exports.
-            bool Imports(Declaration target) => Takes(from, reference, target, imported: true) && Sees(from, target);
+            bool Imports(Declaration target) => (Takes(from, reference, target, imported: true) || Made(target)) && Sees(from, target);
+
+            // A new of a constructor function another file writes the prototype of makes one, as a new of a type does.
+            bool Made(Declaration target) => reference.Kind == CodeEdgeKinds.Instantiates && Constructs(target);
 
             // A value of a type the code does not say: through the type of the member it is - nothing the repository
             // declares where that type is not the repository's - else, where no value is so named and an import's prefix
@@ -1268,22 +1285,28 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// What the scopes <paramref name="from"/> is written in declare named <paramref name="name"/>, from the inside out, with each
-        /// type's bases: the first that holds one decides - but the scope of a type whose members are reached by a receiver alone
-        /// (<see cref="ExtractNode.MembersByReceiver"/>), which a name written alone does not look in.
+        /// type's bases: the first that holds one decides - but the members reached by a receiver alone
+        /// (<see cref="ExtractNode.MembersByReceiver"/>, <see cref="ByReceiver"/>), which a name written alone does not look for, nor
+        /// their type's bases. A scope that holds them holds what else is declared in it all the same - a namespace's members, where
+        /// TypeScript merges a class and a namespace of one name into one scope - which the namespace's own code finds; a member
+        /// reached by a receiver alone finds nothing of the scope it is declared in, its type's members and a merged namespace's alike,
+        /// as a method's body is no scope of its class's.
         /// </summary>
         private IReadOnlyList<Declaration> Scoped(Declaration from, string name, Func<Declaration, bool> accepts)
         {
             foreach (var scope in Chain(from))
             {
-                // Whether a type's scope is passed over is read under the scope's key, which a type come, gone or changed alters.
+                // Whether a scope holds members a name written alone passes over is read under the scope's key, which a type come,
+                // gone or changed alters.
                 _reads?.Keys.Add(_keys.Of(scope));
+                var passed = _byReceiver.Contains(scope);
 
-                if (_byReceiver.Contains(scope))
+                if (passed && scope == from.ScopeKey && ByReceiver(from))
                 {
                     continue;
                 }
 
-                if (InScope(scope, name, accepts, withBases: true) is { Count: > 0 } found)
+                if (InScope(scope, name, passed ? declaration => !ByReceiver(declaration) && accepts(declaration) : accepts, withBases: !passed) is { Count: > 0 } found)
                 {
                     return found;
                 }
@@ -1291,6 +1314,14 @@ public static class CodeGraphLinker
 
             return [];
         }
+
+        /// <summary>
+        /// Whether <paramref name="declaration"/> is reached by a receiver alone (<see cref="ExtractNode.MembersByReceiver"/>): a member of a
+        /// type that says so, or a member added to a type from outside its body, which says so itself.
+        /// </summary>
+        private bool ByReceiver(Declaration declaration)
+            => declaration.Node.Kind != CodeNodeKinds.Type && declaration.Node.MembersByReceiver
+                || (declaration.Node.Parent is { } parent && _owners[declaration.File].TryGetValue(parent, out var holder) && holder.Node is { Kind: CodeNodeKinds.Type, MembersByReceiver: true });
 
         /// <summary>
         /// What <paramref name="name"/> is past the scopes <paramref name="from"/> is written in: a prefix written alone,
@@ -1313,8 +1344,9 @@ public static class CodeGraphLinker
             }
 
             // A name this file's language binds within the file alone - by its scopes or its imports - is bound by nothing where
-            // neither does (<see cref="FileExtract.BoundWithin"/>): the repository's names are not looked through for it.
-            return (BoundWithin(from) ? [] : Repository(from, name, accepts), CodeConfidences.Unique);
+            // neither does (<see cref="FileExtract.BoundWithin"/>): the repository's names are not looked through for it. Nor is a
+            // member reached by a receiver alone (ByReceiver) one a name written alone reaches, wherever it is declared.
+            return (BoundWithin(from) ? [] : Repository(from, name, declaration => !ByReceiver(declaration) && accepts(declaration)), CodeConfidences.Unique);
         }
 
         /// <summary>
@@ -1461,18 +1493,16 @@ public static class CodeGraphLinker
             switch (qualifier.Kind)
             {
                 case CodeQualifierKinds.This:
-                    // A template's own names are its component's members: where the node the reference is made from declares no type
-                    // of its own, the declarations that name its file their template are what it is read on.
-                    if (EnclosingTypes(from) is { Count: > 0 } selves)
+                    var selves = Selves(from);
+
+                    // A value this holds, by the names the code writes after it - this.cart.lines: the name is looked for in the
+                    // type the last of them is declared with, by its name alone where nothing says that type, as a value's is.
+                    if (qualifier.Name is { } written)
                     {
-                        return Several(selves, Typed(from, selves, null, name, accepts, withSelf: true));
+                        return OfThis(from, selves, written.Whole()).Values is { } reached ? Several(selves, Through(from, reached, name, accepts)) : ByName(from, name, accepts);
                     }
 
-                    Touch(Read.Templates, from.File.Path);
-
-                    return _templates.TryGetValue(from.File.Path, out var templates)
-                        ? Several(templates, Typed(from, templates, null, name, accepts, withSelf: true))
-                        : ([], CodeConfidences.Exact);
+                    return selves.Count > 0 ? Several(selves, Typed(from, selves, null, name, accepts, withSelf: true)) : ([], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Base:
                     return EnclosingTypes(from) is { Count: > 0 } derived ? Several(derived, Typed(from, derived, null, name, accepts, withSelf: false)) : ([], CodeConfidences.Exact);
@@ -1600,8 +1630,9 @@ public static class CodeGraphLinker
         /// <summary>
         /// The members named <paramref name="name"/> declared to extend a type, that <paramref name="from"/> reaches, which
         /// extend one of the types of <paramref name="containers"/> - itself where <paramref name="withSelf"/> - or one of
-        /// their bases, as its own file names the type it extends; and, where none of <paramref name="containers"/> is, one
-        /// extending a type the repository does not declare named as <paramref name="written"/> is.
+        /// their bases, as its own file names the type it extends (<see cref="Extended"/>), a constructor function among them;
+        /// and, where none of <paramref name="containers"/> is, one extending a type the repository does not declare named as
+        /// <paramref name="written"/> is.
         /// </summary>
         private IReadOnlyList<Declaration> Extensions(Declaration from, IReadOnlyList<Declaration> containers, string? written, string name, Func<Declaration, bool> accepts, bool withSelf)
         {
@@ -1611,7 +1642,7 @@ public static class CodeGraphLinker
             }
 
             var receivers = new HashSet<QualifiedName>();
-            var pending = new Queue<QualifiedName>(containers.Where(container => container.Node.Kind == CodeNodeKinds.Type)
+            var pending = new Queue<QualifiedName>(containers.Where(container => container.Node.Kind == CodeNodeKinds.Type || IsFunction(container))
                 .SelectMany(type => withSelf ? [type.Id] : BasesOf(type.Id)));
 
             while (pending.TryDequeue(out var id))
@@ -1627,17 +1658,46 @@ public static class CodeGraphLinker
 
             return Distinct(named.Where(extension => accepts(extension)
                 && (Extended(extension) is { Count: > 0 } extended
-                    ? extended.Any(receivers.Contains)
+                    ? extended.Any(type => receivers.Contains(type.Id))
                     : containers.Count == 0 && written is not null && SimpleName(extension.Node.Extends!) == SimpleName(written))
                 && Reaches(from, extension)));
         }
 
-        /// <summary>The types <paramref name="extension"/> extends, by id, as its own file names the type: found once.</summary>
-        private IReadOnlyList<QualifiedName> Extended(Declaration extension)
-            => Cached(_extended, extension, () => [.. Containers(extension, extension.Node.Extends!)
-                .Where(container => container.Node.Kind == CodeNodeKinds.Type)
-                .Select(type => type.Id)
-                .Distinct()]);
+        /// <summary>
+        /// What <paramref name="extension"/>, a member declared to extend a type (<see cref="ExtractNode.Extends"/>), extends, as
+        /// its own file names it: each type of that name; else, where none is, each function its name finds from the extension - its
+        /// scopes, its file's imports, the repository's - a constructor function another file declares, whose prototype the
+        /// extension's file writes. Found once.
+        /// </summary>
+        private IReadOnlyList<Declaration> Extended(Declaration extension)
+            => Cached(_extended, extension, () =>
+            {
+                var extends = extension.Node.Extends!;
+
+                if (Distinct(Containers(extension, extends).Where(container => container.Node.Kind == CodeNodeKinds.Type)) is { Count: > 0 } types)
+                {
+                    return types;
+                }
+
+                bool Constructor(Declaration function) => IsFunction(function) && Sees(extension, function);
+
+                return Distinct(Unqualified(extension, extends, Constructor, Constructor).Found);
+            });
+
+        /// <summary>Whether <paramref name="declaration"/> is a function: a member a call is made of by its arguments, which a constructor function is.</summary>
+        private static bool IsFunction(Declaration declaration) => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: not null };
+
+        /// <summary>
+        /// Whether <paramref name="function"/> is a constructor function another file writes the prototype of: a function some member
+        /// declared to extend a type extends (<see cref="Extended"/>) - the type it is, though its own file declares no type, so its
+        /// body's <c>this</c> is read on it (<see cref="EnclosingTypes"/>) and a <c>new</c> of it makes one. Found once.
+        /// </summary>
+        private bool Constructs(Declaration function)
+            => IsFunction(function) && Cached(_constructs, function, () =>
+            {
+                Touch(Read.Extending, function.Node.Name);
+                return _extending.TryGetValue(function.Node.Name, out var extending) && extending.Any(extension => Extended(extension).Any(extended => extended.Id == function.Id));
+            });
 
         /// <summary>
         /// Whether <paramref name="from"/> reaches <paramref name="declaration"/>, an extension: the scope it is declared in,
@@ -1800,7 +1860,7 @@ public static class CodeGraphLinker
             {
                 var reference = key.Place.File.Extract!.References[key.Place.At];
                 var prefix = before.Count > 0 ? before[0] : null;
-                var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name?.Whole() : null, prefix is null && reference.Qualifier?.Kind == CodeQualifierKinds.Type, reference.Name);
+                var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name?.Whole() : null, prefix is null && reference.Qualifier?.Kind is CodeQualifierKinds.Type or CodeQualifierKinds.This ? reference.Qualifier.Kind : null, reference.Name);
 
                 if (_chainSteps.TryGetValue(link, out var stepped))
                 {
@@ -1813,9 +1873,11 @@ public static class CodeGraphLinker
                 try
                 {
                     // A first link's qualifier of a type - a variable's declared type, which no lookup of the variable finds -
-                    // begins the chain at that type's value; any other at what its names come to.
-                    var head = link.Head is not { } written ? Chained.None
-                        : link.TypeHead ? new Chained(ChainedKind.Types, Distinct(Containers(key.From, written).Where(container => container.Node.Kind == CodeNodeKinds.Type)), null)
+                    // begins the chain at that type's value; one of this at what this is, its names read on it; any other at
+                    // what its names come to.
+                    var head = link.HeadKind == CodeQualifierKinds.This ? OfThis(key.From, Selves(key.From), link.Head)
+                        : link.Head is not { } written ? Chained.None
+                        : link.HeadKind == CodeQualifierKinds.Type ? new Chained(ChainedKind.Types, Distinct(Containers(key.From, written).Where(container => container.Node.Kind == CodeNodeKinds.Type)), null)
                         : Fold(key.From, written);
                     var state = Step(key.From, prefix?.State ?? head, reference.Name);
                     _chainLinks++;
@@ -2441,17 +2503,18 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// One link of a chain as a declaration reads it: the declaration, what the chain before the link came to - none for
-        /// the first link - the names the first link's qualifier writes and whether they name a type, and the link's own name.
-        /// Two are one where they are of the very declaration and the very answer before, and of the same names.
+        /// the first link - the names the first link's qualifier writes and its kind, which says whether they name a type or
+        /// are read on this, and the link's own name. Two are one where they are of the very declaration and the very answer
+        /// before, and of the same names and kind.
         /// </summary>
-        private readonly record struct ChainLink(Declaration From, ChainAnswer? Prefix, string? Head, bool TypeHead, string Name)
+        private readonly record struct ChainLink(Declaration From, ChainAnswer? Prefix, string? Head, string? HeadKind, string Name)
         {
             public static IEqualityComparer<ChainLink> Comparer { get; } = new ByIdentity();
 
             private sealed class ByIdentity : IEqualityComparer<ChainLink>
             {
                 public bool Equals(ChainLink x, ChainLink y)
-                    => ReferenceEquals(x.From, y.From) && ReferenceEquals(x.Prefix, y.Prefix) && x.TypeHead == y.TypeHead
+                    => ReferenceEquals(x.From, y.From) && ReferenceEquals(x.Prefix, y.Prefix) && string.Equals(x.HeadKind, y.HeadKind, StringComparison.Ordinal)
                     && string.Equals(x.Head, y.Head, StringComparison.Ordinal) && string.Equals(x.Name, y.Name, StringComparison.Ordinal);
 
                 public int GetHashCode(ChainLink link)
@@ -2459,7 +2522,7 @@ public static class CodeGraphLinker
                         RuntimeHelpers.GetHashCode(link.From),
                         link.Prefix is null ? 0 : RuntimeHelpers.GetHashCode(link.Prefix),
                         link.Head is null ? 0 : StringComparer.Ordinal.GetHashCode(link.Head),
-                        link.TypeHead,
+                        link.HeadKind is null ? 0 : StringComparer.Ordinal.GetHashCode(link.HeadKind),
                         StringComparer.Ordinal.GetHashCode(link.Name));
             }
         }
@@ -2486,7 +2549,10 @@ public static class CodeGraphLinker
             /// <summary>Its one name is no value the scopes hold; a type of that name may hold the next.</summary>
             Head,
 
-            /// <summary>Its first link is qualified by a type - a variable's declared type - whose value the next name is a member of: the types of that name.</summary>
+            /// <summary>
+            /// Its first link is qualified by a type - a variable's declared type - whose value the next name is a member of: the types
+            /// of that name; or by this, whose value the next name is: what this is (<see cref="Linking.Selves"/>).
+            /// </summary>
             Types,
 
             /// <summary>The values its last name is, each of a type it says.</summary>
@@ -3660,9 +3726,10 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The types <paramref name="from"/> is declared in, or is: the one what holds it reaches - else, where what holds it
-        /// reaches none, every type whose scope it is declared in, as a member defined outside its type's body is; else every type
-        /// a member declared to extend one extends (<see cref="ExtractNode.Extends"/>), as a prototype assignment's member does,
-        /// as its own file names it - the one an import or its scopes name, else each whose qualified name ends with it; none
+        /// reaches none, every type whose scope it is declared in, as a member defined outside its type's body is; else what a
+        /// member declared to extend one extends (<see cref="ExtractNode.Extends"/>, <see cref="Extended"/>), as a prototype
+        /// assignment's member does, as its own file names it - each type of that name, else the constructor function it finds;
+        /// else, where it is a constructor function another file writes the prototype of (<see cref="Constructs"/>), itself; none
         /// where neither is. Several are every one of them, never the first of them.
         /// </summary>
         private IReadOnlyList<Declaration> EnclosingTypes(Declaration from)
@@ -3679,13 +3746,54 @@ public static class CodeGraphLinker
                         return scoped;
                     }
 
-                    return from.Node.Extends is { } extended ? Distinct(Containers(from, extended).Where(container => container.Node.Kind == CodeNodeKinds.Type)) : [];
+                    // A constructor function another file writes the prototype of is the type its own body's this is.
+                    return from.Node.Extends is not null ? Extended(from) : Constructs(from) ? [from] : [];
                 }
 
                 at = holder;
             }
 
             return [at];
+        }
+
+        /// <summary>
+        /// What <c>this</c> is where <paramref name="from"/> is written: the types it is declared in or extends
+        /// (<see cref="EnclosingTypes"/>); else, where it declares none - a template's own code - the declarations that name its
+        /// file their template, whose members a template's own names are.
+        /// </summary>
+        private IReadOnlyList<Declaration> Selves(Declaration from)
+        {
+            if (EnclosingTypes(from) is { Count: > 0 } enclosing)
+            {
+                return enclosing;
+            }
+
+            Touch(Read.Templates, from.File.Path);
+            return _templates.TryGetValue(from.File.Path, out var templates) ? templates : [];
+        }
+
+        /// <summary>
+        /// What <c>this</c> - <paramref name="selves"/>, what it is where <paramref name="from"/> is written - and the names
+        /// <paramref name="written"/> after it come to: a value of the types and the constructor functions it is - with each
+        /// one's bases - by the first name, each next one a value of the type the one before is declared with, as a chain's
+        /// names are (<see cref="Step"/>); what this is where no name is written; none where this is nothing the repository
+        /// declares.
+        /// </summary>
+        private Chained OfThis(Declaration from, IReadOnlyList<Declaration> selves, string? written)
+        {
+            if (selves.Count == 0)
+            {
+                return Chained.None;
+            }
+
+            var state = new Chained(ChainedKind.Types, selves, null);
+
+            foreach (var name in written?.Split('.') ?? [])
+            {
+                state = Step(from, state, name);
+            }
+
+            return state;
         }
 
         /// <summary>Says that the finding under way read the key <paramref name="text"/> of <paramref name="kind"/>.</summary>
@@ -4017,6 +4125,12 @@ public static class CodeGraphLinker
 
                 Named(Read.Name, node.Name, shape);
 
+                // A member extending a type is read by the name it extends too, which tells a constructor function from another.
+                if (node.Extends is { } extends)
+                {
+                    Named(Read.Extending, SimpleName(extends), shape);
+                }
+
                 // A selector is a name the declaration is found by, as its own: one changed moves it from one name's key to another's.
                 foreach (var selector in node.Selectors ?? [])
                 {
@@ -4063,8 +4177,8 @@ public static class CodeGraphLinker
                 }
                 else if (node.MembersByReceiver && scopeKey is { } passed)
                 {
-                    // A member that makes the scope it is declared in one a name written alone passes over is read under that
-                    // scope's key, as a type that makes its own so is.
+                    // A member a name written alone passes over makes the scope it is declared in one that holds such members: it is
+                    // read under that scope's key, as a type whose own scope holds its members is.
                     Add(_keys.Of(passed), (node.Id, node.MembersByReceiver));
                 }
             }
@@ -4219,10 +4333,15 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// Whether <paramref name="from"/> sees <paramref name="declaration"/>: from its file, and - where it is kept to a
-        /// scope - from that scope, or a scope inside it, as the scopes <paramref name="from"/> is written in climb.
+        /// scope - from that scope, or a scope inside it, as the scopes <paramref name="from"/> is written in climb. But a member
+        /// reached by a receiver alone (<see cref="ByReceiver"/>) sees, of what its own scope keeps to itself, its type's members
+        /// alone - never what a namespace TypeScript merges with its type into that scope keeps to the namespace - as a name it
+        /// writes alone finds nothing of that scope (<see cref="Scoped"/>).
         /// </summary>
         private bool Sees(Declaration from, Declaration declaration)
-            => Sees(from.File, declaration) && (declaration.SeenKey is not { } seen || Chain(from).Contains(seen));
+            => Sees(from.File, declaration)
+                && (declaration.SeenKey is not { } seen
+                    || (Chain(from).Contains(seen) && !(seen == from.ScopeKey && ByReceiver(from) && !ByReceiver(declaration))));
 
         /// <summary>Whether <paramref name="path"/> is under the directory <paramref name="directory"/>, the tree's root as empty: a scope import a file declares for its directory's subtree.</summary>
         private static bool Under(string path, string directory)

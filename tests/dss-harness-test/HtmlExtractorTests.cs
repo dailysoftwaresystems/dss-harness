@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
 
@@ -495,16 +494,31 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         Assert.DoesNotContain(extract.References, reference => reference.Name is "shown" or "cs" || reference.Qualifier?.Kind == CodeQualifierKinds.This);
     }
 
-    /// <summary>A page of two hundred thousand elements and as many runs of text is read in time to its length: no run's reading walks the elements again.</summary>
+    /// <summary>
+    /// A page is read in work to its length - each of its elements and its runs of text read a fixed number of times, by the walk
+    /// that makes them and by every reader, never again for each run - a plain page's and an Angular template's, whose test, views,
+    /// blocks and references read them in turn: a page of three times as many elements costs as much more than one of twice as many
+    /// as that one costs more than one of as many, where a reading that walks the elements for each run grows by the square.
+    /// </summary>
     [Fact]
-    public void APageOfTwoHundredThousandElements_IsReadInTimeToItsLength()
+    public void APage_IsReadInWorkToItsLength_APlainPageAndAnAngularTemplate()
     {
-        var text = string.Concat(Enumerable.Repeat("<p>x</p>\n", 200_000));
-        var watch = Stopwatch.StartNew();
-        var extract = Read("big.html", text);
+        // The page, and an Angular template's markup read again as Angular closes its elements.
+        foreach (var (unit, reads) in new[] { ("<p>x</p>\n", 1), ("<p #r (click)=\"go(r)\">{{ x }} {{ r.v }}</p>\n@if (a) { <b>{{ y }}</b> }\n", 2) })
+        {
+            var work = new[] { 1, 2, 3 }.Select(times =>
+            {
+                var read = new List<MarkupText>();
+                var extract = new HtmlExtractor().Extract(new CodeFileInput("src/big.component.html", string.Concat(Enumerable.Repeat(unit, times * 500))), read);
 
-        Assert.True(watch.Elapsed < TimeSpan.FromMinutes(2), $"the page was read in {watch.Elapsed}");
-        Assert.Equal(["body"], extract.Nodes.Select(node => node.Name));
+                Assert.Equal(reads, read.Count);
+                Assert.Equal(["body"], extract.Nodes.Select(node => node.Name));
+                return read.Sum(markup => markup.Visited);
+            }).ToList();
+
+            Assert.True(work[0] > 0, unit);
+            Assert.Equal(work[1] - work[0], work[2] - work[1]);
+        }
     }
 
     /// <summary>
@@ -522,10 +536,16 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
             <em>{{ inner.title }}</em>
             <ng-template let-row><b>{{ row.id }}</b></ng-template>
             <i #box></i>
+            <ng-template><s #held>{{ held.v }}</s></ng-template>
+            <u>{{ held.w }} {{ row.x }}</u>
             """);
 
+        // An ng-template's content a view of its own, whose #x no other view sees; a let-x seen over its own element alone.
         Assert.Equal(
-            [("search", CodeEdgeKinds.Calls, 1), ("clear", CodeEdgeKinds.Calls, 2), ("shown", CodeEdgeKinds.Uses, 4), ("inner", CodeEdgeKinds.Uses, 5)],
+            [
+                ("search", CodeEdgeKinds.Calls, 1), ("clear", CodeEdgeKinds.Calls, 2), ("shown", CodeEdgeKinds.Uses, 4), ("inner", CodeEdgeKinds.Uses, 5),
+                ("held", CodeEdgeKinds.Uses, 9), ("row", CodeEdgeKinds.Uses, 9),
+            ],
             extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.This).Select(reference => (reference.Name, reference.Kind, reference.Line)));
     }
 
@@ -578,7 +598,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
             <ng-container *ngTemplateOutlet="loading"></ng-container>
             @if (a) { {{ x }} } @else if (b) { {{ y }} } @else { {{ z }} }
             @switch (mode) { @case (one) { <b>{{ p }}</b> } @default { <i>{{ q }}</i> } }
-            @for (row of rows; track row.id; let n = $index) { {{ n }} {{ row.k }} } @empty { {{ none }} }
+            @for (row of rows; track row.id; let n = $index) { {{ n }} {{ row.k }} {{ $first }} {{ $count }} } @empty { {{ none }} }
             @for (r of rs; track r) { <p>@}</p>{{ r }} }
             @let total = price * qty;
             <span title="{{ label }}" [class.on]="active" class="c-{{ tone }} plain">{{ total }}</span>
@@ -638,6 +658,35 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         Assert.Equal([".row"], extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Selector).Select(reference => reference.Name));
         Assert.Single(new HtmlExtractor().Help.DoesNotSee, limit => limit.Signs.Contains(HtmlExtractor.OtherEngine));
         Assert.Empty(Read("templates/plain.html", "<p>{{ shown }}</p>").Dynamic);
+    }
+
+    /// <summary>
+    /// Each tag only another engine writes tells its page, by itself and wherever it stands - Handlebars' and Mustache's
+    /// <c>{{# }}</c>, <c>{{/ }}</c>, <c>{{^ }}</c>, <c>{{&gt; }}</c> and <c>{{!-- --}}</c> in a text, a <c>{% %}</c> in an
+    /// attribute's value alone - and a class one of its tags is written into, its <c>{{ }}</c> among them, is one piece with the
+    /// tag, no class: neither the tag's words nor what it wraps.
+    /// </summary>
+    [Fact]
+    public void AnotherEnginesTag_TellsItsPageWhereverItStands_AndAClassItIsWrittenIntoIsNone()
+    {
+        Assert.All(
+            [("<p>{{# list }}x</p>", 1), ("<p>x{{/ list }}</p>", 1), ("<p>{{^ list }}x</p>", 1), ("<p>{{> row }}</p>", 1), ("<p>{{!-- note --}}</p>", 1), ("<p title=\"{% if a %}b{% endif %}\">x</p>", 2)],
+            page =>
+            {
+                var extract = Read("templates/one.html", page.Item1);
+
+                Assert.Equal(page.Item2, extract.Dynamic.Count(dynamic => dynamic.Kind == HtmlExtractor.OtherEngine));
+                Assert.DoesNotContain(extract.References, reference => reference.Qualifier?.Kind == CodeQualifierKinds.This);
+            });
+
+        var classes = Read("templates/nav.html", """
+            <li class="nav-item {% if request.path == '/' %}active{% endif %}">Home</li>
+            <a class="btn {{#if primary}}btn-primary{{/if}} wide">Go</a>
+            """);
+
+        Assert.Equal(
+            [(".nav-item", 1), (".btn", 2), (".wide", 2)],
+            classes.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Selector).Select(reference => (reference.Name, reference.Line)));
     }
 
     private static FileExtract Read(string path, string text) => new HtmlExtractor().Extract(new CodeFileInput(path, text));

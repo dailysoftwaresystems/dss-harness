@@ -4712,17 +4712,29 @@ handlers, calls of the methods they name (`Watched`, the one reading of a hash b
 among them). A member a prototype assignment adds - `X.prototype.y = function () {}`, or each key of
 `X.prototype = {...}` - is a member of X in X's own scope where the file declares X at its top, a function whose
 prototype the file writes being a type, a constructor function whose `constructor` is its body (`Constructors`,
-`Constructed`); else it is a member extending the type the chain names (`Prototyped`, `ExtractNode.Extends`, as a Dart
-extension's members are reached), in a scope of X's name that no name of the file binds. Its own `this` is read on that
-type (`CodeGraphLinker.EnclosingTypes`: every type its scope or its `Extends` names, several a unique finding and never
-the first of them). A class's, an extend type's and a constructor function's members, and those a file adds to a type
-it does not declare, are reached by a receiver alone (`ExtractNode.MembersByReceiver`): a name their code writes by
-itself is looked for past that scope and its bases, so a method's `render(x)` reaches the module's `render`, never the
-method. An AMD module's `define` given its factory and a function called where it is written at the file's top - an
-IIFE, `(function ($) {...})(jQuery)` - are wrappers (`JsReading.Wrapped`), whose body is read as the file's top is: a
-module's in the module's own scope, a script's in a scope of its file alone; each parameter an AMD factory is given a
-dependency for is an import of it by that name, as a `require` declared by it is, each other a value, and an AMD
-factory's own `return` the module's export, as `module.exports =`'s is. An Angular `@Component`'s, `@Directive`'s or
+`Constructed`) - a chain the file assigns one, `App.Cart = function () {}`, among them, the type named by the chain's last
+name in an open scope of the names before it and seen wherever the object is (`AssignedConstructor`); else it is a member
+extending the type the chain names (`Prototyped`, `ExtractNode.Extends`, as a Dart extension's members are reached), in a
+scope of X's name that no name of the file binds. Its own `this` is read on that type (`CodeGraphLinker.EnclosingTypes`:
+every type its scope or its `Extends` names, several a unique finding and never the first of them) - and where no type of
+X's name is, on the constructor function another file declares, found as a call of X is (`CodeGraphLinker.Extended`),
+whose own `this` is read on it too and whose `new` makes it (`Constructs`, by the members extending its name). A
+class's, an extend type's and a constructor function's members, and those a file adds to a type it does not declare,
+are reached by a receiver alone (`ExtractNode.MembersByReceiver`): a name their code writes by itself is looked for past
+that scope and its bases, so a method's `render(x)` reaches the module's `render`, never the method; a namespace
+TypeScript merges with the class into one scope keeps its own names, which its own code finds and the class's members
+do not, in their scopes nor past them (`CodeGraphLinker.Scoped`, `Sees`, `ByReceiver`); and `this.a.b()` is read on the type `this` is, link by link
+(`CodeQualifierKinds.This` with the chain's names). An AMD module's `define` given its factory and a function called where it is written at the file's top - an
+IIFE, `(function ($) {...})(jQuery)` - are wrappers (`JsReading.Wrapped`), whose body is read as the file's top is, in a
+closed scope of its own as a function's body is (`Wrapping`): its code outside its declarations is the calls of a node of
+its own, `(wrapper 3:2)` by its function's line and column, and the scope is under that node's name, which the linker
+looks the node's references up from (`CodeGraphLinker.LookedFrom`), its parent the module's scope, the wrapper's around
+it, or in a script a closed scope of the file's path that declares nothing; what the body declares keeps the file's path
+before its name and is kept to that scope (`ExtractNode.SeenIn`), so no other code of the file sees it or finds it by
+its name, and the reader looks a name of the top's - an export's, a prototype's type's - up from the wrapper it is
+written in outward (`TopKeys`). Each parameter an AMD factory is given a dependency for is an import of it by that name,
+as a `require` declared by it is - but `require`, `exports` and `module`, the loader's own (`AmdOwn`), none - each other a
+value, and an AMD factory's own `return` the module's export, as `module.exports =`'s is. An Angular `@Component`'s, `@Directive`'s or
 `@Pipe`'s object is read (`Angular`) where the decorator is what an import of `@angular/core` binds, never by its name
 alone: its `selector`'s element selectors, each with a dash as a custom element's name has (`ExtractNode.IsSelector`),
 are names the repository finds the class by as its own (`ExtractNode.Selectors`, among the linker's names - `app-cart`,
@@ -4965,7 +4977,9 @@ component's as written, `/>` closing any element, so no tag is dropped as a brow
 and a component named as a raw-text element is - a `<Title>`, a `<Textarea>` - or as one no end tag closes - a
 `<Link>`, an `<Input>` - holds the markup it is written around as any component does.
 What one element says is one rule over a table each kind gives (`MarkupDialect`): each class a `uses` of the rule
-`.name`, split at ASCII white space as HTML splits a class list, and an id a `uses` of `#id`, looked for among rules
+`.name`, split at ASCII white space as HTML splits a class list - a tag of the markup's own expressions or of another
+engine written into a name (Angular's `{{ }}`; on a page, `{{ }}`, `{% %}` and `{# #}`, `HtmlExtractor.EngineAny`) one
+piece with it, whatever white space it holds, and no class (`MarkupDialect.Classes`) - and an id a `uses` of `#id`, looked for among rules
 alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; and what each attribute's
 value is (`MarkupRole`) - a handler's code, a bound expression, a loop, the names a slot declares, or nothing the graph
 reads. What that code calls, uses and declares is never the dialect's to say but its language's reader's: each

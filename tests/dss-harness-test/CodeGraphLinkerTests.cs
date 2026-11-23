@@ -1874,13 +1874,18 @@ public sealed class CodeGraphLinkerTests
             File("comp.t", [Type("Comp"), Member("Comp.Save", 0) with { Parent = "t:Comp" }]),
             File("comp.t", [Type("Comp") with { Templates = ["./cart.t"] }, Member("Comp.Save", 0) with { Parent = "t:Comp" }]));
 
-        // Whether a type's members are reached by a receiver alone: its scope passed over by a name its member writes alone.
+        // Whether a type's members are reached by a receiver alone: its bases passed over by a name written alone in its scope - a
+        // namespace's of its name merged with it, which sees its own names and never the type's bases' - and that name found past it.
         reader = "t:lib.Cart.Go";
         Case(
             "whether a type's members are reached by a receiver alone",
-            [File("b.t", [Member("lib.Cart.Go", 0), Member("lib.Cart.Run", 0)], [Call("lib.Cart.Go", "Run", 0)]), File("c.t", [Member("lib.Run", 0)])],
-            File("a.t", [Type("lib.Cart")]),
-            File("a.t", [Type("lib.Cart") with { MembersByReceiver = true }]));
+            [
+                File("b.t", [Member("lib.Cart.Go", 0)], [Call("lib.Cart.Go", "Run", 0)]),
+                File("c.t", [Member("lib.Run", 0)]),
+                File("d.t", [Type("lib.Base"), Member("lib.Base.Run", 0)]),
+            ],
+            File("a.t", [Type("lib.Cart")], [Ref("lib.Cart", CodeEdgeKinds.Inherits, "Base")]),
+            File("a.t", [Type("lib.Cart") with { MembersByReceiver = true }], [Ref("lib.Cart", CodeEdgeKinds.Inherits, "Base")]));
 
         // Whether a member added to a type from outside its body is reached by a receiver alone: the scope it is declared in passed over.
         reader = "t:lib.X.Go";
@@ -1890,6 +1895,15 @@ public sealed class CodeGraphLinkerTests
             [File("b.t", [Member("lib.X.Go", 0)], [Call("lib.X.Go", "Run", 0)], scopes: [outside]), File("c.t", [Member("lib.Run", 0)])],
             File("a.t", [Member("lib.X.Run", 0) with { Extends = "X" }]),
             File("a.t", [Member("lib.X.Run", 0) with { Extends = "X", MembersByReceiver = true }]));
+
+        // The members declared to extend a type of a name: one come that extends the function a this is read in, which makes the
+        // function a constructor function, whose own this is read on it.
+        reader = "t:Go";
+        Case(
+            "the members declared to extend a type of a name",
+            [File("use.t", [go], [Call("Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.This))])],
+            File("ext.t", [Member("Go.Run", 0) with { Extends = "Other" }]),
+            File("ext.t", [Member("Go.Run", 0) with { Extends = "Go" }]));
 
         // What a file of a language that binds its names within the file reaches through another file's imports and layout: each
         // a declaration named Run of an id of its own, so which one a call finds is seen.

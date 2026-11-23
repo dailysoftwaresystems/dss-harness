@@ -43,15 +43,16 @@ internal sealed class MarkupDialect
 
     /// <summary>
     /// An HTML page's: a custom element - a tag with a dash, <c>&lt;my-widget&gt;</c> - an instantiates of a component of
-    /// that name; an <c>on*</c> attribute a handler, the body of the function HTML makes of it; a class a <c>{{ }}</c> writes -
-    /// another template engine's - no class of its list; its elements closing as HTML closes them.
+    /// that name; an <c>on*</c> attribute a handler, the body of the function HTML makes of it; a class a tag of another template
+    /// engine is written into - a <c>{{ }}</c>, a <c>{% %}</c>, a <c>{# #}</c> (<see cref="HtmlExtractor.EngineAny"/>) - no class
+    /// of its list; its elements closing as HTML closes them.
     /// </summary>
     public static MarkupDialect Html { get; } = new(
         closesAsHtml: true,
         element => element.Name.Contains('-', StringComparison.Ordinal) ? (element.Name, null) : null,
         attribute => attribute.Name.Length > 2 && attribute.Name.StartsWith("on", StringComparison.Ordinal) && !attribute.Name.Contains('-', StringComparison.Ordinal) ? MarkupRole.Handler : MarkupRole.None)
     {
-        Interpolated = true,
+        Tags = HtmlExtractor.EngineAny,
     };
 
     /// <summary>
@@ -112,7 +113,7 @@ internal sealed class MarkupDialect
         OpensViewBy = element => element.Attributes.Any(attribute => attribute.Name.Length > 1 && attribute.Name[0] == '*'),
         HoldsViewBy = element => element.Name == "ng-template",
         ClassBound = AngularClassBound,
-        Interpolated = true,
+        Tags = MarkupTemplates.Mustaches,
         InterpolatesAttributes = true,
     };
 
@@ -134,8 +135,13 @@ internal sealed class MarkupDialect
     /// <summary>The attributes, by their names as the kind compares them, an id is written in.</summary>
     private IReadOnlyList<string> IdAttributes { get; init; } = ["id"];
 
-    /// <summary>Whether a <c>{{ }}</c> its attribute values write is an interpolation - a framework's or another engine's - so what it writes is no class of a list.</summary>
-    private bool Interpolated { get; init; }
+    /// <summary>
+    /// The tags its attribute values write that its markup's own expressions or another engine's are written in - Angular's
+    /// <c>{{ }}</c>, and on a page another engine's <c>{{ }}</c>, <c>{% %}</c> and <c>{# #}</c>: each one piece with the name it is
+    /// written into, whatever white space it holds, so a name a tag is written into is no class of a list
+    /// (<see cref="Classes"/>); none where its values write none.
+    /// </summary>
+    private Regex? Tags { get; init; }
 
     /// <summary>Whether each <c>{{ }}</c> an attribute's value writes is code its framework reads - Angular's <c>title="{{ name }}"</c>.</summary>
     public bool InterpolatesAttributes { get; private init; }
@@ -246,7 +252,7 @@ internal sealed class MarkupDialect
 
         if (ClassAttributes.Contains(name, StringComparer.Ordinal))
         {
-            return Classes(value, Interpolated).Select(named => $".{named}");
+            return Classes(value, Tags).Select(named => $".{named}");
         }
 
         return IdAttributes.Contains(name, StringComparer.Ordinal) && Plain(value) is { } id ? [$"#{id}"] : [];
@@ -268,21 +274,23 @@ internal sealed class MarkupDialect
 
     /// <summary>
     /// The classes a class attribute holds, split at ASCII white space as HTML's class list is; a name the markup's own
-    /// expressions write - an <c>@x</c>, a <c>{{ }}</c> - none: where <paramref name="interpolated"/>, a <c>{{ }}</c> and the
-    /// name it is written into are one piece, its white space none of the list's, and no class.
+    /// expressions write - an <c>@x</c>, a <c>{{ }}</c> - none: each tag <paramref name="tags"/> matches - <c>{{ }}</c>, another
+    /// engine's <c>{% if x %}</c> - and the name it is written into are one piece, its white space none of the list's, and no
+    /// class, for what the engine renders there no reader of the page knows. Each tag is found once, the value walked once.
     /// </summary>
-    internal static IEnumerable<string> Classes(string value, bool interpolated = false)
+    internal static IEnumerable<string> Classes(string value, Regex? tags = null)
     {
         var pieces = new List<string>();
         var start = -1;
+        var tag = tags?.Match(value);
 
         for (var at = 0; at <= value.Length; at++)
         {
-            if (at < value.Length && interpolated && value[at] == '{' && at + 1 < value.Length && value[at + 1] == '{')
+            if (tag is { Success: true } && tag.Index == at)
             {
-                var close = value.IndexOf("}}", at + 2, StringComparison.Ordinal);
                 start = start < 0 ? at : start;
-                at = close < 0 ? value.Length - 1 : close + 1;
+                at = tag.Index + tag.Length - 1;
+                tag = tag.NextMatch();
                 continue;
             }
 
@@ -991,12 +999,19 @@ internal sealed class MarkupDialect
                         continue;
                     }
 
-                    if (Header(text, at, runEnd) is not { } header || !BlocksOf.Contains(header.Kind))
+                    if (Header(text, at, runEnd) is not { } header)
                     {
                         continue;
                     }
 
+                    // An @else if is read as the @if it is, its condition code.
                     var kind = header.Kind == "else if" ? "if" : header.Kind;
+
+                    if (!BlocksOf.Contains(kind))
+                    {
+                        continue;
+                    }
+
                     var binding = header.Expression is not { } expression ? null
                         : kind switch
                         {

@@ -503,7 +503,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             """);
 
         Assert.Equal(
-            [("area", "type", "Shape"), ("make", null, null), ("scale", "type", "Shape"), ("read", "value", "service"), ("whatever", "value", null)],
+            [("area", "type", "Shape"), ("make", null, null), ("scale", "type", "Shape"), ("read", "this", "service"), ("whatever", "value", null)],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(
             ["a call on the any value loose", "a call through the function value onChange", "a call through the function value run"],
@@ -512,6 +512,54 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         var linked = Link(("src/q.ts", "export class Service { read() {} }\nexport class Q {\n  constructor(private service: Service) {}\n  go() { this.service.read(); }\n}"));
 
         Assert.Contains(new CodeEdge("typescript:src/q.ts.Q.go", "typescript:src/q.ts.Service.read", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact), linked.Edges);
+    }
+
+    /// <summary>
+    /// A class's own members are what a name written alone passes over, never the scope they are declared in: where TypeScript merges a
+    /// class and a namespace of one name into one scope, a namespace member's call of its sibling by its name alone reaches the sibling,
+    /// exact - neither the class's method of that name nor another file's function - and a declaration file's namespace merged with its
+    /// class names its own interface so; a class's method by its name alone reaches neither a method of a class wherever the repository
+    /// declares it nor what the namespace merged with its class declares, whose own names its class's methods do not see.
+    /// A value this holds, by the names after this, is read on the class - this.title.text() reaches the type of the
+    /// class's member - whatever a name written alone reaches.
+    /// </summary>
+    [Fact]
+    public void AClassMergedWithANamespace_IsPassedOverForTheClassesMembersAlone()
+    {
+        var linked = Link(
+            ("src/album.ts", """
+                export class Album {
+                  title = new Title();
+                  label(n: string): string { return this.title.text(); }
+                  render() { return label('x'); }
+                }
+                export namespace Album {
+                  function label(n: string) { return n.trim(); }
+                  export function create(n: string) { return label(n); }
+                }
+                export class Title { text(): string { return ''; } }
+                """),
+            ("src/text.ts", "export function label(s: string) { return s; }"),
+            ("types/chart.d.ts", """
+                declare class Chart { options: Chart.Options; }
+                declare namespace Chart {
+                  interface Config { options?: Options }
+                  interface Options {}
+                }
+                """),
+            ("types/other.d.ts", "declare interface Options {}"));
+        var album = "typescript:src/album.ts.Album";
+
+        Assert.Equal(
+            [new CodeEdge($"{album}.create", $"{album}.label~2", CodeEdgeKinds.Calls, 8, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.From == $"{album}.create" && edge.Kind == CodeEdgeKinds.Calls));
+        Assert.Equal(
+            [new CodeEdge("typescript:Chart.Config.options", "typescript:Chart.Options", CodeEdgeKinds.References, 3, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.From == "typescript:Chart.Config.options" && edge.Kind == CodeEdgeKinds.References));
+        Assert.Equal(
+            [new CodeEdge($"{album}.label", "typescript:src/album.ts.Title.text", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.From == $"{album}.label" && edge.Kind == CodeEdgeKinds.Calls));
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == $"{album}.render" && edge.To is var to && (to == $"{album}.label" || to == $"{album}.label~2"));
     }
 
     /// <summary>A declaration file's every member is a prototype, its declarations the repository's where it imports and exports nothing; it is no generated file by that alone.</summary>
@@ -875,12 +923,29 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             [("makeCart", (int?)1, false), ("NgModule", 1, true)],
             extract.References.Where(reference => reference.From == module && reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Arity, reference.Probe)));
         Assert.Equal(["routes"], extract.References.Where(reference => reference.From == module && reference.Kind == CodeEdgeKinds.Uses).Select(reference => reference.Name));
+
+        // What the decorator is, whatever the file calls it: @angular/core's Component through a renamed import and through its namespace.
+        var renamed = Read("src/renamed.ts", """
+            import { Component as Cmp } from '@angular/core';
+            import * as ng from '@angular/core';
+
+            @Cmp({ selector: 'app-renamed' })
+            export class Renamed {}
+
+            @ng.Component({ selector: 'app-spaced' })
+            export class Spaced {}
+            """);
+
+        Assert.Equal(
+            [("Renamed", "app-renamed"), ("Spaced", "app-spaced")],
+            renamed.Nodes.Where(node => node.Selectors is not null).Select(node => (node.Name, Assert.Single(node.Selectors!))));
     }
 
     /// <summary>
     /// A decorator named as one of Angular's that no import of <c>@angular/core</c> binds - vue-property-decorator's
     /// <c>@Component</c> - is a call of what it names and no metadata; a member's decorator a call too, and one the repository's
-    /// import binds asks nothing of it.
+    /// import binds asks nothing of it - nor one a rooted path's import binds, which is no package's though it names nothing of the
+    /// tree, as a specifier's one reading of its form says (<see cref="JsReading.SpecifierForm"/>).
     /// </summary>
     [Fact]
     public void ADecoratorOfAnotherPackage_IsACallOfWhatItNames_AndNoMetadata()
@@ -889,9 +954,11 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             import { Component } from 'vue-property-decorator';
             import { Input } from '@angular/core';
             import { track } from './metrics';
+            import { Log } from '/src/log.js';
 
             @Component({ selector: 'x-panel' })
             @track('panel')
+            @Log()
             export class Panel {
               @Input() items = [];
             }
@@ -900,8 +967,9 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         Assert.Null(Node(extract, panel).Selectors);
         Assert.Equal(
-            [("Component", (int?)1, true), ("track", 1, false)],
+            [("Component", (int?)1, true), ("track", 1, false), ("Log", 0, false)],
             extract.References.Where(reference => reference.From == panel && reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Arity, reference.Probe)));
+        Assert.DoesNotContain(extract.Imports, import => import.Target.StartsWith("/src/log", StringComparison.Ordinal));
         Assert.Equal(
             [("Input", (int?)0, true)],
             extract.References.Where(reference => reference.From == $"{panel}.items" && reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Arity, reference.Probe)));

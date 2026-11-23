@@ -154,7 +154,7 @@ public sealed class VueExtractor : ICodeGraphExtractor
     private static FileExtract Bound(FileExtract merged, IReadOnlyDictionary<string, QualifiedName> bindings)
         => bindings.Count == 0 ? merged : merged with
         {
-            References = [.. merged.References.Select(reference => reference is { Kind: CodeEdgeKinds.Uses, Qualifier: { Kind: CodeQualifierKinds.Value, Name: { } binding } }
+            References = [.. merged.References.Select(reference => reference is { Kind: CodeEdgeKinds.Uses, Qualifier: { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.This, Name: { } binding } }
                 && bindings.TryGetValue(binding.Whole(), out var kept)
                     ? reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Module, kept) }
                     : reference)],

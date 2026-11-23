@@ -292,8 +292,8 @@ internal static class MarkupTemplates
         };
     }
 
-    /// <summary>A <c>{{ }}</c> a template's text or an attribute's value holds, over lines or on one.</summary>
-    private static readonly Regex Mustaches = LinearRegex.Compile(@"\{\{(?<code>.*?)\}\}", RegexOptions.Singleline);
+    /// <summary>A <c>{{ }}</c> a template's text or an attribute's value holds, over lines or on one: an Angular template's tag, which a class attribute writes a name into (<see cref="MarkupDialect.Angular"/>).</summary>
+    internal static readonly Regex Mustaches = LinearRegex.Compile(@"\{\{(?<code>.*?)\}\}", RegexOptions.Singleline);
 
     /// <summary>
     /// The names each view of a template declares over the whole of it, wherever it declares them in it - an Angular template

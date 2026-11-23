@@ -57,7 +57,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it - a class a {{ }} writes none - a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on; a file whose content is an Angular template - an element's (click), [x], *ngFor or #x, a {{ }} or a control-flow block in its text, no script's or style's text among them - read as one, a component's self-closing tag closed as Angular closes it: its component tags, the selectors of components declared elsewhere, as instantiates, but ng-container, ng-template and ng-content, and each attribute's, mustache's and block's code read by the JavaScript reader as Angular compiles it - (click)=\"save()\" statements its event runs, [x], bind-x and {{ }} what their expressions read, a {{ }} in an attribute's value among them, [class.x] a use of the rule .x besides, each pipe - {{ total | money: 'USD' }} - an instantiates of the pipe whose @Pipe name it is, its operand and its arguments code, the pipes Angular's common package declares (date, async, currency and the rest) none; a structural directive's microsyntax - *ngFor's let item of items, index as i and trackBy: trackItem, *ngIf's user$ | async as user and else, any *x - its expressions code and its let and as names its own; @if with its as, @for with its track, its let names and $index and the rest of its context, @switch, @case, @defer's when conditions, @placeholder, @loading, @error, and @let, whose name is the view's; #x and ref-x a name declared over the whole view its element stands in - the template, an ng-template's content, an element a structural directive is written on, a block's body - and let-x one over what its ng-template holds - each name read by itself a member of the component whose templateUrl names the file, joined where a TypeScript file declares it; a file whose texts or attribute values write a tag of a template engine the graph does not read - {% %} and {# #} (Jinja, Django, Liquid, Twig), {{# }}, {{/ }}, {{^ }}, {{> }} and {{!-- --}} (Handlebars, Mustache) - read as a page, every tag of the engine, its {{ }} among them, marked dynamic",
+        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it - a class a template's tag is written into, a {{ }}, a {% %} or a {# #}, none - a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on; a file whose content is an Angular template - an element's (click), [x], *ngFor or #x, a {{ }} or a control-flow block in its text, no script's or style's text among them - read as one, a component's self-closing tag closed as Angular closes it: its component tags, the selectors of components declared elsewhere, as instantiates, but ng-container, ng-template and ng-content, and each attribute's, mustache's and block's code read by the JavaScript reader as Angular compiles it - (click)=\"save()\" statements its event runs, [x], bind-x and {{ }} what their expressions read, a {{ }} in an attribute's value among them, [class.x] a use of the rule .x besides, each pipe - {{ total | money: 'USD' }} - an instantiates of the pipe whose @Pipe name it is, its operand and its arguments code, the pipes Angular's common package declares (date, async, currency and the rest) none; a structural directive's microsyntax - *ngFor's let item of items, index as i and trackBy: trackItem, *ngIf's user$ | async as user and else, any *x - its expressions code and its let and as names its own; @if with its as, @for with its track, its let names and $index and the rest of its context, @switch, @case, @defer's when conditions, @placeholder, @loading, @error, and @let, whose name is the view's; #x and ref-x a name declared over the whole view its element stands in - the template, an ng-template's content, an element a structural directive is written on, a block's body - and let-x one over what its ng-template holds - each name read by itself a member of the component whose templateUrl names the file, joined where a TypeScript file declares it; a file whose texts or attribute values write a tag of a template engine the graph does not read - {% %} and {# #} (Jinja, Django, Liquid, Twig), {{# }}, {{/ }}, {{^ }}, {{> }} and {{!-- --}} (Handlebars, Mustache) - read as a page, every tag of the engine, its {{ }} among them, marked dynamic",
         [
             ("style-attributes", "a style attribute's declarations: no rule of their own"),
             ("other-scripts", "a script of another type - a JSON block, an import map, a template a framework reads: its text read as no code"),
@@ -66,7 +66,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             ("external-links", "an href or src that names no file of the tree - another site's, a rooted path, an anchor, data: - no import of it"),
             ("unbound-templates", "an Angular template no component names by templateUrl, and one written in a file of another extension: its names are bound to no component, so a call or a read its code makes by itself reaches nothing; a template of another engine that writes no tag but {{ }}: read as Angular's, bound to no component alike"),
             ("defer-triggers", "an Angular @defer's on triggers, which name an event and a template's element, and a structural directive's context keys (index in index as i): no code read"),
-            new CodeGraphLimit("template-engine", "a template of another engine in an .html file - Jinja, Django, Liquid, Twig, Handlebars, Mustache - as a tag only such an engine writes tells it: read as a page, its sections, classes and ids a page's, its engine's tags read as no code - each marked dynamic, the names it writes bound to nothing") { Signs = [OtherEngine] },
+            new CodeGraphLimit("template-engine", "a template of another engine in an .html file - Jinja, Django, Liquid, Twig, Handlebars, Mustache - as a tag only such an engine writes tells it: read as a page, its sections, classes and ids a page's - a class one of its tags is written into none - its engine's tags read as no code - each marked dynamic, the names it writes bound to nothing") { Signs = [OtherEngine] },
             ("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why"),
         ])
     {
@@ -74,7 +74,14 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
     };
 
     /// <inheritdoc/>
-    public FileExtract Extract(CodeFileInput input)
+    public FileExtract Extract(CodeFileInput input) => Extract(input, read: null);
+
+    /// <summary>
+    /// The extract of <paramref name="input"/>, as <see cref="Extract(CodeFileInput)"/> answers it, each markup the reading reads -
+    /// the page, and the template it is read again as - added to <paramref name="read"/> where it is given: what the work of a
+    /// reading is counted by (<see cref="MarkupText.Visited"/>).
+    /// </summary>
+    internal FileExtract Extract(CodeFileInput input, ICollection<MarkupText>? read)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -86,6 +93,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         }
 
         var markup = MarkupText.Read(text, MarkupDialect.Html.ClosesAsHtml);
+        read?.Add(markup);
 
         // A template of an engine the graph does not read is a page whose engine's tags are marked; an Angular template is read
         // again as Angular closes its elements, a component's /> closing it.
@@ -95,6 +103,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         if (angular)
         {
             markup = MarkupText.Read(text, MarkupDialect.Angular.ClosesAsHtml, MarkupDialect.Angular.ClosesSelf);
+            read?.Add(markup);
         }
 
         var elements = markup.Elements;
@@ -234,8 +243,8 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
     /// </summary>
     private static readonly Regex EngineTag = LinearRegex.Compile(@"\{%[\s\S]*?%\}|\{#[\s\S]*?#\}|\{\{[#/^>][\s\S]*?\}\}|\{\{!--[\s\S]*?--\}\}");
 
-    /// <summary>Every tag such an engine writes: its statements, its comments, and its expressions, <c>{{ }}</c>.</summary>
-    private static readonly Regex EngineAny = LinearRegex.Compile(@"\{%[\s\S]*?%\}|\{#[\s\S]*?#\}|\{\{[\s\S]*?\}\}");
+    /// <summary>Every tag such an engine writes: its statements, its comments, and its expressions, <c>{{ }}</c> - each marked on a page of such an engine, and each one piece with the name a class attribute writes it into (<see cref="MarkupDialect.Html"/>).</summary>
+    internal static readonly Regex EngineAny = LinearRegex.Compile(@"\{%[\s\S]*?%\}|\{#[\s\S]*?#\}|\{\{[\s\S]*?\}\}");
 
     /// <summary>
     /// Where the markup is a template of an engine the graph does not read - its texts or its attributes' values write a tag only

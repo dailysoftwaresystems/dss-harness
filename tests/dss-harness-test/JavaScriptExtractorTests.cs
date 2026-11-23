@@ -1400,9 +1400,14 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             var vent = _.extend({}, Backbone.Events);
             var settings = $.extend({ debug: false }, window.APP_CONFIG);
             var Invoice = Backbone.Model.extend({ total: function () { return 0; } }, { create: function () { return build(); } });
+            var merged = _.extend({}, { a: 1 });
+            var Mixed = Backbone.Model.extend(mixin);
             """);
 
-        Assert.Equal(("variable", "variable"), (Node(extract, "javascript:vent").SubKind, Node(extract, "javascript:settings").SubKind));
+        // A merge of objects alone, and Backbone's given no object: each gate holds its own.
+        Assert.Equal(
+            ["variable", "variable", "variable", "variable"],
+            new[] { "vent", "settings", "merged", "Mixed" }.Select(name => Node(extract, $"javascript:{name}").SubKind));
         Assert.Contains(extract.References, reference => reference.From == "javascript:vent" && reference.Name == "Events");
         Assert.Contains(extract.References, reference => reference.From == "javascript:settings" && reference.Name == "APP_CONFIG");
 
@@ -1483,12 +1488,122 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [new CodeEdge("javascript:lib/cart.js.Widget.paint", "javascript:lib/cart.js.draw", CodeEdgeKinds.Calls, 5, CodeConfidences.Exact)],
             linked.Edges.Where(edge => edge.From == "javascript:lib/cart.js.Widget.paint" && edge.Kind == CodeEdgeKinds.Calls));
+
+        // A member extending a type from outside its body binds no name of its file: the file's export of paint is none of it.
+        var exported = Read("lib/cart.js", Text + "\nexport { paint as paintIt };");
+
+        Assert.Null(Node(exported, "javascript:lib/cart.js.Widget.paint").Exports);
+    }
+
+    /// <summary>
+    /// A constructor function is one wherever it is declared: a chain the file assigns a function whose prototype it writes is the
+    /// constructor type of that chain - Closure's <c>App.Cart = function</c> - and a function another file declares is the type
+    /// its prototype's members extend, so their <c>this</c> is read on it and on them, and its <c>new</c> makes it.
+    /// </summary>
+    [Fact]
+    public void AConstructorFunction_ByAChainOrInAnotherFile_IsTheTypeItsPrototypesMembersAreOf()
+    {
+        const string Chained = """
+            var App = App || {};
+            App.Cart = function () { this.lines = []; };
+            App.Cart.prototype.add = function (line) { this.lines.push(line); this.total(); };
+            App.Cart.prototype.total = function () { return 0; };
+            """;
+        var extract = Read("lib/app-cart.js", Chained);
+        var cart = "javascript:App.Cart";
+
+        Assert.Equal((CodeNodeKinds.Type, "class", "App"), (Node(extract, cart).Kind, Node(extract, cart).SubKind, Node(extract, cart).Scope?.Whole()));
+        Assert.Equal(["constructor", "add", "total"], extract.Nodes.Where(node => node.Parent == cart).Select(node => node.Name));
+        Assert.Equal(
+            [new CodeEdge($"{cart}.add", $"{cart}.total", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact)],
+            Link(("lib/app-cart.js", Chained)).Edges.Where(edge => edge.From == $"{cart}.add" && edge.Kind == CodeEdgeKinds.Calls));
+
+        // The function in one script, its prototype's members in another: each this reaches the members, and new makes the type.
+        var linked = Link(
+            ("lib/cart.js", "function Cart() { this.total(); }\nfunction make() { return new Cart(); }"),
+            ("lib/cart-total.js", "Cart.prototype.add = function (line) { this.total(); };\nCart.prototype.total = function () { return 0; };"));
+
+        Assert.Equal(
+            [
+                new CodeEdge("javascript:Cart", "javascript:Cart.total", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact),
+                new CodeEdge("javascript:Cart.add", "javascript:Cart.total", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact),
+                new CodeEdge("javascript:make", "javascript:Cart", CodeEdgeKinds.Instantiates, 2, CodeConfidences.Unique),
+            ],
+            linked.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Instantiates).OrderBy(edge => edge.From, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// AMD's own dependencies - <c>require</c>, <c>exports</c> and <c>module</c> - are the loader's objects, no module: given by
+    /// the factory's dependencies or by its parameters' names alone, none is an import, and the body's <c>require('./x')</c> is
+    /// an import as CommonJS's is.
+    /// </summary>
+    [Fact]
+    public void AnAmdFactorysOwnDependencies_AreNoImports_AndItsRequireImports()
+    {
+        var extract = Read("app/total.js", """
+            define(['require', 'exports', './cart'], function (require, exports, cart) {
+              exports.total = function () { return cart.sum() + require('./tax').rate; };
+            });
+            """);
+
+        Assert.Equal(
+            [("./cart", (string?)"cart"), ("./tax", null)],
+            extract.Imports.Where(import => import.Target is "require" or "exports" or "module" or "./cart" or "./tax").Select(import => (import.Target, import.Prefix)));
+    }
+
+    /// <summary>
+    /// A wrapper's body is a closed scope of its own, under the file's, and its code outside its declarations the calls of a node
+    /// of its own, named by where its function begins: its code sees what it declares and what the file does, and the file's
+    /// other code - a script's top among it - does not see what it declares, so a script's global of one name is what the top's
+    /// call reaches; nor does the reader name it from outside the wrapper - an export, a prototype's member written there.
+    /// </summary>
+    [Fact]
+    public void AWrappersDeclarations_AreSeenFromItsOwnCodeAlone()
+    {
+        const string Wrapped = """
+            (function () {
+              function format(x) { return x; }
+              window.show = function () { return format(1); };
+              format(3);
+              function Cart() {}
+              Cart.prototype.add = function () { return format(4); };
+            })();
+            format(2);
+            """;
+        var linked = Link(("lib/a.js", "function format(x) { return x; }"), ("lib/b.js", Wrapped));
+        var wrapper = "javascript:lib/b.js.(wrapper 1:2)";
+
+        // The top's call is a script's global's - found by its name, as any global of another script is - and the wrapper's own a local's.
+        Assert.Equal(
+            [
+                new CodeEdge("javascript:lib/b.js.(module)", "javascript:format", CodeEdgeKinds.Calls, 8, CodeConfidences.Unique),
+                new CodeEdge(wrapper, "javascript:lib/b.js.format", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact),
+                new CodeEdge(wrapper, "javascript:lib/b.js.format", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact),
+                new CodeEdge("javascript:lib/b.js.Cart.add", "javascript:lib/b.js.format", CodeEdgeKinds.Calls, 6, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.From, StringComparer.Ordinal));
+        Assert.Equal(
+            ("module", (1, 7), (string?)wrapper["javascript:".Length..]),
+            (Node(Read("lib/b.js", Wrapped), wrapper).SubKind, Lines(Read("lib/b.js", Wrapped), wrapper), Node(Read("lib/b.js", Wrapped), "javascript:lib/b.js.format").SeenIn?.Whole()));
+
+        // A module's names outside the wrapper: no export of its Cart, and a prototype's member of a Cart the file's top does not declare.
+        var module = Read("lib/c.js", """
+            (function () { function Cart() {} Cart.prototype.add = function () {}; })();
+            Cart.prototype.total = function () {};
+            export { Cart };
+            """);
+
+        Assert.Equal(
+            [("javascript:lib/c.js.Cart.add", "javascript:lib/c.js.Cart", (string?)null), ("javascript:lib/c.js.Cart.total", null, "Cart")],
+            module.Nodes.Where(node => node.Name is "add" or "total").Select(node => (node.Id.Whole(), node.Parent?.Whole(), node.Extends)));
+        Assert.Null(Node(module, "javascript:lib/c.js.Cart").Exports);
     }
 
     /// <summary>
     /// An AMD module's factory and a function called where it is written at the file's top are read as the file's top is: what
-    /// they declare is the file's - a module's own, a script's its file's alone - an AMD dependency an import by its parameter's
-    /// name and the factory's return the module's export; the code around the body the file's code.
+    /// they declare is the file's, by its path, in a closed scope of the body's own under a node of its own - a module's, a script's
+    /// alike - an AMD dependency an import by its parameter's name, a define given a factory a module, and the factory's return
+    /// the module's export; the code around the body the file's code.
     /// </summary>
     [Fact]
     public void AWrappersBody_IsReadAsTheFilesTop()
@@ -1502,11 +1617,16 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             """);
 
         Assert.Equal(
-            [("View", CodeNodeKinds.Type), ("render", CodeNodeKinds.Member), ("helper", CodeNodeKinds.Member)],
+            [("(wrapper 1:32)", CodeNodeKinds.Member), ("View", CodeNodeKinds.Type), ("render", CodeNodeKinds.Member), ("helper", CodeNodeKinds.Member)],
             amd.Nodes.Where(node => node.Id.Whole().StartsWith("javascript:app/view.js.", StringComparison.Ordinal) && node.Name != "(module)").Select(node => (node.Name, node.Kind)));
         Assert.Equal(["default"], Node(amd, "javascript:app/view.js.View").Exports);
         Assert.Equal(["Base"], amd.Imports.Where(import => import.Target == "./base").Select(import => import.Prefix));
         Assert.Equal(["helper"], Calls(amd, "javascript:app/view.js.View.render"));
+
+        // A define given a factory makes the file a module, its factory's body a closed scope under the module's.
+        Assert.Equal(
+            [new ExtractScope("app/view.js", Open: true), new ExtractScope(QualifiedName.Of("app/view.js").Under("(wrapper 1:32)"), Open: false) { Parent = QualifiedName.Of("app/view.js") }],
+            amd.Scopes);
 
         var script = Read("lib/shop.js", """
             ;(function ($) {
@@ -1518,7 +1638,9 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             ["javascript:lib/shop.js.Cart", "javascript:lib/shop.js.Cart.constructor", "javascript:lib/shop.js.Cart.add"],
             script.Nodes.Where(node => node.Kind != CodeNodeKinds.Member || node.Parent is not null).Select(node => node.Id.Whole()));
-        Assert.Equal([new ExtractScope("lib/shop.js", Open: false)], script.Scopes);
+        Assert.Equal(
+            [new ExtractScope("lib/shop.js", Open: false), new ExtractScope(QualifiedName.Of("lib/shop.js").Under("(wrapper 1:3)"), Open: false) { Parent = QualifiedName.Of("lib/shop.js") }],
+            script.Scopes);
         Assert.Contains(script.References, reference => reference.Name == "jQuery");
     }
 

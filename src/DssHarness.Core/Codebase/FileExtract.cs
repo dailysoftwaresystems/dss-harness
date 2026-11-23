@@ -1000,7 +1000,7 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
             : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && (named.Name is not { } namedName || namedName.WhitespaceOnly())
                 && named is not { Kind: CodeQualifierKinds.Named, Name: null, Link: not null } ? "its qualifier names nothing"
-            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && value.WhitespaceOnly() ? "its qualifier's name is empty"
+            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.This or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && value.WhitespaceOnly() ? "its qualifier's name is empty"
             : null;
 }
 
@@ -1028,7 +1028,12 @@ public sealed record ExtractQualifier(string Kind, QualifiedName? Name = null)
 /// <summary>The kinds of qualifier.</summary>
 public static class CodeQualifierKinds
 {
-    /// <summary>The type the reference is written in, and its bases.</summary>
+    /// <summary>
+    /// The type the reference is written in, and its bases. With a name, a value of that type by the names the code writes after
+    /// <c>this</c> - <c>this.cart.lines</c> - each a member of what the one before is, the reference looked for in the type the last
+    /// is declared with, by its name alone where nothing says that type: what a receiver reaches through <c>this</c>, never a name
+    /// written alone, which a type whose members are reached by a receiver alone does not answer (<see cref="ExtractNode.MembersByReceiver"/>).
+    /// </summary>
     public const string This = "this";
 
     /// <summary>The bases of the type the reference is written in, and not the type itself.</summary>

@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Globalization;
 using System.Text;
 using AngleSharp.Html;
@@ -85,8 +86,8 @@ internal sealed class MarkupText
         "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title", "noscript",
     };
 
-    private readonly List<MarkupElement> _elements = [];
-    private readonly List<(long Start, long End)> _texts = [];
+    private readonly Counted<MarkupElement> _elements;
+    private readonly Counted<(long Start, long End)> _texts;
     private readonly List<int> _open = [];
     private readonly Dictionary<string, int> _openNames = new(StringComparer.Ordinal);
     private readonly bool _closesAsHtml;
@@ -101,7 +102,17 @@ internal sealed class MarkupText
         Lines = text.LineIndex;
         _closesAsHtml = closesAsHtml;
         _closesSelf = closesSelf;
+        _elements = new Counted<MarkupElement>(this);
+        _texts = new Counted<(long Start, long End)>(this);
     }
+
+    /// <summary>
+    /// How many times its elements and its runs of text were read, one at a time - by the walk that makes them and by every reader
+    /// that reads them (<see cref="Elements"/>, <see cref="Texts"/>): the work a markup's reading costs past its tokens, which a
+    /// reading linear in the markup keeps to a fixed number of reads of each - and which a reading that walks the elements again for
+    /// each run of text, as one that asks of each run whether it is inside a script, multiplies by the runs.
+    /// </summary>
+    public long Visited { get; private set; }
 
     /// <summary>
     /// The most characters a markup file's text holds for AngleSharp's tokenizer to read it: the tokenizer counts a position
@@ -115,14 +126,15 @@ internal sealed class MarkupText
     /// <summary>Where its lines begin.</summary>
     public CodeLineIndex Lines { get; }
 
-    /// <summary>Its elements, in the order their start tags are written; each one's parent is before it.</summary>
+    /// <summary>Its elements, in the order their start tags are written; each one's parent is before it. Each read of one counted (<see cref="Visited"/>).</summary>
     public IReadOnlyList<MarkupElement> Elements => _elements;
 
     /// <summary>
     /// Its runs of markup text - what no tag and no comment is - each from its first character to past its last, in the order
     /// they are written: the text a <c>script</c> or a <c>style</c> element holds, written as such, none of them - that is code
     /// its own language's reader reads, no template's expression - and a <c>textarea</c>'s or a <c>title</c>'s among them, as a
-    /// framework interpolates it. Told once, by the walk that reads the tokens, which knows the element whose text is raw.
+    /// framework interpolates it. Told once, by the walk that reads the tokens, which knows the element whose text is raw. Each
+    /// read of one counted (<see cref="Visited"/>).
     /// </summary>
     public IReadOnlyList<(long Start, long End)> Texts => _texts;
 
@@ -552,6 +564,39 @@ internal sealed class MarkupText
 
         var written = Text.Substring(start, name.Length);
         return string.Equals(written, name, StringComparison.OrdinalIgnoreCase) ? ExtractText.Whole(written) : name;
+    }
+
+    /// <summary>
+    /// One of the markup's own lists, the one place its items are kept: each item read, by its place or in turn, counted on the
+    /// markup (<see cref="Visited"/>) whoever reads it - its own walk among them - and an item added, by the walk, not.
+    /// </summary>
+    private sealed class Counted<T>(MarkupText markup) : IReadOnlyList<T>
+    {
+        private readonly List<T> _items = [];
+
+        public int Count => _items.Count;
+
+        public T this[int index]
+        {
+            get
+            {
+                markup.Visited++;
+                return _items[index];
+            }
+        }
+
+        public IEnumerator<T> GetEnumerator()
+        {
+            foreach (var item in _items)
+            {
+                markup.Visited++;
+                yield return item;
+            }
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public void Add(T item) => _items.Add(item);
     }
 }
 
