@@ -4776,8 +4776,8 @@ triple-quoted one over lines, a backslash escaping the character after it for wh
 Python's tokenizer reads one; and it says where an f-string's fields hold code (`LiteralStack`, as Dart's, JavaScript's and
 PHP's lexers do): a field's code ends at the `=` of a debugging field, the `!` of a conversion or the `:` of a format, and what
 follows to the brace that closes the field is the field's tail (`LiteralStack.InTail`), none of it the value's, each field a
-format holds code of its own. Its escapes are Python's - one Python does not know kept with its backslash, a bytes string's
-the escapes of bytes, a formatted one's doubled braces a brace. A bracket or a string that never closes, which Python refuses,
+format holds code of its own. Its escapes are Python's - one Python does not know kept with its backslash, a character's name
+(`\N{...}`) kept as written, a bytes string's the escapes of bytes, a formatted one's doubled braces a brace. A bracket or a string that never closes, which Python refuses,
 marks its line `dynamic` (`unclosed`, a limit's sign), since what follows it is read as held in it. Each `import a.b` and `from a.b import c, d as e` is looked for by the package layout,
 which the extract says and the linker reads without knowing the language: the module is tried in the file's own directory and
 in each one above it to the tree's root, the nearest first, as the package's `__init__.py` and else the module's `.py`, every
