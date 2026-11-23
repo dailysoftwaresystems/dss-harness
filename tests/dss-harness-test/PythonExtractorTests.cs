@@ -521,7 +521,11 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
             [("python:pkg.cart.Cart.__init__", "__init__", 22), ("python:pkg.cart.Cart.count", "count", 28), ("python:pkg.cart.Cart.add", "add", 31), ("python:pkg.cart.Cart.flush", "flush", 37), ("python:pkg.cart.Cart.parse", "parse", 41)],
             cart.References.Where(reference => reference.Kind == CodeEdgeKinds.Overrides).Select(reference => (reference.From, reference.Name, reference.Line)));
         Assert.All(cart.References.Where(reference => reference.Kind == CodeEdgeKinds.Overrides), reference => Assert.True(reference.Probe));
-        Assert.All(cart.References.Where(reference => reference.Kind != CodeEdgeKinds.Overrides), reference => Assert.False(reference.Probe));
+
+        // Of the rest, the one probe is the call of the decorator an import of a package binds, @dataclass, made around the class.
+        Assert.Equal(
+            [("python:pkg.cart.Cart", "dataclass", 17, true)],
+            cart.References.Where(reference => reference.Kind != CodeEdgeKinds.Overrides && reference.Probe).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, reference.Around)));
 
         Assert.Equal(("constant", "MAX_LINES: int ="), (Node(cart, "python:pkg.cart.MAX_LINES").SubKind, Node(cart, "python:pkg.cart.MAX_LINES").Signature));
         Assert.Equal(("field", 10), (Node(cart, "python:pkg.cart.default_tag").SubKind, Node(cart, "python:pkg.cart.default_tag").Start));
@@ -775,7 +779,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         Assert.Equal([PythonReading.ComputedExports], Read("pkg/all.py", "__all__ = [\"Cart\"]\n__all__.append(\"Line\")\n").Dynamic.Select(mark => mark.Kind));
         Assert.Empty(Read("pkg/all.py", "__all__ = [\"Cart\", \"Line\"]\n").Dynamic);
         Assert.Equal([("add", CodeEdgeKinds.Calls, 10, CodeQualifierKinds.Value)], References(extract, "python:pkg.dynamic.reach").Where(reference => reference.Kind == CodeEdgeKinds.Calls));
-        Assert.Equal([("Cart", CodeEdgeKinds.References, 11, (string?)null)], References(extract, "python:pkg.dynamic.reach").Where(reference => reference.Name == "Cart"));
+        Assert.Equal([("Cart", CodeEdgeKinds.Uses, 11, (string?)null)], References(extract, "python:pkg.dynamic.reach").Where(reference => reference.Name == "Cart"));
         Assert.Equal([("make", CodeEdgeKinds.Calls, 19, (string?)null)], References(extract, "python:pkg.dynamic.use"));
     }
 
@@ -801,20 +805,23 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         Assert.Equal([("empty_cart", CodeEdgeKinds.References, 12, CodeQualifierKinds.Fixture)], References(extract, test).Where(reference => reference.Kind == CodeEdgeKinds.References));
         Assert.Equal([("add", CodeEdgeKinds.Calls, 13, CodeQualifierKinds.Value), ("make_line", CodeEdgeKinds.Calls, 13, (string?)null), ("total", CodeEdgeKinds.Calls, 14, (string?)null)], References(extract, test).Where(reference => reference.Kind == CodeEdgeKinds.Calls));
 
-        // The language's own decorators are modifiers by their dotted name, their arguments the node's code alone; a fixture is a function
-        // of its own kind within its kind, and never a test though a test file declares it.
+        // A decorator is a modifier by its dotted name and a call of what it names, made around the function: pytest's fixture, which an
+        // import of the package binds, a probe of whether the repository declares it. A fixture is a function of its own kind within its
+        // kind, and never a test though a test file declares it.
         var own = Node(extract, "python:tests.test_cart.empty_cart");
 
         Assert.Equal(["@pytest.fixture"], own.Modifiers);
         Assert.Equal(CodeSubKinds.Fixture, own.SubKind);
         Assert.False(own.Test);
-        Assert.DoesNotContain(extract.References, reference => reference.Name is "pytest" or "fixture");
+        Assert.Equal(
+            [new ExtractReference(QualifiedName.Of("python:tests.test_cart.empty_cart"), CodeEdgeKinds.Calls, "fixture", 7) { Arity = 1, Qualifier = new ExtractQualifier(CodeQualifierKinds.Prefix, QualifiedName.Of("pytest")), Probe = true, Around = true }],
+            extract.References.Where(reference => reference.Name is "pytest" or "fixture"));
 
-        // A fixture the test file imports from nowhere: linked to the conftest.py's, by its name alone.
+        // A fixture the test file imports from nowhere: linked to the conftest.py's, through the conftest's directory import.
         var conftest = Read("tests/conftest.py", Conftest);
 
         Assert.Equal((CodeSubKinds.Fixture, false), (Node(conftest, "python:tests.conftest.sample").SubKind, Node(conftest, "python:tests.conftest.sample").Test));
-        Assert.Contains(new CodeEdge("python:tests.test_cart.test_parse_sample", "python:tests.conftest.sample", CodeEdgeKinds.References, 35, CodeConfidences.Unique), Link(("tests/test_cart.py", extract), ("tests/conftest.py", conftest)).Edges);
+        Assert.Contains(new CodeEdge("python:tests.test_cart.test_parse_sample", "python:tests.conftest.sample", CodeEdgeKinds.References, 35, CodeConfidences.Exact), Link(("tests/test_cart.py", extract), ("tests/conftest.py", conftest)).Edges);
 
         // Not a test file: nothing in it is a test.
         Assert.DoesNotContain(Read("pkg/cart.py", Cart).Nodes, node => node.Test);
@@ -1186,7 +1193,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
         Assert.Contains(new CodeEdge("python:app.first", "python:pkg.cart.Cart", CodeEdgeKinds.Instantiates, 3, CodeConfidences.Unique), linked.Edges);
         Assert.Contains(new CodeEdge("python:app.first", "python:pkg.lines.Line", CodeEdgeKinds.Instantiates, 3, CodeConfidences.Unique), linked.Edges);
-        Assert.Contains(new CodeEdge("python:app.second", "python:pkg.lines.Line", CodeEdgeKinds.References, 4, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("python:app.second", "python:pkg.lines.Line", CodeEdgeKinds.Uses, 4, CodeConfidences.Unique), linked.Edges);
         Assert.Contains(new CodeEdge("file:app.py", "file:pkg/__init__.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact), linked.Edges);
         Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Imports && edge.From == "file:app.py" && edge.To != "file:pkg/__init__.py");
     }
@@ -1341,7 +1348,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         Assert.Contains(new CodeEdge("python:blog.urls.routes", "python:blog.views.index", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact), linked.Edges);
         Assert.Contains(new CodeEdge("python:blog.urls", "python:blog.views.index", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact), linked.Edges);
         Assert.Contains(new CodeEdge("python:pkg.main.run", "python:pkg.utils.parse", CodeEdgeKinds.Calls, 5, CodeConfidences.Exact), linked.Edges);
-        Assert.DoesNotContain(linked.Edges, edge => edge.To is "python:shop.views.index" or "python:utils.parse" or "python:config.path.join");
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind != CodeEdgeKinds.Contains && edge.To is "python:shop.views.index" or "python:utils.parse" or "python:config.path.join");
     }
 
     /// <summary>
@@ -1435,7 +1442,8 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
     /// <summary>
     /// A fixture is found as pytest finds one: the test's own module's, else the nearest <c>conftest.py</c>'s of its directory and of
     /// each above it that declares it - an override in a deeper one shadowing the one above - and never a sibling directory's; a
-    /// fixture's own parameters name fixtures too.
+    /// fixture's own parameters name fixtures too, and one that names the fixture's own name is given the one a level out, which the
+    /// fixture overrides - a conftest.py's the one above it, a test module's its conftest.py's - and never the fixture itself.
     /// </summary>
     [Fact]
     public void AFixture_IsTheNearestConftestsOfTheTestsDirectoryOrOneAbove_AndNoSiblings()
@@ -1443,8 +1451,8 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         const string client = "import pytest\n\n\n@pytest.fixture\ndef client():\n    return 1\n";
         var linked = Link(
             ("tests/conftest.py", Read("tests/conftest.py", "import pytest\n\n\n@pytest.fixture\ndef username():\n    return \"outer\"\n")),
-            ("tests/sub/conftest.py", Read("tests/sub/conftest.py", "import pytest\n\n\n@pytest.fixture\ndef username():\n    return \"inner\"\n\n\n@pytest.fixture\ndef user(username):\n    return username\n")),
-            ("tests/sub/test_names.py", Read("tests/sub/test_names.py", "def test_name(username):\n    assert username\n\n\ndef test_user(user):\n    assert user\n")),
+            ("tests/sub/conftest.py", Read("tests/sub/conftest.py", "import pytest\n\n\n@pytest.fixture\ndef username(username):\n    return \"inner-\" + username\n\n\n@pytest.fixture\ndef user(username):\n    return username\n")),
+            ("tests/sub/test_names.py", Read("tests/sub/test_names.py", "import pytest\n\n\ndef test_name(username):\n    assert username\n\n\n@pytest.fixture\ndef user(user):\n    return user\n\n\ndef test_user(user):\n    assert user\n")),
             ("tests/test_top.py", Read("tests/test_top.py", "def test_name(username):\n    assert username\n")),
             ("tests/api/conftest.py", Read("tests/api/conftest.py", client)),
             ("tests/web/conftest.py", Read("tests/web/conftest.py", client)),
@@ -1452,8 +1460,10 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
         IEnumerable<CodeEdge> Fixtures(string from) => linked.Edges.Where(edge => edge.From == from && edge.Kind == CodeEdgeKinds.References);
 
-        Assert.Equal([new CodeEdge("python:tests.sub.test_names.test_name", "python:tests.sub.conftest.username", CodeEdgeKinds.References, 1, CodeConfidences.Exact)], Fixtures("python:tests.sub.test_names.test_name"));
-        Assert.Equal([new CodeEdge("python:tests.sub.test_names.test_user", "python:tests.sub.conftest.user", CodeEdgeKinds.References, 5, CodeConfidences.Exact)], Fixtures("python:tests.sub.test_names.test_user"));
+        Assert.Equal([new CodeEdge("python:tests.sub.test_names.test_name", "python:tests.sub.conftest.username", CodeEdgeKinds.References, 4, CodeConfidences.Exact)], Fixtures("python:tests.sub.test_names.test_name"));
+        Assert.Equal([new CodeEdge("python:tests.sub.test_names.test_user", "python:tests.sub.test_names.user", CodeEdgeKinds.References, 13, CodeConfidences.Exact)], Fixtures("python:tests.sub.test_names.test_user"));
+        Assert.Equal([new CodeEdge("python:tests.sub.test_names.user", "python:tests.sub.conftest.user", CodeEdgeKinds.References, 9, CodeConfidences.Exact)], Fixtures("python:tests.sub.test_names.user"));
+        Assert.Equal([new CodeEdge("python:tests.sub.conftest.username", "python:tests.conftest.username", CodeEdgeKinds.References, 5, CodeConfidences.Exact)], Fixtures("python:tests.sub.conftest.username"));
         Assert.Equal([new CodeEdge("python:tests.sub.conftest.user", "python:tests.sub.conftest.username", CodeEdgeKinds.References, 10, CodeConfidences.Exact)], Fixtures("python:tests.sub.conftest.user"));
         Assert.Equal([new CodeEdge("python:tests.test_top.test_name", "python:tests.conftest.username", CodeEdgeKinds.References, 1, CodeConfidences.Exact)], Fixtures("python:tests.test_top.test_name"));
         Assert.Equal([new CodeEdge("python:tests.api.test_api.test_get", "python:tests.api.conftest.client", CodeEdgeKinds.References, 1, CodeConfidences.Exact)], Fixtures("python:tests.api.test_api.test_get"));
@@ -1602,10 +1612,11 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
     }
 
     /// <summary>
-    /// A decorator is read whole, where the function is defined: one the language or a framework declares - told by the last name of
-    /// its dotted name - a modifier by that name, what it is given the function's code, a route's path and a parameter set's name
-    /// among its literals; one the repository declares a call of it; each made around the function (<see cref="ExtractReference.Around"/>),
-    /// as its annotations are, and its body's code none of them.
+    /// A decorator is read whole, where the function is defined: a modifier by its dotted name, and code - what it reads and is given,
+    /// a route's path and a parameter set's name among its literals - the name it calls with the function a call, of one argument where
+    /// it is written alone; one an import of a package binds a probe (<see cref="ExtractReference.Probe"/>), one the repository's own
+    /// code binds a call of it, one the language answers to nothing; each made around the function (<see cref="ExtractReference.Around"/>),
+    /// as its annotations are, and its body's code none of them. No decorator is told by the name it is written with.
     /// </summary>
     [Fact]
     public void ADecorator_IsReadWhole_WhatItIsGivenTheFunctionsCode()
@@ -1616,18 +1627,24 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         Assert.Equal(["@app.route", "@retry", "@functools.wraps"], Node(forms, orders).Modifiers);
         Assert.Equal(
             [
-                ("METHODS", CodeEdgeKinds.Uses, 26, (string?)null), ("retry", CodeEdgeKinds.Calls, 27, (string?)null), ("LIMIT", CodeEdgeKinds.Uses, 27, (string?)null),
-                ("open", CodeEdgeKinds.Uses, 28, (string?)null),
+                ("app", CodeEdgeKinds.Uses, 26, (string?)null), ("route", CodeEdgeKinds.Calls, 26, CodeQualifierKinds.Value), ("METHODS", CodeEdgeKinds.Uses, 26, (string?)null),
+                ("retry", CodeEdgeKinds.Calls, 27, (string?)null), ("LIMIT", CodeEdgeKinds.Uses, 27, (string?)null),
+                ("wraps", CodeEdgeKinds.Calls, 28, CodeQualifierKinds.Prefix), ("open", CodeEdgeKinds.Uses, 28, (string?)null),
                 ("Receipt", CodeEdgeKinds.References, 29, CodeQualifierKinds.Prefix), ("Order", CodeEdgeKinds.References, 29, CodeQualifierKinds.Prefix),
                 ("User", CodeEdgeKinds.References, 29, CodeQualifierKinds.Prefix),
                 ("open", CodeEdgeKinds.Calls, 30, (string?)null),
             ],
             References(forms, orders));
-        Assert.Equal([true, true, true, true, true, true, true, false], forms.References.Where(reference => reference.From == orders).Select(reference => reference.Around));
+        Assert.Equal(
+            [(true, false), (true, false), (true, false), (true, false), (true, false), (true, true), (true, false), (true, false), (true, false), (true, false), (false, false)],
+            forms.References.Where(reference => reference.From == orders).Select(reference => (reference.Around, reference.Probe)));
+        Assert.Equal([2, 1, 1], forms.References.Where(reference => reference.From == orders && reference.Kind == CodeEdgeKinds.Calls && reference.Line < 30).Select(reference => reference.Arity!.Value));
         Assert.Equal([(orders, 26)], Places(forms, "/orders"));
         Assert.Equal([(orders, 30)], Places(forms, "orders"));
 
-        // pytest's own: a fixture's parameters and a parameter set's name and values, each the decorated function's code.
+        // pytest's own: a call of what the import of the package reaches, a probe; a fixture's parameters and a parameter set's name and
+        // values, each the decorated function's code; a fixture's own parameter a fixture it requires; a name the parameter set gives no
+        // fixture.
         var sizes = Read("tests/test_sizes.py", """
             import pytest
 
@@ -1647,12 +1664,35 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
         Assert.Equal(CodeSubKinds.Fixture, Node(sizes, "python:tests.test_sizes.case").SubKind);
         Assert.Equal(["@pytest.fixture"], Node(sizes, "python:tests.test_sizes.case").Modifiers);
-        Assert.Equal([("CASES", CodeEdgeKinds.Uses, 7, (string?)null), ("param", CodeEdgeKinds.Uses, 9, CodeQualifierKinds.Value)], References(sizes, "python:tests.test_sizes.case"));
+        Assert.Equal(
+            [
+                ("fixture", CodeEdgeKinds.Calls, 7, CodeQualifierKinds.Prefix), ("CASES", CodeEdgeKinds.Uses, 7, (string?)null),
+                ("request", CodeEdgeKinds.References, 8, CodeQualifierKinds.Fixture), ("param", CodeEdgeKinds.Uses, 9, CodeQualifierKinds.Value),
+            ],
+            References(sizes, "python:tests.test_sizes.case"));
         Assert.Equal(["@pytest.mark.parametrize"], Node(sizes, "python:tests.test_sizes.test_size").Modifiers);
         Assert.Equal(
-            [("SIZES", CodeEdgeKinds.Uses, 12, (string?)null), ("size", CodeEdgeKinds.References, 13, CodeQualifierKinds.Fixture), ("case", CodeEdgeKinds.References, 13, CodeQualifierKinds.Fixture)],
+            [
+                ("mark", CodeEdgeKinds.Uses, 12, CodeQualifierKinds.Prefix), ("parametrize", CodeEdgeKinds.Calls, 12, CodeQualifierKinds.Type),
+                ("SIZES", CodeEdgeKinds.Uses, 12, (string?)null), ("case", CodeEdgeKinds.References, 13, CodeQualifierKinds.Fixture),
+            ],
             References(sizes, "python:tests.test_sizes.test_size"));
+        Assert.Equal(["fixture", "parametrize"], sizes.References.Where(reference => reference.Probe).Select(reference => reference.Name));
         Assert.Equal([("python:tests.test_sizes.test_size", 12)], Places(sizes, "size"));
+
+        // A decorator the repository declares, named like a framework's, is a call of it where the file imports it: an edge from what
+        // it decorates. A builtin decorator names nothing; one a local of a function around it binds is a call through its value.
+        var email = Read("jobs/email.py", "from jobs.registry import task\nfrom .registry import task as job\n\n\n@task\ndef send_receipt():\n    pass\n\n\n@job\ndef send_reminder():\n    pass\n\n\ndef make(wrap):\n    @wrap\n    @property\n    def inner():\n        pass\n    return inner\n");
+        var linked = Link(
+            ("jobs/__init__.py", Read("jobs/__init__.py", string.Empty)),
+            ("jobs/registry.py", Read("jobs/registry.py", "REGISTRY = []\n\n\ndef task(fn):\n    REGISTRY.append(fn)\n    return fn\n")),
+            ("jobs/email.py", email));
+
+        Assert.Equal(
+            [("python:jobs.email.send_receipt", "python:jobs.registry.task", 5, CodeConfidences.Unique), ("python:jobs.email.send_reminder", "python:jobs.registry.task", 10, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.From.StartsWith("python:jobs.email.", StringComparison.Ordinal) && edge.Kind == CodeEdgeKinds.Calls).Select(edge => (edge.From, edge.To, edge.Line, edge.Confidence)));
+        Assert.Equal([(true, true), (true, false)], email.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Around, reference.Probe)));
+        Assert.Equal([(16, PythonReading.FunctionValue)], email.Dynamic.Select(mark => (mark.Line, mark.Kind)));
     }
 
     /// <summary>
@@ -1699,8 +1739,11 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
     /// <summary>
     /// The head and each member of a chain are read on the way to its last name: a name the file declares or imports at its head as a
-    /// name alone is, a member through the head; a local, a receiver and a module's name at its head no use. A chain a call's result
-    /// reaches is read whole from that call, the first through the base where <c>super()</c> reached it.
+    /// name alone is - an imported one a use, whatever it names - and a member through what the head is: one rule for every chain whose
+    /// head an import binds, the first member through the prefix of the import, each after it through the type the names before it stand
+    /// for in the module; a member of <c>self</c> through the type's own, each after it a value by no name. A local, a receiver and a
+    /// module's name at its head are no use. A chain a call's result reaches is read whole from that call, the first through the base
+    /// where <c>super()</c> reached it.
     /// </summary>
     [Fact]
     public void AChainsHeadAndMembers_AreReadOnTheWayToItsLast()
@@ -1721,13 +1764,16 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
         Assert.Equal(
             [
-                ("CONFIG", CodeEdgeKinds.References, 7, (string?)null), ("prices", CodeEdgeKinds.Uses, 7, CodeQualifierKinds.Type), ("get", CodeEdgeKinds.Calls, 7, CodeQualifierKinds.Value),
+                ("CONFIG", CodeEdgeKinds.Uses, 7, (string?)null), ("prices", CodeEdgeKinds.Uses, 7, CodeQualifierKinds.Prefix), ("get", CodeEdgeKinds.Calls, 7, CodeQualifierKinds.Type),
                 ("customer", CodeEdgeKinds.Uses, 7, CodeQualifierKinds.This), ("name", CodeEdgeKinds.Uses, 7, CodeQualifierKinds.Value),
             ],
             References(extract, "python:pkg.chains.Order.total").Where(reference => reference.Kind != CodeEdgeKinds.Overrides));
         Assert.Equal(
+            ["CONFIG", "CONFIG.prices", "store", "store.session"],
+            extract.References.Where(reference => reference.Name is "prices" or "get" or "session" or "commit").Select(reference => reference.Qualifier!.Name!.Whole()));
+        Assert.Equal(
             [
-                ("session", CodeEdgeKinds.Uses, 10, CodeQualifierKinds.Prefix), ("commit", CodeEdgeKinds.Calls, 10, CodeQualifierKinds.Value),
+                ("session", CodeEdgeKinds.Uses, 10, CodeQualifierKinds.Prefix), ("commit", CodeEdgeKinds.Calls, 10, CodeQualifierKinds.Type),
                 ("save", CodeEdgeKinds.Calls, 11, CodeQualifierKinds.Base), ("done", CodeEdgeKinds.Uses, 11, CodeQualifierKinds.Value),
                 ("value", CodeEdgeKinds.Uses, 11, CodeQualifierKinds.Value),
             ],
@@ -1736,8 +1782,9 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
     /// <summary>
     /// A <c>case</c>'s pattern is read as Python reads one: a class pattern's class a reference, never a call; a dotted value the body's
-    /// code, a use of what it names; a literal the body's; a keyword pattern's attribute name nothing; and each capture - a name alone,
-    /// one after <c>*</c>, a keyword pattern's value - bound by the body, no use.
+    /// code, a use of what it names, through the import its head is; a literal the body's; a keyword pattern's attribute name nothing;
+    /// and each capture - a name alone, one after <c>*</c>, a keyword pattern's value - bound by the body, no use. What a pattern and an
+    /// <c>except</c> name is read where the body's run reaches it, in the order the text writes it.
     /// </summary>
     [Fact]
     public void ACasesPattern_NamesItsClass_UsesItsValues_AndBindsItsCaptures()
@@ -1747,9 +1794,10 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         Assert.Equal(
             [
                 ("kind", CodeEdgeKinds.Overrides, 56, CodeQualifierKinds.Base),
-                ("Refund", CodeEdgeKinds.References, 60, (string?)null), ("OrderError", CodeEdgeKinds.References, 66, CodeQualifierKinds.Prefix),
-                ("Status", CodeEdgeKinds.References, 58, (string?)null), ("PAID", CodeEdgeKinds.Uses, 58, CodeQualifierKinds.Type),
+                ("Status", CodeEdgeKinds.Uses, 58, (string?)null), ("PAID", CodeEdgeKinds.Uses, 58, CodeQualifierKinds.Prefix),
+                ("Refund", CodeEdgeKinds.References, 60, (string?)null),
                 ("Order", CodeEdgeKinds.References, 65, CodeQualifierKinds.Prefix), ("items", CodeEdgeKinds.Uses, 65, CodeQualifierKinds.This),
+                ("OrderError", CodeEdgeKinds.References, 66, CodeQualifierKinds.Prefix),
             ],
             References(forms, "python:pkg.forms.Basket.kind"));
         Assert.Equal([("python:pkg.forms.Basket.kind", 59)], Places(forms, "paid"));
@@ -1977,14 +2025,16 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
     /// <summary>
     /// A class of a test file built on a base another file declares may be a test class by it, and says so with each of its <c>test*</c>
-    /// methods: the link makes them tests where that base, any number of levels up, is a test class - <c>tests</c> edges from them - and
-    /// a method not named <c>test*</c> none. The mark is kept as an extract is stored.
+    /// methods: the link makes them tests where a <c>TestCase</c> subclass is among its bases any number of levels up - one declared in a
+    /// file no runner collects by its name, through a class of another such file that is no test class itself - <c>tests</c> edges from
+    /// them, and a method not named <c>test*</c> none. A <c>TestCase</c> subclass is a test class wherever it is declared, and says that
+    /// tests are built on it. The marks are kept as an extract is stored, and what a class's head names is made around it.
     /// </summary>
     [Fact]
     public void ATestClassByABaseAnotherFileDeclares_IsATestOnceTheLinkFindsThatBase()
     {
         var suite = Read("tests/test_orders.py", """
-            from .base import ShopCase
+            from .support import ShopCase
             from pkg.orders import place
 
 
@@ -2009,29 +2059,40 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
             ],
             suite.Nodes.Skip(1).Select(node => (node.Id.Whole(), node.Test, node.TestByType)));
 
+        var cases = Read("tests/base.py", "import unittest\n\n\nclass BaseCase(unittest.TestCase):\n    def test_ready(self):\n        place()\n");
+        var support = Read("tests/support.py", "from .base import BaseCase\n\n\nclass ShopCase(BaseCase):\n    def setUp(self):\n        self.ready = True\n");
         var linked = Link(
-            ("tests/base.py", Read("tests/base.py", "import unittest\n\n\nclass ShopCase(unittest.TestCase):\n    def setUp(self):\n        self.ready = True\n")),
+            ("tests/base.py", cases),
+            ("tests/support.py", support),
             ("tests/test_orders.py", suite),
             ("pkg/orders.py", Read("pkg/orders.py", "def place():\n    return 1\n")));
 
+        Assert.Equal(
+            [("python:tests.base.BaseCase", true, true, false), ("python:tests.base.BaseCase.test_ready", true, false, false)],
+            cases.Nodes.Skip(1).Select(node => (node.Id.Whole(), node.Test, node.TestBase, node.TestByType)));
+        Assert.DoesNotContain(support.Nodes, node => node.Test || node.TestBase || node.TestByType);
         Assert.Equal(
             [("python:tests.test_orders.OrdersSuite.test_place", 7), ("python:tests.test_orders.Deeper.test_again", 15)],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Tests && edge.To == "python:pkg.orders.place").OrderBy(edge => edge.Line).Select(edge => (edge.From, edge.Line)));
 
         var stored = JsonSerializer.Deserialize<FileExtract>(JsonSerializer.Serialize(suite, JsonStateFile.LineOptions), JsonStateFile.LineOptions)!;
+        var storedCases = JsonSerializer.Deserialize<FileExtract>(JsonSerializer.Serialize(cases, JsonStateFile.LineOptions), JsonStateFile.LineOptions)!;
         Assert.Equal(suite.Nodes.Select(node => node.TestByType), stored.Nodes.Select(node => node.TestByType));
+        Assert.Equal(cases.Nodes.Select(node => node.TestBase), storedCases.Nodes.Select(node => node.TestBase));
         Assert.Equal(suite.References.Select(reference => reference.Around), stored.References.Select(reference => reference.Around));
-        Assert.Contains(stored.References, reference => reference.Around);
+        Assert.Equal([true, true], stored.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Around));
     }
 
     /// <summary>
-    /// Only a test file's <c>test*</c> functions, <c>Test*</c> classes and <c>TestCase</c> subclasses are tests: another file's are not,
-    /// whatever they are named or built on.
+    /// A test is what a runner collects. A file no runner collects by its name - pytest's <c>test_*.py</c> and <c>*_test.py</c>,
+    /// unittest's and Django's <c>test*.py</c> - holds no test by its name: its <c>Test*</c> classes and <c>test*</c> functions are none,
+    /// as <c>TestClient</c> of a production module is none. A <c>TestCase</c> subclass is a test class wherever it is declared, as
+    /// unittest runs one by its type, with its <c>test*</c> methods. Django's <c>tests.py</c> and a <c>testing.py</c> are test files.
     /// </summary>
     [Fact]
     public void ATestNamedOutsideATestFile_IsNoTest()
     {
-        var extract = Read("pkg/testing.py", """
+        const string text = """
             import unittest
 
 
@@ -2047,10 +2108,339 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
             def test_free():
                 pass
+            """;
+
+        Assert.Equal(
+            ["python:shop.client.Case", "python:shop.client.Case.test_x"],
+            Read("shop/client.py", text).Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
+
+        foreach (var path in new[] { "polls/tests.py", "pkg/testing.py", "pkg/test_cart.py", "pkg/cart_test.py" })
+        {
+            var module = path[..^3].Replace('/', '.');
+            Assert.Equal(
+                [$"python:{module}.TestHelper", $"python:{module}.TestHelper.test_shape", $"python:{module}.Case", $"python:{module}.Case.test_x", $"python:{module}.test_free"],
+                Read(path, text).Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
+        }
+
+        Assert.DoesNotContain(Read("tests/helpers.py", "def test_like():\n    pass\n\n\nclass TestLike:\n    pass\n").Nodes, node => node.Test);
+    }
+
+    /// <summary>
+    /// A name an import binds is read as what it reaches, whatever it names: an imported constant read alone or as the head of a chain
+    /// is a use of it - <c>references</c> reaches types alone - and is joined to the constant; a type mention of the file's own class
+    /// alone a reference.
+    /// </summary>
+    [Fact]
+    public void AnImportedNameReadAlone_IsAUseOfIt_WhateverItNames()
+    {
+        var client = Read("pkg/client.py", "from .config import MAX_RETRIES, CONFIG\n\n\ndef fetch():\n    for _ in range(MAX_RETRIES):\n        CONFIG.get(\"x\")\n    return Local\n\n\nclass Local:\n    pass\n");
+        var linked = Link(
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/config.py", Read("pkg/config.py", "MAX_RETRIES = 3\nCONFIG = {}\n")),
+            ("pkg/client.py", client));
+
+        Assert.Equal(
+            [("MAX_RETRIES", CodeEdgeKinds.Uses, 5, (string?)null), ("CONFIG", CodeEdgeKinds.Uses, 6, (string?)null), ("get", CodeEdgeKinds.Calls, 6, CodeQualifierKinds.Prefix), ("Local", CodeEdgeKinds.References, 7, (string?)null)],
+            References(client, "python:pkg.client.fetch"));
+        Assert.Equal(
+            [
+                new CodeEdge("python:pkg.client.fetch", "python:pkg.config.MAX_RETRIES", CodeEdgeKinds.Uses, 5, CodeConfidences.Unique),
+                new CodeEdge("python:pkg.client.fetch", "python:pkg.config.CONFIG", CodeEdgeKinds.Uses, 6, CodeConfidences.Unique),
+                new CodeEdge("python:pkg.client.fetch", "python:pkg.client.Local", CodeEdgeKinds.References, 7, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.From == "python:pkg.client.fetch"));
+    }
+
+    /// <summary>
+    /// A name an import of a declaration around the code binds is found as Python finds it: a closure's through the function around
+    /// it; a head's - a decorator's, an annotation's, a default's - where the declaration is defined, a method's in its class; an
+    /// annotation of an attribute a method assigns in the method, the type it names no name the method binds, so the method's own call
+    /// of it is one; and none of them through another declaration's import.
+    /// </summary>
+    [Fact]
+    public void AnImportAroundTheCode_IsFoundAsPythonFindsIt()
+    {
+        var service = Read("pkg/service.py", """
+            def outer():
+                from .heavy import Engine
+                def inner():
+                    return Engine()
+                return inner
+
+
+            def make_app():
+                from .views import cached
+                @cached
+                def handler():
+                    pass
+                return handler
+
+
+            class Shop:
+                from .heavy import Engine
+
+                def build(self, kind: Engine = None) -> Engine:
+                    return kind
+
+
+            class Depot:
+                def __init__(self):
+                    from .heavy import Engine
+                    self.engine: Engine = Engine()
+
+                def other(self) -> Engine:
+                    return cached
+            """);
+        var linked = Link(
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/heavy.py", Read("pkg/heavy.py", "class Engine:\n    pass\n")),
+            ("pkg/views.py", Read("pkg/views.py", "def cached(fn):\n    return fn\n")),
+            ("pkg/service.py", service));
+
+        Assert.Equal(
+            [
+                ("python:pkg.service.outer.inner", "python:pkg.heavy.Engine", CodeEdgeKinds.Instantiates, 4),
+                ("python:pkg.service.make_app.handler", "python:pkg.views.cached", CodeEdgeKinds.Calls, 10),
+                ("python:pkg.service.Shop.build", "python:pkg.heavy.Engine", CodeEdgeKinds.References, 19),
+                ("python:pkg.service.Depot.__init__", "python:pkg.heavy.Engine", CodeEdgeKinds.Instantiates, 26),
+                ("python:pkg.service.Depot.engine", "python:pkg.heavy.Engine", CodeEdgeKinds.References, 26),
+            ],
+            linked.Edges.Where(edge => edge.Kind != CodeEdgeKinds.Contains && edge.To is "python:pkg.heavy.Engine" or "python:pkg.views.cached").OrderBy(edge => edge.Line).ThenBy(edge => edge.From, StringComparer.Ordinal).Select(edge => (edge.From, edge.To, edge.Kind, edge.Line)));
+        Assert.All(linked.Edges.Where(edge => edge.Kind != CodeEdgeKinds.Contains && edge.To is "python:pkg.heavy.Engine" or "python:pkg.views.cached"), edge => Assert.Equal(CodeConfidences.Exact, edge.Confidence));
+        Assert.Empty(service.Dynamic);
+    }
+
+    /// <summary>
+    /// What a function's statements name that the walk meets before the file's names are bound - an <c>except</c>'s type, a
+    /// <c>case</c>'s class pattern, a local's annotation - is read where the function's run reaches it, once every name of the file is
+    /// bound: a name the module imports below the function is the import's there.
+    /// </summary>
+    [Fact]
+    public void WhatAStatementNames_IsReadOnceEveryNameOfTheFileIsBound()
+    {
+        var late = Read("pkg/late.py", """
+            def load(value):
+                try:
+                    pass
+                except DbError:
+                    pass
+                match value:
+                    case Point(x=0):
+                        pass
+                total: Price = 1
+                return total
+
+
+            from .db import Error as DbError
+            from .geo import Point
+            from .money import Price
             """);
 
-        Assert.DoesNotContain(extract.Nodes, node => node.Test || node.TestByType);
-        Assert.Equal(6, extract.Nodes.Count);
+        Assert.Equal(
+            [("Error", CodeEdgeKinds.References, 4, CodeQualifierKinds.Prefix), ("Point", CodeEdgeKinds.References, 7, (string?)null), ("Price", CodeEdgeKinds.References, 9, (string?)null)],
+            References(late, "python:pkg.late.load"));
+    }
+
+    /// <summary>
+    /// A class's type parameters are the code's of every declaration it holds: a method's annotations, its body, its decorators and the
+    /// class's base name its <c>Item</c> as their own, never a type of the repository's of that name the file imports; a function's
+    /// decorator runs outside the function's own type parameters, and names what the module binds by their name.
+    /// </summary>
+    [Fact]
+    public void AClasssTypeParameters_AreItsMembersOwn()
+    {
+        var box = Read("pkg/box.py", """
+            from .models import Item, register, T
+
+
+            class Box[Item](Base[Item]):
+                def get(self) -> Item:
+                    value: Item = self.held
+                    return Item
+
+                @register(Item)
+                def put[Item](self, item: Item) -> None:
+                    pass
+
+
+            @register(T)
+            def first[T](items: list[T]) -> T:
+                return items[0]
+            """);
+
+        Assert.Equal(
+            [
+                ("Base", CodeEdgeKinds.Inherits, 4, (string?)null), ("held", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.This), ("register", CodeEdgeKinds.Calls, 9, (string?)null),
+                ("register", CodeEdgeKinds.Calls, 14, (string?)null), ("T", CodeEdgeKinds.Uses, 14, (string?)null),
+            ],
+            box.References.Where(reference => reference.Kind != CodeEdgeKinds.Overrides).Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Qualifier?.Kind)));
+    }
+
+    /// <summary>
+    /// A fixture is what pytest's or pytest-asyncio's fixture decorator makes, told by what binds the decorator's head, and is named as
+    /// pytest names it - by its <c>name=</c> where one is given; a name a <c>parametrize</c> mark gives a test is no fixture of it.
+    /// </summary>
+    [Fact]
+    public void AFixture_IsNamedAsPytestNamesIt_AndAParametrizedNameIsNone()
+    {
+        var conftest = Read("tests/conftest.py", """
+            import pytest
+            import pytest_asyncio
+            from pytest import fixture
+
+
+            @pytest.fixture(name="client")
+            def client_fixture():
+                return 1
+
+
+            @pytest_asyncio.fixture
+            async def session():
+                return 2
+
+
+            @fixture
+            def user():
+                return 3
+            """);
+        var test = Read("tests/test_api.py", """
+            import pytest
+
+
+            @pytest.mark.parametrize(argnames="user, role", argvalues=[(1, 2)])
+            def test_x(client, session, user, role):
+                assert client
+            """);
+        var linked = Link(("tests/conftest.py", conftest), ("tests/test_api.py", test));
+
+        Assert.Equal(
+            [("python:tests.conftest.client", "client"), ("python:tests.conftest.session", "session"), ("python:tests.conftest.user", "user")],
+            conftest.Nodes.Where(node => node.SubKind == CodeSubKinds.Fixture).Select(node => (node.Id.Whole(), node.Name)));
+        Assert.Equal(
+            [("client", CodeEdgeKinds.References, 5, CodeQualifierKinds.Fixture), ("session", CodeEdgeKinds.References, 5, CodeQualifierKinds.Fixture)],
+            References(test, "python:tests.test_api.test_x").Where(reference => reference.Qualifier == CodeQualifierKinds.Fixture));
+        Assert.Equal(
+            ["python:tests.conftest.client", "python:tests.conftest.session"],
+            linked.Edges.Where(edge => edge.From == "python:tests.test_api.test_x" && edge.Kind == CodeEdgeKinds.References).Select(edge => edge.To));
+    }
+
+    /// <summary>
+    /// What a body binds is its own: a walrus's name at any depth - in a comprehension's condition too, which binds it in the function -
+    /// is no use; a name a <c>global</c> declares is the module's, read and written as a use of it; and a name a <c>nonlocal</c> declares
+    /// is the function's around it, the code's own.
+    /// </summary>
+    [Fact]
+    public void AWalrus_AGlobal_AndANonlocal_BindAsPythonBinds()
+    {
+        var binds = Read("pkg/binds.py", """
+            COUNT = 0
+
+
+            def bump():
+                global COUNT
+                COUNT += 1
+
+
+            def find(rx, texts):
+                if (found := rx.match(texts[0])):
+                    return found.group(1)
+                return [size for text in texts if (size := len(text))]
+
+
+            def counter():
+                total = 0
+                def add():
+                    nonlocal total
+                    total += 1
+                    return total
+                return add
+            """);
+
+        Assert.Equal([("COUNT", CodeEdgeKinds.Uses, 6, (string?)null)], References(binds, "python:pkg.binds.bump"));
+        Assert.Equal([("match", CodeEdgeKinds.Calls, 10, CodeQualifierKinds.Value), ("group", CodeEdgeKinds.Calls, 11, CodeQualifierKinds.Value)], References(binds, "python:pkg.binds.find"));
+        Assert.Equal([("add", CodeEdgeKinds.Uses, 21, (string?)null)], References(binds, "python:pkg.binds.counter"));
+        Assert.Empty(References(binds, "python:pkg.binds.counter.add"));
+        Assert.Contains(new CodeEdge("python:pkg.binds.bump", "python:pkg.binds.COUNT", CodeEdgeKinds.Uses, 6, CodeConfidences.Exact), Link(("pkg/binds.py", binds)).Edges);
+    }
+
+    /// <summary>
+    /// An import in a conditional block at the module's top - a <c>try</c>'s and its <c>except</c>'s, an <c>if TYPE_CHECKING:</c>'s -
+    /// binds names of the module, published and its importers' too, as one at the top does.
+    /// </summary>
+    [Fact]
+    public void AnImportInAConditionalBlockAtTheTop_BindsNamesOfTheModule()
+    {
+        var fast = Read("pkg/fast.py", """
+            try:
+                import ujson as json
+            except ImportError:
+                import json
+            from typing import TYPE_CHECKING
+            if TYPE_CHECKING:
+                from .cart import Cart
+            """);
+        var linked = Link(
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/cart.py", Read("pkg/cart.py", "class Cart:\n    pass\n")),
+            ("pkg/fast.py", fast),
+            ("pkg/app.py", Read("pkg/app.py", "from .fast import Cart\n\nmade = Cart()\n")));
+
+        Assert.Equal(["json", "TYPE_CHECKING", "Cart"], fast.Published!);
+        Assert.All(fast.Imports, import => Assert.True(import.Reexports));
+        Assert.Contains(new CodeEdge("python:pkg.app.made", "python:pkg.cart.Cart", CodeEdgeKinds.Instantiates, 3, CodeConfidences.Unique), linked.Edges);
+    }
+
+    /// <summary>
+    /// What <c>from helper import pack</c> binds, where the file's directory is no package and both places a bare import may stand at
+    /// hold the module, is each place's: a call of it a candidate of both, as the file's imports edges are, and never the first alone.
+    /// </summary>
+    [Fact]
+    public void ANameEitherPlaceGives_IsACandidateOfBoth()
+    {
+        var linked = Link(
+            ("tools/helper.py", Read("tools/helper.py", "def pack(): ...\n")),
+            ("helper.py", Read("helper.py", "def pack(): ...\n")),
+            ("tools/run.py", Read("tools/run.py", "from helper import pack\nimport helper\n\npack()\nhelper.pack()\n")));
+
+        Assert.Equal(
+            [
+                new CodeEdge("python:tools.run", "python:helper.pack", CodeEdgeKinds.Calls, 4, CodeConfidences.Candidates),
+                new CodeEdge("python:tools.run", "python:tools.helper.pack", CodeEdgeKinds.Calls, 4, CodeConfidences.Candidates),
+                new CodeEdge("python:tools.run", "python:helper.pack", CodeEdgeKinds.Calls, 5, CodeConfidences.Candidates),
+                new CodeEdge("python:tools.run", "python:tools.helper.pack", CodeEdgeKinds.Calls, 5, CodeConfidences.Candidates),
+            ],
+            linked.Edges.Where(edge => edge.From == "python:tools.run" && edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The reading's work over the file's structure (<see cref="PythonReading.Work"/>) grows with its text, never with a depth times a
+    /// length: classes nested in blocks a thousand deep around a long suite - each class's names found by its own statements alone, each
+    /// statement's end found from the file's logical lines - and a chain thousands of names long, each member's qualifier found from the
+    /// one before it. Doubling every size doubles the work, less what a file costs whatever its size.
+    /// </summary>
+    [Fact]
+    public void TheReadingsWork_GrowsWithItsText_NeverWithADepthTimesALength()
+    {
+        var small = Work(500, 1_000, 2_000);
+        var large = Work(1_000, 2_000, 4_000);
+
+        Assert.Equal((26_764L, -14L), (small, large - 2 * small));
+    }
+
+    /// <summary>
+    /// The work of reading a file of classes and <c>if</c> blocks nested <paramref name="depth"/> deep, the innermost suite
+    /// <paramref name="width"/> assignments and a method that reads a chain <paramref name="chain"/> names long through <c>self</c>.
+    /// </summary>
+    private static long Work(int depth, int width, int chain)
+    {
+        var lines = Enumerable.Range(0, depth).Select(level => new string(' ', level) + (level % 2 == 0 ? $"class C{level}:" : "if x:"))
+            .Concat(Enumerable.Range(0, width).Select(at => new string(' ', depth) + $"v{at} = {at}"))
+            .Append(new string(' ', depth) + "def m(self):")
+            .Append(new string(' ', depth + 1) + "return self." + string.Join('.', Enumerable.Range(0, chain).Select(at => $"a{at}")));
+        var reading = new PythonReading("python", "pkg/wide.py", new CodeFileInput("pkg/wide.py", string.Join('\n', lines) + "\n").Text);
+
+        reading.Read();
+        return reading.Work;
     }
 
     /// <summary>

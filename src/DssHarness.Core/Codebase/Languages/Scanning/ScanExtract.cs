@@ -40,8 +40,8 @@ internal sealed class ScanExtract
 
     /// <summary>
     /// Whether the references added now are made around their node rather than in its body (<see cref="ExtractReference.Around"/>):
-    /// set while a reader reads a declaration's header - a Python function's decorators, annotations and defaults, a class's decorators
-    /// and the bases its code computes - and unset after.
+    /// set while a reader reads a declaration's header - a Python function's decorators, annotations and defaults, a class's decorators,
+    /// type parameters' bounds and bases - and unset after.
     /// </summary>
     public bool Around { get; set; }
 

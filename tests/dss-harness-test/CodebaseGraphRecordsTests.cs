@@ -138,6 +138,10 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Literals = LiteralRow.Table(new LiteralRow("value", 2, "toy:Z")) }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
             (sound with { Nodes = [Node with { Selectors = ["app-cart", " "] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, TestByType = true }] }, "it is a test by its type, and a node of kind 'namespace' is neither a type nor a member a type holds"),
+            (sound with { Nodes = [Node with { Id = "toy:b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "b", TestByType = true }] }, "its node 'toy:b': it is a member that is a test by its type, and no type holds it"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace }, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", TestByType = true }] }, "its node 'toy:A.b' is a test by its type, and 'toy:A', which holds it, is no type"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, TestBase = true }] }, "it is a type tests are built on, and a node of kind 'namespace' is no type"),
+            (sound with { Nodes = [Node, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", TestBase = true }] }, "it is a type tests are built on, and a node of kind 'member' is no type"),
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'namespace' is no type, nor a member that extends one"),
             (sound with { Nodes = [Node, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'member' is no type, nor a member that extends one"),
             (sound with { Nodes = [Node with { Templates = [] }] }, "a template it names is empty, or it names none"),
@@ -156,8 +160,9 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Either = true }] }, "it is one of two places a name may stand at, which only an import of a file that is no export is"),
             (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Either = true, Export = true }] }, "it is one of two places a name may stand at, which only an import of a file that is no export is"),
             (sound with { Imports = [new ExtractImport(CodeImportForms.Directory, "tests", 1) { Serves = "fixtures" }] }, "it serves the references of the qualifier 'fixtures', which is none of"),
-            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Serves = CodeQualifierKinds.Fixture, Export = true }] }, "it serves one qualifier's references, and is an export"),
-            (sound with { Imports = [new ExtractImport(CodeImportForms.Directory, "tests", 1) { Serves = "fix\uD83D" }] }, "a surrogate cut from its pair"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Serves = CodeQualifierKinds.Fixture }] }, "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Serves = CodeQualifierKinds.Fixture, Export = true }] }, "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Directory, "tests", 1) { Serves = CodeQualifierKinds.Fixture, Global = true }] }, "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"),
             (sound with { Published = ["A", " "] }, "a name it publishes is empty"),
             (sound with { Published = ["A\uD83D"] }, "a surrogate cut from its pair"),
             (sound with { PublishesTaken = true }, "it publishes what its imports take, and publishes nothing of its own"),
@@ -173,7 +178,7 @@ public sealed class CodebaseGraphRecordsTests
 
     /// <summary>
     /// Every field an extract may set is written by the store and read back as it was: a node's element selectors, its templates, the
-    /// type it extends, whether its members are reached by a receiver alone and whether it is a test by its type; an import's prefix
+    /// type it extends, whether its members are reached by a receiver alone, whether it is a test by its type and whether tests are built on it; an import's prefix
     /// standing for the name it shows, whether its names are its importers' too, whether it takes a file's published names, whether it
     /// names a place of a layout, whether it is one of two places, whether it is under a root of the layout and the qualifier it
     /// serves; a reference that is a probe, and one made around its node; the names a file publishes, whether what its imports take
@@ -185,7 +190,7 @@ public sealed class CodebaseGraphRecordsTests
     {
         var extract = new FileExtract(
         [
-            Node with { Selectors = ["app-cart", "cart-view"], Templates = ["cart.html"], MembersByReceiver = true, TestByType = true },
+            Node with { Selectors = ["app-cart", "cart-view"], Templates = ["cart.html"], MembersByReceiver = true, TestByType = true, TestBase = true },
             Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", Extends = "Shape", MembersByReceiver = true },
         ])
         {
@@ -218,7 +223,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal(["app-cart", "cart-view"], back.Nodes[0].Selectors!);
         Assert.Equal(["cart.html"], back.Nodes[0].Templates!);
         Assert.Equal("Shape", back.Nodes[1].Extends);
-        Assert.Equal([(true, true), (true, false)], back.Nodes.Select(node => (node.MembersByReceiver, node.TestByType)));
+        Assert.Equal([(true, true, true), (true, false, false)], back.Nodes.Select(node => (node.MembersByReceiver, node.TestByType, node.TestBase)));
         Assert.Equal(
             [
                 (CodeImportForms.Relative, "Line", "Line", true, true, false, true, true, false, (string?)null),
@@ -238,6 +243,7 @@ public sealed class CodebaseGraphRecordsTests
 
         Assert.DoesNotContain("membersByReceiver", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("testByType", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("testBase", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("around", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("publishesTaken", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("layoutRoots", plain, StringComparison.Ordinal);

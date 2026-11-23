@@ -97,7 +97,7 @@ public sealed class PyprojectExtractorTests : CodeGraphExtractorContractTests<Py
     /// <summary>
     /// A value no string writes, a directory <c>package-dir</c> maps one package to and one a setup.cfg's interpolation computes name no
     /// root, and a file that names none declares none, named by its file's name where it names no project; a value whose bracket never
-    /// closes is read to the file's end, the line it begins on marked; and arrays nested however deep are read on the reading's own stack.
+    /// closes is read to the file's end, the line it begins on marked.
     /// </summary>
     [Fact]
     public void AValueNoStringWrites_OrOneTheFileComputes_NamesNoRoot_AndOneThatNeverCloses_IsMarked()
@@ -112,13 +112,48 @@ public sealed class PyprojectExtractorTests : CodeGraphExtractorContractTests<Py
 
         Assert.Equal(["src"], open.LayoutRoots!);
         Assert.Equal([2], open.Dynamic.Select(mark => mark.Line));
+    }
 
+    /// <summary>
+    /// Arrays nested five thousand deep are read whole on the reading's own stack, nothing marked - in a child given a small stack,
+    /// which a reading by recursion would overflow.
+    /// </summary>
+    [Fact]
+    public async Task AnArrayFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(
+            new ChildRunAnswer(0, "src; 0 dynamic", ""),
+            await ChildRun.MethodAsync(typeof(PyprojectExtractorTests), nameof(ArraysFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="AnArrayFiveThousandDeep_IsReadWhole"/>: the roots read and how much is marked dynamic.</summary>
+    internal static string ArraysFiveThousandDeep() => SmallStack.Run(() =>
+    {
         const int Depth = 5_000;
         var deep = Read("pyproject.toml", "[tool.setuptools.packages.find]\nwhere = " + new string('[', Depth) + "\"src\"" + new string(']', Depth) + "\n");
 
-        Assert.Equal(["src"], deep.LayoutRoots!);
-        Assert.Empty(deep.Dynamic);
+        return $"{string.Join(',', deep.LayoutRoots ?? [])}; {deep.Dynamic.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} dynamic";
+    });
+
+    /// <summary>
+    /// pytest's <c>pythonpath</c> written as one string names each word it writes, as pytest splits a string of paths - its blanks part
+    /// them, a quoted run one word with its blanks, a backslash taking the character after it - in a pyproject.toml and a setup.cfg
+    /// alike, an array's each string as written; a quote that never closes, which pytest refuses, names none. A setup.cfg's
+    /// <c>where</c> is the first entry of its list, the one directory setuptools looks in.
+    /// </summary>
+    [Fact]
+    public void PytestsPythonpath_IsSplitAsPytestSplitsIt_AndASetupCfgsWhereIsItsFirstEntry()
+    {
+        Assert.Equal(["src", "tests", "my lib", "a b"], Read("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = \"src  tests 'my lib' a\\\\ b\"\n").LayoutRoots!);
+        Assert.Equal(["src tests"], Read("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = [\"src tests\"]\n").LayoutRoots!);
+        Assert.Equal(["src", "lib"], Read("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = \"\"\"src\n  lib\"\"\"\n").LayoutRoots!);
+        Assert.Null(Read("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = \"src 'lib\"\n").LayoutRoots);
+        Assert.Equal(["src,tests", "my lib"], Read("setup.cfg", "[tool:pytest]\npythonpath = src,tests \"my lib\"\n").LayoutRoots!);
+        Assert.Equal(["src"], Read("setup.cfg", "[options.packages.find]\nwhere = src, lib\n").LayoutRoots!);
+        Assert.Equal(["src"], Read("setup.cfg", "[options.packages.find]\nwhere =\n    src\n    lib\n").LayoutRoots!);
     }
+
+    /// <summary>The file is outlined: no key of it is a node and no value a literal, so the sites operation searches it by its text.</summary>
+    [Fact]
+    public void AProjectFile_IsOutlined() => Assert.True(new PyprojectExtractor().Outlines);
 
     /// <summary>
     /// A string's value is TOML's - a multi-line one's too, its line break right after its opener none of it, a quote before its closer

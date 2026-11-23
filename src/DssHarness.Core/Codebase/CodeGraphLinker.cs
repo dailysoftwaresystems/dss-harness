@@ -1251,7 +1251,7 @@ public static class CodeGraphLinker
 
                     if (value.Name is { } written && ImportsOf(from.File).Any(made => string.Equals(made.Import.Prefix, written.Whole(), StringComparison.Ordinal)))
                     {
-                        return (Prefixed(from, written.Whole(), reference.Name, Imports), CodeConfidences.Exact);
+                        return Prefixed(from, written.Whole(), reference.Name, Imports);
                     }
                 }
 
@@ -1339,7 +1339,7 @@ public static class CodeGraphLinker
             {
                 if (Imported(import, owner, name, imported) is { Count: > 0 } visible)
                 {
-                    return (visible, CodeConfidences.Unique);
+                    return ThroughRun(import, owner, visible, place => place.Prefix is null && place.Lets(name) ? Imported(place, owner, name, imported) : []);
                 }
             }
 
@@ -1380,7 +1380,7 @@ public static class CodeGraphLinker
             {
                 if (Imported(import, owner, name, accepts, walked, suffixed: selector) is { Count: > 0 } visible)
                 {
-                    return (visible, CodeConfidences.Unique);
+                    return ThroughRun(import, owner, visible, place => !member || (place.Prefix is null && place.Lets(name)) ? Imported(place, owner, name, accepts, walked, suffixed: selector) : []);
                 }
             }
 
@@ -1508,7 +1508,7 @@ public static class CodeGraphLinker
                     return EnclosingTypes(from) is { Count: > 0 } derived ? Several(derived, Typed(from, derived, null, name, accepts, withSelf: false)) : ([], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Prefix:
-                    return (Prefixed(from, qualifier.Name!.Whole(), name, imported), CodeConfidences.Exact);
+                    return Prefixed(from, qualifier.Name!.Whole(), name, imported);
 
                 case CodeQualifierKinds.Own:
                     // The node of its own file its implementation names by id - what a YAML alias or merge repeats, read
@@ -1550,15 +1550,19 @@ public static class CodeGraphLinker
                     // else what the scope imports made for the test's file that serve fixtures alone hold, the nearest
                     // directory's first, the first that holds one deciding - a conftest.py's, which pytest gives every test under
                     // it and no test imports; exact, and nowhere else: one no file of the tree provides is none of its
-                    // declarations. Takes keeps it to fixtures (<see cref="CodeSubKinds.Fixture"/>).
-                    if (Scoped(from, name, accepts) is { Count: > 0 } near)
+                    // declarations. Takes keeps it to fixtures (<see cref="CodeSubKinds.Fixture"/>). What the reference is made
+                    // from is never what it reaches: a fixture that asks for its own name overrides the one a level out - its
+                    // module's, a conftest.py's above - and is given that one, as pytest gives it.
+                    bool Provided(Declaration target) => accepts(target) && target.Id != from.Id;
+
+                    if (Scoped(from, name, Provided) is { Count: > 0 } near)
                     {
                         return (near, CodeConfidences.Exact);
                     }
 
                     foreach (var serving in ServingImports(from.File, CodeQualifierKinds.Fixture))
                     {
-                        if (InScope(OpenKey(serving.Target), name, accepts, withBases: false) is { Count: > 0 } provided)
+                        if (InScope(OpenKey(serving.Target), name, Provided, withBases: false) is { Count: > 0 } provided)
                         {
                             return (provided, CodeConfidences.Exact);
                         }
@@ -1597,14 +1601,24 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <paramref name="name"/> is through each import <paramref name="from"/>'s file makes by the prefix <paramref name="prefix"/>:
         /// what the import makes visible by it, its filter applied - or, where the prefix stands for the one name the import shows
-        /// (<see cref="ExtractImport.Binds"/>), a member of each type or scope the import makes visible by that name.
+        /// (<see cref="ExtractImport.Binds"/>), a member of each type or scope the import makes visible by that name - exact; and
+        /// candidates where an import it is found through is one of two places a name may stand at (<see cref="PairOf"/>), since the
+        /// file cannot tell which of them it imports.
         /// </summary>
-        private IReadOnlyList<Declaration> Prefixed(Declaration from, string prefix, string name, Func<Declaration, bool> accepts)
-            => Distinct(ImportsOf(from.File)
-                .Where(made => string.Equals(made.Import.Prefix, prefix, StringComparison.Ordinal) && (made.Import.Binds || made.Import.Lets(name)))
-                .SelectMany(made => made.Import.Binds
-                    ? Inside(Stood(made.Import, made.File), name, accepts, withSelf: true)
-                    : Imported(made.Import, made.File, name, accepts)));
+        private (IReadOnlyList<Declaration> Found, string Confidence) Prefixed(Declaration from, string prefix, string name, Func<Declaration, bool> accepts)
+        {
+            var found = new List<Declaration>();
+            var paired = false;
+
+            foreach (var (import, file) in ImportsOf(from.File).Where(made => string.Equals(made.Import.Prefix, prefix, StringComparison.Ordinal) && (made.Import.Binds || made.Import.Lets(name))))
+            {
+                var visible = import.Binds ? Inside(Stood(import, file), name, accepts, withSelf: true) : Imported(import, file, name, accepts);
+                found.AddRange(visible);
+                paired |= visible.Count > 0 && PairOf(import, file) is not null;
+            }
+
+            return (Distinct(found), paired ? CodeConfidences.Candidates : CodeConfidences.Exact);
+        }
 
         /// <summary>The types and scopes an import whose prefix stands for the one name it shows (<see cref="ExtractImport.Binds"/>) makes visible by that name.</summary>
         private IReadOnlyList<Declaration> Stood(ExtractImport import, CodeGraphFile file) => Imported(import, file, import.Show![0], IsContainer);
@@ -2991,6 +3005,27 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
+        /// The two places a name may stand at that the run of <paramref name="import"/>, made by <paramref name="file"/>, is taken as
+        /// (<see cref="ExtractImport.Either"/>, <see cref="TakenRuns"/>): both of its imports; none where the run is taken as one.
+        /// Only an import of the two places, or one standing in for another, may be either of them.
+        /// </summary>
+        private IReadOnlyList<ExtractImport>? PairOf(ExtractImport import, CodeGraphFile file)
+            => (import.Either || import.Fallback) && file.Extract is not null
+                ? TakenRuns(file).FirstOrDefault(run => run.Count > 1 && run.Any(place => ReferenceEquals(place, import)))
+                : null;
+
+        /// <summary>
+        /// What a name found through <paramref name="import"/>, made by <paramref name="file"/>, is - <paramref name="found"/>, what the
+        /// import makes visible by it - and how sure: unique; and where the import is one of two places a name may stand at that its
+        /// run is taken as (<see cref="PairOf"/>), what each of the two makes visible by it (<paramref name="find"/>, the other's),
+        /// candidates, since the file cannot tell which of them it imports - as its imports edges say.
+        /// </summary>
+        private (IReadOnlyList<Declaration> Found, string Confidence) ThroughRun(ExtractImport import, CodeGraphFile file, IReadOnlyList<Declaration> found, Func<ExtractImport, IReadOnlyList<Declaration>> find)
+            => PairOf(import, file) is { } pair
+                ? (Distinct(pair.SelectMany(place => ReferenceEquals(place, import) ? found : find(place))), CodeConfidences.Candidates)
+                : (found, CodeConfidences.Unique);
+
+        /// <summary>
         /// The imports <paramref name="file"/> makes, in order, each run of an import and those that stand in for it
         /// (<see cref="ExtractImport.Fallback"/>) taken as <see cref="TakenRuns"/> takes it.
         /// </summary>
@@ -3244,40 +3279,52 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The declarations that are tests by their type (<see cref="ExtractNode.TestByType"/>), by id: each type so marked
-        /// that is built on a test type - one marked a test, or built on one in turn, along the <c>inherits</c> and
-        /// <c>mixesIn</c> edges found, however deep - and each member so marked that such a type holds. Walked from the test
-        /// types out along the edges, each type once, so a chain of bases of any length, a cycle among them, is walked once.
+        /// that is built on a type tests are built on (<see cref="ExtractNode.TestBase"/>) - along the <c>inherits</c> and
+        /// <c>mixesIn</c> edges found, however many levels up and through whatever types stand between, a type no file marks
+        /// among them - and each member so marked that such a type holds. Walked from the types tests are built on out along
+        /// the edges, each type once, so a chain of bases of any length, a cycle among them, is walked once.
         /// </summary>
         private List<string> TestsByType()
         {
-            var marked = _declarations.Where(declaration => declaration.Node.TestByType).ToList();
+            var bases = _declarations.Where(declaration => declaration.Node is { TestBase: true, Kind: CodeNodeKinds.Type }).Select(declaration => declaration.Id.Whole()).ToList();
             var found = new List<string>();
 
-            if (marked.Count == 0)
+            if (bases.Count == 0)
             {
                 return found;
             }
 
+            var marked = _declarations.Where(declaration => declaration.Node.TestByType).ToList();
             var types = marked.Where(declaration => declaration.Node.Kind == CodeNodeKinds.Type).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
             var built = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
-            foreach (var edge in _edges.Where(edge => edge.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.MixesIn && types.Contains(edge.From)))
+            foreach (var edge in _edges.Where(edge => edge.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.MixesIn))
             {
                 Add(built, edge.To, edge.From);
             }
 
-            var tested = _declarations.Where(declaration => declaration.Node is { Test: true, Kind: CodeNodeKinds.Type }).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
-            var pending = new Stack<string>(tested);
+            // Every type built on one tests are built on is reached, so a type between them that no file marks - a base of a test
+            // file's class built on another module's TestCase subclass, declared where no runner looks - passes the walk on.
+            var reached = new HashSet<string>(bases, StringComparer.Ordinal);
+            var tested = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new Stack<string>(bases);
 
             while (pending.TryPop(out var type))
             {
                 foreach (var derived in built.GetValueOrDefault(type) ?? [])
                 {
-                    if (tested.Add(derived))
+                    if (!reached.Add(derived))
                     {
-                        found.Add(derived);
-                        pending.Push(derived);
+                        continue;
                     }
+
+                    if (types.Contains(derived))
+                    {
+                        tested.Add(derived);
+                        found.Add(derived);
+                    }
+
+                    pending.Push(derived);
                 }
             }
 

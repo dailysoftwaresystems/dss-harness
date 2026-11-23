@@ -9,7 +9,8 @@ namespace DssHarness.Core.Codebase.Languages;
 /// header the line that names it; and the roots of the layout the file names in its own words (<see cref="FileExtract.LayoutRoots"/>),
 /// each a directory beside the file under which a bare import of Python is looked for: setuptools' <c>package-dir</c> root and
 /// <c>packages.find</c>'s <c>where</c>, Poetry's <c>packages</c>' <c>from</c>, the directory of each of Hatch's wheel
-/// <c>packages</c>, PDM's <c>package-dir</c>, and pytest's <c>pythonpath</c>. A value written as anything but a string - or, in a
+/// <c>packages</c>, PDM's <c>package-dir</c>, and pytest's <c>pythonpath</c> - each read as its tool reads it, a string of pytest's
+/// paths split into its words and a setup.cfg's <c>where</c> its first entry. A value written as anything but a string - or, in a
 /// setup.cfg, one an interpolation computes - names none.
 /// </summary>
 /// <remarks>
@@ -29,8 +30,10 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
         ["tool", "setuptools", "packages", "find", "where"],
         ["tool", "poetry", "packages", "from"],
         ["tool", "pdm", "build", "package-dir"],
-        ["tool", "pytest", "ini_options", "pythonpath"],
     ];
+
+    /// <summary>The key of pytest's <c>pythonpath</c> in a pyproject.toml: an array's each string a root, and one string each word it writes (<see cref="TomlRoot"/>).</summary>
+    private static readonly string[] PytestPaths = ["tool", "pytest", "ini_options", "pythonpath"];
 
     /// <summary>The keys of a pyproject.toml whose strings are packages, each in the directory that is a root: Hatch's wheel's.</summary>
     private static readonly string[][] TomlPackages = [["tool", "hatch", "build", "targets", "wheel", "packages"]];
@@ -52,7 +55,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Python projects (pyproject.toml and setup.cfg): a project node for each, named by its name, and the roots of the layout it names - setuptools' package-dir root and packages.find's where, Poetry's packages' from, the directory of each of Hatch's wheel packages, PDM's package-dir and pytest's pythonpath - each a directory beside the file under which Python's bare imports are looked for",
+        "Python projects (pyproject.toml and setup.cfg): a project node for each, named by its name, and the roots of the layout it names - setuptools' package-dir root and packages.find's where, a setup.cfg's first entry of it, Poetry's packages' from, the directory of each of Hatch's wheel packages, PDM's package-dir and pytest's pythonpath, a string of it split into its words as pytest splits it - each a directory beside the file under which Python's bare imports are looked for",
         [
             ("other-keys", "dependencies, optional dependencies, the build backend, scripts and entry points, and every tool's configuration but the roots: not read - no key of the file is a node and no value a literal, so the sites operation searches the file by its text"),
             ("computed-roots", "a root a value computes - a setup.cfg's interpolation, a setup.py's code - and a directory package-dir maps one package to: no root"),
@@ -71,15 +74,15 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
         var roots = new List<string>();
         (string Value, int Line)? name = null;
 
-        foreach (var (path, value, line) in entries)
+        foreach (var entry in entries)
         {
-            if (cfg ? IniName(path) : TomlNames.Any(names => Is(path, names)))
+            if (cfg ? IniName(entry.Path) : TomlNames.Any(names => Is(entry.Path, names)))
             {
-                name ??= (value, line);
+                name ??= (entry.Value, entry.Line);
                 continue;
             }
 
-            foreach (var root in cfg ? IniRoots(path, value) : TomlRoot(path, value))
+            foreach (var root in cfg ? IniRoots(entry.Path, entry.Value) : TomlRoot(entry))
             {
                 roots.Add(root);
             }
@@ -96,23 +99,132 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
         };
     }
 
-    /// <summary>One string a file sets: the keys it stands under, its value and the line it is written on.</summary>
-    private sealed record Entry(IReadOnlyList<string> Path, string Value, int Line);
+    /// <summary>One string a file sets: the keys it stands under, its value, the line it is written on, and whether it is an element of an array.</summary>
+    private sealed record Entry(IReadOnlyList<string> Path, string Value, int Line, bool Element = false);
 
     /// <summary>Whether <paramref name="path"/> is <paramref name="keys"/>.</summary>
     private static bool Is(IReadOnlyList<string> path, string[] keys) => path.SequenceEqual(keys, StringComparer.Ordinal);
 
-    /// <summary>The roots a pyproject.toml's string <paramref name="value"/> under <paramref name="path"/> names: itself, for a root's key; a package's directory, for a package's.</summary>
-    private static IEnumerable<string> TomlRoot(IReadOnlyList<string> path, string value)
+    /// <summary>
+    /// The roots a pyproject.toml's string <paramref name="entry"/> names: itself, for a root's key - pytest's <c>pythonpath</c> written as
+    /// one string each word it writes, as pytest splits it (<see cref="ShellWords"/>), and an element of its array as written - and a
+    /// package's directory, for a package's.
+    /// </summary>
+    private static IEnumerable<string> TomlRoot(Entry entry)
     {
-        if (TomlRoots.Any(keys => Is(path, keys)) && Root(value) is { } root)
+        if (Is(entry.Path, PytestPaths))
+        {
+            foreach (var word in (entry.Element ? [entry.Value] : ShellWords(entry.Value)) ?? [])
+            {
+                if (Root(word) is { } root)
+                {
+                    yield return root;
+                }
+            }
+        }
+        else if (TomlRoots.Any(keys => Is(entry.Path, keys)) && Root(entry.Value) is { } root)
         {
             yield return root;
         }
-        else if (TomlPackages.Any(keys => Is(path, keys)) && Root(value) is { } package && package.LastIndexOf('/') is var slash and > 0)
+        else if (TomlPackages.Any(keys => Is(entry.Path, keys)) && Root(entry.Value) is { } package && package.LastIndexOf('/') is var slash and > 0)
         {
             yield return package[..slash];
         }
+    }
+
+    /// <summary>
+    /// The words <paramref name="value"/> writes, as pytest reads a string of paths - Python's <c>shlex.split</c>: parted by blanks and
+    /// line breaks; a run quoted in single or double quotes part of one word, without its quotes, a blank in it its own; a backslash
+    /// outside quotes taking the character after it as written, and in double quotes a quote or a backslash after it; no <c>#</c> a
+    /// comment. <see langword="null"/> where a quote never closes or a backslash ends the value, which <c>shlex</c> refuses.
+    /// </summary>
+    private static List<string>? ShellWords(string value)
+    {
+        var words = new List<string>();
+        var word = new StringBuilder();
+        var begun = false;
+        var quote = '\0';
+
+        for (var at = 0; at < value.Length; at++)
+        {
+            var c = value[at];
+
+            if (quote == '\'')
+            {
+                if (c == '\'')
+                {
+                    quote = '\0';
+                }
+                else
+                {
+                    word.Append(c);
+                }
+
+                continue;
+            }
+
+            if (quote == '"')
+            {
+                if (c == '"')
+                {
+                    quote = '\0';
+                }
+                else if (c == '\\' && at + 1 < value.Length && value[at + 1] is '"' or '\\')
+                {
+                    word.Append(value[++at]);
+                }
+                else
+                {
+                    word.Append(c);
+                }
+
+                continue;
+            }
+
+            if (c is ' ' or '\t' or '\r' or '\n')
+            {
+                if (begun)
+                {
+                    words.Add(word.ToString());
+                    word.Clear();
+                    begun = false;
+                }
+
+                continue;
+            }
+
+            begun = true;
+
+            if (c is '\'' or '"')
+            {
+                quote = c;
+            }
+            else if (c == '\\')
+            {
+                if (++at >= value.Length)
+                {
+                    return null;
+                }
+
+                word.Append(value[at]);
+            }
+            else
+            {
+                word.Append(c);
+            }
+        }
+
+        if (quote != '\0')
+        {
+            return null;
+        }
+
+        if (begun)
+        {
+            words.Add(word.ToString());
+        }
+
+        return words;
     }
 
     /// <summary><paramref name="value"/> as a directory beside the file: its <c>.</c> and <c>..</c> taken out, the file's own directory <c>.</c>; none where it is empty.</summary>
@@ -332,7 +444,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
                             return lines.Count;
                         }
 
-                        entries.Add(new Entry(here, written, line + 1));
+                        entries.Add(new Entry(here, written, line + 1, top is { Table: false }));
                         (line, at) = (closes, past);
                         done = nests.Count == 0;
                         break;
@@ -340,7 +452,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
 
                     if (Quoted(text, at, out var closed) is { } value)
                     {
-                        entries.Add(new Entry(here, value, line + 1));
+                        entries.Add(new Entry(here, value, line + 1, top is { Table: false }));
                         at = closed;
                     }
                     else
@@ -613,9 +725,11 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
     private static bool IniName(IReadOnlyList<string> path) => path is ["metadata", "name"];
 
     /// <summary>
-    /// The roots a setup.cfg's option under <paramref name="path"/> names by <paramref name="value"/>: <c>[options]</c>'s
-    /// <c>package_dir</c> the directory of its entry with no package's name, <c>[options.packages.find]</c>'s <c>where</c> and
-    /// <c>[tool:pytest]</c>'s <c>pythonpath</c> each directory they list; a value an interpolation computes none.
+    /// The roots a setup.cfg's option under <paramref name="path"/> names by <paramref name="value"/>, each read as the tool that reads it
+    /// does: <c>[options]</c>'s <c>package_dir</c> the directory of its entry with no package's name; <c>[options.packages.find]</c>'s
+    /// <c>where</c> the first entry of its list - its lines where it is written over several, else its parts between commas - which
+    /// setuptools takes as the one directory it looks in; <c>[tool:pytest]</c>'s <c>pythonpath</c> each word it writes, as pytest splits it
+    /// (<see cref="ShellWords"/>); a value an interpolation computes none.
     /// </summary>
     private static IEnumerable<string> IniRoots(IReadOnlyList<string> path, string value)
     {
@@ -634,11 +748,18 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
                 }
             }
         }
-        else if (path is ["options.packages.find", "where"] or ["tool:pytest", "pythonpath"])
+        else if (path is ["options.packages.find", "where"])
         {
-            foreach (var entry in value.Split([' ', '\t', '\n', ','], StringSplitOptions.RemoveEmptyEntries))
+            if (value.Split(value.Contains('\n') ? '\n' : ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) is [var first, ..] && Root(first) is { } root)
             {
-                if (Root(entry) is { } root)
+                yield return root;
+            }
+        }
+        else if (path is ["tool:pytest", "pythonpath"])
+        {
+            foreach (var word in ShellWords(value) ?? [])
+            {
+                if (Root(word) is { } root)
                 {
                     yield return root;
                 }

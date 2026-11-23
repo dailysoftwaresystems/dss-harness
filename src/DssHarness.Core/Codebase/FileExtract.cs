@@ -160,6 +160,12 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 {
                     return $"its node '{node.Id}' (lines {Lines(node)}) is declared inside '{parent}' (lines {Lines(holder)}), whose lines do not hold it";
                 }
+
+                // A member is a test by its type where the type that holds it is: one held by anything else never is.
+                if (node is { TestByType: true, Kind: CodeNodeKinds.Member } && holder.Kind != CodeNodeKinds.Type)
+                {
+                    return $"its node '{node.Id}' is a test by its type, and '{parent}', which holds it, is no type";
+                }
             }
         }
 
@@ -603,14 +609,23 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
 
     /// <summary>
     /// Whether it is a test where a type is a test type that its own file cannot tell is one - a type built on bases, of which
-    /// one may be a test type another file declares, and each member such a type holds that is named as its language names a
-    /// test: a type so marked is a test type where one of its bases is, along the bases the linker found, however deep, and a
+    /// one may be a type tests are built on that another file declares (<see cref="TestBase"/>), and each member such a type
+    /// holds that is named as its language names a test: a type so marked is a test type where a type tests are built on is
+    /// among its bases, along the bases the linker found, however many levels up and through whatever types between, and a
     /// member so marked is a test where the type that holds it is - as a Python test file's class built on a <c>TestCase</c>
     /// subclass another module declares is, with its <c>test*</c> methods. The linker gives each such test its <c>tests</c>
-    /// edges as it gives a marked one (<see cref="Test"/>).
+    /// edges as it gives a marked one (<see cref="Test"/>). Only a type and a member a type holds say it.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool TestByType { get; init; }
+
+    /// <summary>
+    /// Whether it is a type tests are built on: a type every type built on it, any number of levels down, is a test type by -
+    /// a Python <c>TestCase</c> subclass, which unittest runs by its type wherever it is declared - where that type says it
+    /// may be one (<see cref="TestByType"/>). The types the linker walks from to the tests by their type. Only a type says it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TestBase { get; init; }
 
     /// <summary>
     /// Whether it says it is one part of a declaration another file holds the rest of - a XAML view whose
@@ -724,6 +739,8 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
             : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
             : TestByType && Kind is not (CodeNodeKinds.Type or CodeNodeKinds.Member) ? $"it is a test by its type, and a node of kind '{Kind}' is neither a type nor a member a type holds"
+            : TestByType && Kind == CodeNodeKinds.Member && Parent is null ? "it is a member that is a test by its type, and no type holds it"
+            : TestBase && Kind != CodeNodeKinds.Type ? $"it is a type tests are built on, and a node of kind '{Kind}' is no type"
             : MembersByReceiver && Kind != CodeNodeKinds.Type && (Kind != CodeNodeKinds.Member || Extends is null) ? $"its members are reached by a receiver alone, and a node of kind '{Kind}' is no type, nor a member that extends one"
             : Selectors is { } selectors && (selectors.Count == 0 || !selectors.All(IsSelector)) ? "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"
             : Templates is { } templates && (templates.Count == 0 || templates.Any(string.IsNullOrWhiteSpace)) ? "a template it names is empty, or it names none"
@@ -846,8 +863,9 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     /// <summary>
     /// The kind of qualifier whose references alone it serves (<see cref="CodeQualifierKinds"/>), and no other reference of the
     /// files it is made for: a <c>conftest.py</c>'s fixtures, which pytest gives every test under its directory by a parameter's
-    /// name (<see cref="CodeQualifierKinds.Fixture"/>) and no other name of a test file reaches. <see langword="null"/> where it
-    /// serves every reference.
+    /// name (<see cref="CodeQualifierKinds.Fixture"/>) and no other name of a test file reaches. Only an import of the
+    /// <see cref="CodeImportForms.Directory"/> form that is not every file's (<see cref="Global"/>) serves one, and the extract is
+    /// refused where any other does. <see langword="null"/> where it serves every reference.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Serves { get; init; }
@@ -891,7 +909,7 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : Binds && (Export || Form is CodeImportForms.Scope or CodeImportForms.Directory) ? "its prefix stands for a name a file shows, which only an import of a file that is no export does"
             : Either && (Export || Form is CodeImportForms.Scope or CodeImportForms.Directory) ? "it is one of two places a name may stand at, which only an import of a file that is no export is"
             : Serves is { } serves && !CodeQualifierKinds.All.Contains(serves, StringComparer.Ordinal) ? $"it serves the references of the qualifier '{serves}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
-            : Serves is not null && Export ? "it serves one qualifier's references, and is an export: an export makes names visible to every importer"
+            : Serves is not null && (Form != CodeImportForms.Directory || Global) ? "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"
             : Shares && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and shares its imports: only a file's are shared"
             : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
             : Namespace && (Form != CodeImportForms.Directory || Prefix is not null || Show is not null || Hide is not null) ? "it is the scope a directory's files are declared in, and is no import of a directory's whole scope"
@@ -1145,7 +1163,8 @@ public static class CodeQualifierKinds
     /// its class, its module - then among those of each import made for the test's file that serves fixtures alone
     /// (<see cref="ExtractImport.Serves"/>), the nearest directory's first - a conftest.py's, which pytest gives every test under its
     /// directory and no test imports - the first that holds one deciding, exact; and nowhere else, so a fixture a plugin provides
-    /// names nothing the repository declares.
+    /// names nothing the repository declares. The node the reference is made from is never what it reaches: a fixture that asks for
+    /// its own name is given the one a level out, which it overrides.
     /// </summary>
     public const string Fixture = "fixture";
 

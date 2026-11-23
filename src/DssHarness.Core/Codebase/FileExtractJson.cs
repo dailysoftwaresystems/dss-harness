@@ -145,6 +145,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     Prototype = node.Prototype,
                     Test = node.Test,
                     TestByType = node.TestByType,
+                    TestBase = node.TestBase,
                     Part = node.Part,
                     MembersByReceiver = node.MembersByReceiver,
                     ValueType = node.ValueType,
@@ -263,6 +264,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         Prototype = stored.Prototype,
                         Test = stored.Test,
                         TestByType = stored.TestByType,
+                        TestBase = stored.TestBase,
                         Part = stored.Part,
                         MembersByReceiver = stored.MembersByReceiver,
                         ValueType = stored.ValueType,
@@ -380,6 +382,9 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool TestByType { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool TestBase { get; init; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool Part { get; init; }

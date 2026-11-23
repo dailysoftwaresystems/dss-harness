@@ -4489,10 +4489,10 @@ value `ScanLiteral` decodes from what each lexer saw of the literal's form - a p
 triple quote, a heredoc's label and closing indentation - by its language's escapes, a `String.raw` template's as
 written, an HTML character reference by its grammar whatever its length; an interpolated or template string's
 constant parts each a literal of its own, its holes read as code, a character constant, a regular
-expression and JSX markup none, a JSX attribute's text one - and six marks - a prototype, a test, a test by a type
-another file declares (`TestByType`), a part of a declaration other files hold parts of too (`Part`), generated code
-with why, and each line it saw something it cannot bind or stopped reading at (`dynamic`), with why - of which the
-linker reads the first four; a dynamic mark may carry a
+expression and JSX markup none, a JSX attribute's text one - and seven marks - a prototype, a test, a test by a type
+another file declares (`TestByType`), a type tests are built on (`TestBase`), a part of a declaration other files hold parts
+of too (`Part`), generated code with why, and each line it saw something it cannot bind or stopped reading at (`dynamic`),
+with why - of which the linker reads the first five; a dynamic mark may carry a
 kind (`ExtractDynamic.Kind`), and what an implementation's help says it does not see is a limit that names the signs
 telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, references the linker left candidates, or
 references it counted external - so that an answer says of a file only the limits its marks show. Beside the calls, every
@@ -4793,7 +4793,8 @@ at a time, a value over several lines read whole and its arrays and tables neste
 project node named by the project's name, and declares the roots of the layout its words name (`FileExtract.LayoutRoots`),
 each a directory beside the file under which a bare Python import is looked for: setuptools' `package-dir` root and
 `packages.find`'s `where`, Poetry's `packages`' `from`, the directory of each of Hatch's wheel `packages`, PDM's `package-dir`
-and pytest's `pythonpath`. A string's value is TOML's: a basic one's escapes decoded, a multi-line one's line break right
+and pytest's `pythonpath` - each read as its tool reads it, a string of pytest's paths split into its words as pytest splits it
+(`shlex`) and a setup.cfg's `where` the first entry of its list, the one directory setuptools looks in. A string's value is TOML's: a basic one's escapes decoded, a multi-line one's line break right
 after its opener none of it, one or two quotes before its closer its own and a backslash that ends a line's text taking the
 blanks and line breaks after it. A setup.cfg's options are configparser's: a line indented deeper than the last line that
 continued none continues its option, a comment or a blank line ends none, and a section's name is the text from its `[` to
@@ -4815,14 +4816,19 @@ path - `pkg/sub/mod.py` is `pkg.sub.mod`, an
 `__init__.py` its directory's package - one open scope that every name it declares is reachable from and that its own
 top-level code is looked up in. A class is a type and a scope; a function's body is a closed scope under the function's
 qualified name, whose parent is the function or the module around it and never a class, as Python looks a body's names up -
-what it declares is held by the function as its `Parent` and named under it. What a function's head runs where the function
-is defined - its decorators, annotations and defaults, the fixtures its parameters name - is made around it
-(`ExtractReference.Around`). A declaration's head and body are read once every declaration of the file is made - each before
-the declarations it holds, the functions around a body open while it is read - so a name the file declares or imports below
-a function is the file's there too, and a closure's names are its own. Each name of a target list - `a, *b = ...`, `(a, b) =
+what it declares is held by the function as its `Parent` and named under it. What a function's or a class's head runs where it
+is defined - its decorators, bases, annotations and defaults, the fixtures its parameters name - is made around it
+(`ExtractReference.Around`), and its names are bound where the declaration stands - by an import of the function or the
+class around it, a method's head by its class's - never by the declaration's own imports. A declaration's head and body are
+read once every declaration of the file is made - each before the declarations it holds, the functions around a body open
+while it is read - so a name the file declares or imports below a function is the file's there too, and a closure's names,
+and the names the imports of the functions around it bind, are its own; what a body's statements name that the walk meets
+first - an `except`'s types, a `case`'s class pattern, an annotation, a class's values - is read by the body's run where it
+reaches it, in the order the text writes it. Each name of a target list - `a, *b = ...`, `(a, b) =
 ...` - is a constant or a field at the top and in a class and a local in a function; an attribute a method first assigns
 through `self` or `cls` is a field of its class where the class declares no member of its name; `type X = ...` is a type of
-sub-kind `alias`; and a type parameter - `def f[T]`, `class C[T: Base]` - is its declaration's own, naming no type. A local,
+sub-kind `alias`; and a type parameter - `def f[T]`, `class C[T: Base]` - is its declaration's own and the code's of every declaration it holds,
+a class's its methods', naming no type; a function's decorators and defaults run outside its own. A local,
 a parameter, a lambda's parameter, a comprehension's target and a name a function around the code binds are the code's own,
 nearer than an import or a builtin of the name; a name a class's own code reads that the class declares is the class's, a
 `this` reference, as a class's body sees its names and none of its bases'; and a builtin the file declares or imports is the
@@ -4854,9 +4860,9 @@ import is a path beside the file. What `from m import c` binds is tried at each 
 name `m` binds (`ExtractImport.Binds`), whose prefix then stands for that name, so `c.f()` reaches `f` in the module or in
 the class `m` binds. An import at the module's top - in its conditional blocks too - binds names of the module, its
 importers' too (`ExtractImport.Reexports`): `from pkg import Cart` reaches what the package's `__init__.py` imports, under
-the name it gives it, and `from . import views` there makes the module a name of the package; one in a function or a class
-binds for that declaration's own code alone - a class's for the class's own code, as no class's names are a method's - by a
-prefix no other code of the file writes, and is no name of the module. `from m import *` is an import marked `Published`,
+the name it gives it, and `from . import views` there makes the module a name of the package; one in a function binds for
+its own code and the functions it holds, as a closure finds a name, and one in a class for the class's own code alone, as no
+class's names are a method's - each by a prefix no other code of the file writes, and no name of the module. `from m import *` is an import marked `Published`,
 which makes visible the names the module publishes alone (`FileExtract.Published`): its `__all__` where it is a list or a
 tuple of string literals the code changes nowhere, else every name bound at its top that is not written with a leading
 underscore - one the code computes or changes marked `dynamic` - and, where it names no literal `__all__`, what its own `*`
@@ -4868,24 +4874,33 @@ it makes is counted external, which is the sign (`CodeGraphLimit.External`) of t
 not show, the names nothing binds and the fixtures no `conftest.py` above the test declares. `self` and `cls` qualify a
 `this` reference, `super()` a `base` one; a chain whose head an import binds is qualified by what the import reaches - the
 `prefix` of the module the longest run of its names before the member reaches, else the `type` those names stand for inside
-it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain; the
-head of a chain the file declares or imports - `CONFIG` of `CONFIG.get()` - and each member a chain passes on its way to its
-last - `items` of `self.items.append(x)` - is a `uses` (a `references` where it names a class), the later ones values by no
-name the file types rather than links, since a `self` chain's head writes no name to link to and a function's body sees no
+it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain; a
+name read alone and the head of a chain the file declares or imports - `CONFIG` of `CONFIG.get()` - is a `uses` of what it
+names, whatever that is, an imported class or constant alike (a `references` where it names a class the file declares), and
+each member a chain passes on its way to its last - `items` of `self.items.append(x)` - is a `uses`, those after the first
+of a chain no import's head is values by no name the file types rather than links, since a `self` chain's head writes no name to link to and a function's body sees no
 name of its class; a call of a name written with a capital first letter is an `instantiates`, as a method's `cls(...)` and
 `type(self)(...)` are, of the class the method is of (an `own` qualifier); a type an annotation, a string
 annotation, an `isinstance`, an `except` or a `case`'s class pattern names - dotted or not, through the import its head is -
 is a `references`, every one read by the one reader of a type expression, which reads `Literal`'s values and `Annotated`'s
-metadata as code; a `case`'s dotted value is a `uses` and its captures are bound. A decorator is read whole, a framework's
-or the language's by the last name of its dotted name a modifier, what it is given code. A parameter a test or a fixture
+metadata as code; a `case`'s dotted value is a `uses` and its captures are bound. A decorator is read whole as code and kept
+as a modifier by its dotted name: the name it calls with what it decorates is a call - of one argument where it is written
+alone - a probe (`ExtractReference.Probe`) where an import of a package binds it, and one the language answers to names
+nothing; no decorator is told by the name it is written with. A parameter a test or a fixture
 requires is a reference with a `fixture` qualifier (`CodeQualifierKinds.Fixture`), reached by the fixtures alone - nodes of
-sub-kind `fixture`, functions `pytest.fixture` decorates - as pytest finds one: what the test's scopes declare, its class's
-and its module's, else what the nearest `conftest.py` that declares it holds of its directory and each above it - a
+sub-kind `fixture`, functions pytest's or pytest-asyncio's fixture decorator decorates, told by the import that binds the
+decorator's head and named by its `name=` where one is given - as pytest finds one: what the test's scopes declare, its
+class's and its module's, else what the nearest `conftest.py` that declares it holds of its directory and each above it - a
 `conftest.py`'s module is a `directory` import that serves the fixture references of every file under its directory alone
-(`ExtractImport.Serves`) - and nowhere else. A test file's `test*` functions, its `Test*` classes and `TestCase` subclasses
-with their `test*` methods are tests, and no other file's; a class of a test file built on a base another file declares says
-it may be a test class by that base (`ExtractNode.TestByType`), as does each `test*` method it holds, and the link makes
-them tests where a base of the class is a test class. A method is bound by its name alone, so each carries an `overrides`
+(`ExtractImport.Serves`), which only such an import may do - and nowhere else; a fixture that requires its own name is given
+the one a level out, which it overrides, and never itself, and a name a `parametrize` mark gives a test is no fixture of it.
+A test is what a runner collects: a test file - `test*.py` or `*_test.py`, as unittest and pytest collect them, Django's
+`tests.py` among them - holds tests in its `test*` functions and its `Test*` classes, and no other file's names make one; a
+`TestCase` subclass - built on a class an import reaches by a name ending in `TestCase`, or on a class of the file that is
+one - is a test class wherever it is declared, as unittest runs it by its type, and a type tests are built on
+(`ExtractNode.TestBase`); and a test class's `test*` methods are tests. A class of a test file built on a base another file
+declares says it may be a test class by that base (`ExtractNode.TestByType`), as does each `test*` method it holds, and the
+link makes them tests where a type tests are built on is among its bases, any number of levels up. A method is bound by its name alone, so each carries an `overrides`
 reference of its own name with a `base` qualifier, an edge where a base of its type declares it along the chain; no word of
 the language says a method overrides, so the reference is a probe
 (`ExtractReference.Probe`) - it asks whether a declaration is there, and where none is it is no external callee.
@@ -4902,8 +4917,8 @@ qualifier being read as such a prefix too where no type or scope has it as its w
 that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
 prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`,
 `tests` and `partOf` from the `implements` edges and the marks - a declaration marked a test by its type a test where a
-base its type is built on, along the `inherits` and `mixesIn` edges any number of levels up, is a test type, each type
-walked once - and the keys' join from the literals and the fields
+type tests are built on is among the bases its type is built on, along the `inherits` and `mixesIn` edges any number of
+levels up and through types no file marks, each type walked once - and the keys' join from the literals and the fields
 and properties that name a key. A type is looked in before its bases and its bases a level at a
 time, each level nearest first, the first rank that holds the name deciding with all it holds: the mixins each type of
 the level names, a rank each, the last first - each applied over what comes before it - then one rank of everything

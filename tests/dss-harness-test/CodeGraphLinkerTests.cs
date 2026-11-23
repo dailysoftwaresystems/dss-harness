@@ -2398,12 +2398,13 @@ public sealed class CodeGraphLinkerTests
                     5 when imports[changing].Form == CodeImportForms.Relative && !imports[changing].Export => imports[changing] with { Layout = !imports[changing].Layout },
                     6 when imports[changing].Form is not (CodeImportForms.Scope or CodeImportForms.Directory) && !imports[changing].Export => imports[changing] with { Either = !imports[changing].Either },
                     7 when imports[changing] is { Form: not (CodeImportForms.Scope or CodeImportForms.Directory), Prefix: null, Show: null, Hide: null, Export: false, Binds: false } => imports[changing] with { Published = !imports[changing].Published },
-                    8 when imports[changing].Form == CodeImportForms.Directory => imports[changing] with { Serves = imports[changing].Serves is null ? CodeQualifierKinds.Fixture : null },
+                    8 when imports[changing] is { Form: CodeImportForms.Directory, Global: false } => imports[changing] with { Serves = imports[changing].Serves is null ? CodeQualifierKinds.Fixture : null },
                     0 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Prefix = imports[changing].Prefix is null ? Pick(random, ["p", "A"]) : null },
                     1 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Show = imports[changing].Show is null ? [Pick(random, RandomNames)] : null },
                     2 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Hide = imports[changing].Hide is null ? [Pick(random, RandomNames)] : null },
                     3 when imports[changing] is { Form: not (CodeImportForms.Scope or CodeImportForms.Directory), Prefix: null } => imports[changing] with { Export = !imports[changing].Export, Shares = false },
-                    _ => imports[changing] with { Global = !imports[changing].Global },
+                    // An import made for the language's every file serves no qualifier's references: one that serves loses it.
+                    _ => imports[changing] with { Global = !imports[changing].Global, Serves = null },
                 };
                 break;
 
