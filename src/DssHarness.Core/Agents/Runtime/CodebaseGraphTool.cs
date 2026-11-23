@@ -915,12 +915,13 @@ public sealed class CodebaseGraphTool(
     /// and every line that holds it of the files the graph does not answer of it
     /// (<see cref="CodebaseGraphQueries.TextScopeOf"/>) - each place one card, the node at it, saying every way it decides,
     /// the cards grouped by file kind and tier (<see cref="CodebaseGraphQueries.KindOf"/>,
-    /// <see cref="CodebaseGraphQueries.TierOf"/>), and a raw line where the graph read no node of its file. A data that names
-    /// a node by itself - its handle, its id, a <c>path:line</c> - asks of that node, its name the word its literals and the
-    /// text are searched for (<see cref="CodebaseGraphQueries.SitesPattern"/>), and a name written with its scopes or a key
-    /// path in any spelling its reader reads is searched for by its last part (<see cref="CodebaseGraphQueries.LastPart"/>),
-    /// as code and data write it, and a key path by its places as an environment variable writes them too
-    /// (<see cref="CodebaseGraphQueries.KeySpellings"/>); a quoted one asks by its value alone, never the symbols. Every place
+    /// <see cref="CodebaseGraphQueries.TierOf"/>), and a raw line where the graph read no node of its file. A
+    /// data that names a node by itself - its handle, its id, a <c>path:line</c> - asks of that node, its name the word its
+    /// literals and the text are searched for, and a selector is searched for as it is written; a name written with its
+    /// scopes, or a key path in any spelling its reader reads where the data names a key or nothing names it, is searched for
+    /// by its last name, as code and data write it, and each key path it names by its places as an environment variable
+    /// writes them too (<see cref="CodebaseGraphQueries.SitesSearch"/>, <see cref="GraphSitesSearch"/>: one pattern of one
+    /// size however many key paths it names); a quoted one asks by its value alone, never the symbols. Every place
     /// passes the step's reads at one gate (<see cref="SiteList"/>), and those they do not reach are counted. The coverage
     /// lines that end the answer say what the text search read, each file counted once it was read, and why; then every limit
     /// of each language whose files the graph read (<see cref="Unseen"/>).
@@ -957,16 +958,15 @@ public sealed class CodebaseGraphTool(
                 }
             }
 
-            // The word the literals and the text are searched for: the value, the name of the node the data names by itself,
-            // or the last part of the data as it is written - a name written with its scopes, a key path in any spelling, is
-            // written in code and in data by its last part (shape.Area(), "TimeoutSeconds": 30), and a whole word of that part
-            // is held by every longer name that ends with it - one pattern for both; and each key path the data names as an
-            // environment variable writes it, which no whole word of its last key is held by.
-            var word = quoted ?? on.NamedExactly(written)?.Name ?? CodebaseGraphQueries.LastPart(written);
-            var spellings = quoted is null ? CodebaseGraphQueries.KeySpellings(written, definers) : [];
-            var pattern = CodebaseGraphQueries.SitesPattern(word, spellings);
+            // What the literals and the text are searched for (CodebaseGraphQueries.SitesSearch): the value; or the name of the
+            // node the data names by itself, the selector it is written as, or its last name - a name written with its scopes,
+            // a key path in any spelling, is written in code and in data by its last name (shape.Area(), "TimeoutSeconds": 30),
+            // and a whole word of it is held by every longer name that ends with it - and each key path it names as an
+            // environment variable writes it, which no whole word of its last key is held by: by a pattern of one size however
+            // many key paths it names, each line and value it matches held to them whole.
+            var searched = quoted is null ? on.SitesSearch(written, definers) : GraphSitesSearch.Of(quoted);
 
-            foreach (var place in on.LiteralSites(pattern))
+            foreach (var place in on.LiteralSites(searched))
             {
                 sites.AddLiteral(place);
             }
@@ -975,14 +975,14 @@ public sealed class CodebaseGraphTool(
             // once the search read it; a name's references the linker bound to nothing of its name tell files of it. Each file
             // is told by the one path its listing names it by - what the search takes it by, each hit's and each read's - and
             // a file the graph answers of is never taken, so it is never counted among those the reader may not read.
-            IReadOnlyList<string> names = quoted is null ? [.. definers.Select(card => card.Name).Append(CodebaseGraphQueries.LastPart(word)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)] : [];
+            IReadOnlyList<string> names = quoted is null ? [.. definers.Select(card => card.Name).Append(searched.Word).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)] : [];
             var unbound = on.UnboundNaming(names);
             var scopes = new Dictionary<string, GraphTextScope>(StringComparer.Ordinal);
             var read = new Dictionary<GraphTextScope, List<string>>();
             var hits = new Dictionary<GraphTextScope, int>();
             var search = await TextSearchAsync(
                 on,
-                pattern,
+                searched.Pattern,
                 listed =>
                 {
                     if (on.TextScopeOf(listed, unbound, quoted is not null) is not { } scope)
@@ -995,6 +995,12 @@ public sealed class CodebaseGraphTool(
                 },
                 hit =>
                 {
+                    // A line the pattern reads holds the data only where the search holds it so: one of the key paths whole.
+                    if (!searched.Holds(hit.Text))
+                    {
+                        return;
+                    }
+
                     var scope = scopes[hit.Path];
                     hits[scope] = hits.GetValueOrDefault(scope) + 1;
                     sites.AddHit(hit, scope);
@@ -1002,7 +1008,7 @@ public sealed class CodebaseGraphTool(
                 listed => (read.TryGetValue(scopes[listed], out var files) ? files : read[scopes[listed]] = []).Add(listed),
                 token).ConfigureAwait(false);
 
-            var notes = new List<string>(Coverage(read, hits, word, names, spellings));
+            var notes = new List<string>(Coverage(read, hits, searched, names));
             notes.AddRange(Unseen(on));
             notes.AddRange(search.LeftOut(ReportText.Printable));
 
@@ -1034,11 +1040,14 @@ public sealed class CodebaseGraphTool(
     /// is unsure of always, said where none was; and, where any was, the files held in another state no implementation of a
     /// language read them in, by the state, those the graph does not hold, those whose extract it no longer holds, those it
     /// outlines, those holding a reference named the data it bound to nothing of that name, and those read for a value; the
-    /// forms a selector was searched in, and the spellings of a key path (<paramref name="spellings"/>); and, where any file
-    /// the graph lists only was searched, that nothing is assumed of a language with no extractor.
+    /// forms a selector was searched in, and how many key paths it names were searched as an environment variable writes
+    /// each, where <paramref name="searched"/> searched any so; and, where any file the graph lists only was searched, that
+    /// nothing is assumed of a language with no extractor.
     /// </summary>
-    private static IEnumerable<string> Coverage(IReadOnlyDictionary<GraphTextScope, List<string>> read, IReadOnlyDictionary<GraphTextScope, int> hits, string word, IReadOnlyList<string> names, IReadOnlyList<string> spellings)
+    private static IEnumerable<string> Coverage(IReadOnlyDictionary<GraphTextScope, List<string>> read, IReadOnlyDictionary<GraphTextScope, int> hits, GraphSitesSearch searched, IReadOnlyList<string> names)
     {
+        var word = searched.Word;
+
         string Searched(GraphTextScope scope, string said, bool too = false)
             => $"coverage: {ReportText.Counted(read[scope].Count, "file")} {said} searched by text{(too ? " too" : string.Empty)} - {ReportText.Counted(hits.GetValueOrDefault(scope), "hit")}";
 
@@ -1087,14 +1096,14 @@ public sealed class CodebaseGraphTool(
             yield return Searched(value, "the graph read, for it holds a value only where code writes it as a string literal,", too: true);
         }
 
-        if (CodebaseGraphQueries.SelectorName(word) is { } bare)
+        if (searched.Selector is { } bare)
         {
             yield return $"coverage: '{ReportText.Printable(word)}' searched as a rule writes it and as the name '{ReportText.Printable(bare)}', a whole word of a class list";
         }
 
-        if (spellings.Count > 0)
+        if (searched.Spellings.Count > 0)
         {
-            yield return $"coverage: '{ReportText.Printable(word)}' searched as a whole word, and the key path as an environment variable writes it: {string.Join(", ", spellings.Select(spelt => $"'{ReportText.Printable(spelt)}'"))}";
+            yield return $"coverage: '{ReportText.Printable(word)}' searched as a whole word, and {ReportText.Counted(searched.Spellings.Count, "key path")} it names as an environment variable writes each, its places joined by '__'";
         }
 
         if (read.ContainsKey(listed))

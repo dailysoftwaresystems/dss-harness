@@ -260,7 +260,7 @@ public sealed class CodebaseGraphServingTests
     /// <summary>
     /// Whether the answer's <paramref name="lines"/> hold <paramref name="site"/> as it decides: a literal by the line the
     /// answer writes it on (<c>path:line holds the literal '...'</c>, beneath its node's card or alone); a line of text by its
-    /// hit's line (<c>path:line text</c>); and a way of a node by the card of the node at the line - the innermost, as the
+    /// hit's line (<c>path:line text</c>); and a way of a node by the card of the node at the line, as the
     /// view reads it (<see cref="CodebaseGraphQueries.AtLine"/>), told by its handle - whose ways, after its last
     /// <c> | </c>, hold that way, how sure it is said or not. A card that only spans the line - its type's, its file's - is
     /// never the place.

@@ -5334,16 +5334,24 @@ and what they override, a part of a declaration walked as the node itself, each 
 reaches it is - and no site's own edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds
 it as a whole word (`CodebaseGraphQueries.LiteralSites`, read once an ask over the literals of every extract the view holds -
 no node of the graph is a literal's, so the read is the one index of them) - the datum searched for by the name of the node it
-names by itself, else by its last part (`CodebaseGraphQueries.LastPart`, a path's places read by `CodeKeyPaths.Places`, so a
-quoted name's dot parts nothing), for a name written with its scopes and a key path in any spelling are written in code and in
-data by their last part (`shape.Area()`, `"TimeoutSeconds": 30`), and each key path it names by its places as an environment
-variable writes them too (`CodebaseGraphQueries.KeySpellings`, `CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which
-no whole word of its last key is held by) - by the one whole-word rule every
-search of the graph reads (`CodebaseGraphQueries.WordPattern`: a boundary beside each edge of the word that is a word character,
-an edge that is none its own boundary, so `.btn-primary` is held by `button.btn-primary`) and, for a selector, the selector with
-no character of a class's name after it, so `.btn` is not held by `.btn-primary`, and its bare name as a whole word of a class
-list too (`CodebaseGraphQueries.SitesPattern`: `class="btn btn-primary"`, `addClass('btn-primary')`); and every key the datum
-names (`CodeSubKinds.Key`), held and never defined. What the graph does not answer of the datum is
+names by itself, by a selector whole, else by its last name (`CodebaseGraphQueries.SitesSearch`, `CodeKeyPaths.LastName`, a
+path's places read by `CodeKeyPaths.Places`, which reads a place in brackets only as a key's path writes one - an item's digits,
+a quoted name, whose dot parts nothing - so `this[]` of `Canvas.this[]` and `operator[]` of `Vec::operator[]` are names), for a
+name written with its scopes and a key path in any spelling are written in code and in data by their last name (`shape.Area()`,
+`"TimeoutSeconds": 30`) - a datum spelt as .NET's configuration spells a key path read as one where it names a key, or where
+nothing names it and it is written as no node's id and no file's line, and as the name code declares else (`RETRY__LIMIT`); a
+selector never, so `.card__title` is the class a BEM element names and never the path `.card.title` - and each key path it
+names by its places as an environment variable writes them too, every key's among its definers however many and the path it
+spells where it is read as one (`CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which no whole word of its last key is
+held by) - by the one whole-word rule every search of the graph reads (`CodebaseGraphQueries.WordPattern`: a boundary beside each
+edge of the word that is a word character, an edge that is none its own boundary, so `.btn-primary` is held by
+`button.btn-primary`) and, for a selector, the selector with no character of a class's name after it, so `.btn` is not held by
+`.btn-primary`, and its bare name as a whole word of a class list too (`class="btn btn-primary"`, `addClass('btn-primary')`), the
+one owner of what a value or a line holds of the datum (`GraphSitesSearch`): a line is read by a pattern of one size however
+many key paths the datum names - the word's own, and the double underscore every such path parts its places by - and each line
+and value it reads is held to the key paths whole in code, every one of them looked for in one pass of it
+(`GraphSitesSearch.Holds`), so no key path is left out and no pattern grows with them; and every key the datum names
+(`CodeSubKinds.Key`), held and never defined. What the graph does not answer of the datum is
 searched by text with the same pattern, by the one search the text fallback runs too, and said
 (`CodebaseGraphQueries.TextScopeOf`, each file for the first of these it is): a file the view does not hold; one it holds in
 a state no implementation of a language read it in - listed by the fallback alone, which no extractor reads the language of,
@@ -5359,15 +5367,19 @@ name holds where it is no separator stays the name's, and a file the graph answe
 and counted nowhere, never as one the reader may not read. Each place is one card, the node at it, saying every way
 it decides - an edge's other than exact with how sure it is, as the `node` operation marks a candidates edge - with the lines
 a literal and a text hit stand on beneath it, a hit at a line a literal already names passed over - a hit's node the one at
-its line (`CodebaseGraphQueries.AtLine`: of the nodes that begin last, of those the ones that end first, the innermost, one no
-other of them is declared inside; where several are, the one of those lines they are all declared inside - the record of a
-positional record's parameters, the enum of a one-line enum's members, the object of a one-line object's keys - else the one
-of them that makes a reference at the line, else the nearest node they are all declared inside; never the file's own node
-where another holds the line, nor one by the order of the ids - so a Vue component spanning its file is never the file's
-node, a page's landmark never its body of the same lines, a type's only member on its line never the type, and a Razor page's
-markup never the class it compiles to - read from each file's line index, made once a file a view by one sweep of its nodes
-with an explicit stack of those open at a line, so a search of a file's every line costs its nodes and references once); or a
-raw line where the graph read no node of the file. The cards are grouped by file kind and tier, as part 02 has it (`CodebaseGraphQueries.KindOf`: the
+its line (`CodebaseGraphQueries.AtLine`: at a line nodes begin on, the outermost of them - of those that end last, the one no
+other of them is declared inside, whatever their count, so a one-line type is the type and not its one member, a positional
+record the record of one parameter or several, a one-line enum the enum, a one-line object the object of one key or several,
+and a method that begins on a field's line the method - where several are, the one of them that makes a reference at the line,
+else the nearest node they are all declared inside; at any other line, the innermost node that holds it - of the nodes that
+begin last, of those the ones that end first, the innermost, one no other of them is declared inside; where several are, the
+one of those lines they are all declared inside, else the one of them that makes a reference at the line, else the nearest
+node they are all declared inside; never the file's own node where another holds the line, nor one by the order of the ids -
+so a Vue component spanning its file is never the file's node, a page's landmark never its body of the same lines, and a Razor
+page's markup never the class it compiles to - read from each file's line index, made once a file a view by one sweep of its
+nodes with an explicit stack of those open at a line, each node's declaration in the file looked up in an index of every
+declaration made once a view, so a search of a file's every line costs its nodes and references once, never the other files a
+node it shares - a namespace, a partial type - is declared in); or a raw line where the graph read no node of the file. The cards are grouped by file kind and tier, as part 02 has it (`CodebaseGraphQueries.KindOf`: the
 language that read the file, else its extension or its name; `CodebaseGraphQueries.TierOf`: the project nearest above it as
 the repository's map names its projects, else its top directory as the outline names it), at `CodebaseGraphTool.RelatedLines`
 places a page, each place a block its card heads - the place counted once, its lines riding on it - so a page holds it whole

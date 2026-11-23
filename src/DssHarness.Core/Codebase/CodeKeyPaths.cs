@@ -128,11 +128,11 @@ public static class CodeKeyPaths
 
         foreach (var (start, end) in Places(path))
         {
-            if (path[start] != '[')
+            if (!InBrackets(path, start))
             {
                 places.Add(path[start..end]);
             }
-            else if (end - start > 2 && path[start + 1] != '"')
+            else if (path[start + 1] != '"')
             {
                 places.Add(path[(start + 1)..(end - 1)]);
             }
@@ -152,12 +152,15 @@ public static class CodeKeyPaths
     }
 
     /// <summary>
-    /// Each place <paramref name="path"/> is written of, in order, by where its text begins and ends: a name up to the dot
-    /// or the bracket after it, the dot left out; an item or a quoted name with its brackets - a quoted name's escapes read
-    /// as <see cref="ReportText.Quoted"/> writes them, so a dot or a bracket inside the quotes parts nothing. A path is read
-    /// once, so a place is told in time to its own length.
+    /// Each place <paramref name="path"/> is written of, in order, by where its text begins and ends: a place in brackets
+    /// only as <see cref="Of"/> writes one - an item's digits (<see cref="Item"/>), or a quoted name (<see cref="Name"/>)
+    /// whose escapes are read as <see cref="ReportText.Quoted"/> writes them, so a dot or a bracket inside the quotes parts
+    /// nothing - with its brackets; else a name, up to the dot or the place in brackets after it, the dot left out - a
+    /// bracket that opens no such place a character of the name it stands in, as a name code declares holds one
+    /// (<c>Canvas.this[]</c>, <c>Vec.operator[]</c>). A path is read once: each bracket is asked once whether it opens a
+    /// place, and the text that asks reads is read by no other ask, so a place is told in time to its own length.
     /// </summary>
-    /// <param name="path">A key's path, as <see cref="Of"/> writes one.</param>
+    /// <param name="path">A key's path, as <see cref="Of"/> writes one, or a name as code writes one.</param>
     public static IEnumerable<(int Start, int End)> Places(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -172,37 +175,99 @@ public static class CodeKeyPaths
 
             var start = at;
 
-            if (path[at] == '[')
+            if (BracketEnd(path, at) is { } end)
             {
-                at++;
-
-                if (at < path.Length && path[at] == '"')
-                {
-                    for (at++; at < path.Length && path[at] != '"'; at++)
-                    {
-                        at += path[at] == '\\' ? 1 : 0;
-                    }
-
-                    at++;
-                }
-
-                while (at < path.Length && path[at] != ']')
-                {
-                    at++;
-                }
-
-                at = Math.Min(at + 1, path.Length);
+                at = end;
             }
             else
             {
-                while (at < path.Length && path[at] is not ('.' or '['))
+                for (at++; at < path.Length && path[at] != '.' && !(path[at] == '[' && BracketEnd(path, at) is not null); at++)
                 {
-                    at++;
                 }
             }
 
             yield return (start, at);
         }
+    }
+
+    /// <summary>
+    /// The last place <paramref name="path"/> is written of (<see cref="Places"/>), as it is written - a name, or an item or a
+    /// quoted name with its brackets, as a data file's key of that place is named - or the whole path where it holds none.
+    /// </summary>
+    /// <param name="path">A key's path, as <see cref="Of"/> writes one, or a name as code writes one.</param>
+    public static string Last(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        string? last = null;
+
+        foreach (var (start, end) in Places(path))
+        {
+            last = path[start..end];
+        }
+
+        return last ?? path;
+    }
+
+    /// <summary>
+    /// The last place of <paramref name="path"/> that is a name, no item or quoted name in brackets, which no text writes as
+    /// it is - <c>value</c> of <c>limits[1].value</c>, <c>limits</c> of <c>limits[1]</c>, <c>this[]</c> of
+    /// <c>Canvas.this[]</c> - as data and code write the place a path ends at; the whole path where it holds no name.
+    /// </summary>
+    /// <param name="path">A key's path, as <see cref="Of"/> writes one, or a name as code writes one.</param>
+    public static string LastName(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        string? last = null;
+
+        foreach (var (start, end) in Places(path))
+        {
+            last = InBrackets(path, start) ? last : path[start..end];
+        }
+
+        return last ?? path;
+    }
+
+    /// <summary>Whether the place of <paramref name="path"/> that begins at <paramref name="start"/> is one in brackets, an item or a quoted name, and no name.</summary>
+    private static bool InBrackets(string path, int start) => BracketEnd(path, start) is not null;
+
+    /// <summary>
+    /// Where the place in brackets <paramref name="path"/> holds at <paramref name="at"/> ends, past its closing bracket - an
+    /// item's digits, or a quoted name read to its first unescaped quote mark, which the closing bracket follows - or null
+    /// where no such place begins there.
+    /// </summary>
+    private static int? BracketEnd(string path, int at)
+    {
+        if (at + 1 >= path.Length || path[at] != '[')
+        {
+            return null;
+        }
+
+        var end = at + 1;
+
+        if (char.IsAsciiDigit(path[end]))
+        {
+            while (end < path.Length && char.IsAsciiDigit(path[end]))
+            {
+                end++;
+            }
+        }
+        else if (path[end] == '"')
+        {
+            for (end++; end < path.Length && path[end] != '"'; end++)
+            {
+                end += path[end] == '\\' ? 1 : 0;
+            }
+
+            end++;
+        }
+        else
+        {
+            return null;
+        }
+
+        return end < path.Length && path[end] == ']' ? end + 1 : null;
     }
 
     /// <summary>

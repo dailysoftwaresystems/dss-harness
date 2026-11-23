@@ -22,6 +22,10 @@ public sealed partial class CodebaseGraphToolTests
     /// <summary>The coverage line of the one file every tree of these tests holds that the graph lists only, its zoo.txt, where it holds no hit.</summary>
     private const string ListedZoo = "coverage: 1 file(s) the graph lists only (.txt) searched by text - 0 hit(s)";
 
+    /// <summary>The coverage line of an answer that searched <paramref name="word"/> and <paramref name="paths"/> key paths as an environment variable writes each.</summary>
+    private static string KeyPathsSearched(string word, int paths)
+        => $"coverage: '{word}' searched as a whole word, and {paths.ToString(CultureInfo.InvariantCulture)} key path(s) it names as an environment variable writes each, its places joined by '__'";
+
     /// <summary>
     /// <c>sites</c> answers every place that decides a name once - the card of the node at it, saying every way it decides,
     /// an edge's other than exact with how sure it is, as <c>node</c> marks a candidates edge: its definers, what calls them,
@@ -138,7 +142,7 @@ public sealed partial class CodebaseGraphToolTests
                 ListedZoo,
                 "coverage: 2 file(s) the graph is unsure of, searched by text too - 0 hit(s)",
                 "coverage: 2 file(s) the graph outlines (.json, .md), their values and their text held by no literal of it, searched by text too - 1 hit(s)",
-                "coverage: 'TimeoutSeconds' searched as a whole word, and the key path as an environment variable writes it: 'Payments__TimeoutSeconds'",
+                KeyPathsSearched("TimeoutSeconds", 1),
                 NoExtractor,
                 .. LimitsOf("csharp", [CodeGraphLimit.Candidates]),
                 .. LimitsOf("json"),
@@ -319,11 +323,14 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Contains("coverage: '.btn-primary' searched as a rule writes it and as the name 'btn-primary', a whole word of a class list", lines);
         Assert.DoesNotContain(lines, line => line.Contains("btn-primary-outline", StringComparison.Ordinal));
 
-        // The pattern itself: the selector with no character of a class's name after it, and its name a whole word of a class list.
-        var pattern = CodebaseGraphQueries.SitesPattern(".btn-primary");
+        // The search itself: the selector with no character of a class's name after it, and its name a whole word of a class list.
+        var search = GraphSitesSearch.Of(".btn-primary");
+        string[] held = ["button.btn-primary", ".btn-primary {", "class=\"btn btn-primary\"", "addClass('btn-primary')", "btn-primary"];
+        string[] other = [".btn-primary-outline", "btn-primary-outline", "my-btn-primary", "class=\"btn-primary2\""];
 
-        Assert.All(new[] { "button.btn-primary", ".btn-primary {", "class=\"btn btn-primary\"", "addClass('btn-primary')", "btn-primary" }, held => Assert.Matches(pattern, held));
-        Assert.All(new[] { ".btn-primary-outline", "btn-primary-outline", "my-btn-primary", "class=\"btn-primary2\"" }, other => Assert.DoesNotMatch(pattern, other));
+        Assert.Equal([.. held.Select(_ => true), .. other.Select(_ => false)], held.Concat(other).Select(search.Holds));
+        Assert.Equal((".btn-primary", "btn-primary"), (search.Word, search.Selector));
+        Assert.Empty(search.Spellings);
 
         // The dot is the selector's own: the class rule alone, and the name without it the element rule and the key.
         Assert.Equal(["css:web/site.css#.header"], (await AskAsync(tool, """{"op":"sites","data":".header"}""")).Facts.Asked);
@@ -694,17 +701,17 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// The node at a line - a text hit's card, a <c>path:line</c>'s node - is of the nodes of the tightest lines the innermost,
-    /// never one of them by the order of their ids: a page's landmark before the body of the same lines, a type's only member
-    /// on its line before the type, and a Vue component that spans its whole file before the file's own node. Where several
-    /// are innermost, the line declares them inside one of those lines, which is the node at it - a positional record, not its
-    /// first parameter by id though one of them makes a reference there; a one-line enum, not the member whose name sorts
-    /// first; a one-line object of a JSON list, not its first key - else the one that makes a reference at the line - a Razor
-    /// page's markup, not the class it compiles to - else the nearest node they are all declared inside: two fields on one
-    /// line, their type.
+    /// The node at a line - a text hit's card, a <c>path:line</c>'s node - is, at a line nodes begin on, the outermost of them -
+    /// of those that end last, the one no other of them is declared inside - whatever their count: a one-line type, not its
+    /// one member; a positional record, not its parameter, one or several; a one-line enum, not a member; a one-line object of
+    /// a JSON list, not its key, one or several; a method that begins on a field's line, not the field. Where several are
+    /// outermost, the one that makes a reference at the line, else the nearest node they are all declared inside: two fields
+    /// on one line, their type. At a line inside a node that began before it, the innermost node that holds it, never one by
+    /// the order of their ids: a page's landmark before the body of the same lines, a Vue component that spans its whole file
+    /// before the file's own node, and a Razor page's markup before the class it compiles to.
     /// </summary>
     [Fact]
-    public async Task TheNodeAtALine_IsTheInnermost_OrTheNodeTheLineDeclaresSeveralInside_NeverOneByTheOrderOfIds()
+    public async Task TheNodeAtALine_IsTheOutermostTheLineBegins_OrTheInnermostThatHoldsIt_NeverOneByTheOrderOfIds()
     {
         using var tree = await TreeAsync(
             ("web/page.html", "<main>\n  <p>Okapi</p>\n</main>\n"),
@@ -713,22 +720,28 @@ public sealed partial class CodebaseGraphToolTests
             ("src/CartService.cs", "namespace Shop;\n\npublic sealed class CartService\n{\n    public int Total() => 0;\n}\n"),
             ("src/Pages/_Total.cshtml", "@model Shop.CartService\n\n<p>Total: @Model.Total()</p>\n"),
             ("src/Events.cs", "namespace Demo;\n\npublic interface IEvent\n{\n}\n\npublic sealed class Product\n{\n}\n\npublic sealed record OrderPlaced(System.Guid Id, decimal Total) : IEvent;\n\npublic sealed record Line(Product Item, int Count);\n"),
+            ("src/Ids.cs", "namespace Demo;\n\npublic interface IId\n{\n}\n\npublic readonly record struct OrderId(System.Guid Value) : IId;\n"),
             ("src/Enums.cs", "namespace Demo;\n\npublic enum Shipping { Standard, Express }\n\npublic enum Color { Red, Green, Blue }\n"),
             ("src/Pair.cs", "namespace Demo;\n\npublic sealed class Pair\n{\n    public int Left; public int Right;\n}\n"),
-            ("config/limits.json", "{\n  \"limits\": [\n    { \"kind\": \"depth\", \"value\": 8 },\n    { \"kind\": \"size\", \"value\": 9 }\n  ]\n}\n"));
+            ("src/Mixed.cs", "namespace Demo;\n\npublic sealed class Mixed\n{\n    public int Count; public void Reset()\n    {\n        Count = 0;\n    }\n}\n"),
+            ("config/limits.json", "{\n  \"limits\": [\n    { \"kind\": \"depth\", \"value\": 8 },\n    { \"kind\": \"size\", \"value\": 9 }\n  ]\n}\n"),
+            ("config/urls.json", "[\n  { \"url\": \"x\" }\n]\n"));
         var queries = await QueriesAsync(tree);
 
         string Qualified(string path, int line) => queries.AtLine(path, line)!.Qualified;
 
         Assert.Equal("landmark", queries.AtLine("web/page.html", 2)!.SubKind);
-        Assert.Equal("Two", queries.AtLine("src/One.cs", 3)!.Name);
         Assert.Equal(("vue:src/Cart.vue", CodeNodeKinds.Type), (queries.AtLine("src/Cart.vue", 2)!.Id, queries.AtLine("src/Cart.vue", 2)!.Kind));
         Assert.Equal("razor:src/Pages/_Total.cshtml#view", queries.AtLine("src/Pages/_Total.cshtml", 3)!.Id);
 
-        // Each line here declares several of the same lines inside one: the record, the enum, the object.
+        // Each line here begins several nodes, the others declared inside one: the type, the record, the enum, the object -
+        // of one member as of several.
         Assert.Equal(
-            ["Demo.OrderPlaced", "Demo.Line", "Demo.Shipping", "Demo.Color", "config/limits.json#limits[0]", "config/limits.json#limits[1]"],
-            [Qualified("src/Events.cs", 11), Qualified("src/Events.cs", 13), Qualified("src/Enums.cs", 3), Qualified("src/Enums.cs", 5), Qualified("config/limits.json", 3), Qualified("config/limits.json", 4)]);
+            ["Demo.One", "Demo.OrderPlaced", "Demo.Line", "Demo.OrderId", "Demo.Shipping", "Demo.Color", "config/limits.json#limits[0]", "config/limits.json#limits[1]", "config/urls.json#[0]"],
+            [Qualified("src/One.cs", 3), Qualified("src/Events.cs", 11), Qualified("src/Events.cs", 13), Qualified("src/Ids.cs", 7), Qualified("src/Enums.cs", 3), Qualified("src/Enums.cs", 5), Qualified("config/limits.json", 3), Qualified("config/limits.json", 4), Qualified("config/urls.json", 2)]);
+
+        // A method that begins on a field's line ends after it: the method's lines hold the field's.
+        Assert.Equal("Demo.Mixed.Reset", Qualified("src/Mixed.cs", 5));
 
         // Two fields on a line of their type: neither of them, but the type they are declared inside.
         Assert.Equal("Demo.Pair", Qualified("src/Pair.cs", 5));
@@ -833,8 +846,9 @@ public sealed partial class CodebaseGraphToolTests
     /// the same keys: the key at that path, and a key whose own name spells it, an environment variable's under a compose
     /// file's <c>environment</c>; and it is searched for by its last key, as data and code write it, and by its places as an
     /// environment variable writes them, which a whole word of its last key is never held by - the line that writes the path
-    /// so said under its key's card, and the spelling said in the coverage lines. A name spelt so of a place that holds a
-    /// separator of its own is no spelling of the path, for it is never read back as it.
+    /// so said under its key's card, and how many key paths were searched so said in the coverage lines. One spelt so that
+    /// nothing names is read as a key path too. A name spelt so of a place that holds a separator of its own is no spelling of
+    /// the path, for it is never read back as it.
     /// </summary>
     [Fact]
     public async Task Sites_OfAKeyPathInAnySpelling_AnswerTheSameKeys_AndSearchItAsCodeDataAndTheEnvironmentWriteIt()
@@ -861,14 +875,22 @@ public sealed partial class CodebaseGraphToolTests
             Assert.Contains("      src/Settings.cs:7 holds the literal 'Payments:TimeoutSeconds'", lines);
             Assert.Contains($"  {GraphLines.Of(variable)} | holds the key, a line holds it", lines);
             Assert.Contains("      deploy/compose.yml:2 Payments__TimeoutSeconds: 60", lines);
-            Assert.Contains("coverage: 'TimeoutSeconds' searched as a whole word, and the key path as an environment variable writes it: 'Payments__TimeoutSeconds'", lines);
+            Assert.Contains(KeyPathsSearched("TimeoutSeconds", 1), lines);
         }
 
-        // The last key of a path in each spelling, a quoted name's dot no separator; each path as an environment variable writes it,
-        // and each name a key may be written with that names it, none of a place that holds a separator of its own.
+        // The word each is searched for by - the last key of a path in each spelling, a key path nothing names read as one, a name
+        // with its scopes by its last part, a selector whole - and the key path it spells as an environment variable writes it.
+        string[] written = ["Payments:TimeoutSeconds", "Payments__TimeoutSeconds", "Limits:1:Value", "Order::Total", ".btn", "MAX_SIZE"];
+        var searches = written.Select(data => queries.SitesSearch(data, queries.DefinersOf(data))).ToList();
+
+        Assert.Equal(["TimeoutSeconds", "TimeoutSeconds", "Value", "Total", ".btn", "MAX_SIZE"], searches.Select(search => search.Word));
+        Assert.Equal([["Payments__TimeoutSeconds"], ["Payments__TimeoutSeconds"], ["Limits__1__Value"], [], [], []], searches.Select(search => search.Spellings.Order(StringComparer.Ordinal).ToArray()));
+
+        // The last name of a path, a quoted name's dot no separator; each path as an environment variable writes it, and each name a
+        // key may be written with that names it, none of a place that holds a separator of its own.
         Assert.Equal(
-            ["TimeoutSeconds", "TimeoutSeconds", "Value", "limits", "value", "Total", ".btn", "MAX_SIZE"],
-            new[] { "Payments:TimeoutSeconds", "Payments__TimeoutSeconds", "Limits:1:Value", "limits[1]", "packages[\"a.b\"].value", "Order::Total", ".btn", "MAX_SIZE" }.Select(CodebaseGraphQueries.LastPart));
+            ["TimeoutSeconds", "Value", "limits", "value", "Total", "MAX_SIZE"],
+            new[] { "Payments.TimeoutSeconds", "Limits[1].Value", "limits[1]", "packages[\"a.b\"].value", "Order.Total", "MAX_SIZE" }.Select(CodeKeyPaths.LastName));
         Assert.Equal(
             ["Payments__TimeoutSeconds", "Limits__1__Value", null, null, null],
             new[] { "Payments.TimeoutSeconds", "Limits[1].Value", "packages[\"\"].name", "Payments", "environment.Payments__TimeoutSeconds" }.Select(CodeKeyPaths.Environment));
@@ -1011,5 +1033,184 @@ public sealed partial class CodebaseGraphToolTests
 
         Assert.Equal(GraphToolOutcome.Answered, answer.Outcome);
         Assert.Equal(["every place that decides 'zebu':", ".txt in directory docs/ (1):", "  docs/a\\b.txt:1 A zebu grazes here."], answer.Text.Split('\n')[..3]);
+    }
+
+    /// <summary>
+    /// A name hundreds of key paths end with - a workflow's every step's <c>name</c> - is searched for by every one of them as an
+    /// environment variable writes it, by a pattern of one size however many there are: the pattern reads a line by the
+    /// double underscore every such path parts its places by, and each line and literal it reads is held to the paths whole,
+    /// so a line that writes one of them is a place and one that writes another name ending alike is none. No key path is
+    /// left out, the answer is given, and the coverage line says how many were searched so.
+    /// </summary>
+    [Fact]
+    public async Task Sites_OfANameHundredsOfKeyPathsEndWith_SearchEachAsAnEnvironmentVariableWritesIt_ByAPatternOfOneSize()
+    {
+        const int Jobs = 300;
+        var jobs = new StringBuilder("{\n  \"jobs\": {\n");
+
+        for (var at = 0; at < Jobs; at++)
+        {
+            jobs.Append(CultureInfo.InvariantCulture, $"    \"job{at}\": {{ \"steps\": [ {{ \"name\": \"step\" }} ] }}{(at < Jobs - 1 ? "," : string.Empty)}\n");
+        }
+
+        using var tree = await TreeAsync(
+            ("config/jobs.json", jobs.Append("  }\n}\n").ToString()),
+            ("deploy/jobs.txt", "jobs__job150__steps__0__name=build\nother__name=nothing\njobs__job150__steps__0__names=nothing\n"),
+            ("src/Env.cs", "namespace Demo;\n\npublic static class Env\n{\n    public static string? Step() => System.Environment.GetEnvironmentVariable(\"jobs__job7__steps__0__name\");\n\n    public static string? Other() => System.Environment.GetEnvironmentVariable(\"nobody__name\");\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        var first = await AskAsync(tool, """{"op":"sites","data":"name"}""");
+        var lines = new List<string>(first.Text.Split('\n'));
+
+        for (var page = 2; page <= first.Paging!.Pages; page++)
+        {
+            var later = await AskAsync(tool, $$"""{"op":"sites","data":"name","page":{{page}}}""");
+
+            Assert.Equal(GraphToolOutcome.Answered, later.Outcome);
+            lines.AddRange(later.Text.Split('\n'));
+        }
+
+        Assert.Equal(GraphToolOutcome.Answered, first.Outcome);
+        Assert.Equal(Jobs, queries.DefinersOf("name").Count(card => card.SubKind == CodeSubKinds.Key));
+        Assert.Contains("  deploy/jobs.txt:1 jobs__job150__steps__0__name=build", lines);
+        Assert.Contains("      src/Env.cs:5 holds the literal 'jobs__job7__steps__0__name'", lines);
+        Assert.Contains(KeyPathsSearched("name", Jobs), lines);
+
+        // Another name ending alike, and a longer word that begins with a key path, are no places.
+        Assert.DoesNotContain(lines, line => line.Contains("other__name", StringComparison.Ordinal) || line.Contains("__names", StringComparison.Ordinal) || line.Contains("nobody__name", StringComparison.Ordinal));
+
+        // The pattern is of one size, whatever the key paths: the word's, and their kind's.
+        var search = queries.SitesSearch("name", queries.DefinersOf("name"));
+
+        Assert.Equal(Jobs, search.Spellings.Count);
+        Assert.Equal(GraphSitesSearch.Of("name", ["any__name"]).Pattern.ToString(), search.Pattern.ToString());
+
+        // A key path is held whole whatever characters its places hold, each edge that is a word character at a word's edge.
+        var spelt = GraphSitesSearch.Of("timeout", ["my-service__timeout", "Payments__timeout"]);
+        string[] held = ["export my-service__timeout=1", "Payments__timeout: 30", "a-Payments__timeout"];
+        string[] other = ["xmy-service__timeout", "my-service__timeouts", "MY__timeout", "__timeout"];
+
+        Assert.Equal([.. held.Select(_ => true), .. other.Select(_ => false)], held.Concat(other).Select(spelt.Holds));
+        Assert.Throws<ArgumentException>(() => GraphSitesSearch.Of("timeout", ["timeout_seconds"]));
+    }
+
+    /// <summary>
+    /// A selector is a selector before it is a key path: a BEM element's class, <c>.card__title</c>, is asked of its rule and
+    /// searched as a rule writes it and by its name as a class list writes it - a literal that adds the class and a line of
+    /// markup that names it are its places - never as the key path <c>.card.title</c>, whose last key would make every word
+    /// <c>title</c> a place.
+    /// </summary>
+    [Fact]
+    public async Task ABemSelector_IsSearchedAsTheSelectorItIs_NeverAsAKeyPath()
+    {
+        using var tree = await TreeAsync(
+            ("web/card.css", ".card__title {\n  font-weight: bold;\n}\n"),
+            ("web/card.ts", "export function mark(el: HTMLElement): void {\n  el.classList.add('card__title');\n}\n\nexport function heading(): string {\n  return 'title';\n}\n"),
+            ("docs/card.txt", "<h2 class=\"card__title\">Cart</h2>\n<title>Shop</title>\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        var answer = await AskAsync(tool, """{"op":"sites","data":".card__title"}""");
+        var lines = answer.Text.Split('\n');
+
+        Assert.Equal(["css:web/card.css#.card__title"], answer.Facts.Asked);
+        Assert.Contains($"  {GraphLines.Of(queries.Card("css:web/card.css#.card__title"))} | defines, a line holds it", lines);
+        Assert.Contains("      web/card.ts:2 holds the literal 'card__title'", lines);
+        Assert.Contains("  docs/card.txt:1 <h2 class=\"card__title\">Cart</h2>", lines);
+        Assert.Contains("coverage: '.card__title' searched as a rule writes it and as the name 'card__title', a whole word of a class list", lines);
+        Assert.DoesNotContain(lines, line => line.Contains("'title'", StringComparison.Ordinal) || line.Contains("docs/card.txt:2", StringComparison.Ordinal) || line.Contains("environment variable", StringComparison.Ordinal));
+        Assert.Equal((".card__title", "card__title"), (queries.SitesSearch(".card__title", queries.DefinersOf(".card__title")).Word, queries.SitesSearch(".card__title", queries.DefinersOf(".card__title")).Selector));
+    }
+
+    /// <summary>
+    /// A name whose last part holds brackets that are no key path's - C#'s indexer <c>this[]</c>, C++'s <c>operator[]</c> - is
+    /// read as code writes it: resolved with its scopes, as main resolved it, and searched for whole, never by the word before
+    /// its brackets, so a string that holds the word <c>this</c> is no place of the indexer. A key path's places in brackets are
+    /// an item's digits and a quoted name alone.
+    /// </summary>
+    [Fact]
+    public async Task ANameWhoseBracketsAreNoKeyPaths_IsResolvedAndSearchedAsCodeWritesIt()
+    {
+        using var tree = await TreeAsync(
+            ("src/Canvas.cs", "namespace Shapes;\n\npublic sealed class Canvas\n{\n    public int this[int at] => at;\n\n    public string Label() => \"Click this button\";\n}\n"),
+            ("src/vec.cpp", "struct Vec\n{\n    double operator[](int at) const\n    {\n        return at;\n    }\n};\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        Assert.Equal(("this[]", "Shapes.Canvas.this[]"), (CardOf(queries, "Canvas.this[]").Name, CardOf(queries, "Canvas.this[]").Qualified));
+        Assert.Equal(("operator[]", "Vec.operator[]"), (CardOf(queries, "Vec::operator[]").Name, CardOf(queries, "Vec::operator[]").Qualified));
+
+        var answer = await AskAsync(tool, """{"op":"sites","data":"Canvas.this[]"}""");
+
+        Assert.Equal([CardOf(queries, "Canvas.this[]").Id], answer.Facts.Asked);
+        Assert.Equal("this[]", queries.SitesSearch("Canvas.this[]", queries.DefinersOf("Canvas.this[]")).Word);
+        Assert.DoesNotContain(answer.Text.Split('\n'), line => line.Contains("Click this button", StringComparison.Ordinal));
+
+        // The places a path or a name is written of: a bracket opens a place only as a key's path writes one.
+        string[] Places(string path) => [.. CodeKeyPaths.Places(path).Select(place => path[place.Start..place.End])];
+
+        Assert.Equal(["Shapes", "Canvas", "this[]"], Places("Shapes.Canvas.this[]"));
+        Assert.Equal(["Vec", "operator[]="], Places("Vec.operator[]="));
+        Assert.Equal(["limits", "[1]", "value"], Places("limits[1].value"));
+        Assert.Equal(["messages", "[\"a.b\\\"]\"]", "text"], Places("messages[\"a.b\\\"]\"].text"));
+        Assert.Equal(["this[]", "this[]", "[1]"], new[] { "Shapes.Canvas.this[]", "this[]", "limits[1]" }.Select(CodeKeyPaths.Last));
+        Assert.Equal(["this[]", "operator[]", "limits"], new[] { "Shapes.Canvas.this[]", "Vec.operator[]", "limits[1]" }.Select(CodeKeyPaths.LastName));
+    }
+
+    /// <summary>
+    /// What names a node by itself - its id, a <c>path:line</c> - is never read as a key path, whether or not the view holds
+    /// what it names, and neither is a name the data's definers are declarations of, none a key - a constant code declares as
+    /// <c>RETRY__LIMIT</c> is searched for whole, never as the path <c>RETRY.LIMIT</c>'s last key: none is searched as an
+    /// environment variable writes a path, and the coverage lines say none was. A key path spelt so that names a key is.
+    /// </summary>
+    [Fact]
+    public async Task Sites_ByANodeOrAFilesLine_OrANameCodeDeclares_NeverSearchItAsAKeyPath()
+    {
+        using var tree = await TreeAsync(
+            ("config/app.json", "{\n  \"Payments\": {\n    \"TimeoutSeconds\": 30\n  }\n}\n"),
+            ("src/Retry.cs", "namespace Demo;\n\npublic static class Retry\n{\n    public const int RETRY__LIMIT = 3;\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        foreach (var data in new[] { "csharp:Demo.Circle.Area()", "src/Shapes.cs:14", "csharp:Demo.Gone()", "src/Gone.cs:7", "RETRY__LIMIT" })
+        {
+            var lines = (await AskAsync(tool, $$"""{"op":"sites","data":"{{data}}"}""")).Text.Split('\n');
+
+            Assert.DoesNotContain(lines, line => line.Contains("environment variable", StringComparison.Ordinal));
+            Assert.Empty(queries.SitesSearch(data, queries.DefinersOf(data)).Spellings);
+        }
+
+        var limit = await AskAsync(tool, """{"op":"sites","data":"RETRY__LIMIT"}""");
+
+        Assert.Equal("RETRY__LIMIT", queries.SitesSearch("RETRY__LIMIT", queries.DefinersOf("RETRY__LIMIT")).Word);
+        Assert.Contains($"  {GraphLines.Of(CardOf(queries, "Retry.RETRY__LIMIT"))} | defines", limit.Text.Split('\n'));
+        Assert.Contains(KeyPathsSearched("TimeoutSeconds", 1), (await AskAsync(tool, """{"op":"sites","data":"Payments:TimeoutSeconds"}""")).Text.Split('\n'));
+    }
+
+    /// <summary>
+    /// A node declared in many files - a namespace every file opens - is looked up once in each file's line index and once for
+    /// each card of it as a file declares it, from an index of every declaration made once: a file's index costs its own
+    /// nodes, never every other file the node is declared in, so the indexes of every file cost the files' nodes, never their
+    /// square.
+    /// </summary>
+    [Fact]
+    public async Task EachFilesLineIndex_LooksUpEachNodeItSharesOnce_HoweverManyFilesDeclareIt()
+    {
+        const int Files = 40;
+        using var tree = await TreeAsync([.. Enumerable.Range(0, Files).Select(at => ($"wide/W{at}.cs", $"namespace Wide;\n\npublic sealed class C{at}\n{{\n}}\n"))]);
+        var queries = await QueriesAsync(tree);
+
+        Assert.Equal(Files, queries.Parts(CardOf(queries, "Wide").Id).Count);
+
+        var before = queries.DeclarationsRead;
+
+        for (var at = 0; at < Files; at++)
+        {
+            Assert.Equal($"Wide.C{at}", queries.AtLine($"wide/W{at}.cs", 3)!.Qualified);
+        }
+
+        // Each file's index looks up each of its three nodes - its own, the namespace, its class - and its card one more.
+        Assert.Equal(Files * 4, queries.DeclarationsRead - before);
     }
 }
