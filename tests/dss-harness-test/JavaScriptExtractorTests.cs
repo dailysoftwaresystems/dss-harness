@@ -1345,7 +1345,8 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         var extract = Read("lib/invoice.js", Text);
         var type = "javascript:lib/invoice.js.InvoiceView";
 
-        Assert.Equal((CodeNodeKinds.Type, "class", 3, 9), (Node(extract, type).Kind, Node(extract, type).SubKind, Node(extract, type).Start, Node(extract, type).End));
+        // The type's lines hold the member its prototype is given after the call that builds it, as a type holds every member it has.
+        Assert.Equal((CodeNodeKinds.Type, "class", 3, 11), (Node(extract, type).Kind, Node(extract, type).SubKind, Node(extract, type).Start, Node(extract, type).End));
 
         // The object's functions are methods and its values fields, each a member of the type over its own lines.
         Assert.Equal(
@@ -1616,6 +1617,67 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
                 new CodeEdge("javascript:lib/main.js.go", "javascript:lib/cart.js.Cart", CodeEdgeKinds.Instantiates, 3, CodeConfidences.Exact),
             ],
             linked.Edges.Where(edge => edge.From == "javascript:lib/main.js.go" && edge.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Instantiates).OrderBy(edge => edge.Kind, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A value's type is read where the value is declared: a field one file's <c>this.cart = new Cart()</c> declares, whose
+    /// constructor function that file binds by a <c>require</c>, is of that function wherever the field is called on - from a
+    /// class another file builds on the field's class, which binds no <c>Cart</c> - so the call reaches the member a third file
+    /// adds to the function's prototype, as the same call written in the field's own file does.
+    /// </summary>
+    [Fact]
+    public void AValuesType_IsReadWhereTheValueIsDeclared_NotWhereItIsCalledOn()
+    {
+        var linked = Link(
+            ("lib/cart.js", "function Cart() { this.items = []; }\nmodule.exports = Cart;"),
+            ("lib/cart-total.js", "var Cart = require('./cart');\nCart.prototype.total = function () { return 0; };"),
+            ("lib/view.js", "var Cart = require('./cart');\nclass View { constructor() { this.cart = new Cart(); } }\nmodule.exports = View;"),
+            ("lib/special.js", "var View = require('./view');\nclass Special extends View { sum() { return this.cart.total(); } }"));
+
+        Assert.Equal(
+            [new CodeEdge("javascript:lib/special.js.Special.sum", "javascript:lib/cart-total.js.Cart.total", CodeEdgeKinds.Calls, 2, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.From == "javascript:lib/special.js.Special.sum" && edge.Kind == CodeEdgeKinds.Calls));
+    }
+
+    /// <summary>
+    /// A chain names a constructor function by what the names before its last hold, never by a member a prototype is given, which
+    /// is an instance's and no name its type holds: <c>Lib.Widget</c> is never <c>Lib.prototype.Widget</c>, so the members a file
+    /// adds to <c>Lib.Widget</c>'s prototype extend nothing the repository declares, and their <c>this</c> reaches nothing - not
+    /// the sibling the scope of that chain holds.
+    /// </summary>
+    [Fact]
+    public void AChainNamesAConstructorByWhatItsNamesHold_NeverByAMemberAPrototypeIsGiven()
+    {
+        const string Render = "Lib.Widget.prototype.render = function () { this.paint(); };\nLib.Widget.prototype.paint = function () {};";
+        var linked = Link(("lib/lib.js", "function Lib() {}"), ("lib/widget.js", "Lib.prototype.Widget = function () {};"), ("lib/render.js", Render));
+
+        // Both extend the chain, which no file declares; the one a prototype is given is Lib's, never the chain's.
+        Assert.Equal(
+            [("javascript:Lib.Widget.render", "Lib.Widget"), ("javascript:Lib.Widget.paint", "Lib.Widget")],
+            Read("lib/render.js", Render).Nodes.Where(node => node.Extends is not null).Select(node => (node.Id.Whole(), node.Extends!)));
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Calls);
+        Assert.Equal(1, linked.External["javascript:Lib.Widget.render"]);
+    }
+
+    /// <summary>
+    /// What a member a prototype is given extends is never found from what another extends, so a link ends wherever the chains
+    /// they extend name each other's members: one whose chain's last name is its own, <c>Lib.render.prototype.render</c>, and
+    /// two in two files that name each other's last names - each extending nothing, its <c>this</c> reaching nothing.
+    /// </summary>
+    [Fact]
+    public void PrototypesMembersWhoseChainsNameEachOther_ExtendNothing_AndTheLinkEnds()
+    {
+        var own = Link(("lib/a.js", "Lib.render.prototype.render = function () { this.draw(); };"));
+
+        Assert.DoesNotContain(own.Edges, edge => edge.Kind == CodeEdgeKinds.Calls);
+        Assert.Equal(1, own.External["javascript:Lib.render.render"]);
+
+        var each = Link(
+            ("lib/widget.js", "Lib.Widget.prototype.render = function () { this.draw(); };"),
+            ("lib/render.js", "Lib.render.prototype.Widget = function () { this.draw(); };"));
+
+        Assert.DoesNotContain(each.Edges, edge => edge.Kind == CodeEdgeKinds.Calls);
+        Assert.Equal([("javascript:Lib.Widget.render", 1), ("javascript:Lib.render.Widget", 1)], each.External.OrderBy(entry => entry.Key, StringComparer.Ordinal).Select(entry => (entry.Key, entry.Value)));
     }
 
     /// <summary>

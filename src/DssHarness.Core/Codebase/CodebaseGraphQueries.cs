@@ -495,14 +495,16 @@ public sealed class CodebaseGraphQueries
     /// writes one. The word is the name of the node the data names by itself - its handle, its id, a <c>path:line</c> - else
     /// the selector it is written as, a rule's (<c>.btn</c>, <c>.card__title</c>), whole; else its last name
     /// (<see cref="CodeKeyPaths.LastName"/>) - <c>Total</c> of <c>Order.Total</c> and of <c>Order::Total</c>, <c>this[]</c> of
-    /// <c>Canvas.this[]</c> - read as a key path where it is spelt as one (<see cref="SpeltAsAKeyPath"/>) and the data names a
-    /// key, or nothing names it and it is written as no node's id and no file's line (<see cref="WrittenAsAPlace"/>) -
-    /// <c>TimeoutSeconds</c> of <c>Payments:TimeoutSeconds</c> and of <c>Payments__TimeoutSeconds</c> - and as the name it is
-    /// written as else, as code that declares <c>RETRY__LIMIT</c> writes it. The key paths are those of the keys among its
-    /// definers, and the path the data spells where it is read as one, each as an environment variable writes it
-    /// (<see cref="CodeKeyPaths.Environment"/>): <c>Payments__TimeoutSeconds</c>, which no whole word of its last key is held
-    /// by. A node the data names by itself, a selector, and a name read as the name it is written as spell no path of their
-    /// own.
+    /// <c>Canvas.this[]</c> - read as a key path where it is spelt as one (<see cref="SpeltAsAKeyPath"/>): where it names a key;
+    /// where its definers, none a key, are found by the path it spells and none is named by it as it is written - a member the
+    /// options pattern binds a section to, <c>Api.JwtSettings.Secret</c> of <c>JwtSettings:Secret</c>; and where nothing names
+    /// it and it is written as no node's id and no file's line (<see cref="WrittenAsAPlace"/>) - <c>TimeoutSeconds</c> of
+    /// <c>Payments:TimeoutSeconds</c> and of <c>Payments__TimeoutSeconds</c>, <c>Secret</c> of <c>JwtSettings:Secret</c>. Where none
+    /// of its definers is a key and one is named by it as it is written (<see cref="NamedAsWritten"/>) it is read as that name, as
+    /// code that declares <c>RETRY__LIMIT</c> writes it. The key paths are those of the keys among its definers, and the path
+    /// the data spells where it is read as one, each as an environment variable writes it (<see cref="CodeKeyPaths.Environment"/>):
+    /// <c>Payments__TimeoutSeconds</c>, which no whole word of its last key is held by. A node the data names by itself, a
+    /// selector, and a name read as the name it is written as spell no path of their own.
     /// </summary>
     /// <param name="data">The data as it is written, asked by a name.</param>
     /// <param name="definers">The data's definers.</param>
@@ -513,10 +515,25 @@ public sealed class CodebaseGraphQueries
 
         var keys = definers.Where(card => string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal)).ToList();
         var exact = NamedExactly(data);
-        var spelt = exact is null && SpeltAsAKeyPath(data) is { } path && (keys.Count > 0 || (definers.Count == 0 && !WrittenAsAPlace(data))) ? path : null;
+        var spelt = exact is null && SpeltAsAKeyPath(data) is { } path
+            && (keys.Count > 0 || (definers.Count > 0 ? !NamedAsWritten(data, definers) : !WrittenAsAPlace(data)))
+            ? path
+            : null;
         var word = exact?.Name ?? (SelectorName(data) is not null ? data : CodeKeyPaths.LastName(spelt ?? Dotted(data)));
 
         return GraphSitesSearch.Of(word, keys.Select(card => card.Qualified).Append(spelt).OfType<string>().Select(CodeKeyPaths.Environment).OfType<string>());
+    }
+
+    /// <summary>
+    /// Whether one of <paramref name="definers"/> is named by <paramref name="data"/> as it is written - its name or its qualified
+    /// name the data, or the data with its language's own separators written as dots (<see cref="Dotted"/>) - and not by the key
+    /// path the data spells: a name code declares, <c>RETRY__LIMIT</c>, which the data is read as.
+    /// </summary>
+    private static bool NamedAsWritten(string data, IReadOnlyList<GraphCard> definers)
+    {
+        var dotted = Dotted(data);
+
+        return definers.Any(card => card.Name == data || card.Qualified == data || card.Name == dotted || card.Qualified == dotted);
     }
 
     /// <summary>

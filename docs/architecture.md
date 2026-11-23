@@ -4737,22 +4737,26 @@ name an import binds as the export it binds, a `require`'s or a default import's
 on that type (`CodeGraphLinker.EnclosingTypes`: every type its scope or its `Extends` names, several a unique finding and
 never the first of them) - and where no type of X's name is, on the constructor function another file declares, found as a
 call of X is (`CodeGraphLinker.Extended`: a name alone in the scopes, the imports and the repository, a chain's last name
-through the import its prefix is - `Prefixed` - else in what the names before it name), whose own `this` is read on it
-too and whose `new` makes it (`Constructs`, by the members extending each name it is reached by, its own and each it is
-exported by); two chains naming a type the repository does not declare name it alike where one is the other or ends it
-at a name (`WrittenAlike`), never two modules' `default`s. Such a member is the type's own wherever the type is
-(`ExtractNode.Joined`) - the assignment adds it to the type itself when its file runs - so a call on a value of the type, or
-of a type built on it, reaches it whatever loaded the file that writes it, an import for its side effect alone that binds no
-name among them, where a C# or a Dart extension is reached only where the call's file reaches it (`Reaches`); a value of a
-type a chain names that no type is, is of the constructor function a call of the chain finds, as an extension finds the one
-it extends (`CodeGraphLinker.FunctionsCalled`); and a member extending a type the repository does not declare - a
-library's, `Backbone.View.prototype.close` - is reached on a value of a type written alike and on a type built on one as its
-base is written (`WrittenBasesOf`, the type's key holding how its bases are written). A jQuery plugin, `$.fn.y = function ()
-{}`, is such a member of `$` - `fn` after `$` or `jQuery` is jQuery's name for its prototype (`JsReading.PrototypeOf`) -
-reached by its name alone from what a call of `$` gives. A member a constructor, a method or an accessor of a type the
-file declares assigns through `this` - `this.lines = []` - is a field of the type where it declares nothing of that name,
-from the first such assignment (`JsReading.ThisFields`), as Python's `self` fields are, of the type the assignment's `new`
-makes where it is one, as a field the type's body declares is (`ValueTypeOf`). A
+through the import its prefix is - `Prefixed` - else what the types and scopes the names before it name hold by it, never a
+member a prototype is given, which is an instance's and no name the type holds - `Lib.Widget` is never
+`Lib.prototype.Widget` - so what one extension extends is never found from what another extends, and no finding of it asks
+for itself), whose own `this` is read on it too and whose `new` makes it (`Constructs`, by the members extending each name
+it is reached by, its own and each it is exported by); two chains naming a type the repository does not declare name it
+alike where one is the other or ends it at a name (`WrittenAlike`), never two modules' `default`s. Such a member is the
+type's own wherever the type is (`ExtractNode.Joined`) - the assignment adds it to the type itself when its file runs - so a
+call on a value of the type, or of a type built on it, reaches it whatever loaded the file that writes it, an import for its
+side effect alone that binds no name among them, where a C# or a Dart extension is reached only where the call's file
+reaches it (`Reaches`); a value of a type a chain names that no type is, is of the constructor function a call of the chain
+finds, as an extension finds the one it extends (`CodeGraphLinker.FunctionsCalled`), the chain read in the file of the value
+it types, which writes it - so a field one file's `this.cart = new Cart()` declares is of that `Cart` where a class another
+file builds on its class, binding no `Cart` of its own, calls on it; and a member extending a type the repository does not
+declare - a library's, `Backbone.View.prototype.close` - is reached on a value of a type written alike and on a type built
+on one as its base is written (`WrittenBasesOf`, the type's key holding how its bases are written). A jQuery plugin,
+`$.fn.y = function () {}`, is such a member of `$` - `fn` after `$` or `jQuery` is jQuery's name for its prototype
+(`JsReading.PrototypeOf`) - reached by its name alone from what a call of `$` gives. A member a constructor, a method or an
+accessor of a type the file declares assigns through `this` - `this.lines = []` - is a field of the type where it
+declares nothing of that name, from the first such assignment (`JsReading.ThisFields`), as Python's `self` fields are, of
+the type the assignment's `new` makes where it is one, as a field the type's body declares is (`ValueTypeOf`). A
 class's, an extend type's and a constructor function's members, and those a file adds to a type it does not declare,
 are reached by a receiver alone (`ExtractNode.MembersByReceiver`): a name their code writes by itself is looked for past
 that scope and its bases, so a method's `render(x)` reaches the module's `render`, never the method; a namespace
@@ -5036,8 +5040,12 @@ which says the key (`Named`, `ScopeNamed`, `ContainersOf`, `ParentOf`, `PartsOf`
 the rest); `CodeGraphLinker.Relink` takes the link it is made from (`CodeGraphLinked.Memory`, held in memory alone)
 and finds again only the references of the files not given as the very object that link was given, and those whose
 finding read a key whose part - what each changed file holds of it - is not what it was, the bases each round found moved
-among them; every other reference keeps its finding, and `References` counts what was found. A global import is read from the file that makes it, so a relative one
-names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
+among them; every other reference keeps its finding, and `References` counts what was found. What findings ask again -
+what a written name is from a file and a scope, what an extension extends, what a file imported makes visible by a name -
+is found once, with what finding it read (`CodeGraphLinker.Cached`), its key held from the moment its making begins: a
+making that asks for its own key again, through however many others, is given what is known of it then, nothing, and
+never makes it inside itself, as `Memo` answers a key met again while it is answered. A global import is read from the
+file that makes it, so a relative one names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
 own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as
 the least sure edge on its way up, each of several bases that answer alike is one of the candidates, however many, and
@@ -5374,12 +5382,13 @@ names by itself, by a selector whole, else by its last name (`CodebaseGraphQueri
 path's places read by `CodeKeyPaths.Places`, which reads a place in brackets only as a key's path writes one - an item's digits,
 a quoted name, whose dot parts nothing - so `this[]` of `Canvas.this[]` and `operator[]` of `Vec::operator[]` are names), for a
 name written with its scopes and a key path in any spelling are written in code and in data by their last name (`shape.Area()`,
-`"TimeoutSeconds": 30`) - a datum spelt as .NET's configuration spells a key path read as one where it names a key, or where
-nothing names it and it is written as no node's id and no file's line, and as the name code declares else (`RETRY__LIMIT`); a
-selector never, so `.card__title` is the class a BEM element names and never the path `.card.title` - and each key path it
-names by its places as an environment variable writes them too, every key's among its definers however many and the path it
-spells where it is read as one (`CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which no whole word of its last key is
-held by) - by the one whole-word rule every search of the graph reads (`GraphWord.Whole`: a boundary beside each
+`"TimeoutSeconds": 30`) - a datum spelt as .NET's configuration spells a key path read as one where it names a key, where
+the path it spells finds code's members, none a key (`Secret` of `JwtSettings:Secret`, a member the options pattern binds a
+section to), or where nothing names it and it is written as no node's id and no file's line, and as the name code declares
+where a definer, none of them a key, is named by it as it is written (`RETRY__LIMIT`); a selector never, so `.card__title`
+is the class a BEM element names and never the path `.card.title` - and each key path it names by its places as an
+environment variable writes them too, every key's among its definers however many and the path it spells where it is read
+as one (`CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which no whole word of its last key is held by) - by the one whole-word rule every search of the graph reads (`GraphWord.Whole`: a boundary beside each
 edge of the word that is a word character, an edge that is none its own boundary, so `.btn-primary` is held by
 `button.btn-primary`) and, for a selector, the selector with no character of a class's name after it, so `.btn` is not held by
 `.btn-primary`, and its bare name as a whole word of a class list too (`class="btn btn-primary"`, `addClass('btn-primary')`), the

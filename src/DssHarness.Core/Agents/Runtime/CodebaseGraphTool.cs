@@ -917,8 +917,9 @@ public sealed class CodebaseGraphTool(
     /// <see cref="CodebaseGraphQueries.TierOf"/>), and a raw line where the graph read no node of its file. A
     /// data that names a node by itself - its handle, its id, a <c>path:line</c> - asks of that node, its name the word its
     /// literals and the text are searched for, and a selector is searched for as it is written; a name written with its
-    /// scopes, or a key path in any spelling its reader reads where the data names a key or nothing names it, is searched for
-    /// by its last name, as code and data write it, and each key path it names by its places as an environment variable
+    /// scopes, or a key path in any spelling its reader reads - but for a name a definer, none of them a key, is named by as it
+    /// is written, which is searched for whole - is searched for by its last name, as code and data write it, and each key path
+    /// it names by its places as an environment variable
     /// writes them too (<see cref="CodebaseGraphQueries.SitesSearch"/>, <see cref="GraphSitesSearch"/>: no pattern, whatever the
     /// word's length and however many key paths it names); a quoted one asks by its value alone, never the symbols. Every place
     /// passes the step's reads at one gate (<see cref="SiteList"/>), and those they do not reach are counted. The coverage

@@ -1223,6 +1223,59 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
+    /// A key path spelt as .NET's configuration spells one whose definers its path finds - code's members, none a key, as the
+    /// options pattern binds a section to a class - is read as that key path in either spelling: searched for by its last key,
+    /// as code writes it, and by its places as an environment variable writes them - a Dockerfile's <c>ENV</c> line, a literal
+    /// that writes the path with a colon - and a file holding a reference of that last name the graph bound to nothing is
+    /// searched for the same word, never for the data as it was typed, which no line of code holds.
+    /// </summary>
+    [Fact]
+    public async Task AKeyPathWhoseDefinersItsPathFindsAreCodesMembers_IsSearchedAsThatKeyPath()
+    {
+        using var tree = await TreeAsync(
+            ("src/JwtSettings.cs", "namespace Api;\n\npublic sealed class JwtSettings\n{\n    public string Secret { get; set; } = \"\";\n}\n"),
+            ("src/Program.cs", "namespace Api;\n\npublic static class Program\n{\n    public static string Key(Microsoft.Extensions.Options.IOptions<JwtSettings> options)\n    {\n        return options.Value.Secret;\n    }\n\n    public static string Raw(Microsoft.Extensions.Configuration.IConfiguration config)\n    {\n        return config[\"JwtSettings:Secret\"];\n    }\n}\n"),
+            ("Dockerfile", "FROM base\nENV JwtSettings__Secret=change-me\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        foreach (var data in new[] { "JwtSettings:Secret", "JwtSettings__Secret" })
+        {
+            var definers = queries.DefinersOf(data);
+            var search = queries.SitesSearch(data, definers);
+            var answer = await AskAsync(tool, $$"""{"op":"sites","data":"{{data}}"}""");
+            var lines = answer.Text.Split('\n');
+
+            Assert.Equal(["csharp:Api.JwtSettings.Secret"], definers.Select(card => card.Id));
+            Assert.Equal("Secret", search.Word);
+            Assert.Equal(["JwtSettings__Secret"], search.Spellings);
+            Assert.Equal(["csharp:Api.JwtSettings.Secret"], answer.Facts.Asked);
+
+            // The ENV line by the path's spelling, the unbound reference and the literal by the last key: both of Program.cs's lines
+            // are the hits of the file taken for its reference of that name.
+            Assert.Equal(
+                [
+                    $"every place that decides '{data}':",
+                    "Dockerfile in directory . (1):",
+                    "  Dockerfile:2 ENV JwtSettings__Secret=change-me",
+                    "csharp in directory src/ (3):",
+                    $"  {GraphLines.Of(CardOf(queries, "JwtSettings.Secret"))} | defines",
+                    $"  {GraphLines.Of(CardOf(queries, "Program.Key"))} | a line holds it",
+                    "      src/Program.cs:7 return options.Value.Secret;",
+                    $"  {GraphLines.Of(CardOf(queries, "Program.Raw"))} | holds the literal",
+                    "      src/Program.cs:12 holds the literal 'JwtSettings:Secret'",
+                    "coverage: 2 file(s) the graph lists only (.txt, Dockerfile) searched by text - 1 hit(s)",
+                    "coverage: 2 file(s) the graph is unsure of, searched by text too - 0 hit(s)",
+                    OutlinedReadme,
+                    "coverage: 1 file(s) holding a reference named 'Secret' that the graph bound to nothing of that name, searched by text too - 2 hit(s)",
+                    KeyPathsSearched("Secret", 1),
+                    NoExtractor,
+                ],
+                lines[..15]);
+        }
+    }
+
+    /// <summary>
     /// A node declared in many files - a namespace every file opens - is looked up once in each file's line index and once for
     /// each card of it as a file declares it, from an index of every declaration made once: a file's index costs its own
     /// nodes, never every other file the node is declared in, so the indexes of every file cost the files' nodes, never their
