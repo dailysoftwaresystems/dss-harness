@@ -1257,8 +1257,9 @@ public sealed class HostAgentServiceTests
     /// <summary>
     /// What the agent says to a machine that has stopped reading holds nothing up. The console's own writer writes where
     /// it is called, and one whose reader has gone never returns: the run is cancelled all the same, and where its last
-    /// line is never read either, so that the request never answers, the agent ends what it started and itself. Waited
-    /// on where it was written, the first word of why held the cancellation it came before, for as long as the
+    /// line is never read either, so that the request never answers, the agent ends what it started and itself - stopped
+    /// meanwhile too: where a line it said is still unwritten, the lines it says as it end are begun alone and not waited
+    /// for. Waited on where it was written, the first word of why held the cancellation it came before, for as long as the
     /// connection stood - which is the machine the beat is there to notice.
     /// </summary>
     [Fact]
@@ -1267,6 +1268,7 @@ public sealed class HostAgentServiceTests
         using var copy = new TempDirectory();
         using var input = new BeatingReader(RunRequest(copy.Path, "verify-git"));
         using var error = new UnreadWriter();
+        using var stopped = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var lastResort = new RecordingLastResort();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1294,17 +1296,19 @@ public sealed class HostAgentServiceTests
                         return HarnessExit.Cancelled;
                     }
                 },
-                cancellationToken);
+                stopped.Token);
 
         try
         {
             await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
 
-            // The sign that is said, to a machine that reads nothing any more.
+            // The sign that is said, to a machine that reads nothing any more, and is still unwritten; then the agent stopped
+            // meanwhile, where the lines it says as it ends would be waited for on any other stream.
             error.Stall();
             input.Fail(new IOException("the input broke."));
-
             await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            stopped.Cancel();
+
             Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
             Assert.True(lastResort.Asked);
         }
@@ -1317,7 +1321,190 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// A writer whose reader may stop reading: from then on whatever writes to it does not return, as the console's own
+    /// Where the agent itself is stopped while its run goes on - a session hung up, which a machine may read the end of for
+    /// a moment - what it says as it ends stands before the end: the failure line and the completion line are handed to the
+    /// writer as one write, and the agent asks to end only once that write is taken, be the machine slow to take it. Begun
+    /// alone and not waited for, a machine busy enough ended the process between the two lines - the failure line written,
+    /// and the completion line, the one the machine reads the exit code from, never - as one CI runner in eighteen did
+    /// (<see cref="HostAgentBeatEndToEndTests"/>).
+    /// </summary>
+    [Fact]
+    public async Task Run_StoppedWhileItsRunGoesOn_EndsAfterItsLastLinesAreTaken_InOneWrite()
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 0, "verify-git"));
+        using var error = new HeldWriter();
+        using var stopped = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var lastResort = new RecordingLastResort { OnEnd = _ => error.Note("ended") };
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var serving = Service(lastResort: lastResort).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            (_, _, _, _) =>
+            {
+                // Never stops for its token, as a command whose child's output never ends.
+                started.SetResult();
+                return release.Task;
+            },
+            stopped.Token);
+
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
+            // The agent is stopped, as the hang-up of its session stops it, its run still going.
+            stopped.Cancel();
+
+            // The agent's last lines are handed to the machine that asked, both as one write, and it holds them.
+            await error.Held.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            Assert.Empty(error.Notes);
+
+            // The machine takes them, and only then does the agent ask to end.
+            error.Take();
+
+            Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+            Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+        }
+        finally
+        {
+            error.Take();
+            release.TrySetResult(HarnessExit.Success);
+        }
+
+        Assert.Equal(
+            [HostAgentProtocol.StartedLine(Nonce) + Environment.NewLine,
+             FailureLine.For(
+                 HostAgentProtocol.CommandName,
+                 $"what the request started here was cancelled - and this agent was stopped before it had stopped: {lastResort.Found}, and this process ends")
+             + Environment.NewLine
+             + HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Cancelled)
+             + Environment.NewLine],
+            error.Writes);
+
+        Assert.Equal(["taken", "ended"], error.Notes);
+    }
+
+    /// <summary>
+    /// Where the run waits on what will never end - among its causes a line nobody reads - the agent ends at once, as it
+    /// always did, though its last lines are still untaken: a host held by a run nobody reads is what the last resort is
+    /// there to end, and nothing says the stream takes what is written now. The lines are handed over all the same, and
+    /// taken where the stream takes them.
+    /// </summary>
+    [Fact]
+    public async Task Run_ThatNeverEndsOnceNothingItStartedRuns_EndsAtOnce_ItsLastLinesNotWaitedFor()
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 0, "verify-git"));
+        using var error = new HeldWriter();
+        var lastResort = new RecordingLastResort { OnEnd = _ => error.Note("ended") };
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var serving = Service(lastResort: lastResort).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            (_, _, _, _) =>
+            {
+                // Never stops for its token, as a command whose child's output never ends.
+                started.SetResult();
+                return release.Task;
+            },
+            cancellationToken);
+
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            input.End();
+
+            // The agent's last lines are handed over and held, and the agent asks to end without waiting for them.
+            await error.Held.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+            Assert.Equal(["ended"], error.Notes);
+
+            error.Take();
+
+            Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+        }
+        finally
+        {
+            error.Take();
+            release.TrySetResult(HarnessExit.Success);
+        }
+
+        Assert.Equal(
+            [HostAgentProtocol.StartedLine(Nonce) + Environment.NewLine,
+             FailureLine.For(
+                 HostAgentProtocol.CommandName,
+                 "what the request started here was cancelled - the input it holds open here ended - and waits, with nothing it started still "
+                 + "running, on what will never end - the output of something its child left behind, or a line nobody reads: "
+                 + $"{lastResort.Found}, and this process ends")
+             + Environment.NewLine
+             + HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Cancelled)
+             + Environment.NewLine],
+            error.Writes);
+
+        Assert.Equal(["ended", "taken"], error.Notes);
+    }
+
+    /// <summary>
+    /// A run that answers once the agent has taken its last resort writes no completion line of its own: how the request
+    /// finished is said once, there, with the code the agent ends by. Answering in that moment, the run said it a second
+    /// time with its own code, and a reader taking the last line read that one.
+    /// </summary>
+    [Fact]
+    public async Task Run_AnsweringOnceTheLastResortIsTaken_WritesNoCompletionLineOfItsOwn()
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 0, "verify-git"));
+        using var written = new StringWriter();
+        var error = TextWriter.Synchronized(written);
+
+        // Answered where it is awaited, on the thread that takes the last resort: the run's completion has run its course
+        // before the last resort goes on, so what it wrote is all there to be read.
+        var release = new TaskCompletionSource<int>();
+        var lastResort = new RecordingLastResort { OnEndStarted = () => release.TrySetResult(HarnessExit.Success) };
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var serving = Service(lastResort: lastResort).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            (_, _, _, _) =>
+            {
+                started.SetResult();
+                return release.Task;
+            },
+            cancellationToken);
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        input.End();
+
+        try
+        {
+            Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+            Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+        }
+        finally
+        {
+            release.TrySetResult(HarnessExit.Success);
+        }
+
+        // What was said, once the last resort's completion line is all there.
+        var said = await SaidAsync(error, written, HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Cancelled), cancellationToken);
+
+        Assert.DoesNotContain(HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Success), said, StringComparison.Ordinal);
+        Assert.Single(said.Split('\n'), line => HostAgentProtocol.TryReadCompletionLine(line.TrimEnd('\r'), Nonce, out _));
+    }
+
+    /// <summary>
+    /// A writer whose reader may stop reading: from then on whatever is written to it does not return, as the console's own
     /// writer does not where the pipe it writes to is full, until it is read again.
     /// </summary>
     private sealed class UnreadWriter : StringWriter
@@ -1328,16 +1515,98 @@ public sealed class HostAgentServiceTests
 
         public void Release() => _read.Set();
 
-        public override Task WriteLineAsync(string? value)
+        public override Task WriteAsync(string? value)
         {
             _read.Wait();
-            return base.WriteLineAsync(value);
+            return base.WriteAsync(value);
         }
 
         public override Task FlushAsync(CancellationToken cancellationToken)
         {
             _read.Wait();
             return base.FlushAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A writer a test holds: what the agent says to it is handed over as one write and is not taken until the test lets it
+    /// be, as a machine is slow to take what is written to it. Each text handed to it as one write, and each line it is
+    /// asked for, is kept as it was handed, in order; and each write taken and each note a test makes is kept in the order
+    /// it happened.
+    /// </summary>
+    private sealed class HeldWriter : StringWriter
+    {
+        private readonly ManualResetEventSlim _take = new(initialState: false);
+
+        private readonly TaskCompletionSource _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private readonly object _kept = new();
+
+        private readonly List<string> _writes = [];
+
+        private readonly List<string> _notes = [];
+
+        /// <summary>Completes once a write has been handed to it, and is held.</summary>
+        public Task Held => _held.Task;
+
+        /// <summary>Every text handed to it as one write, and each line asked for, in order.</summary>
+        public string[] Writes
+        {
+            get
+            {
+                lock (_kept)
+                {
+                    return [.. _writes];
+                }
+            }
+        }
+
+        /// <summary>What happened, in order: each write taken, and each note.</summary>
+        public string[] Notes
+        {
+            get
+            {
+                lock (_kept)
+                {
+                    return [.. _notes];
+                }
+            }
+        }
+
+        /// <summary>Lets the write held be taken.</summary>
+        public void Take() => _take.Set();
+
+        /// <summary>Keeps <paramref name="what"/>, in the order it happened.</summary>
+        public void Note(string what)
+        {
+            lock (_kept)
+            {
+                _notes.Add(what);
+            }
+        }
+
+        public override Task WriteLineAsync(string? value)
+        {
+            lock (_kept)
+            {
+                _writes.Add(value + NewLine);
+            }
+
+            return base.WriteLineAsync(value);
+        }
+
+        public override Task WriteAsync(string? value)
+        {
+            lock (_kept)
+            {
+                _writes.Add(value!);
+            }
+
+            _held.TrySetResult();
+            _take.Wait();
+            Note("taken");
+
+            return base.WriteAsync(value);
         }
     }
 

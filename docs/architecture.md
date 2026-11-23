@@ -6268,9 +6268,19 @@ one that counts from the machine's start, so that held against the agent's own s
 runtime tells it every child read as older than its parent and none was ended - and never the
 console the agent runs in, which Windows lists as its child (`conhost`) and ends everything in the
 console with. The agent's last line says what that came to: each process ended, by its id, each it
-could not end, or why none could be listed. The one thing started on a host to outlast the request
-that asked for it is the process holding the host awake between commands (`holdAwakeSeconds`),
-which ends on its own seconds. There is no verb that stops a run on its hosts, because stopping
+could not end, or why none could be listed. That line and the request's completion line are handed
+to the stream as one write (`Gone.SayingAsync`), and where the agent itself was stopped meanwhile
+the end stands behind that write: it is awaited, so a machine slow to take it is waited for as long
+as it takes - begun alone and not waited for, a busy machine once ended the agent between the two
+lines - and a stream whose reader has gone takes it at once, as if written. Where the run waits on
+what will never end, a line nobody reads among the causes, the saying is begun alone and the agent
+ends as it always did, at once; and where a line the agent said before is still unwritten, nothing
+written now is read either (`Gone.ReadsNothing`). A run that answers once the last resort is taken
+writes no completion line of its own (`Gone.Ending`): how the request finished is said there, once.
+The one thing started on a host to outlast the
+request that asked for it is the process holding the host awake between commands
+(`holdAwakeSeconds`), which ends on its own seconds. There is no verb that stops a run on its hosts,
+because stopping
 the command that dispatched it is that verb, on every carriage.
 
 The beat can fail at this end too: the process that carries the request - ssh, wsl.exe - stops
