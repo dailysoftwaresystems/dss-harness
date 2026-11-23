@@ -103,8 +103,10 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
   once from its dependencies' answers, and a key met again while it is being answered by the cycle's own rule (`Memo`);
   answers made once where making one asks for others as it is made, through any store sharing its makings, a memo
   given them among them - a key asked again while it is made given what is known of it then, an answer made from that
-  placeholder held for the making of the outermost key it leans on, each key of a cycle made once there, and made again
-  after it, never kept, the outermost key's own answer, made from those, the one kept (`MadeOnce`, `Makings`);
+  placeholder held for the making of the outermost key it leans on, each key of a cycle made once there; once it ends,
+  the outermost key's own answer, made from those, the one kept, an answer that read its placeholder made again after it,
+  the rest set aside under the key met inside it that they lean on and taken back by that key's next making, none of
+  them kept (`MadeOnce`, `Makings`);
   a chain followed to its end or its first revisit (`Chain`); a step repeated until it says it is done or its state
   repeats, which is told as a cycle (`Fixpoint`); and a recursion moved onto a thread of a larger stack where the stack
   runs short - our own at each level (`DeepCalls.Run`), a library's we do not own on a thread whose stack holds the depth
@@ -5050,9 +5052,11 @@ what a written name is from a file and a scope, what an extension extends, what 
 is found once, with what finding it read (`CodeGraphLinker.Cached`), every cache of the link - those, the chains' and the
 aliases' memos, the links of chains stepped - sharing one set of makings (`MadeOnce`, `Makings`): a making that asks for
 its own key again, through however many others, is given what is known of it then, nothing, and never makes it inside
-itself; an answer made from that placeholder is held for the making of the key met again, made once there however deep
-the cycles nest, and made again after it from that key's answer, never kept; and that key's own answer, made from those,
-is kept - the one answer kept that a placeholder reached. A global import is read from the file that makes it, so a
+itself; an answer made from that placeholder is held for the making of the outermost key it leans on, each key of a cycle
+made once there however deep the cycles nest; once that making ends, the outermost key's own answer, made from those, is
+kept - the one answer kept that a placeholder reached - an answer that read its placeholder is made again after it from
+that answer, and the rest are set aside under the key met inside it that they lean on, taken back by that key's next
+making, none of them kept. A global import is read from the file that makes it, so a
 relative one names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
 own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as

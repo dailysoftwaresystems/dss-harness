@@ -19,8 +19,11 @@ namespace DssHarness.Core.Walks;
 /// <para>
 /// Given <see cref="Makings"/> it shares with other stores, a memo answers each key as a making of theirs, and keeps its answers
 /// by their rule (<see cref="MadeOnce{TKey, TAnswer}"/>): an answer that read a cycle's placeholder - its own cycle's or one
-/// through any of those stores - is held for the making of the outermost key it leans on and answered again after it, never
-/// kept, where a memo of its own keeps every answer it gives.
+/// through any of those stores - is held for the making of the outermost key it leans on, each key of a cycle answered once
+/// there; once that making ends, the outermost key's own answer, made from those, is kept - the one kept that a placeholder
+/// reached - an answer that read its placeholder is answered again after it, and the rest are set aside under the key met
+/// inside it that they lean on, taken back by that key's next making, none of them kept; where a memo of its own keeps every
+/// answer it gives.
 /// </para>
 /// <para>
 /// One memo serves one walker at a time: it is not safe for use from several threads at once, and a caller that shares

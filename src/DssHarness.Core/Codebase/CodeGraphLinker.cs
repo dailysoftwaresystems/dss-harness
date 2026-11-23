@@ -2024,10 +2024,12 @@ public static class CodeGraphLinker
         /// <summary>
         /// The modifier a member's own code says it is its type's own and no instance's by, as the readers of the languages that
         /// write it name it (<see cref="ExtractNode.Modifiers"/>): JavaScript's and TypeScript's - a class's <c>static</c> members,
-        /// and Backbone's second object - Dart's, PHP's and C#'s. Python's reader writes none - its <c>@staticmethod</c> is read as a
-        /// call that takes no receiver - and a chain never reaches a Python member through it: a chain is read so
-        /// (<see cref="FunctionsCalled"/>) for what an extension extends, and only C#, Dart and JavaScript declare extensions, or
-        /// for the receivers a value's chain gives an extension of those languages, which no Python member is the type of.
+        /// and Backbone's second object - Dart's, PHP's, C#'s, and C's and C++'s (<see cref="Languages.CFamilyReading"/>), whose
+        /// <c>static</c> a function or variable outside any type carries too, no type's member to be its own. Python's reader writes
+        /// none - its <c>@staticmethod</c> is read as a call that takes no receiver - and a chain never reaches a Python member
+        /// through it: a chain is read so (<see cref="FunctionsCalled"/>) for what an extension extends, and only C#, Dart and
+        /// JavaScript declare extensions, or for the receivers a value's chain gives an extension of those languages, which no
+        /// Python member is the type of.
         /// </summary>
         private const string StaticModifier = "static";
 
@@ -4537,9 +4539,11 @@ public static class CodeGraphLinker
         /// and read through whole (<see cref="KeptReads"/>), so a check every finding makes costs each of them a reference.
         /// Every cache of the link shares its makings (<see cref="_makings"/>), so a making that asks for its own key again, through
         /// any other cache, is given <paramref name="none"/> - what is known of it then, nothing, which reads nothing - and never
-        /// makes it inside itself. An answer made from that placeholder is held for the making of the key met again, made once there,
-        /// and made again after it from that key's answer, what it read read again with it; that key's own answer, made from those,
-        /// is kept - the one answer kept that a placeholder reached (<see cref="MadeOnce{TKey, TAnswer}"/>).
+        /// makes it inside itself. An answer made from that placeholder is held for the making of the outermost key it leans on, each
+        /// key of a cycle made once there; once that making ends, the outermost key's own answer, made from those, is kept - the one
+        /// answer kept that a placeholder reached - an answer that read its placeholder is made again after it, from that answer,
+        /// what it read read again with it, and the rest are set aside under the key met inside it that they lean on, taken back by
+        /// that key's next making, none of them kept (<see cref="MadeOnce{TKey, TAnswer}"/>).
         /// </summary>
         private T Cached<TKey, T>(MadeOnce<TKey, (T Value, KeptReads Reads)> cache, TKey key, T none, Func<T> make)
             where TKey : notnull
