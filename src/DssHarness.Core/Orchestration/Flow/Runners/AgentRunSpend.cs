@@ -11,8 +11,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// the run's dollars unknown past what was counted, never zero, naming the price missing (<see cref="FlowDollars"/>). A
 /// run budgeted in dollars never comes to one: the runner refuses it, on every client, a model without the prices its
 /// client is billed by before any client is taken, so the budget is charged a counted cost or nothing at all. Each turn is
-/// handed on as it is counted where the run's events are given - its cost, or why it could not be counted - so a run's
-/// budget is charged while its agent works, and what an asking ended part way had spent is still known.
+/// handed on as it is counted where the run's events are given - its tokens by kind, its cost or why it could not be
+/// counted, the model that served it and the price copied as it was counted - so a run's budget is charged while its
+/// agent works, and what an asking ended part way had spent is still known.
 /// </summary>
 /// <param name="providers">The configuration's providers, whose models' prices count each turn.</param>
 /// <param name="serving">The model the run starts on; null where none resolved, until a session names one.</param>
@@ -22,8 +23,11 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
 {
     private string? _serving = serving;
     private string? _firstModel = serving;
-    private readonly Dictionary<string, (int Calls, int Failed)> _tools = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (int Calls, int Failed, int Denied)> _tools = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _calls = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _denied = new(StringComparer.Ordinal);
+    private readonly List<(string Id, string Tool)> _open = [];
+    private readonly List<FlowTurnSpend> _turns = [];
 
     /// <summary>Every token the run's turns used, of every kind.</summary>
     public long Tokens { get; private set; }
@@ -40,8 +44,11 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
     /// <summary>Whether any turn's usage was reported: where none was, nothing is known of what the run spent.</summary>
     public bool Reported { get; private set; }
 
+    /// <summary>Every turn the run's usage reports said, in order, each with its spend as it was counted.</summary>
+    public IReadOnlyList<FlowTurnSpend> Turns => _turns;
+
     /// <summary>How many turns the run's conversation took.</summary>
-    public int Turns { get; private set; }
+    public int TurnsTaken { get; private set; }
 
     /// <summary>How many times the run's conversation was compacted.</summary>
     public int Compactions { get; private set; }
@@ -54,9 +61,6 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
 
     /// <summary>The provider of the model that served the run's last counted turn; null where none was counted.</summary>
     public string? Provider { get; private set; }
-
-    /// <summary>The price the run's last counted turn was costed at, copied as the configuration gave it then.</summary>
-    public FlowStepPrice? Price { get; private set; }
 
     /// <summary>The effort the run goes on at - the one it began at, or the one a fallback moved it to.</summary>
     public string? Effort { get; private set; } = effort;
@@ -76,7 +80,10 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
         switch (@event)
         {
             case SessionStarted started:
+                // The session says what it started on - the model and the effort - so a run read back from its stream
+                // alone knows both as the run that wrote it did.
                 _serving = started.Model;
+                Effort = started.Effort ?? Effort;
                 break;
 
             case FallbackStarted moved:
@@ -92,7 +99,7 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
                 break;
 
             case TurnFinished:
-                Turns++;
+                TurnsTaken++;
                 break;
 
             case Compacted:
@@ -100,61 +107,72 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
                 break;
 
             case ToolCallStarted call:
-                // A call is counted by the tool the agent named as it called it, however the call ended - its id kept
-                // for the finish, which says how it ended but not the name.
+                // A call is counted as it begins, by the tool the agent named - its id kept for the finish, which says how
+                // it ended but not the name.
                 _calls[call.Id] = call.Tool;
+                _open.Add((call.Id, call.Tool));
                 var use = _tools.GetValueOrDefault(call.Tool);
-                _tools[call.Tool] = (use.Calls + 1, use.Failed);
-                break;
-
-            case ToolCallFinished { Ok: false } finished when ToolNameOf(finished.Id) is { } failedTool
-                && _tools.TryGetValue(failedTool, out var made):
-                _tools[failedTool] = (made.Calls, made.Failed + 1);
+                _tools[call.Tool] = (use.Calls + 1, use.Failed, use.Denied);
                 break;
 
             case PermissionDenied denied:
-                // A denial is a call that never ran: counted with the tool's, among its failures.
+                // A denial is counted on its own. The call it refused - the newest of the tool's the run saw begin and not
+                // yet end - is no call that ran and failed, so its finish is not counted again as a failure.
                 var deniedUse = _tools.GetValueOrDefault(denied.Tool);
-                _tools[denied.Tool] = (deniedUse.Calls + 1, deniedUse.Failed + 1);
+                _tools[denied.Tool] = (deniedUse.Calls, deniedUse.Failed, deniedUse.Denied + 1);
+
+                if (_open.FindLastIndex(open => string.Equals(open.Tool, denied.Tool, StringComparison.Ordinal) && !_denied.Contains(open.Id)) is var at and >= 0)
+                {
+                    _ = _denied.Add(_open[at].Id);
+                }
+
+                break;
+
+            case ToolCallFinished finished:
+                // A call is counted failed as it ends, where it was not denied and did not end well. A call whose start
+                // the run never saw is counted by no name.
+                _ = _open.RemoveAll(open => string.Equals(open.Id, finished.Id, StringComparison.Ordinal));
+
+                if (_calls.Remove(finished.Id, out var tool) && !_denied.Remove(finished.Id) && !finished.Ok && _tools.TryGetValue(tool, out var made))
+                {
+                    _tools[tool] = (made.Calls, made.Failed + 1, made.Denied);
+                }
+
                 break;
 
             case UsageReported used:
-                var tokens = used.Turn.AllTokens;
                 var entry = _serving is { } model ? providers.Of(model) : null;
                 var usd = entry is { } priced ? AgentPrices.CostOf(priced.Provider, priced.Model, used.Turn) : null;
                 var uncounted = usd is not null ? null
                     : entry is { } listed ? AgentPrices.UnknownOf(listed.Provider, listed.Model, used.Turn)
                     : $"no provider lists '{_serving ?? "the run's model"}', whose prices the cost is counted at";
 
-                if (entry is { } costed)
+                // The price is copied as the turn is counted, from the configuration as it stands now: one changed later
+                // never changes what a past turn cost, for the copy stands in the attempt's record.
+                var turn = new FlowTurnSpend(used.Turn, usd, uncounted, _serving, entry is { } costed ? FlowStepPrice.Of(costed.Provider, costed.Model) : null);
+
+                if (turn.Price is { } price)
                 {
-                    // The price is copied as the turn is counted, from the configuration as it stands now: one changed
-                    // later never changes what a past turn cost, for the copy stands in the attempt's record.
-                    Provider = costed.Provider.Name;
-                    Price = FlowStepPrice.Of(costed.Provider, costed.Model);
+                    Provider = price.Provider;
                 }
 
-                Tokens += tokens;
+                Tokens += used.Turn.AllTokens;
                 Usage = Usage.Plus(used.Turn);
                 Dollars = Dollars.Plus(FlowDollars.Of(usd, uncounted));
                 Reported = true;
-                events?.Used(tokens, usd, uncounted, used.Turn, _serving);
+                _turns.Add(turn);
+                events?.Used(turn);
                 break;
         }
 
         return ValueTask.CompletedTask;
-
-        // The name of the tool a finished call belongs to, where the run's own calls said one: a call whose start the
-        // run never saw is counted by no name.
-        string? ToolNameOf(string id)
-            => _calls.TryGetValue(id, out var tool) ? tool : null;
     }
 
     /// <summary>
-    /// The attempt's own account, as the runner hands it to the engine with its answer: what served it and what that
-    /// cost - the provider, the model, the effort, where a fallback moved it from and why, and the price copied as its
-    /// cost was counted - with the turns it took, the tools it called and how often its conversation was compacted. No
-    /// spend: that is the engine's own count, charged turn by turn as each was reported (<see cref="Spent"/>).
+    /// The run's own account, as the runner hands it to the engine with its answer: what served it - the provider, the
+    /// model, the effort, where a fallback moved it from and why - with the turns it took, the tools it called and how
+    /// often its conversation was compacted. No spend: that is the engine's own count, charged turn by turn into the
+    /// attempt's entry as each was reported (<see cref="Turns"/>).
     /// </summary>
     public FlowStepAttempt Account()
         => new(
@@ -164,10 +182,9 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
             Effort: Effort,
             FallbackFrom: FallbackFrom,
             FallbackReason: FallbackWhy,
-            Price: Price,
-            Turns: Turns > 0 ? Turns : null,
+            Turns: TurnsTaken > 0 ? TurnsTaken : null,
             Tools: _tools.Count > 0
-                ? [.. _tools.OrderBy(tool => tool.Key, StringComparer.Ordinal).Select(tool => new FlowStepToolUse(tool.Key, tool.Value.Calls, tool.Value.Failed))]
+                ? [.. _tools.OrderBy(tool => tool.Key, StringComparer.Ordinal).Select(tool => new FlowStepToolUse(tool.Key, tool.Value.Calls, tool.Value.Failed, tool.Value.Denied))]
                 : null,
             Compactions: Compactions > 0 ? Compactions : null);
 }

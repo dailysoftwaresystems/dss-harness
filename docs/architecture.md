@@ -3823,25 +3823,39 @@ resume after a crash at any write from there asks once, before anything starts a
 the reserve to meet it a second time - and a grant of more recorded since goes on.
 
 Every step instance's work is measured as it runs, on its own record (`FlowStepMeasure`, `step.json`'s and
-`flow.json`'s `measure`, one owner in `Orchestration\Flow\FlowStepMeasure.cs`): when it was ready (`readyAt`, the first
-admission walk that found everything it depends on ended), how long it waited and on what (`waited[]`, by the words a
-record's `waitsOn` holds - the reasoning limit, a claim, a person's answer - folded where the causes change at every
-write and every walk), how long it ran (`ran`, the wall time of its attempts) and how long it stood stopped for the
-run's own pause (`paused`, the resume's wait kept apart). The open wait is kept in the record with its time
-(`waitingOn`, `waitingSince`), so a wait that spans two sessions is one wait, whole. One entry per attempt
-(`attempts[]`) holds its own times and outcome, what served it - the provider, the model, the effort, where a fallback
-moved it from and why - the price copied as its cost was counted (a price changed in the configuration later never
-changes what a past attempt cost), its tokens by kind and dollars, the uncounted reason where a part could not be
-counted, the turns, the tool calls by name with their failures, and the compactions; the failed attempt the engine
-runs again carries its backoff (`retryAfter`). What an attempt spends is counted once, at the one place a token is
-counted (`FlowCoordinator.TakeMessage`'s usage branch): the same numbers charge the run's budget and the instance's
-own measure (`ChargeTheAttempt`, a turn that reaches its attempt after its entry was written - a handoff turn answered
-while the step stood paused - folded into that entry by its attempt's number), so the run's `spent` is the sum of its
-instances'. What the advisor spent answering a step's own questions is kept beside them (`measure.advice`, never in an
-attempt, for the advisor's turns are its own records'). An attempt a crash cut off - its record still `Running` - has
-its measure completed at the resume from its own stored stream (`IFlowHandoffRunner.AttemptOf`: the attempt's events
-replayed through the engine's own count of a run's spending, priced as the configuration stands now), and the run's
-budget charged with the same numbers there, for the session that crashed never read them.
+`flow.json`'s `measure`, one owner in `Orchestration\Flow\FlowStepMeasure.cs`), null until the run draws it: when it was
+ready (`readyAt`, the first walk - the admission's or a record's - that found nothing holding it but room; what held it
+before, the steps it depends on or the run's own holds, is theirs and never its wait; a group, which runs nothing of
+its own, holds none), how long it waited and on what (`waited[]`, by the words a record's `waitsOn` holds - the
+reasoning limit, a claim, a person's answer, the machine its legs run on holding every one of them still to run in its
+queue, for its memory or for its room - folded where the causes change at every write and every walk, each period as
+exact as the clock gave it), how long it ran (`ran`, the sum of its attempts' runs) and how long it stood stopped for
+the run's own pause or a crash (`paused`). The open wait is kept in the record with its time (`waitingOn`,
+`waitingSince`), so a wait that spans two sessions is one wait, whole; at a resume every open wait but a person's is
+closed where the session before wrote its last record (`FlowResumeState.LastRecordAt`), and the time from there is its
+pause. One entry per attempt (`attempts[]`), opened as the attempt starts, holds its own times and outcome, each run of
+it (`runs[]`: an asking closes one and its answer's continuation opens the next, as the machine holding its legs and
+letting one start does), what served it - the provider, the model, the effort, where a fallback moved it from and why
+- its tokens by kind and dollars, each part of them by the model that served it at the price copied as its cost was
+counted (`parts[]`: a price changed in the configuration later never changes what a past turn cost), the uncounted
+reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns, the tool calls
+by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, and
+for a machine step what each leg did (`legs[]`: its verdict, its time, how long its machine held it before it let it
+start, each phase's time and its digest's counts); the failed attempt the engine runs again carries its backoff
+(`retryAfter`). What an attempt spends is counted once, at the one place a token is counted
+(`FlowCoordinator.TakeMessage`'s usage branch, `Charge`): every turn charges the run's budget and the attempt's entry
+with the same numbers, so the run's `spent` is the sum of its instances' - and is summed from them again at a resume,
+for a step's record is written before the run's, with what a build that kept no measures recorded before them
+(`flow.json`'s `spent.unmeasured`). What the advisor spent answering a step's own questions is kept beside them
+(`measure.advice`, never in an attempt, for the advisor's turns are its own records'). An attempt a crash cut off - its
+record still `Running` - is completed at the resume from its own stored stream (`IFlowHandoffRunner.AttemptOf`: the
+events of the attempt the record says it was on, replayed through the engine's own count of a run's spending, each turn
+priced as it was reported): only the turns past what its entry was charged (`reports`) are charged now, its run ends
+where its stream did, and a stream that does not read whole, or cannot be priced, says so as the part's uncounted
+reason. The machine a step's legs run on tells its holds as each wait of a leg's admission begins and ends
+(`AdmissionRequest.Told`, `ILegRunWatch.Admitting`; an ssh host's by a note its dispatcher reads), and the step is held
+- its run stopped, its wait on those causes open - while every leg it placed that has not ended waits there and none
+holds a slot (`LegStepRunner.StepHold`).
 
 The report of a run is built from its records alone by their one owner (`FlowRunReport`, from `flow.json`,
 `questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition): the same

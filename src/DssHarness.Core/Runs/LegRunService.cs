@@ -256,7 +256,8 @@ public sealed class LegRunService(
     RunStops stops,
     MachineSettingsFile machineSettings,
     CommandOrigin? origin = null,
-    LegSetUps? setUps = null)
+    LegSetUps? setUps = null,
+    HostNotes? notes = null)
 {
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LegsService _legsService = legsService;
@@ -292,6 +293,9 @@ public sealed class LegRunService(
 
     /// <summary>What brings a leg's set-ups up and down, where its run is asked to set up.</summary>
     private readonly LegSetUps? _setUps = setUps;
+
+    /// <summary>What tells the machine that dispatched this run to this host how its legs' admission here goes, as notes.</summary>
+    private readonly HostNotes? _notes = notes;
 
     /// <summary>The stop another process asks of a run (<c>stop-run</c>), which the run looks for while it owns its directory.</summary>
     private readonly RunStops _stops = stops;
@@ -1206,6 +1210,7 @@ public sealed class LegRunService(
                 {
                     Settle = settle,
                     WorkBegunBy = workBegunBy,
+                    Told = Told(leg.Name, asking, request.Watch, _notes, _origin),
 
                     // What this machine counts as in use and could have back: the page cache of WSL's virtual machine, which
                     // holds what every distribution's builds read and wrote until it idles for minutes.
@@ -1224,6 +1229,41 @@ public sealed class LegRunService(
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Who is told each stage of <paramref name="asking"/>'s admission here: the run's watch, where it has one; the machine
+    /// that dispatched this run to this host, by a note (<see cref="AdmissionNote"/>), which its own watch is told;
+    /// <see langword="null"/> where neither asks.
+    /// </summary>
+    internal static Action<AdmissionStage>? Told(string leg, string asking, ILegRunWatch? watch, HostNotes? notes, CommandOrigin origin)
+        => watch is not null ? stage => watch.Admitting(leg, asking, stage)
+            : notes is not null && origin.Dispatched is not null ? stage => notes.Write(AdmissionNote, $"{leg}\n{asking}\n{stage}")
+            : null;
+
+    /// <summary>
+    /// What reads the notes the host of a dispatched leg writes as it runs: a stage of a leg's admission
+    /// there, which <paramref name="watch"/> is told, and every other note the command's own reader takes
+    /// (<paramref name="command"/>); <see langword="null"/> where neither reads any.
+    /// </summary>
+    internal static Action<string, string>? NotesOf(Action<string, string>? command, ILegRunWatch? watch)
+        => watch is null ? command
+            : (kind, text) =>
+            {
+                if (kind != AdmissionNote)
+                {
+                    command?.Invoke(kind, text);
+                }
+
+                // Dropped where it does not read as one this build writes, as a damaged note is: the step then counts that
+                // wait as its run, never a wrong cause.
+                else if (text.Split('\n') is [var named, var asking, var said] && Enum.TryParse<AdmissionStage>(said, out var stage) && Enum.IsDefined(stage))
+                {
+                    watch.Admitting(named, asking, stage);
+                }
+            };
+
+    /// <summary>The kind of note a host writes as a leg's admission there reaches a stage: the leg, what asked and the stage, one a line.</summary>
+    internal const string AdmissionNote = "admission";
 
     /// <summary>
     /// The least room <paramref name="leg"/>'s builds here leave free on each filesystem they fill - its machine's
@@ -1529,7 +1569,7 @@ public sealed class LegRunService(
             // What one dispatched leg is given of its own, after the command's own options, and what reads the notes its
             // host writes while it runs: asked of it alone, here, once - no other leg is asked for.
             var own = request.RemoteArgumentsOf?.Invoke(leg) ?? [];
-            var onNote = request.HostNotes?.Invoke(leg);
+            var onNote = NotesOf(request.HostNotes?.Invoke(leg), request.Watch);
             var ended = await _remoteLegs
                 .RunAsync(
                     commandName,

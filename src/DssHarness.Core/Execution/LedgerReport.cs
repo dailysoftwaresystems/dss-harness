@@ -56,6 +56,9 @@ public sealed record LedgerLine(
     /// <summary>Each phase log in <see cref="Records"/>, by phase, in the order of their names; empty where none are.</summary>
     public IReadOnlyList<PhaseLogFile> Logs { get; init; } = [];
 
+    /// <summary>Each phase the leg ran, with its own time, as <see cref="LegEntry.Phases"/> says.</summary>
+    public IReadOnlyList<PhaseRecord> Phases { get; init; } = [];
+
     /// <summary>The steps the leg's operating system does not run, by name.</summary>
     public IReadOnlyList<string> SkippedSteps { get; init; } = [];
 
@@ -391,6 +394,7 @@ public sealed class LedgerReport
                     HostRunId = entry.HostRunId,
                     Records = entry.Records,
                     Logs = entry.Logs ?? [],
+                    Phases = entry.Phases,
                     SkippedSteps = entry.SkippedSteps,
                     RanSteps = entry.RanSteps,
                     ManualSteps = entry.ManualSteps,

@@ -347,16 +347,20 @@ public interface IFlowRunEvents
     void LegEnded(string leg);
 
     /// <summary>
-    /// What a reason step's conversation has spent as it runs: tokens and dollars, counted against the run's budget - a
-    /// cost that could not be counted leaving the run's dollars not known past what was (<see cref="FlowDollars"/>), never
-    /// charged as nothing.
+    /// What one turn of a reason step's conversation spent as it ran: its tokens by kind and its dollars, charged into the
+    /// attempt's own measure and against the run's budget at once - a cost that could not be counted leaving the run's
+    /// dollars not known past what was (<see cref="FlowDollars"/>), never charged as nothing.
     /// </summary>
-    /// <param name="tokens">The tokens the clients report: input, cache write, cache read and output.</param>
-    /// <param name="usd">What they cost, at the prices the configuration gives each model; null where it could not be counted.</param>
-    /// <param name="uncounted">Why it could not be counted - the price missing, the model no provider lists - where it could not; null otherwise.</param>
-    /// <param name="turn">The turn's tokens by kind, where the caller knows them; null where only the total is known.</param>
-    /// <param name="serving">The model that served the turn - the last after any fallback; null where the caller does not know it.</param>
-    void Used(long tokens, double? usd, string? uncounted = null, Agents.AgentUsage? turn = null, string? serving = null);
+    /// <param name="turn">The turn's spend, with the model that served it and the price it was costed at.</param>
+    void Used(FlowTurnSpend turn);
+
+    /// <summary>
+    /// The machine this step's legs run on holds every leg of it still to run back - for its dispatch queue, its memory, its
+    /// room (<paramref name="on"/>) - or, where <paramref name="on"/> is empty, lets one start: the time it holds them is
+    /// the step's wait on those causes, never its run.
+    /// </summary>
+    /// <param name="on">What it waits on, as <see cref="FlowWaits"/> names each; empty where a leg of it runs.</param>
+    void Held(IReadOnlyList<string> on);
 
     /// <summary>
     /// The prompt that holds this attempt's <see cref="FlowStepRun.Handoff"/> is written: the handoff is spent, and its
@@ -364,6 +368,55 @@ public interface IFlowRunEvents
     /// in one place or the other and never in neither.
     /// </summary>
     void HandoffTaken();
+}
+
+/// <summary>
+/// The events of an agent run that tells the engine nothing while it works - the advisor's, the reporter's and the
+/// analyst's, whose answer is all they say and whose spend their own count keeps.
+/// </summary>
+public sealed class FlowRunEvents : IFlowRunEvents
+{
+    /// <summary>The one such run's events.</summary>
+    public static IFlowRunEvents None { get; } = new FlowRunEvents();
+
+    private FlowRunEvents()
+    {
+    }
+
+    /// <inheritdoc/>
+    public void LegPlaced(string leg, bool inACopy)
+    {
+    }
+
+    /// <inheritdoc/>
+    public void EveryLegPlaced()
+    {
+    }
+
+    /// <inheritdoc/>
+    public void LegCopyMade(string leg)
+    {
+    }
+
+    /// <inheritdoc/>
+    public void LegEnded(string leg)
+    {
+    }
+
+    /// <inheritdoc/>
+    public void Used(FlowTurnSpend turn)
+    {
+    }
+
+    /// <inheritdoc/>
+    public void Held(IReadOnlyList<string> on)
+    {
+    }
+
+    /// <inheritdoc/>
+    public void HandoffTaken()
+    {
+    }
 }
 
 /// <summary>What one consent a fold family step's dry run lacks is about: its kind, and the rows, the cells or the paths it names.</summary>
@@ -545,9 +598,9 @@ public sealed record FlowStepResult
     /// <summary>
     /// The attempt's own account, as its runner hands it back: what served it and what that cost - the provider, the
     /// model, the effort, where a fallback moved it from and why, and the price copied as its cost was counted - with
-    /// the turns it took, the tools it called and how often its conversation was compacted. Its spend is not here: the
-    /// engine counts that turn by turn as each was reported, the one place a token is counted. Null for a step that no
-    /// agent served.
+    /// the turns it took, the tools it called and how often its conversation was compacted - or, for a machine step, what
+    /// each of its legs did. Its spend is not here: the engine counts that turn by turn as each was reported, the one
+    /// place a token is counted. Null for a step that neither an agent served nor ran legs.
     /// </summary>
     public FlowStepAttempt? Attempt { get; init; }
 

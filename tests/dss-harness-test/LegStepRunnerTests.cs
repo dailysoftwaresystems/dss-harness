@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Application;
@@ -113,7 +114,9 @@ public sealed class LegStepRunnerTests : IDisposable
 
         public void LegEnded(string leg) => Add($"{leg} ended");
 
-        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) => Add("used");
+        public void Used(FlowTurnSpend turn) => Add("used");
+
+        public void Held(IReadOnlyList<string> on) => Add(on.Count == 0 ? "a leg runs" : $"held on {string.Join(", ", on)}");
 
         public void HandoffTaken() => Add("handoff taken");
 
@@ -141,12 +144,37 @@ public sealed class LegStepRunnerTests : IDisposable
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var legs = new FakeLegs
         {
-            Answer = Result([new LegEntry { Leg = "native", Verdict = LegVerdict.Passed }, new LegEntry { Leg = "here", Verdict = LegVerdict.Passed }], HarnessExit.Success, "passed"),
+            Answer = Result(
+                [
+                    new LegEntry
+                    {
+                        Leg = "native",
+                        Verdict = LegVerdict.Passed,
+                        Duration = TimeSpan.FromSeconds(90),
+                        Phases = [new PhaseRecord("configure", TimeSpan.FromSeconds(20), false), new PhaseRecord("build", TimeSpan.FromSeconds(65), false)],
+                        Admission = new AdmissionFact(true, 42.5),
+                        Digest = ResultDigest.Of(
+                            [
+                                new Diagnostic("msbuild", "warning", "CS0168", "unused", "src/a.cs", 1),
+                                new Diagnostic("msbuild", "warning", "CS0168", "unused", "src/b.cs", 2),
+                                new Diagnostic("msbuild", "warning", "CS0219", "assigned", "src/c.cs", 3),
+                            ],
+                            [],
+                            ["a line no parser read"]),
+                    },
+                    new LegEntry { Leg = "here", Verdict = LegVerdict.Passed },
+                ],
+                HarnessExit.Success,
+                "passed"),
             WhileItRuns = watch =>
             {
                 watch.Placed([new LegPlace("native", InACopy: true), new LegPlace("here", InACopy: false)]);
                 watch.CopyMade("native");
                 watch.Ended("here");
+                watch.Admitting("native", "native", AdmissionStage.Queue);
+                watch.Admitting("native", "native", AdmissionStage.Memory);
+                watch.Admitting("native", "native", AdmissionStage.Taken);
+                watch.Admitting("native", "native", AdmissionStage.Ended);
                 watch.Ended("native");
             },
         };
@@ -158,7 +186,24 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.True(result.Passed, result.Error);
         Assert.Equal(HarnessExit.Success, result.Exit);
         Assert.Equal([new FlowLeg("native", LegVerdict.Passed), new FlowLeg("here", LegVerdict.Passed)], result.Legs);
-        Assert.Equal(["placed native in a copy", "placed here in the tree", "every leg placed", "copy of native made", "here ended", "native ended"], said.Events);
+
+        // The machine held the step once every leg still to run waited at it - each cause as it began - and let it go on as
+        // its leg started.
+        Assert.Equal(
+            [
+                "placed native in a copy", "placed here in the tree", "every leg placed", "copy of native made", "here ended",
+                $"held on {FlowWaits.MachineQueue}", $"held on {FlowWaits.MachineMemory}", "a leg runs", "native ended",
+            ],
+            said.Events);
+
+        // What each leg did is the attempt's: its time, how long its machine held it, each phase and its digest's counts.
+        Assert.Equal(
+            JsonSerializer.Serialize<IReadOnlyList<FlowStepLeg>>(
+            [
+                new FlowStepLeg("native", "passed", 90, 42.5, [new FlowStepPhase("configure", 20), new FlowStepPhase("build", 65)], 0, 3, 0, 1),
+                new FlowStepLeg("here", "passed"),
+            ]),
+            JsonSerializer.Serialize(result.Attempt!.Legs));
         Assert.Equal(
             """{"passed":true,"exitCode":0,"verdicts":[{"leg":"native","verdict":"passed"},{"leg":"here","verdict":"passed"}],"red":[],"runDirectory":"/runs/r","isolation":{"mode":"required","none":"the test asked none"}}""",
             result.Output!.ToJsonString());

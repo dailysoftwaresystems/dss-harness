@@ -1263,7 +1263,11 @@ public sealed class CommitStepTests
         {
         }
 
-        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null)
+        public void Used(FlowTurnSpend turn)
+        {
+        }
+
+        public void Held(IReadOnlyList<string> on)
         {
         }
 

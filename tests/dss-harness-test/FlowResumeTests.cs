@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
@@ -1796,7 +1797,7 @@ public sealed class FlowResumeTests
 
             // What the reasoning spent is counted once it has ended, so the reserve is reached with nothing left that
             // can run but the build the pause leaves to finish.
-            spending!.Used(tokens: 1_000, usd: 45.10);
+            spending!.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
             await watched.SeenAsync(snapshot => snapshot.Pause is not null).WaitAsync(Bound, Token);
             runner.Complete("gate");
             var first = await session.WaitAsync(Bound, Token);
@@ -1848,8 +1849,8 @@ public sealed class FlowResumeTests
             """);
         var runner = new Runner().On("think", run =>
         {
-            run.Events.Used(tokens: 1_000, usd: 1.25);
-            run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+            run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 1.25));
+            run.Events.Used(new FlowTurnSpend(new AgentUsage(500, 0, 0, 0, 0, 0), null, Uncounted: Why));
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
         }).Hold("gate");
         var (harness, layout, records) = Records("r1", temp.Path, definition);
@@ -1879,7 +1880,7 @@ public sealed class FlowResumeTests
         {
             var resumed = new Runner().On("after", run =>
             {
-                run.Events.Used(tokens: 100, usd: 0.25);
+                run.Events.Used(new FlowTurnSpend(new AgentUsage(100, 0, 0, 0, 0, 0), 0.25));
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
             var end = await new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: taken, records: again).RunAsync(Token).WaitAsync(Bound, Token);
@@ -1893,7 +1894,7 @@ public sealed class FlowResumeTests
         using var counted = new TempDirectory();
         var whole = new Runner().On("think", run =>
         {
-            run.Events.Used(tokens: 1_000, usd: 1.25);
+            run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 1.25));
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
         });
         var (wholeHarness, wholeLayout, wholeRecords) = Records("r1", counted.Path, definition);
@@ -3274,7 +3275,7 @@ public sealed class FlowResumeTests
             if (kept is null)
             {
                 kept = run.Events;
-                run.Events.Used(tokens: 500, usd: null, uncounted: "no price for the first turn");
+                run.Events.Used(new FlowTurnSpend(new AgentUsage(500, 0, 0, 0, 0, 0), null, Uncounted: "no price for the first turn"));
             }
 
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
@@ -3292,7 +3293,7 @@ public sealed class FlowResumeTests
 
             // An answer offered between sessions, then a turn a runner that outlived its attempt reports with no cost.
             var offered = coordinator.OfferAnswerAsync(asked.Id, "more");
-            kept!.Used(10, null, "a late turn came with no cost");
+            kept!.Used(new FlowTurnSpend(new AgentUsage(10, 0, 0, 0, 0, 0), null, Uncounted: "a late turn came with no cost"));
             written.Clear();
 
             var second = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
@@ -3519,12 +3520,12 @@ public sealed class FlowResumeTests
 
                 if (by == "share")
                 {
-                    run.Events.Used(tokens: 1_000, usd: 44.0);
+                    run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 44.0));
                     return FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve");
                 }
 
-                run.Events.Used(tokens: 1_000, usd: 2.0);
-                run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+                run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 2.0));
+                run.Events.Used(new FlowTurnSpend(new AgentUsage(500, 0, 0, 0, 0, 0), null, Uncounted: Why));
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success);
             });
 

@@ -96,7 +96,7 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
             : _none.Account(run);
 
     /// <inheritdoc/>
-    public async Task<FlowStepAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+    public async Task<FlowCutAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
         => run.Step.Type is { } type && _byType.TryGetValue(type, out var runner) && runner is IFlowHandoffRunner handoff
             ? await handoff.AttemptOf(run, cancellationToken).ConfigureAwait(false)
             : null;

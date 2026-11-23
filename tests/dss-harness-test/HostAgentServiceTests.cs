@@ -14,6 +14,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
 using DssHarness.Core.Tools;
 
 namespace DssHarness.Tests;
@@ -214,6 +215,59 @@ public sealed class HostAgentServiceTests
 
         Assert.True(HostAgentProtocol.TryReadNoteLine(written[3], out var nonceOfNone, out var kindOfNone, out var lastOfNone, out var base64OfNone));
         Assert.Equal((Nonce, NoteSink.VerifiedKind, true, ""), (nonceOfNone, kindOfNone, lastOfNone, base64OfNone));
+    }
+
+    /// <summary>
+    /// A leg an ssh host admits tells the machine that dispatched it each stage of its admission there, by a note its watch
+    /// is told - the leg, what asked and the stage - while every other note reaches the command's own reader, and one that
+    /// does not read as a stage is dropped. A run nobody dispatched, with no watch, tells nobody.
+    /// </summary>
+    [Fact]
+    public void AHostsAdmissionStages_ReachTheDispatchersWatch_AsNotes()
+    {
+        var lines = new StringWriter();
+        var origin = CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, Arguments = ["check-mutations"], Nonce = Nonce }));
+        var notes = new HostNotes(origin, new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false));
+        var told = LegRunService.Told("linux", "linux/arm-1", watch: null, notes, origin)!;
+
+        told(AdmissionStage.Queue);
+        notes.Write(NoteSink.ArmKind, "an arm's verdict");
+        notes.Write(LegRunService.AdmissionNote, "linux\nlinux/arm-1\nNever");
+        told(AdmissionStage.Taken);
+
+        var watch = new StagesWatch();
+        var command = new List<(string Kind, string Text)>();
+        var agent = new HostAgentLines(Nonce, LegRunService.NotesOf((kind, text) => command.Add((kind, text)), watch));
+
+        foreach (var line in lines.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            Assert.False(agent.Error(line.TrimEnd('\r')), "no piece of a note is relayed");
+        }
+
+        Assert.Equal([("linux", "linux/arm-1", AdmissionStage.Queue), ("linux", "linux/arm-1", AdmissionStage.Taken)], watch.Told);
+        Assert.Equal([(NoteSink.ArmKind, "an arm's verdict")], command);
+        Assert.Null(LegRunService.Told("linux", "linux", watch: null, notes, CommandOrigin.Typed));
+    }
+
+    /// <summary>A watch that keeps each stage of its legs' admission it is told, in order.</summary>
+    private sealed class StagesWatch : ILegRunWatch
+    {
+        /// <summary>Each stage told, with the leg and what asked.</summary>
+        public List<(string Leg, string Asking, AdmissionStage Stage)> Told { get; } = [];
+
+        public void Placed(IReadOnlyList<LegPlace> legs)
+        {
+        }
+
+        public void CopyMade(string leg)
+        {
+        }
+
+        public void Ended(string leg)
+        {
+        }
+
+        public void Admitting(string leg, string asking, AdmissionStage stage) => Told.Add((leg, asking, stage));
     }
 
     /// <summary>

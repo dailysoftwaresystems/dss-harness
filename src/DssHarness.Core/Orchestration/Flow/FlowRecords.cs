@@ -340,6 +340,7 @@ public sealed record FlowStepRecord(
                 ? "a skill it was given names no name, place, file, digest or folder"
             : (Inputs is not null || Decided is not null) && !Group ? "it holds what only a group's own record holds: a use's inputs, or a loop's decision"
             : Decided?.Problem() is { } decided ? $"its loop's decision: {decided}"
+            : Measure?.Problem() is { } measure ? $"its measure: {measure}"
             : null;
 }
 
@@ -579,12 +580,22 @@ public sealed record FlowHoldRecord(string Update, [property: JsonConverter(type
 /// that met it, so a resume after a crash asks as the session would have, and a grant of more recorded since goes on;
 /// left out where none did, as a record written before the mark was kept is read.
 /// </param>
-public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null)
+/// <param name="Unmeasured">
+/// What the run spent before its steps' measures were kept - a run a build that recorded the run's spend alone began -
+/// which no instance's measure holds and the totals above carry whole; left out where every part was measured.
+/// </param>
+public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null, FlowUnmeasuredSpend? Unmeasured = null)
 {
     /// <summary>The dollars as the one fold holds them: what was counted, and why the rest is not known where it is not.</summary>
     [JsonIgnore]
     public FlowDollars Dollars => new(Usd, Uncounted);
 }
+
+/// <summary>What a run spent that no instance's measure holds, recorded before its steps were measured.</summary>
+/// <param name="Usd">Its dollars, as far as each part was counted.</param>
+/// <param name="Tokens">Its tokens.</param>
+/// <param name="Uncounted">Why a part of it could not be counted; null where every part was.</param>
+public sealed record FlowUnmeasuredSpend(double Usd, long Tokens, string? Uncounted = null);
 
 /// <summary>The safe pause a run is under or was ended by, as <c>flow.json</c> holds it.</summary>
 /// <param name="Cause">Who asked for the pause.</param>

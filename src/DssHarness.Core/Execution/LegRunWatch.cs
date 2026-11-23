@@ -34,4 +34,15 @@ public interface ILegRunWatch
     /// <summary><paramref name="leg"/> has ended, its line recorded: whatever of the tree it was to read, it has read.</summary>
     /// <param name="leg">The leg's name.</param>
     void Ended(string leg);
+
+    /// <summary>
+    /// <paramref name="asking"/> - <paramref name="leg"/>, or a unit of its work - reached <paramref name="stage"/> of its
+    /// admission onto the machine its work runs on (<see cref="AdmissionRequest.Told"/>): each wait on a cause as it
+    /// begins, its start, and its admission's end. Said of a leg or unit that asks for a heavy-leg slot, on this machine or
+    /// - as the note its host writes says it - on an ssh host; never of one that asks for none.
+    /// </summary>
+    /// <param name="leg">The leg's name.</param>
+    /// <param name="asking">What asked: the leg's name, or <c>&lt;leg&gt;/&lt;unit&gt;</c> for a unit of its work.</param>
+    /// <param name="stage">The stage it reached.</param>
+    void Admitting(string leg, string asking, AdmissionStage stage);
 }

@@ -91,14 +91,16 @@ public sealed class Admission : IDisposable
     private readonly SlotPlace? _place;
     private readonly TimeProvider? _clock;
     private readonly long _takenAt;
+    private Action? _givenBack;
 
-    private Admission(SlotPlace? place, AdmissionFact fact, string? refusal, TimeProvider? clock)
+    private Admission(SlotPlace? place, AdmissionFact fact, string? refusal, TimeProvider? clock, Action? givenBack = null)
     {
         _place = place;
         Fact = fact;
         Refusal = refusal;
         _clock = clock;
         _takenAt = clock?.GetTimestamp() ?? 0;
+        _givenBack = givenBack;
     }
 
     /// <summary>What the leg's line says of it.</summary>
@@ -109,10 +111,11 @@ public sealed class Admission : IDisposable
 
     /// <summary>
     /// A leg let start, holding its slot, and any room it claimed, until disposed: how long it holds them is measured on
-    /// <paramref name="clock"/> from now, for what the next unit of its name costs.
+    /// <paramref name="clock"/> from now, for what the next unit of its name costs - then <paramref name="givenBack"/>
+    /// told, once.
     /// </summary>
-    internal static Admission Taken(SlotPlace place, AdmissionFact fact, TimeProvider clock)
-        => fact.Admitted ? new(place, fact, null, clock) : throw new ArgumentException("A leg taken is one let start.", nameof(fact));
+    internal static Admission Taken(SlotPlace place, AdmissionFact fact, TimeProvider clock, Action? givenBack = null)
+        => fact.Admitted ? new(place, fact, null, clock, givenBack) : throw new ArgumentException("A leg taken is one let start.", nameof(fact));
 
     /// <summary>A leg not let start, having given its place back.</summary>
     internal static Admission Refused(AdmissionFact fact, string refusal)
@@ -120,7 +123,7 @@ public sealed class Admission : IDisposable
 
     /// <summary>
     /// Gives the leg's slot, and the room it claimed, back, once its work has ended, keeping how long it held them for what
-    /// the next unit of its name costs (<see cref="UnitDurations"/>).
+    /// the next unit of its name costs (<see cref="UnitDurations"/>) - then tells its caller its admission has ended, once.
     /// </summary>
     public void Dispose()
     {
@@ -128,6 +131,8 @@ public sealed class Admission : IDisposable
         {
             _place.Ran(_clock!.GetElapsedTime(_takenAt));
         }
+
+        Interlocked.Exchange(ref _givenBack, null)?.Invoke();
     }
 }
 
@@ -202,6 +207,34 @@ public sealed record AdmissionRequest(
     /// what their builds already fill a second time. <see langword="null"/> where nothing is made for it.
     /// </summary>
     public Func<long, DiskSpace, CancellationToken, Task<MadeRoom?>>? MakeRoom { get; init; }
+
+    /// <summary>
+    /// Told each stage of the leg's admission as it is reached: what holds it back as each wait on a cause begins - the
+    /// machine's queue, its memory, its room - then <see cref="AdmissionStage.Taken"/> as it is let start, and
+    /// <see cref="AdmissionStage.Ended"/> once its admission ends - the slot it was let start in given back, or the leg
+    /// refused or stopped while it waited: what its caller's measure counts the machine's wait by, beside
+    /// <see cref="Progress"/>'s words. <see langword="null"/> where nothing is told.
+    /// </summary>
+    public Action<AdmissionStage>? Told { get; init; }
+}
+
+/// <summary>A stage of a heavy leg's admission onto its machine, as its caller is told it (<see cref="AdmissionRequest.Told"/>).</summary>
+public enum AdmissionStage
+{
+    /// <summary>It waits for one of the machine's heavy-leg slots, in the machine's fair order.</summary>
+    Queue,
+
+    /// <summary>It waits for the machine's memory in use to fall below its limit, or to be read again.</summary>
+    Memory,
+
+    /// <summary>It waits for the room its build needs on the machine's disk.</summary>
+    Room,
+
+    /// <summary>It was let start, and holds its slot until its work ends.</summary>
+    Taken,
+
+    /// <summary>Its admission ended: the slot it was let start in given back, or it was refused or stopped as it waited.</summary>
+    Ended,
 }
 
 /// <summary>
@@ -332,6 +365,9 @@ public sealed class LegAdmission(
         var excused = TimeSpan.Zero;
         long? ownSince = null;
 
+        // What the wait holds the leg back for now, as its caller was last told (AdmissionRequest.Told).
+        AdmissionStage? holding = null;
+
         try
         {
             IReadOnlyList<SlotEntry>? heldBy = null;
@@ -364,6 +400,7 @@ public sealed class LegAdmission(
 
                 if (!standing.Holding)
                 {
+                    Holds(AdmissionStage.Queue);
                     var whose = own ? $", each its own command's, which does not count against the {LedgerReport.SaidDuration(rule.MaxWait)} it may wait" : string.Empty;
 
                     if (heldBy is null || !heldBy.SequenceEqual(standing.Holders) || ownSaid != own)
@@ -382,6 +419,7 @@ public sealed class LegAdmission(
                     if (!own && Remaining() <= TimeSpan.Zero)
                     {
                         return Refuse(
+                            request,
                             place,
                             reclaimed,
                             started,
@@ -422,6 +460,8 @@ public sealed class LegAdmission(
 
                     // Read before in this wait and not now: nothing is decided on a reading this old - one above the limit
                     // would otherwise let the leg start the moment the count failed once - so it is read again next time.
+                    Holds(AdmissionStage.Memory);
+
                     if (!readingLost)
                     {
                         Say($"holds a heavy-leg slot, and could not read the memory in use again: {why}; it last read {last.Describe()}");
@@ -435,6 +475,7 @@ public sealed class LegAdmission(
                     if (Remaining() <= TimeSpan.Zero)
                     {
                         return Refuse(
+                            request,
                             place,
                             reclaimed,
                             started,
@@ -482,6 +523,7 @@ public sealed class LegAdmission(
 
                     var settling = Waits.Shorter(_settle(rule.SettleLeast, rule.SettleMost), Remaining());
 
+                    Holds(AdmissionStage.Memory);
                     Say($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {LedgerReport.SaidDuration(settling)}");
 
                     // Waited whole - the memory is read again only once all of it has passed - in pieces no longer than a
@@ -507,6 +549,7 @@ public sealed class LegAdmission(
                 }
 
                 settled = false;
+                Holds(AdmissionStage.Memory);
 
                 if (!waitingForMemory)
                 {
@@ -521,6 +564,7 @@ public sealed class LegAdmission(
                 if (Remaining() <= TimeSpan.Zero)
                 {
                     return Refuse(
+                        request,
                         place,
                         reclaimed,
                         started,
@@ -560,6 +604,7 @@ public sealed class LegAdmission(
         {
             // Stopped or failed while it waited: its place goes back, as it does once a taken leg's work ends.
             place.Dispose();
+            request.Told?.Invoke(AdmissionStage.Ended);
             throw;
         }
 
@@ -622,6 +667,8 @@ public sealed class LegAdmission(
                     _clock);
             }
 
+            Holds(AdmissionStage.Room);
+
             if (claim.Disk is null)
             {
                 var read = lastRoom!.Describe(room);
@@ -639,6 +686,7 @@ public sealed class LegAdmission(
                 return Remaining() > TimeSpan.Zero
                     ? null
                     : Refuse(
+                        request,
                         place,
                         reclaimed,
                         started,
@@ -667,6 +715,7 @@ public sealed class LegAdmission(
             return Remaining() > TimeSpan.Zero
                 ? null
                 : Refuse(
+                    request,
                     place,
                     reclaimed,
                     started,
@@ -687,6 +736,16 @@ public sealed class LegAdmission(
         {
             request.Progress(line);
             saidAt = _clock.GetTimestamp();
+        }
+
+        // Tells the leg's caller what holds it back, as a wait on a cause other than the one before begins.
+        void Holds(AdmissionStage on)
+        {
+            if (holding != on)
+            {
+                holding = on;
+                request.Told?.Invoke(on);
+            }
         }
 
         // Whether the wait has gone SaidAgainEvery without saying where it stands.
@@ -757,15 +816,23 @@ public sealed class LegAdmission(
     private static Admission Take(AdmissionRequest request, SlotPlace place, AdmissionFact fact, TimeProvider clock)
     {
         request.Progress(fact.Describe()!);
-        return Admission.Taken(place, fact, clock);
+
+        if (request.Told is not { } told)
+        {
+            return Admission.Taken(place, fact, clock);
+        }
+
+        told(AdmissionStage.Taken);
+        return Admission.Taken(place, fact, clock, () => told(AdmissionStage.Ended));
     }
 
     /// <summary>
     /// A leg not let start, its place given back, its line naming what held it: the slots' holders and their record, or the
     /// room, the legs claiming it and the room's record - and what it removed of other trees' idle builds as it waited,
-    /// which stays removed.
+    /// which stays removed. Its caller is told its admission has ended.
     /// </summary>
     private Admission Refuse(
+        AdmissionRequest request,
         SlotPlace place,
         IReadOnlyList<string> reclaimed,
         long started,
@@ -778,6 +845,7 @@ public sealed class LegAdmission(
         string? room = null)
     {
         place.Dispose();
+        request.Told?.Invoke(AdmissionStage.Ended);
 
         var holders = standing?.Holders ?? claimants;
 

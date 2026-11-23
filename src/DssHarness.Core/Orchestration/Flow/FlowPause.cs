@@ -45,10 +45,18 @@ public sealed record FlowHandoff(string Text, string By, string? Why = null)
 /// What a run's reasoning has spent against its budget: what the clients reported in tokens and dollars, and the time
 /// reason steps ran - each counted for reason steps alone, an advice among them. Its dollars are the one fold of what
 /// the engine's agents spend (<see cref="FlowDollars"/>): a part whose cost could not be counted leaves them not known
-/// past what was, never charged as nothing.
+/// past what was, never charged as nothing. Its tokens and dollars are the sum of the run's instances' measures, charged
+/// with each part where the part is charged to its instance and summed from them again at a resume - with what a build
+/// that kept no measures recorded before them (<see cref="Unmeasured"/>) - never a count of their own.
 /// </summary>
 public sealed class FlowBudgetSpent
 {
+    /// <summary>
+    /// What the run spent before its steps' measures were kept - recorded by a build that kept the run's spend alone - which
+    /// no instance's measure holds and the run's total carries whole; null where every part was measured.
+    /// </summary>
+    public FlowUnmeasuredSpend? Unmeasured { get; internal set; }
+
     /// <summary>What the reason steps cost, as far as each part's cost could be counted, and why the rest is not known where it is not.</summary>
     public FlowDollars Dollars { get; internal set; }
 
@@ -75,7 +83,7 @@ public sealed class FlowBudgetSpent
     /// What was spent as it stands now, as <c>flow.json</c> holds it: a value, so a snapshot taken now and written later -
     /// held while a session's start is - says the run as it stood when it was taken, never what was spent since.
     /// </summary>
-    public FlowBudgetRecord Recorded() => new(Usd, Tokens, Minutes, Uncounted, ReserveMetAt);
+    public FlowBudgetRecord Recorded() => new(Usd, Tokens, Minutes, Uncounted, ReserveMetAt, Unmeasured);
 
     /// <summary>Charges one part of the run's reasoning - a turn of a reason step, an advice - by the one fold of its dollars.</summary>
     /// <param name="tokens">The tokens it used.</param>

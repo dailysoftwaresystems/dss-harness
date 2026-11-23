@@ -150,12 +150,15 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         output["isolation"] = ran.Isolation;
         var lines = result.Report.Lines;
 
+        // What each leg did, for the attempt's measure: however the run ended, every line it kept is the attempt's.
+        var account = new FlowStepAttempt(run.Attempt, Legs: [.. lines.Select(FlowStepLeg.Of)]);
+
         // A run something other than its legs ended - refused, cut off, a leg it placed left with no line - ends the step
         // with the run's own code: its ledger holds only what its legs reached, which says nothing of what ended it. A run
         // its legs ended - none could run, another run owns its records - is read by its legs' verdicts like any other.
         if (FlowStepLegs.EndedOutsideItsLegs(result, watch.PlacedLegs))
         {
-            return FlowStepResult.Ended(passed: false, result.ExitCode, result.Message, output) with { Cause = result.Cause };
+            return FlowStepResult.Ended(passed: false, result.ExitCode, result.Message, output) with { Cause = result.Cause, Attempt = account };
         }
 
         // The coordinator decides the step by each leg's verdict; what is said beside them is what those verdicts say,
@@ -171,6 +174,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             Output = output,
             Legs = legs,
             Cause = result.Cause,
+            Attempt = account,
         };
     }
 
@@ -300,10 +304,17 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         }
     }
 
-    /// <summary>Tells the engine what the leg service says of the step's legs, in the engine's words, and keeps the legs placed.</summary>
-    private sealed class StepWatch(IFlowRunEvents events) : ILegRunWatch
+    /// <summary>
+    /// Tells the engine what the leg service says of the step's legs, in the engine's words, and keeps the legs placed -
+    /// and, from each stage of their admission, whether the machine holds every leg still to run back
+    /// (<see cref="StepHold"/>), as the engine counts the step's machine wait by.
+    /// </summary>
+    internal sealed class StepWatch(IFlowRunEvents events) : ILegRunWatch
     {
+        private readonly Lock _gate = new();
+        private readonly StepHold _hold = new();
         private IReadOnlyList<string> _placed = [];
+        private IReadOnlyList<string> _told = [];
 
         /// <summary>Every leg the run placed, by name; none before it placed them.</summary>
         public IReadOnlyList<string> PlacedLegs => Volatile.Read(ref _placed);
@@ -312,6 +323,11 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         public void Placed(IReadOnlyList<LegPlace> legs)
         {
             Volatile.Write(ref _placed, [.. legs.Select(leg => leg.Leg)]);
+
+            lock (_gate)
+            {
+                _hold.Placed(legs.Select(leg => leg.Leg));
+            }
 
             foreach (var leg in legs)
             {
@@ -325,7 +341,104 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         public void CopyMade(string leg) => events.LegCopyMade(leg);
 
         /// <inheritdoc/>
-        public void Ended(string leg) => events.LegEnded(leg);
+        public void Ended(string leg)
+        {
+            Tell(() => _hold.Ended(leg));
+            events.LegEnded(leg);
+        }
+
+        /// <inheritdoc/>
+        public void Admitting(string leg, string asking, AdmissionStage stage) => Tell(() => _hold.Admitting(leg, asking, stage));
+
+        // Tells the engine what holds the step's legs back, where a change makes it other than it last said: under one lock,
+        // so two legs' stages said at once are told in the order they changed it.
+        private void Tell(Action change)
+        {
+            lock (_gate)
+            {
+                change();
+
+                if (_hold.On() is var on && !on.SequenceEqual(_told))
+                {
+                    _told = on;
+                    events.Held(on);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// What holds a machine step's legs back, from each stage of their admission: a leg is held while something of it -
+    /// itself, or a unit of its work - waits at its machine and nothing of it holds a slot there; the step is held while
+    /// every leg it placed that has not ended is held, on what each of them waits on.
+    /// </summary>
+    internal sealed class StepHold
+    {
+        private readonly HashSet<string> _legs = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _ended = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Leg, AdmissionStage Stage)> _asking = new(StringComparer.Ordinal);
+
+        /// <summary>The run placed <paramref name="legs"/>.</summary>
+        public void Placed(IEnumerable<string> legs) => _legs.UnionWith(legs);
+
+        /// <summary><paramref name="leg"/> ended: nothing of it waits or holds a slot any more.</summary>
+        public void Ended(string leg)
+        {
+            _ = _ended.Add(leg);
+
+            foreach (var asking in _asking.Where(entry => entry.Value.Leg == leg).Select(entry => entry.Key).ToList())
+            {
+                _ = _asking.Remove(asking);
+            }
+        }
+
+        /// <summary><paramref name="asking"/>, of <paramref name="leg"/>, reached <paramref name="stage"/> of its admission.</summary>
+        public void Admitting(string leg, string asking, AdmissionStage stage)
+        {
+            _ = _legs.Add(leg);
+
+            if (stage == AdmissionStage.Ended || _ended.Contains(leg))
+            {
+                _ = _asking.Remove(asking);
+            }
+            else
+            {
+                _asking[asking] = (leg, stage);
+            }
+        }
+
+        /// <summary>
+        /// What the machine holds every leg still to run back for, as <see cref="FlowWaits"/> names each, in the order of
+        /// <see cref="AdmissionStage"/>; empty where a leg of the step runs, or none is left to.
+        /// </summary>
+        public IReadOnlyList<string> On()
+        {
+            var running = _legs.Where(leg => !_ended.Contains(leg)).ToList();
+            var waits = new SortedSet<AdmissionStage>();
+
+            foreach (var leg in running)
+            {
+                var stages = _asking.Values.Where(entry => entry.Leg == leg).Select(entry => entry.Stage).ToList();
+
+                if (stages.Count == 0 || stages.Contains(AdmissionStage.Taken))
+                {
+                    return [];
+                }
+
+                waits.UnionWith(stages);
+            }
+
+            return [.. waits.Select(Words)];
+        }
+
+        /// <summary>The words a record says a wait on <paramref name="stage"/> by.</summary>
+        private static string Words(AdmissionStage stage) => stage switch
+        {
+            AdmissionStage.Queue => FlowWaits.MachineQueue,
+            AdmissionStage.Memory => FlowWaits.MachineMemory,
+            AdmissionStage.Room => FlowWaits.MachineRoom,
+            _ => throw new ArgumentOutOfRangeException(nameof(stage), stage, "Only a wait's stage is said as a wait."),
+        };
     }
 }
 

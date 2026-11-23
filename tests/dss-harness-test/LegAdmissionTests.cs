@@ -113,7 +113,7 @@ public sealed class LegAdmissionTests
 
     /// <summary>
     /// Holding a slot, a leg waits for the memory in use to fall below the limit, saying so once, and starts at the
-    /// reading that was below it.
+    /// reading that was below it - its caller told each stage of it once, the end as its slot is given back.
     /// </summary>
     [Fact]
     public async Task ALegHoldingASlot_WaitsForTheMemoryToFallBelowTheLimit()
@@ -123,9 +123,10 @@ public sealed class LegAdmissionTests
         var record = temp.Combine("admission.json");
         var clock = new ManualClock();
         var said = new List<string>();
+        var stages = new List<AdmissionStage>();
 
-        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(84.1, 80, 75.9), clock)
-            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said), TestContext.Current.CancellationToken);
+        var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(84.1, 80, 75.9), clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said) with { Told = stages.Add }, TestContext.Current.CancellationToken);
 
         Assert.True(admitted.Fact.Admitted);
         Assert.Equal(60, admitted.Fact.WaitedSeconds);
@@ -134,6 +135,33 @@ public sealed class LegAdmissionTests
             "holds a heavy-leg slot, and waits for the memory 84.1% in use (84.1 of 100 by the test) to fall below 76%",
             Assert.Single(said, line => line.StartsWith("holds", StringComparison.Ordinal)));
         Assert.Equal("admitted after 1m00s, memory 75.9% in use (75.9 of 100 by the test)", said[^1]);
+
+        // Its caller is told each stage, once: the wait on the memory, the start, and - once its slot is given back - the end.
+        Assert.Equal([AdmissionStage.Memory, AdmissionStage.Taken], stages);
+        admitted.Dispose();
+        admitted.Dispose();
+        Assert.Equal([AdmissionStage.Memory, AdmissionStage.Taken, AdmissionStage.Ended], stages);
+    }
+
+    /// <summary>
+    /// A leg's caller is told each stage of its admission as it is reached: a wait for a slot, and - the leg not let start
+    /// once it waited as long as its machine allows - the admission's end, with no start between.
+    /// </summary>
+    [Fact]
+    public async Task ALegsCaller_IsToldTheWaitForASlot_AndTheEndOfARefusedAdmission()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var stages = new List<AdmissionStage>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"), AdmissionKit.Holder(harness, "second"));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock())
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30, maxWaitMinutes: 2), []) with { Told = stages.Add }, TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.Equal([AdmissionStage.Queue, AdmissionStage.Ended], stages);
     }
 
     /// <summary>

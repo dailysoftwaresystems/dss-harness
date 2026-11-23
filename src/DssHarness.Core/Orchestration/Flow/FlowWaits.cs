@@ -55,13 +55,35 @@ public static class FlowWaits
     /// iteration starts until it says whether the loop goes on or ends.
     /// </summary>
     /// <param name="question">The question's id.</param>
-    public static string Answer(string question) => $"the answer to {question}";
+    public static string Answer(string question) => $"{AnswerTo}{question}";
+
+    /// <summary>The machine a step's legs run on, its dispatch queue: every leg of the step still to run waits its turn there.</summary>
+    public const string MachineQueue = "the machine's queue";
+
+    /// <summary>The machine a step's legs run on, its memory in use: every leg of the step still to run waits for it to fall.</summary>
+    public const string MachineMemory = "the machine's memory";
+
+    /// <summary>The machine a step's legs run on, the room its builds need: every leg of the step still to run waits for it.</summary>
+    public const string MachineRoom = "the machine's room";
 
     /// <summary>
-    /// Whether <paramref name="wait"/> is a wait for room - a claim, the run to be quiet, or a counter of the run's
-    /// limits - which only the run's own pace ends, and whose length no step's time says.
+    /// Whether <paramref name="wait"/> is a wait for room - a claim, the run to be quiet, a counter of the run's limits,
+    /// or the machine its legs run on holding them in its queue, for its memory or for its room - which only the run's
+    /// or the machine's own pace ends, and whose length no step's time says.
     /// </summary>
     /// <param name="wait">One word of a record's <c>waitsOn</c>.</param>
     public static bool ForRoom(string wait)
-        => wait is Claim or Quiet or ReasoningAgents or ParallelProcesses or OpenAgents;
+        => wait is Claim or Quiet or ReasoningAgents or ParallelProcesses or OpenAgents or MachineQueue or MachineMemory or MachineRoom;
+
+    /// <summary>
+    /// Whether <paramref name="wait"/> is a wait on a person: a question's own id, which the step that asked it waits on,
+    /// or the answer to one a loop's bound asked (<see cref="Answer"/>) - a wait a person ends, whether or not an engine
+    /// runs while it is open.
+    /// </summary>
+    /// <param name="wait">One word of a record's <c>waitsOn</c>.</param>
+    public static bool ForAPerson(string wait)
+        => FlowQuestionIds.IsWellFormed(wait) || (wait.StartsWith(AnswerTo, StringComparison.Ordinal) && FlowQuestionIds.IsWellFormed(wait[AnswerTo.Length..]));
+
+    /// <summary>The words that begin a wait on the answer to a question (<see cref="Answer"/>).</summary>
+    private const string AnswerTo = "the answer to ";
 }

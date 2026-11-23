@@ -22,6 +22,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Refused">Every answer handed over through the inbox that the run refused, as its file of questions holds them; null where none was.</param>
 /// <param name="AffectedTests">Each key's test units the run kept, as its own record of them holds them; null where the state was read from no record.</param>
 /// <param name="NextRound">Every issue the run owes its next round, as its own file of them holds it; none where the run's directory holds no file of them.</param>
+/// <param name="LastRecordAt">
+/// When the session before last wrote a record - its last whole event's time, every state change writing one - the
+/// time the run is taken to have stood still from: what was open then is closed there, and the time from there to the
+/// resume is its pause. Null where the run's events hold none.
+/// </param>
 public sealed record FlowResumeState(
     FlowFile File,
     IReadOnlyList<string> Differing,
@@ -31,7 +36,8 @@ public sealed record FlowResumeState(
     IReadOnlyList<PreExistingIssue>? Issues = null,
     IReadOnlyList<FlowRefusedAnswer>? Refused = null,
     IReadOnlyList<FlowAffectedTests>? AffectedTests = null,
-    IReadOnlyList<FlowNextIssue>? NextRound = null);
+    IReadOnlyList<FlowNextIssue>? NextRound = null,
+    DateTimeOffset? LastRecordAt = null);
 
 /// <summary>
 /// Reads what a killed or stopped run left and hands it to a resume: the run's state in one file checked against the
@@ -144,7 +150,11 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 
         _store.WriteFlow(_layout, reconciled);
 
-        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused, affected.Entries, next);
+        // Where the session before stood still: its events' last whole line, every state change writing one after the
+        // records that tell of it.
+        var events = _fileSystem.FileExists(_layout.EventsFile) ? FlowEventLog.Read(_fileSystem, _layout.EventsFile).Events : [];
+
+        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused, affected.Entries, next, events.Count > 0 ? events[^1].At : null);
     }
 
     /// <summary>Every step record the run's directories hold - the run's, then each agent's - by instance id, each with any handoff its record does not name yet taken back.</summary>

@@ -87,7 +87,7 @@ public sealed class ReportAnalystRunner(
                 null,
                 null,
                 [],
-                new NoEvents(),
+                FlowRunEvents.None,
                 Handoff: null,
                 Issue: null,
                 Visit: 1,
@@ -304,20 +304,4 @@ public sealed class ReportAnalystRunner(
             },
             out var problem)
             ?? throw new HarnessException(HarnessExit.ConfigInvalid, problem!);
-
-    /// <summary>The events of an analyst's run, which tells the run nothing while it works - its answer is all it says.</summary>
-    private sealed class NoEvents : IFlowRunEvents
-    {
-        public void LegPlaced(string leg, bool inACopy) { }
-
-        public void EveryLegPlaced() { }
-
-        public void LegCopyMade(string leg) { }
-
-        public void LegEnded(string leg) { }
-
-        public void Used(long tokens, double? usd, string? uncounted = null, Agents.AgentUsage? turn = null, string? serving = null) { }
-
-        public void HandoffTaken() { }
-    }
 }

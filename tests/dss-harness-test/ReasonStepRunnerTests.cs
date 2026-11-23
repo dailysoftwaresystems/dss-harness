@@ -30,7 +30,9 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) { }
+        public void Used(FlowTurnSpend turn) { }
+
+        public void Held(IReadOnlyList<string> on) { }
 
         public void HandoffTaken() { }
     }
@@ -1017,6 +1019,65 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// What a crash cut off is read back from the attempt's stored stream: the events of the attempt the step's record says
+    /// it was on - every run of it, to the end the crash left, a last line torn in two passed over - replayed through the
+    /// engine's own count, each turn priced as it was reported and handed back with its spend, with what served it and when
+    /// its last event was written. Another attempt's events are never its; a stream with no run of the attempt has nothing
+    /// to add; one a whole line of which does not read says so, for what it spent past its record is then not known.
+    /// </summary>
+    [Fact]
+    public async Task ACutOffAttempt_IsReadBackFromItsStream_ItsTurnsPricedAsReported()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        Priced(kit);
+        await kit.CreateReadingAgentAsync("reader");
+        var runner = (IFlowHandoffRunner)Runner(kit, agents);
+        var directory = kit.Layout.AgentStepDirectory("reader", "think");
+        var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
+
+        await stream.EmitAsync(new RunStarted(1));
+        await stream.EmitAsync(new SessionStarted("claude-api", "claude-opus-5-5", "sha", [], [], HandedConversation: false, Provider: "anthropic", Effort: "high"));
+        await stream.EmitAsync(new UsageReported(new AgentUsage(9000, 900, 0, 0, 0, 0), new AgentUsage(9000, 900, 0, 0, 0, 0)));
+        await stream.EmitAsync(new RunFinished(AgentRunStatus.Failed));
+        await stream.EmitAsync(new RunStarted(2));
+        await stream.EmitAsync(new SessionStarted("claude-api", "claude-opus-5-5", "sha", [], [], HandedConversation: false, Provider: "anthropic", Effort: "high"));
+        await stream.EmitAsync(new TurnFinished(1, "claude-opus-5-5", new AgentUsage(1000, 100, 0, 0, 0, 0), "tool_use"));
+        await stream.EmitAsync(new UsageReported(new AgentUsage(1000, 100, 0, 0, 0, 0), new AgentUsage(1000, 100, 0, 0, 0, 0)));
+        await stream.EmitAsync(new TurnFinished(2, "claude-opus-5-5", new AgentUsage(2000, 200, 0, 0, 0, 0), "end_turn"));
+        await stream.EmitAsync(new UsageReported(new AgentUsage(2000, 200, 0, 0, 0, 0), new AgentUsage(3000, 300, 0, 0, 0, 0)));
+        stream.Dispose();
+
+        var file = Path.Combine(directory, StoredStream.FileName);
+        var whole = File.ReadAllText(file);
+        var endedAt = kit.Harness.OrchestrationStore.ReadStepStream(directory)[^1].At;
+        File.AppendAllText(file, "{\"kind\":\"usageRep");
+
+        var cut = await runner.AttemptOf(Run(kit, agent: "reader", attempt: 2), Token);
+
+        Assert.NotNull(cut);
+        Assert.Null(cut.Unread);
+        Assert.Equal(
+            [(1100L, (double?)0.015, "claude-opus-5-5"), (2200L, 0.03, "claude-opus-5-5")],
+            cut.Turns.Select(turn => (turn.Usage.AllTokens, turn.Usd is { } usd ? Math.Round(usd, 9) : (double?)null, turn.Serving)));
+        Assert.Equal(("anthropic", "claude-opus-5-5", "high", 2), (cut.Account.Provider, cut.Account.Model, cut.Account.Effort, cut.Account.Turns));
+        Assert.Equal(endedAt, cut.EndedAt);
+
+        // Attempt 3 never started: the stream has nothing of it to add.
+        Assert.Null(await runner.AttemptOf(Run(kit, agent: "reader", attempt: 3), Token));
+
+        // A line in the middle that does not read: what the attempt spent past its record is not known, and the account says so.
+        var first = whole.IndexOf('\n', StringComparison.Ordinal) + 1;
+        File.WriteAllText(file, whole[..first] + "{not json\n" + whole[first..]);
+
+        var unread = await runner.AttemptOf(Run(kit, agent: "reader", attempt: 2), Token);
+
+        Assert.NotNull(unread);
+        Assert.StartsWith("its stream does not read whole, so what it spent past its record is not known: ", unread.Unread, StringComparison.Ordinal);
+        Assert.Empty(unread.Turns);
+    }
+
+    /// <summary>
     /// A continuation record says how each step before ended, as its own record states it, lists the paths this
     /// agent's folds wrote into the main tree, and holds the red legs of its newest red build or test: each by its
     /// ledger line, its digest, the raw lines its entry carries beside it - the phase's last lines where nothing was
@@ -1432,13 +1493,14 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// The attempt's own account rides its answer back to the engine: what served it and what that cost - the
-    /// provider, the model, the effort, where a fallback moved it from and why - with the price copied as its cost was
-    /// counted, the turns, the tools by name with their failures, and the compactions. Its spend is not in it: the
-    /// engine counts that turn by turn as each was reported.
+    /// The attempt's own account rides its answer back to the engine: what served it - the provider, the model, the
+    /// effort, where a fallback moved it from and why - the turns, the tools by name with their failures and denials, and
+    /// the compactions. Its spend is not in it: each turn is handed on as it is reported, served by the model serving the
+    /// run then and costed at that model's price, copied as it was counted - a fallback's turns at its own model's. A
+    /// call the policy denied is counted a call and a denial, never a failure.
     /// </summary>
     [Fact]
-    public async Task TheAttemptsOwnAccount_RidesItsAnswer_WithItsPriceCopiedAsItWasCounted()
+    public async Task TheAttemptsOwnAccount_RidesItsAnswer_AndEachTurnItsModelsPrice()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
@@ -1483,20 +1545,30 @@ public sealed class ReasonStepRunnerTests
         agents.Says.Add(new TurnFinished(2, "claude-sonnet-5-5", new AgentUsage(500, 50, 0, 0, 0, 0), "end_turn"));
         agents.Says.Add(new ToolCallStarted("t2", "read", default));
         agents.Says.Add(new ToolCallFinished("t2", Ok: false, TimeSpan.FromSeconds(1), "{}", "the read failed"));
+        agents.Says.Add(new ToolCallStarted("t3", "bash", default));
+        agents.Says.Add(new PermissionDenied("bash", "rm -rf /", "never remove outside the tree", AgentPermissionSource.Builtin, "it removes outside the tree"));
+        agents.Says.Add(new ToolCallFinished("t3", Ok: false, TimeSpan.FromSeconds(0), "{}", "denied"));
         agents.Says.Add(new UsageReported(new AgentUsage(500, 50, 0, 0, 0, 0), new AgentUsage(1500, 150, 0, 0, 0, 0)));
+        var events = new SpendingEvents();
 
-        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader") with { Events = events }, Token);
 
         Assert.True(result.Passed, result.Error);
         var account = result.Attempt!;
         Assert.Equal(("anthropic", "claude-sonnet-5-5", "low"), (account.Provider, account.Model, account.Effort));
         Assert.Equal(("claude-opus-5-5", "the account is out of credit"), (account.FallbackFrom, account.FallbackReason));
 
-        // The price is the one the last counted turn was costed at, copied as the configuration gave it then.
-        Assert.Equal(("claude-sonnet-5-5", "2026-10-01", 2.0, 0.2, 10.0), (account.Price!.Model, account.Price.ReadOn, account.Price.InputMiss, account.Price.InputHit, account.Price.Output));
         Assert.Equal(2, account.Turns);
-        Assert.Equal([new FlowStepToolUse("read", 2, 1)], account.Tools);
+        Assert.Equal([new FlowStepToolUse("bash", 1, 0, Denied: 1), new FlowStepToolUse("read", 2, 1)], account.Tools);
         Assert.Equal(1, account.Compactions);
+
+        // Each turn at the price of the model that served it, copied as the configuration gave it then.
+        Assert.Equal(
+            [
+                ("claude-opus-5-5", (double?)0.015, "2026-10-01", (double?)10.0, (double?)50.0),
+                ("claude-sonnet-5-5", (double?)0.0015, "2026-10-01", (double?)2.0, (double?)10.0),
+            ],
+            events.Turns.Select(turn => (turn.Serving, turn.Usd is { } usd ? Math.Round(usd, 9) : (double?)null, turn.Price!.ReadOn, turn.Price.InputMiss, turn.Price.Output)));
     }
 
     /// <summary>
@@ -1643,6 +1715,9 @@ public sealed class ReasonStepRunnerTests
         /// <summary>Every turn's spend, in the order handed on.</summary>
         public List<(long Tokens, double? Usd, string? Uncounted)> Spent { get; } = [];
 
+        /// <summary>Every turn handed on, whole, in order.</summary>
+        public List<FlowTurnSpend> Turns { get; } = [];
+
         public void LegPlaced(string leg, bool inACopy) { }
 
         public void EveryLegPlaced() { }
@@ -1651,7 +1726,13 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) => Spent.Add((tokens, usd, uncounted));
+        public void Used(FlowTurnSpend turn)
+        {
+            Spent.Add((turn.Usage.AllTokens, turn.Usd, turn.Uncounted));
+            Turns.Add(turn);
+        }
+
+        public void Held(IReadOnlyList<string> on) { }
 
         public void HandoffTaken() { }
     }
@@ -1670,7 +1751,9 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) { }
+        public void Used(FlowTurnSpend turn) { }
+
+        public void Held(IReadOnlyList<string> on) { }
 
         public void HandoffTaken() => Taken++;
     }
