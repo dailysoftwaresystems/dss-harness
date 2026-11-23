@@ -557,6 +557,93 @@ public sealed class FlowStepMeasureTests
     }
 
     /// <summary>
+    /// An attempt that asked, was answered and was cut off by a crash as it went on is completed from its stream charging
+    /// only the turns past what its own record was charged: the turn its first run spent, written before the answer, is
+    /// never charged again, and the turn the crash kept the engine from reading is charged once - the run's spend the
+    /// sum of its instances', the reserve never met by a turn counted twice.
+    /// </summary>
+    [Fact]
+    public async Task AResume_AfterAnAnswer_ChargesOnlyTheTurnsPastTheRecord()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var charged = new FlowTurnSpend(new AgentUsage(600, 100, 0, 0, 0, 0), 0.25, Serving: "model-x");
+        var past = new FlowTurnSpend(new AgentUsage(250, 50, 0, 0, 0, 0), 0.125, Serving: "model-x");
+        var runner = new Runner().OnAsync("think", (run, asked) =>
+        {
+            if (asked > 1)
+            {
+                // The answer's continuation: its turn is streamed, and the engine ends before it reads it.
+                return new TaskCompletionSource<FlowStepResult>().Task;
+            }
+
+            run.Events.Used(charged);
+            return Task.FromResult(FlowStepResult.Asking(new FlowQuestion(FlowQuestions.RunsOwn, "ask", "think", "which way?", FlowQuestions.OptionsOf("ask", step: null))));
+        });
+        var (harness, layout, records) = Records("r1", temp.Path, definition, new ManualClock(Began));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: records);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var (_, _, answered) = Records("r1", temp.Path, definition, new ManualClock(Began.AddHours(1)));
+
+        using (answered)
+        {
+            var seen = new Seen(answered);
+            var running = seen.SeenAsync(snapshot => Step(snapshot, "think").State == FlowInstanceState.Running);
+            using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began.AddHours(1)), resume: TakeUp(harness, layout, definition), records: seen);
+
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "answer", "the left one", out var refused), refused);
+            var session = coordinator.RunAsync(engine.Token);
+            await running.WaitAsync(Bound, Token);
+
+            // The crash, with the continuation's turn in the stream and not read.
+            await engine.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition, new ManualClock(Began.AddHours(2)));
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(
+                definition,
+                new Runner(),
+                new RunnerFacts(),
+                new ManualClock(Began.AddHours(2)),
+                resume: TakeUp(harness, layout, definition),
+                records: again,
+                streamAccount: new CutAccount(new FlowCutAttempt(new FlowStepAttempt(0, Model: "model-x"), [charged, past], Began.AddHours(1).AddSeconds(5))));
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+        var think = flow.Steps.Single().Measure!;
+        var cut = think.Attempts![0];
+
+        Assert.Equal((1, "Stopped", 2), (cut.N, cut.Outcome, cut.Reports));
+        Assert.Equal(new AgentUsage(850, 150, 0, 0, 0, 0), cut.Tokens);
+        Assert.Equal(0.375, cut.Usd);
+        Assert.Equal([new FlowStepSpan(Began, Began), new FlowStepSpan(Began.AddHours(1), Began.AddHours(1).AddSeconds(5))], cut.Runs);
+        Assert.Equal([new FlowStepWait("q1", 3600.0)], think.Waited);
+        Assert.Equal(3595.0, think.Paused);
+        Assert.Equal((1000, 0.375), (flow.Spent.Tokens, flow.Spent.Usd));
+    }
+
+    /// <summary>
     /// A run a build that kept no measures recorded is resumed with what it had spent carried whole beside the measures
     /// kept since (<c>spent.unmeasured</c>): its total is never lost for want of a measure, nor counted twice once one is kept.
     /// </summary>

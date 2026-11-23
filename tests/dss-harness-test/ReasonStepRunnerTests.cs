@@ -1063,7 +1063,10 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(("anthropic", "claude-opus-5-5", "high", 2), (cut.Account.Provider, cut.Account.Model, cut.Account.Effort, cut.Account.Turns));
         Assert.Equal(endedAt, cut.EndedAt);
 
-        // Attempt 3 never started: the stream has nothing of it to add.
+        // An attempt a newer one followed has nothing past its record to add (AgentAttempt.Of): its record was written
+        // whole before the newer began. And attempt 3 never started: the stream has nothing of it either, never the
+        // newest attempt's events read as its.
+        Assert.Null(await runner.AttemptOf(Run(kit, agent: "reader", attempt: 1), Token));
         Assert.Null(await runner.AttemptOf(Run(kit, agent: "reader", attempt: 3), Token));
 
         // A line in the middle that does not read: what the attempt spent past its record is not known, and the account says so.
