@@ -442,6 +442,41 @@ public sealed class FlowStepMeasureTests
         Assert.Equal("Done", machine.Attempts[1].Outcome);
     }
 
+    /// <summary>
+    /// A runner that throws an exception the engine did not expect ends the step 70, and the attempt's measure entry
+    /// keeps the exception's own record: its type, its message, the stack with each frame's file and line.
+    /// </summary>
+    [Fact]
+    public async Task ARunnerThatThrows_ItsAttemptKeepsTheExceptionRecord()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: broke
+                type: orient
+            """);
+        var runner = new Runner().OnAsync("broke", _ => throw new InvalidOperationException("the runner broke"));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Failed, end.Status);
+        }
+
+        var broke = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single().Measure!;
+        var attempt = broke.Attempts!.Single();
+
+        Assert.Equal("Failed", attempt.Outcome);
+        Assert.NotNull(attempt.Exception);
+        Assert.Equal("System.InvalidOperationException", attempt.Exception.Type);
+        Assert.Equal("the runner broke", attempt.Exception.Message);
+        Assert.Contains(attempt.Exception.Stack, frame => frame.Text.Contains(nameof(FlowStepMeasureTests), StringComparison.Ordinal));
+    }
+
     /// <summary>Parses a definition, refusing a file that does not read: these tests run one that does.</summary>
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);

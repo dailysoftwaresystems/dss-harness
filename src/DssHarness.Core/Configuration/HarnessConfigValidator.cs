@@ -170,6 +170,21 @@ public static partial class HarnessConfigValidator
         {
             problems.Add($"defaults.report: {wrong}");
         }
+
+        foreach (var matcher in config.Results.Matchers)
+        {
+            matcher.Compile();
+
+            if (matcher.Problem() is { } unreadable)
+            {
+                problems.Add($"results.matchers: {unreadable}");
+            }
+        }
+
+        if (config.Results.Matchers.GroupBy(matcher => matcher.Name, StringComparer.Ordinal).Any(twice => twice.Count() > 1))
+        {
+            problems.Add($"results.matchers: {string.Join(", ", config.Results.Matchers.GroupBy(matcher => matcher.Name, StringComparer.Ordinal).Where(twice => twice.Count() > 1).Select(twice => $"'{twice.Key}'"))} named twice");
+        }
     }
 
     /// <summary>Checks one admission section: every field it declares is one a machine can admit legs by.</summary>

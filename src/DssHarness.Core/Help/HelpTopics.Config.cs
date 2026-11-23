@@ -44,6 +44,9 @@ public static partial class HelpTopics
         builder.AppendLine("                 ('help runners'), admission, how heavy legs share a machine");
         builder.AppendLine("                 ('help admission'), and report, the thresholds a run report's");
         builder.AppendLine("                 signals are computed by ('help orchestrators')");
+        builder.AppendLine("  results        matchers: a problem matcher for any other tool - a regex with");
+        builder.AppendLine("                 named groups saying where its file, line, column, code and message");
+        builder.AppendLine("                 are, so its output is digested as every tool's is; validated at load");
         builder.AppendLine("  toolchains     compilers, as environment and cache variables (msvc, gcc, clang)");
         builder.AppendLine("  sanitizers     instrumentation overlays composed onto a build");
         builder.AppendLine("  buildConfigs   named configurations (debug, release, o1, o2)");

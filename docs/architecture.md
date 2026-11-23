@@ -9647,6 +9647,34 @@ arm, the workers and the first part that differs (`KeyDifference`); one worker a
 compared its keys with no other's. A self-test's keys are on no line: nothing of a self-test is
 kept.
 
+## Results digested
+
+What a red phase or a failed test prints is typed, never left as a log to search: one owner of the
+shapes (`Results\ResultDigest.cs`) and one of the parsers that read them
+(`Results\ResultParsers.cs`). A `Diagnostic` is a compiler's or a linter's line - its tool, its
+severity, its code, its message, its file, line and column, its project, how many times it was
+printed again (once per translation unit or per target framework, folded into one), the chain that
+led to it as `StackFrame`s and the line range of its log - and a `TestFailure` is a failed test's
+identity, its assertion, its duration, its outcome (`failed`, `errored`, `timedOut`, `crashed`)
+and, where the failure is a thrown error, its `ExceptionRecord`: type, message, stack and the
+cause chain. A `StackFrame` carries its line as printed, its place, its symbol, its kind (`call`,
+`include`, `instantiation`, `macro`, `async`) and whether its file is inside the tree; a stack is
+held to 64 frames - the first 48 and the last 16, the middle cut and said, which the log range
+still holds - and a cause chain to 8. A `ResultDigest` folds both, counts each by severity and
+outcome, keeps the first error in the order the tool met it, and says whether output the parsers
+did not understand remains: never a guess. The built-in parsers read the .NET and C compilers
+(MSBuild/csc, MSVC, gcc with its include chain, clang), CMake, Ninja's `FAILED:` block, the
+linkers, tsc, the Dart analyser, the stack traces the runtimes print (.NET with its
+inner-exception marker, the JVM with `Caused by:`, Python's traceback, V8's, Dart's `#n` frames,
+Go's panic, Rust's `panicked at`, the sanitizers' `#n 0x... in`), and the test consoles that print
+their failures (xUnit's, gtest's, ctest's list); each is chosen for the output it reads and never
+runs over another's. `results.matchers` in `config.json` declares one for any other tool - a regex
+with named groups saying where its file, line, column, code and message are, and optionally a frame
+pattern with an end, read as a stack - compiled and its groups checked at load
+(`Configuration\ProblemMatcher.cs`). Where a step's runner throws an error the engine did not
+expect, the attempt's measure entry keeps it whole (`FlowStepAttempt.Exception`, built from the
+live exception's own stack, each frame marked by whether its file is inside the run's tree).
+
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.

@@ -178,6 +178,7 @@ public sealed record FlowStepWait(string Cause, double Seconds)
 /// <param name="Tools">The tool calls the attempt made, by tool name, with how many failed or were denied; null for a machine step or where the agent called none.</param>
 /// <param name="Compactions">How many times the agent's conversation was compacted; null where none.</param>
 /// <param name="RetryAfter">The backoff the engine waited before the attempt ran again; null for the last or the only attempt.</param>
+/// <param name="Exception">Where the attempt ended in an error the engine did not expect - an exception out of a step runner, not a verdict: its type, message, stack and causes; null otherwise.</param>
 public sealed record FlowStepAttempt(
     int N,
     [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? StartedAt = null,
@@ -198,7 +199,8 @@ public sealed record FlowStepAttempt(
     int? Turns = null,
     IReadOnlyList<FlowStepToolUse>? Tools = null,
     int? Compactions = null,
-    double? RetryAfter = null)
+    double? RetryAfter = null,
+    Results.ExceptionRecord? Exception = null)
 {
     /// <summary>What is wrong with this attempt; null when nothing is.</summary>
     public string? Problem()

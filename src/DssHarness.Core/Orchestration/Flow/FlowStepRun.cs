@@ -544,6 +544,12 @@ public sealed record FlowStepResult
     public FlowStepAttempt? Attempt { get; init; }
 
     /// <summary>
+    /// Where the attempt ended in an error the engine did not expect - an exception out of its runner, not a verdict:
+    /// its record, with the harness's own stack trace and causes. Null for every other ending.
+    /// </summary>
+    public Results.ExceptionRecord? Thrown { get; init; }
+
+    /// <summary>
     /// What the step's codebase graph gave and what it saved, as its <c>step.json</c> holds it: its mode, its view, what
     /// the map and the pack - or the changes a conversation gone on with was told - its last launch was given cost, what
     /// the tool served, and what the agent still read whole; null where the step was given no graph, or its agent never
