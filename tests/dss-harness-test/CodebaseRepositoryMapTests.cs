@@ -69,6 +69,35 @@ public sealed class CodebaseRepositoryMapTests
             view.Central("the total of the shapes").Select(card => card.Name).Order(StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// A file is test code by the tests the link finds in it, never by a class its reader only marks as one that may be a test by
+    /// a base another file declares: a production <c>testclient.py</c> - a name unittest's <c>test*.py</c> collects - whose class is
+    /// built on an imported base that is no <c>TestCase</c> is ranked, and a <c>tests.py</c> whose class the link finds built on a
+    /// <c>TestCase</c> subclass another module declares is not, nor is that module, which declares a test class itself.
+    /// </summary>
+    [Fact]
+    public async Task AFileIsTestCode_ByTheTestsTheLinkFinds_NeverByAClassOnlyMarkedAsOneThatMayBe()
+    {
+        using var tree = await CodebaseGraphTree.CreateAsync();
+        tree.Over([.. CodeGraphExtractors.OfThisBuild.All]);
+        tree.Write("pkg/base.py", "class BaseClient:\n    def get(self):\n        return 1\n");
+        tree.Write("pkg/testclient.py", "from .base import BaseClient\n\n\nclass TestClient(BaseClient):\n    def test_mode(self):\n        return 2\n");
+        tree.Write("pkg/cases.py", "import unittest\n\n\nclass ShopCase(unittest.TestCase):\n    pass\n");
+        tree.Write("pkg/tests.py", "from .cases import ShopCase\n\n\nclass CartTests(ShopCase):\n    def test_total(self):\n        return 3\n");
+        await tree.CommitAsync();
+        await tree.SyncAsync();
+        var view = await QueriesAsync(tree);
+
+        // Both classes of the files unittest collects by their names may be tests by their bases; the link finds CartTests one.
+        Assert.Equal(
+            [("pkg/base.py", "BaseClient"), ("pkg/base.py", "get"), ("pkg/testclient.py", "TestClient"), ("pkg/testclient.py", "test_mode")],
+            view.Central(string.Empty)
+                .Where(card => card.Kind is CodeNodeKinds.Type or CodeNodeKinds.Member)
+                .Select(card => (card.Path, card.Name))
+                .OrderBy(card => card.Path, StringComparer.Ordinal)
+                .ThenBy(card => card.Name, StringComparer.Ordinal));
+    }
+
     /// <summary>A cap of 0 gives no map: no text at all, not even its header, and its meta says so.</summary>
     [Fact]
     public async Task ACapOfNothing_GivesNoMap()

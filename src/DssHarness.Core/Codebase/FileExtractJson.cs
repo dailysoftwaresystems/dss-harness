@@ -146,10 +146,12 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     Test = node.Test,
                     TestByType = node.TestByType,
                     TestBase = node.TestBase,
+                    Parametrizes = node.Parametrizes,
                     Part = node.Part,
                     MembersByReceiver = node.MembersByReceiver,
                     ValueType = node.ValueType,
                     Extends = node.Extends,
+                    Joined = node.Joined,
                     SeenIn = node.SeenIn is { } seenIn ? Name("scope", seenIn) : null,
                     Exports = node.Exports,
                     SuffixOf = node.SuffixOf is { } onto ? [.. onto.Select(id => Place(id, $"its node '{node.Id}' stands for names written onto"))] : null,
@@ -265,10 +267,12 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         Test = stored.Test,
                         TestByType = stored.TestByType,
                         TestBase = stored.TestBase,
+                        Parametrizes = stored.Parametrizes,
                         Part = stored.Part,
                         MembersByReceiver = stored.MembersByReceiver,
                         ValueType = stored.ValueType,
                         Extends = stored.Extends,
+                        Joined = stored.Joined,
                         SeenIn = stored.SeenIn is { } seenIn ? Name(seenIn, "scope") : null,
                         Exports = stored.Exports,
                         Selectors = stored.Selectors,
@@ -386,6 +390,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool TestBase { get; init; }
 
+        public IReadOnlyList<string>? Parametrizes { get; init; }
+
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool Part { get; init; }
 
@@ -395,6 +401,9 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         public string? ValueType { get; init; }
 
         public string? Extends { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Joined { get; init; }
 
         public StoredName? SeenIn { get; init; }
 

@@ -147,6 +147,10 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace }, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", TestByType = true }] }, "its node 'toy:A.b' is a test by its type, and 'toy:A', which holds it, is no type"),
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, TestBase = true }] }, "it is a type tests are built on, and a node of kind 'namespace' is no type"),
             (sound with { Nodes = [Node, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", TestBase = true }] }, "it is a type tests are built on, and a node of kind 'member' is no type"),
+            (sound with { Nodes = [Node with { Joined = true }] }, "it is the own member of the type it extends, and it extends none"),
+            (sound with { Nodes = [Node with { Parametrizes = [] }] }, "a name it parametrizes tests by is empty, or it names none"),
+            (sound with { Nodes = [Node with { Parametrizes = ["user", " "] }] }, "a name it parametrizes tests by is empty, or it names none"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, Parametrizes = ["user"] }] }, "it parametrizes the tests of the types built on it, and a node of kind 'namespace' is no type"),
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'namespace' is no type, nor a member that extends one"),
             (sound with { Nodes = [Node, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'member' is no type, nor a member that extends one"),
             (sound with { Nodes = [Node with { Templates = [] }] }, "a template it names is empty, or it names none"),
@@ -184,7 +188,8 @@ public sealed class CodebaseGraphRecordsTests
 
     /// <summary>
     /// Every field an extract may set is written by the store and read back as it was: a node's element selectors, its templates, the
-    /// type it extends, whether its members are reached by a receiver alone, whether it is a test by its type and whether tests are built on it; an import's prefix
+    /// type it extends, whether its members are reached by a receiver alone, whether it is a test by its type and whether tests are built on it,
+    /// the names it parametrizes the tests of the types built on it by, whether it is the own member of the type it extends; an import's prefix
     /// standing for the name it shows, whether its names are its importers' too, whether it takes a file's published names, whether it
     /// names a place of a layout, whether it is one of two places, whether it is under a root of the layout and the qualifier it
     /// serves; a reference that is a probe, and one made around its node; the names a file publishes, whether what its imports take
@@ -196,8 +201,8 @@ public sealed class CodebaseGraphRecordsTests
     {
         var extract = new FileExtract(
         [
-            Node with { Selectors = ["app-cart", "cart-view"], Templates = ["cart.html"], MembersByReceiver = true, TestByType = true, TestBase = true },
-            Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", Extends = "Shape", MembersByReceiver = true },
+            Node with { Selectors = ["app-cart", "cart-view"], Templates = ["cart.html"], MembersByReceiver = true, TestByType = true, TestBase = true, Parametrizes = ["db", "user"] },
+            Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", Extends = "Shape", Joined = true, MembersByReceiver = true },
         ])
         {
             Imports =
@@ -228,8 +233,10 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal(text, Json(back));
         Assert.Equal(["app-cart", "cart-view"], back.Nodes[0].Selectors!);
         Assert.Equal(["cart.html"], back.Nodes[0].Templates!);
-        Assert.Equal("Shape", back.Nodes[1].Extends);
+        Assert.Equal(("Shape", true), (back.Nodes[1].Extends, back.Nodes[1].Joined));
         Assert.Equal([(true, true, true), (true, false, false)], back.Nodes.Select(node => (node.MembersByReceiver, node.TestByType, node.TestBase)));
+        Assert.Equal(["db", "user"], back.Nodes[0].Parametrizes!);
+        Assert.Null(back.Nodes[1].Parametrizes);
         Assert.Equal(
             [
                 (CodeImportForms.Relative, "Line", "Line", true, true, false, true, true, false, (string?)null),

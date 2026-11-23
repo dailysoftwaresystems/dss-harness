@@ -1594,6 +1594,70 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
     }
 
     /// <summary>
+    /// A member a file adds to a constructor function's prototype is the type's own wherever the type is: writing the prototype
+    /// changes the type itself, whatever import loaded the file that writes it - one for its side effect alone, which binds no name,
+    /// among them, or none of the file that calls - so a call on a value the type's <c>new</c> makes reaches the member another file
+    /// added, the constructor bound by its own import.
+    /// </summary>
+    [Theory]
+    [InlineData("require('./cart-total');")]
+    [InlineData("import './cart-total.js';")]
+    [InlineData("// loaded by the page")]
+    public void AMemberAFileAddsToAPrototype_IsTheTypesOwn_WhateverImportLoadedTheFile(string loaded)
+    {
+        var linked = Link(
+            ("lib/cart.js", "function Cart() { this.lines = []; }\nmodule.exports = Cart;"),
+            ("lib/cart-total.js", "var Cart = require('./cart');\nCart.prototype.total = function () { return 0; };"),
+            ("lib/main.js", loaded + "\nvar Cart = require('./cart');\nfunction go() { var cart = new Cart(); return cart.total(); }"));
+
+        Assert.Equal(
+            [
+                new CodeEdge("javascript:lib/main.js.go", "javascript:lib/cart-total.js.Cart.total", CodeEdgeKinds.Calls, 3, CodeConfidences.Unique),
+                new CodeEdge("javascript:lib/main.js.go", "javascript:lib/cart.js.Cart", CodeEdgeKinds.Instantiates, 3, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.From == "javascript:lib/main.js.go" && edge.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Instantiates).OrderBy(edge => edge.Kind, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A member the repository adds to the prototype of a type it does not declare - a library's, which an import from outside the
+    /// tree binds - is reached by its callers wherever they are, whatever loaded its file: a call on a value a <c>new</c> of the type
+    /// makes; a call through <c>this</c> in a class built on the type, by <c>extends</c> or by Backbone's <c>extend</c>, and on a value
+    /// of that class - the class built on the type as its base is written; and a jQuery plugin, added to <c>$.fn</c>, jQuery's name
+    /// for its prototype, called on what a call of <c>$</c> gives, by its name alone as any call on a value whose type is not said.
+    /// </summary>
+    [Fact]
+    public void AMemberTheRepositoryAddsToATypeItDoesNotDeclare_IsReachedByItsCallers()
+    {
+        const string Close = "var Backbone = require('backbone');\nBackbone.View.prototype.close = function () { this.remove(); };";
+        const string Loaded = "require('./close');\nvar Backbone = require('backbone');\n";
+        const string Closing = "javascript:lib/close.js.Backbone.View.close";
+
+        IEnumerable<CodeEdge> CallsOf(CodeGraphLinked linked) => linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.From, StringComparer.Ordinal);
+
+        Assert.Equal(
+            [new CodeEdge("javascript:lib/main.js.go", Closing, CodeEdgeKinds.Calls, 3, CodeConfidences.Unique)],
+            CallsOf(Link(("lib/close.js", Close), ("lib/main.js", Loaded + "function go() { var view = new Backbone.View(); view.close(); }"))));
+        Assert.Equal(
+            [
+                new CodeEdge("javascript:lib/main.js.MyView.render", Closing, CodeEdgeKinds.Calls, 3, CodeConfidences.Unique),
+                new CodeEdge("javascript:lib/main.js.go", Closing, CodeEdgeKinds.Calls, 4, CodeConfidences.Unique),
+            ],
+            CallsOf(Link(("lib/close.js", Close), ("lib/main.js", Loaded + "class MyView extends Backbone.View { render() { this.close(); } }\nfunction go() { var view = new MyView(); view.close(); }"))));
+        Assert.Equal(
+            [new CodeEdge("javascript:lib/main.js.MyView.render", Closing, CodeEdgeKinds.Calls, 3, CodeConfidences.Unique)],
+            CallsOf(Link(("lib/close.js", Close), ("lib/main.js", Loaded + "var MyView = Backbone.View.extend({ render: function () { this.close(); } });"))));
+
+        // The plugin is a member of what $ is, added to its prototype, and reached by its name from what a call of $ gives.
+        const string Plugin = "var $ = require('jquery');\n$.fn.plugin = function () { return this; };";
+        var plugin = Read("lib/plugin.js", Plugin);
+
+        Assert.Equal(("$.default", true), (Node(plugin, "javascript:lib/plugin.js.$.plugin").Extends, Node(plugin, "javascript:lib/plugin.js.$.plugin").Joined));
+        Assert.Equal(
+            [new CodeEdge("javascript:lib/main.js.go", "javascript:lib/plugin.js.$.plugin", CodeEdgeKinds.Calls, 3, CodeConfidences.Unique)],
+            CallsOf(Link(("lib/plugin.js", Plugin), ("lib/main.js", "require('./plugin');\nvar $ = require('jquery');\nfunction go() { $('#x').plugin(); }"))));
+    }
+
+    /// <summary>
     /// Members the repository adds to the prototypes of two modules' defaults, which no constructor function the repository
     /// declares is - what a call returns - extend each the one its file names by the whole chain, <c>Cart.default</c> and
     /// <c>Box.default</c>, so a value a <c>new</c> of one makes reaches its own members and never the other's, though both chains

@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
@@ -920,8 +919,8 @@ public sealed class CodebaseGraphTool(
     /// literals and the text are searched for, and a selector is searched for as it is written; a name written with its
     /// scopes, or a key path in any spelling its reader reads where the data names a key or nothing names it, is searched for
     /// by its last name, as code and data write it, and each key path it names by its places as an environment variable
-    /// writes them too (<see cref="CodebaseGraphQueries.SitesSearch"/>, <see cref="GraphSitesSearch"/>: one pattern of one
-    /// size however many key paths it names); a quoted one asks by its value alone, never the symbols. Every place
+    /// writes them too (<see cref="CodebaseGraphQueries.SitesSearch"/>, <see cref="GraphSitesSearch"/>: no pattern, whatever the
+    /// word's length and however many key paths it names); a quoted one asks by its value alone, never the symbols. Every place
     /// passes the step's reads at one gate (<see cref="SiteList"/>), and those they do not reach are counted. The coverage
     /// lines that end the answer say what the text search read, each file counted once it was read, and why; then every limit
     /// of each language whose files the graph read (<see cref="Unseen"/>).
@@ -962,8 +961,8 @@ public sealed class CodebaseGraphTool(
             // node the data names by itself, the selector it is written as, or its last name - a name written with its scopes,
             // a key path in any spelling, is written in code and in data by its last name (shape.Area(), "TimeoutSeconds": 30),
             // and a whole word of it is held by every longer name that ends with it - and each key path it names as an
-            // environment variable writes it, which no whole word of its last key is held by: by a pattern of one size however
-            // many key paths it names, each line and value it matches held to them whole.
+            // environment variable writes it, which no whole word of its last key is held by: each line and value asked by the
+            // search's characters alone, no pattern compiled however long the word or however many key paths it names.
             var searched = quoted is null ? on.SitesSearch(written, definers) : GraphSitesSearch.Of(quoted);
 
             foreach (var place in on.LiteralSites(searched))
@@ -982,7 +981,7 @@ public sealed class CodebaseGraphTool(
             var hits = new Dictionary<GraphTextScope, int>();
             var search = await TextSearchAsync(
                 on,
-                searched.Pattern,
+                searched.Holds,
                 listed =>
                 {
                     if (on.TextScopeOf(listed, unbound, quoted is not null) is not { } scope)
@@ -995,12 +994,6 @@ public sealed class CodebaseGraphTool(
                 },
                 hit =>
                 {
-                    // A line the pattern reads holds the data only where the search holds it so: one of the key paths whole.
-                    if (!searched.Holds(hit.Text))
-                    {
-                        return;
-                    }
-
                     var scope = scopes[hit.Path];
                     hits[scope] = hits.GetValueOrDefault(scope) + 1;
                     sites.AddHit(hit, scope);
@@ -1684,7 +1677,7 @@ public sealed class CodebaseGraphTool(
             => Hits.Count == 0 && word.Trim().Length > 0 ? [$"text: no line holds '{ReportText.Printable(word.Trim())}'"] : [];
     }
 
-    /// <summary>The lines that hold <paramref name="name"/> as a whole word (<see cref="CodebaseGraphQueries.WordPattern"/>), case-sensitive, as <c>search_files</c> searches - the text a not-sure answer adds, and the notes of what it did not read.</summary>
+    /// <summary>The lines that hold <paramref name="name"/> as a whole word (<see cref="GraphWord.Whole"/>), case-sensitive, as <c>search_files</c> searches - the text a not-sure answer adds, and the notes of what it did not read.</summary>
     private async Task<Searched> SearchAsync(string name, CancellationToken cancellationToken)
     {
         var word = name.Trim();
@@ -1697,7 +1690,8 @@ public sealed class CodebaseGraphTool(
         // No bound on the hits, nor on a file's bytes, nor on a hit's line: the answer's pages hold them all, at the text
         // fallback's size a page, a line wider than a page given in pieces.
         var hits = new List<AgentSearchHit>();
-        var search = await TextSearchAsync(_queries, CodebaseGraphQueries.WordPattern(word), take: null, hit => hits.Add(hit), read: null, cancellationToken).ConfigureAwait(false);
+        var whole = GraphWord.Whole(word);
+        var search = await TextSearchAsync(_queries, line => whole.In(line), take: null, hit => hits.Add(hit), read: null, cancellationToken).ConfigureAwait(false);
 
         return new(
             [.. hits.Select(hit => new GraphEntry("  " + HitLine(hit.Path, hit), Lines: 1, Hit: true))],
@@ -1705,17 +1699,18 @@ public sealed class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// The one text search the tool runs, the text fallback's and a <c>sites</c> answer's alike: every file under
+    /// The one text search the tool runs, the text fallback's and a <c>sites</c> answer's alike - each line asked by
+    /// <paramref name="holds"/> whether it holds what is searched for: every file under
     /// <paramref name="view"/>'s tree that <paramref name="take"/> takes, where one is given, by the path the tree's listing
     /// names it by - the one path the file is told by, each hit handed to <paramref name="found"/> and each file read to its
     /// end to <paramref name="read"/> naming it so - and the step may read: held to the tree as well as to what the graph may
     /// read, for the search decides again where each file it opened stands, and a link put on its way since may lead out of
     /// the tree, where no relative path reads.
     /// </summary>
-    private Task<AgentSearch> TextSearchAsync(CodebaseGraphQueries view, Regex pattern, Func<string, bool>? take, Action<AgentSearchHit> found, Action<string>? read, CancellationToken cancellationToken)
+    private Task<AgentSearch> TextSearchAsync(CodebaseGraphQueries view, Func<string, bool> holds, Func<string, bool>? take, Action<AgentSearchHit> found, Action<string>? read, CancellationToken cancellationToken)
         => _files.SearchAsync(
             view.Tree,
-            pattern,
+            holds,
             take,
             0,
             file => _paths.Read(file).Full is not null && _mayRead(Relative(file)),

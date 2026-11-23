@@ -629,6 +629,17 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public bool TestBase { get; init; }
 
     /// <summary>
+    /// The names a type's own marks give a value to in each test it holds and in each test of every type built on it, any number
+    /// of levels down, in place of the fixture of that name - a pytest class's <c>parametrize</c> marks, its decorators' and its
+    /// <c>pytestmark</c>'s, which pytest applies to the classes built on it - those a mark routes to the fixture of the name, which
+    /// the test still requires, left out. Its own file reads what it gives its own tests; for a test of a type built on it, a
+    /// reference of one of these names with a fixture qualifier (<see cref="CodeQualifierKinds.Fixture"/>) is none, found nowhere
+    /// and counted nowhere - the linker reads it along the bases it found, each type once. Only a type says it;
+    /// <see langword="null"/> where it gives none.
+    /// </summary>
+    public IReadOnlyList<string>? Parametrizes { get; init; }
+
+    /// <summary>
     /// Whether it says it is one part of a declaration another file holds the rest of - a XAML view whose
     /// <c>x:Class</c> names a C# partial type, a Blazor component and its code-behind - which the linker joins as
     /// <see cref="CodeEdgeKinds.PartOf"/> to every other part of the same qualified name that says so.
@@ -659,6 +670,16 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     /// the call's file reaches it.
     /// </summary>
     public string? Extends { get; init; }
+
+    /// <summary>
+    /// Whether, a member that extends a type (<see cref="Extends"/>), it is the type's own wherever the type is - a member a
+    /// prototype is given, which the assignment adds to the type itself when its file runs - and no member a file must reach to
+    /// call, as an extension method is, whose namespace or library a call's file imports: a call on a value of the type, or of a
+    /// type built on it, finds it wherever the call is written, whatever loaded the file that adds it - an import for its side
+    /// effect alone, which binds no name, or none of the caller's. Only a member that extends a type says it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Joined { get; init; }
 
     /// <summary>
     /// The scope whose declarations alone see it, by its qualified name, where it is kept to them: a declaration written in
@@ -735,6 +756,7 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : MinArity is < 0 || (MaxArity is { } most && (MinArity is not { } least || most < least)) ? "its arity is no range of argument counts"
             : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
+            : Joined && Extends is null ? "it is the own member of the type it extends, and it extends none"
             : SeenIn is { } seenIn && seenIn.WhitespaceOnly() ? "the scope it is seen in is empty"
             : Exports is { } exports && (exports.Count == 0 || exports.Any(string.IsNullOrWhiteSpace)) ? "a name it is exported by is empty, or it lists none"
             : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(id => string.IsNullOrWhiteSpace(id.Whole()))) ? "a node its names are written onto is empty, or it names none"
@@ -743,6 +765,8 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : TestByType && Kind is not (CodeNodeKinds.Type or CodeNodeKinds.Member) ? $"it is a test by its type, and a node of kind '{Kind}' is neither a type nor a member a type holds"
             : TestByType && Kind == CodeNodeKinds.Member && Parent is null ? "it is a member that is a test by its type, and no type holds it"
             : TestBase && Kind != CodeNodeKinds.Type ? $"it is a type tests are built on, and a node of kind '{Kind}' is no type"
+            : Parametrizes is { } parametrizes && (parametrizes.Count == 0 || parametrizes.Any(string.IsNullOrWhiteSpace)) ? "a name it parametrizes tests by is empty, or it names none"
+            : Parametrizes is not null && Kind != CodeNodeKinds.Type ? $"it parametrizes the tests of the types built on it, and a node of kind '{Kind}' is no type"
             : MembersByReceiver && Kind != CodeNodeKinds.Type && (Kind != CodeNodeKinds.Member || Extends is null) ? $"its members are reached by a receiver alone, and a node of kind '{Kind}' is no type, nor a member that extends one"
             : Selectors is { } selectors && (selectors.Count == 0 || !selectors.All(IsSelector)) ? "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"
             : Templates is { } templates && (templates.Count == 0 || templates.Any(string.IsNullOrWhiteSpace)) ? "a template it names is empty, or it names none"

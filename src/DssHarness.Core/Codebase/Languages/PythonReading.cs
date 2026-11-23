@@ -2088,9 +2088,17 @@ internal sealed class PythonReading
                 var cases = Cases.None;
 
                 // What the class's parameter sets give every test it holds, on top of what the node it is written in gives: its
-                // decorators', read where it is defined, and its pytestmark's, its own code.
+                // decorators', read where it is defined, and its pytestmark's, its own code. Its own marks pytest applies to every class
+                // built on it too, as their attribute: what they give in place of a fixture the class says, for the link to read for
+                // the tests of a class another file builds on it (ExtractNode.Parametrizes).
                 var around = _parameterNames.GetValueOrDefault(frame.Parent!) ?? ParameterNames.None;
-                _parameterNames[key] = Parametrized(_pytestmarks.GetValueOrDefault(key) ?? [], key, Parametrized(decorators, frame.Parent!, around));
+                var own = Parametrized(_pytestmarks.GetValueOrDefault(key) ?? [], key, Parametrized(decorators, frame.Parent!, ParameterNames.None));
+                _parameterNames[key] = new ParameterNames(around.Given.Union(own.Given), around.Routed.Union(own.Routed));
+
+                if (own.Given.Where(own.Instead).Order(StringComparer.Ordinal).ToList() is { Count: > 0 } parametrizes)
+                {
+                    _extract.Change(key, node => node with { Parametrizes = parametrizes });
+                }
                 _extract.Around = true;
 
                 try

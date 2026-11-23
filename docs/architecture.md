@@ -4740,7 +4740,16 @@ call of X is (`CodeGraphLinker.Extended`: a name alone in the scopes, the import
 through the import its prefix is - `Prefixed` - else in what the names before it name), whose own `this` is read on it
 too and whose `new` makes it (`Constructs`, by the members extending each name it is reached by, its own and each it is
 exported by); two chains naming a type the repository does not declare name it alike where one is the other or ends it
-at a name (`WrittenAlike`), never two modules' `default`s. A member a constructor, a method or an accessor of a type the
+at a name (`WrittenAlike`), never two modules' `default`s. Such a member is the type's own wherever the type is
+(`ExtractNode.Joined`) - the assignment adds it to the type itself when its file runs - so a call on a value of the type, or
+of a type built on it, reaches it whatever loaded the file that writes it, an import for its side effect alone that binds no
+name among them, where a C# or a Dart extension is reached only where the call's file reaches it (`Reaches`); a value of a
+type a chain names that no type is, is of the constructor function a call of the chain finds, as an extension finds the one
+it extends (`CodeGraphLinker.FunctionsCalled`); and a member extending a type the repository does not declare - a
+library's, `Backbone.View.prototype.close` - is reached on a value of a type written alike and on a type built on one as its
+base is written (`WrittenBasesOf`, the type's key holding how its bases are written). A jQuery plugin, `$.fn.y = function ()
+{}`, is such a member of `$` - `fn` after `$` or `jQuery` is jQuery's name for its prototype (`JsReading.PrototypeOf`) -
+reached by its name alone from what a call of `$` gives. A member a constructor, a method or an accessor of a type the
 file declares assigns through `this` - `this.lines = []` - is a field of the type where it declares nothing of that name,
 from the first such assignment (`JsReading.ThisFields`), as Python's `self` fields are, of the type the assignment's `new`
 makes where it is one, as a field the type's body declares is (`ValueTypeOf`). A
@@ -4937,7 +4946,10 @@ class's and its module's, else what the nearest `conftest.py` that declares it h
 the one a level out, which it overrides, and never itself; and a name a `parametrize` mark gives a test - the test's own, each
 class's around it, its decorators' and its `pytestmark`'s, and the module's `pytestmark`'s, as pytest reads the marks of a test
 and of each node it is collected under, one reader of them all - is no fixture of it, but one the mark's `indirect=` routes to
-the fixture of that name, which the test still requires: every name where it is `True`, those of a list or a tuple of strings.
+the fixture of that name, which the test still requires: every name where it is `True`, those of a list or a tuple of strings. A
+class's own marks pytest applies to every class built on it too, so the class says the names they give in place of a fixture
+(`ExtractNode.Parametrizes`), and the linker finds no fixture of such a name for a test of a class built on it, any number of
+levels up along the bases it found, each type once: the reference is none, counted nowhere and signed nothing.
 A test is what a runner collects: a pytest file - `test_*.py` or `*_test.py`, pytest's default `python_files` - holds tests in
 its `test*` functions and its `Test*` classes, and no other file's names make one, so a `testing.py` or a `testclient.py`
 holds none of them; a `TestCase` subclass - built on a class an import reaches by a name ending in `TestCase`, or on a class
@@ -5367,16 +5379,17 @@ nothing names it and it is written as no node's id and no file's line, and as th
 selector never, so `.card__title` is the class a BEM element names and never the path `.card.title` - and each key path it
 names by its places as an environment variable writes them too, every key's among its definers however many and the path it
 spells where it is read as one (`CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which no whole word of its last key is
-held by) - by the one whole-word rule every search of the graph reads (`CodebaseGraphQueries.WordPattern`: a boundary beside each
+held by) - by the one whole-word rule every search of the graph reads (`GraphWord.Whole`: a boundary beside each
 edge of the word that is a word character, an edge that is none its own boundary, so `.btn-primary` is held by
 `button.btn-primary`) and, for a selector, the selector with no character of a class's name after it, so `.btn` is not held by
 `.btn-primary`, and its bare name as a whole word of a class list too (`class="btn btn-primary"`, `addClass('btn-primary')`), the
-one owner of what a value or a line holds of the datum (`GraphSitesSearch`): a line is read by a pattern of one size however
-many key paths the datum names - the word's own, and the double underscore every such path parts its places by - and each line
-and value it reads is held to the key paths whole in code, every one of them looked for in one pass of it
-(`GraphSitesSearch.Holds`), so no key path is left out and no pattern grows with them; and every key the datum names
+one owner of what a value or a line holds of the datum (`GraphSitesSearch`): no pattern is compiled of the word or of the key
+paths, so none is refused for its length - a quoted value of twenty thousand characters is searched as one of five - and none
+grows with how many key paths the datum names: the word is looked for by its characters, every place it stands at found in one
+pass of a line however its characters repeat (`GraphWord`, Knuth, Morris and Pratt), and the key paths whole, every one of
+them looked for in one pass of it (`GraphSitesSearch.Holds`), so no key path is left out; and every key the datum names
 (`CodeSubKinds.Key`), held and never defined. What the graph does not answer of the datum is
-searched by text with the same pattern, by the one search the text fallback runs too, and said
+searched by text, each line asked whether the search holds it, by the one search the text fallback runs too, and said
 (`CodebaseGraphQueries.TextScopeOf`, each file for the first of these it is): a file the view does not hold; one it holds in
 a state no implementation of a language read it in - listed by the fallback alone, which no extractor reads the language of,
 unreadable, ambiguous; one it holds read but no longer the extract of (`CodebaseGraphQueries.Unheld`), its declarations in no
@@ -5474,8 +5487,8 @@ holds (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where
 matched, a name it does not hold, an edge of `candidates` - in a `node`, but a use's, which is recall and never a doubt
 (`CodeEdgeKinds.Recall`, the one rule `CodebaseGraphQueries.Doubts` judges an edge an answer gives by) - a node named
 with external callees or in a file `dynamic` or generated - the answer adds the lines that hold the name as a whole word, searched by
-`AgentFiles.SearchAsync` as `search_files` searches - but in every file whatever it holds, the whole word matched in time
-linear in a line and so never timed, each hit's line whole - a section of their own at `CodebaseGraphTool.TextHits` a page of
+`AgentFiles.SearchAsync` as `search_files` searches - but in every file whatever it holds, the whole word looked for by its
+characters (`GraphWord.Whole`) in time linear in a line and so never timed, no word refused for its length, each hit's line whole - a section of their own at `CodebaseGraphTool.TextHits` a page of
 each word, a body's among them, all of them paged - none left out - and saying what it did not read in the notes the
 answer ends with (`AgentSearch.LeftOut`), through the read rule the tool is handed, which leaves out and counts every
 node, edge and hit of a file it refuses; a path or a `path:line`

@@ -118,6 +118,67 @@ public static class CodeGraphLinker
         return new Linking(files, previous.Memory, CodebaseGraphShape.NamingOf(keyNaming)).Link();
     }
 
+    /// <summary>
+    /// The declarations of <paramref name="nodes"/> that are tests by their type (<see cref="ExtractNode.TestByType"/>), by id, as
+    /// <paramref name="edges"/> - a link's - say: each type so marked that is built on a type tests are built on
+    /// (<see cref="ExtractNode.TestBase"/>) - along the <c>inherits</c> and <c>mixesIn</c> edges, however many levels up and
+    /// through whatever types stand between, a type no file marks among them - and each member so marked that such a type holds.
+    /// Walked from the types tests are built on out along the edges, each type once, so a chain of bases of any length, a cycle
+    /// among them, is walked once. The one owner of which those are: the link's <c>tests</c> edges are made from them, and a view
+    /// counts a file that declares one as test code (<see cref="CodebaseGraphQueries"/>) - never one only marked so, which a
+    /// runner may not collect.
+    /// </summary>
+    /// <param name="nodes">Every declaration the link holds, each as its extract says it.</param>
+    /// <param name="edges">The link's edges: its <c>inherits</c> and <c>mixesIn</c> among them.</param>
+    internal static List<string> TestsByType(IEnumerable<ExtractNode> nodes, IEnumerable<CodeEdge> edges)
+    {
+        var all = nodes.ToList();
+        var bases = all.Where(node => node is { TestBase: true, Kind: CodeNodeKinds.Type }).Select(node => node.Id.Whole()).ToList();
+        var found = new List<string>();
+
+        if (bases.Count == 0)
+        {
+            return found;
+        }
+
+        var marked = all.Where(node => node.TestByType).ToList();
+        var types = marked.Where(node => node.Kind == CodeNodeKinds.Type).Select(node => node.Id.Whole()).ToHashSet(StringComparer.Ordinal);
+        var built = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var edge in edges.Where(edge => edge.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.MixesIn))
+        {
+            Add(built, edge.To, edge.From);
+        }
+
+        // Every type built on one tests are built on is reached, so a type between them that no file marks - a base of a test
+        // file's class built on another module's TestCase subclass, declared where no runner looks - passes the walk on.
+        var reached = new HashSet<string>(bases, StringComparer.Ordinal);
+        var tested = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>(bases);
+
+        while (pending.TryPop(out var type))
+        {
+            foreach (var derived in built.GetValueOrDefault(type) ?? [])
+            {
+                if (!reached.Add(derived))
+                {
+                    continue;
+                }
+
+                if (types.Contains(derived))
+                {
+                    tested.Add(derived);
+                    found.Add(derived);
+                }
+
+                pending.Push(derived);
+            }
+        }
+
+        found.AddRange(marked.Where(node => node.Kind == CodeNodeKinds.Member && node.Parent is { } holder && tested.Contains(holder.Whole())).Select(node => node.Id.Whole()));
+        return found;
+    }
+
     /// <summary>One declaration of one file, placed.</summary>
     /// <param name="Node">What its extract says of it.</param>
     /// <param name="File">The file that declares it.</param>
@@ -522,6 +583,9 @@ public static class CodeGraphLinker
 
         /// <summary>The names of the closed scopes each file's extract declares: found once a file, as every key of one of its names is.</summary>
         private readonly Dictionary<CodeGraphFile, HashSet<QualifiedName>> _closed = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>The chains of names the bases of each type a file declares are written as, by the file and the type's id (<see cref="WrittenBases"/>): read once a file.</summary>
+        private readonly Dictionary<CodeGraphFile, ILookup<QualifiedName, string>> _writtenBases = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>Each member whose body is a scope of its own, as what the references made in that body are looked for from (<see cref="LookedFrom"/>): made once a member.</summary>
         private readonly Dictionary<Declaration, Declaration> _bodies = new(ReferenceEqualityComparer.Instance);
@@ -1219,6 +1283,13 @@ public static class CodeGraphLinker
 
             try
             {
+                // A fixture a type a test's own type is built on gives the test a value of in its place is none: found nowhere, and
+                // counted nowhere (ExtractNode.Parametrizes).
+                if (reference.Qualifier?.Kind == CodeQualifierKinds.Fixture && (from.Node.Test || from.Node.TestByType) && Parametrized(from, reference.Name))
+                {
+                    return new Finding([], External: false, null, _reads.Kept());
+                }
+
                 var (all, confidence, doubt) = Found(LookedFrom(from, reference), reference, new ReferenceAt(file, at));
                 var found = Bodied(all);
 
@@ -1802,11 +1873,13 @@ public static class CodeGraphLinker
                 : InScope(KeyOf(container.File, container.Node.Qualified), name, accepts, withBases: false)));
 
         /// <summary>
-        /// The members named <paramref name="name"/> declared to extend a type, that <paramref name="from"/> reaches, which
-        /// extend one of the types of <paramref name="containers"/> - itself where <paramref name="withSelf"/> - or one of
-        /// their bases, as its own file names the type it extends (<see cref="Extended"/>), a constructor function among them;
-        /// and, where none of <paramref name="containers"/> is, one extending a type the repository does not declare written alike
-        /// with <paramref name="written"/> (<see cref="WrittenAlike"/>).
+        /// The members named <paramref name="name"/> declared to extend a type, that <paramref name="from"/> reaches - or that are
+        /// the type's own wherever it is (<see cref="ExtractNode.Joined"/>), a prototype's - which extend one of the types of
+        /// <paramref name="containers"/> - itself where <paramref name="withSelf"/> - or one of their bases, as its own file names the
+        /// type it extends (<see cref="Extended"/>), a constructor function among them; and one extending a type the repository does
+        /// not declare written alike (<see cref="WrittenAlike"/>) with <paramref name="written"/>, where none of
+        /// <paramref name="containers"/> is, or with a base one of those types or of their bases is written as built on
+        /// (<see cref="WrittenBasesOf"/>) - a type built on <c>Backbone.View</c> reaching what the repository adds to its prototype.
         /// </summary>
         private IReadOnlyList<Declaration> Extensions(Declaration from, IReadOnlyList<Declaration> containers, string? written, string name, Func<Declaration, bool> accepts, bool withSelf)
         {
@@ -1815,8 +1888,11 @@ public static class CodeGraphLinker
                 return [];
             }
 
+            // The types the receiver may be: those the chain names; where it names none, each constructor function a call of the chain
+            // finds, as an extension finds the one it extends - a value a new of Cart, whose prototype another file writes, makes.
             var receivers = new HashSet<QualifiedName>();
-            var pending = new Queue<QualifiedName>(containers.Where(container => container.Node.Kind == CodeNodeKinds.Type || IsFunction(container))
+            var typed = containers.Count == 0 && written is not null ? FunctionsCalled(from, written) : containers;
+            var pending = new Queue<QualifiedName>(typed.Where(container => container.Node.Kind == CodeNodeKinds.Type || IsFunction(container))
                 .SelectMany(type => withSelf ? [type.Id] : BasesOf(type.Id)));
 
             while (pending.TryDequeue(out var id))
@@ -1830,11 +1906,39 @@ public static class CodeGraphLinker
                 }
             }
 
+            // The chains the receivers' bases are written as, by their last name - which a chain written alike ends with too - found
+            // where an extension of a type the repository does not declare first asks.
+            ILookup<string, string>? bases = null;
+
+            bool BuiltOn(string extends)
+                => (bases ??= receivers.SelectMany(WrittenBasesOf).Distinct(StringComparer.Ordinal).ToLookup(SimpleName, StringComparer.Ordinal))[SimpleName(extends)]
+                    .Any(basis => WrittenAlike(extends, basis));
+
             return Distinct(named.Where(extension => accepts(extension)
                 && (Extended(extension) is { Count: > 0 } extended
                     ? extended.Any(type => receivers.Contains(type.Id))
-                    : containers.Count == 0 && written is not null && WrittenAlike(extension.Node.Extends!, written))
-                && Reaches(from, extension)));
+                    : (containers.Count == 0 && written is not null && WrittenAlike(extension.Node.Extends!, written)) || BuiltOn(extension.Node.Extends!))
+                && (extension.Node.Joined || Reaches(from, extension))));
+        }
+
+        /// <summary>
+        /// The chains of names the bases of the type <paramref name="id"/> are written as, by every file that declares a part of it -
+        /// each base reference's qualifier's names and its own (<see cref="FileExtract.Written"/>): what a type built on one the
+        /// repository does not declare names it by. Read with the type's parts, whose key holds them (<see cref="NodePart"/>).
+        /// </summary>
+        private IEnumerable<string> WrittenBasesOf(QualifiedName id) => PartsOf(id).SelectMany(part => WrittenBases(part.File)[part.Id]);
+
+        /// <summary>The chains of names the bases of each type <paramref name="file"/> declares are written as, by the type's id: found once a file.</summary>
+        private ILookup<QualifiedName, string> WrittenBases(CodeGraphFile file)
+        {
+            if (!_writtenBases.TryGetValue(file, out var bases))
+            {
+                var extract = file.Extract!;
+                _writtenBases[file] = bases = extract.References.Where(reference => IsBase(reference.Kind))
+                    .ToLookup(reference => reference.From, reference => extract.Written(reference.Qualifier) is { } before ? $"{before}.{reference.Name}" : reference.Name);
+            }
+
+            return bases;
         }
 
         /// <summary>
@@ -1849,35 +1953,42 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <paramref name="extension"/>, a member declared to extend a type (<see cref="ExtractNode.Extends"/>), extends, as
         /// its own file names it: each type of that name; else, where none is, each function a call of that chain finds from the
-        /// extension, by the very ways a call's reference written with it is found - a name alone as one written alone is (its scopes,
-        /// its file's imports, the repository's), the last name past the prefix of an import of its file through that import
-        /// (<see cref="Prefixed"/>, as a constructor a <c>require</c> or a default import binds is, its module's <c>default</c>), else in
-        /// what the names before it name (<see cref="InChain"/>) - a constructor function another file declares, whose prototype the
-        /// extension's file writes. Found once.
+        /// extension (<see cref="FunctionsCalled"/>) - a constructor function another file declares, whose prototype the extension's
+        /// file writes. Found once.
         /// </summary>
         private IReadOnlyList<Declaration> Extended(Declaration extension)
             => Cached(_extended, extension, () =>
             {
                 var extends = extension.Node.Extends!;
 
-                if (Distinct(Containers(extension, extends).Found.Where(container => container.Node.Kind == CodeNodeKinds.Type)) is { Count: > 0 } types)
-                {
-                    return types;
-                }
-
-                bool Constructor(Declaration function) => IsFunction(function) && Sees(extension, function);
-
-                if (extends.LastIndexOf('.') is not (var dot and > 0))
-                {
-                    return Distinct(Unqualified(extension, extends, Constructor, Constructor).Found);
-                }
-
-                var (before, last) = (extends[..dot], extends[(dot + 1)..]);
-
-                return Distinct(Prefixed(extension, before, last, Constructor) is { Found.Count: > 0 } through
-                    ? through.Found
-                    : InChain(extension, Containers(extension, before), () => Containers(extension, extends), before, last, Constructor).Found);
+                return Distinct(Containers(extension, extends).Found.Where(container => container.Node.Kind == CodeNodeKinds.Type)) is { Count: > 0 } types
+                    ? types
+                    : FunctionsCalled(extension, extends);
             });
+
+        /// <summary>
+        /// The functions a call of the chain <paramref name="chain"/> finds from <paramref name="from"/>, that it sees, by the very ways a
+        /// call's reference written with it is found - a name alone as one written alone is (its scopes, its file's imports, the
+        /// repository's), the last name past the prefix of an import of its file through that import (<see cref="Prefixed"/>, as a
+        /// constructor a <c>require</c> or a default import binds is, its module's <c>default</c>), else in what the names before it name
+        /// (<see cref="InChain"/>): the one reading of a chain that names a constructor function, what a prototype's members extend
+        /// (<see cref="Extended"/>) and what a value of the type the chain writes is (<see cref="Extensions"/>) alike.
+        /// </summary>
+        private IReadOnlyList<Declaration> FunctionsCalled(Declaration from, string chain)
+        {
+            bool Function(Declaration function) => IsFunction(function) && Sees(from, function);
+
+            if (chain.LastIndexOf('.') is not (var dot and > 0))
+            {
+                return Distinct(Unqualified(from, chain, Function, Function).Found);
+            }
+
+            var (before, last) = (chain[..dot], chain[(dot + 1)..]);
+
+            return Distinct(Prefixed(from, before, last, Function) is { Found.Count: > 0 } through
+                ? through.Found
+                : InChain(from, Containers(from, before), () => Containers(from, chain), before, last, Function).Found);
+        }
 
         /// <summary>Whether <paramref name="declaration"/> is a function: a member a call is made of by its arguments, which a constructor function is.</summary>
         private static bool IsFunction(Declaration declaration) => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: not null };
@@ -2993,6 +3104,41 @@ public static class CodeGraphLinker
             return ranks;
         }
 
+        /// <summary>
+        /// Whether a type that one of the types <paramref name="test"/> is written in is built on - any number of levels up, along the
+        /// bases found, each type once whatever cycle they hold - gives the test a value of <paramref name="name"/> in place of the
+        /// fixture of that name (<see cref="ExtractNode.Parametrizes"/>): what its own marks give, which apply to the types built on it.
+        /// The types the test is written in say their own in their file, which reads them for the test; their bases do not.
+        /// </summary>
+        private bool Parametrized(Declaration test, string name)
+        {
+            var seen = new HashSet<QualifiedName>();
+            var pending = new Stack<QualifiedName>();
+
+            for (var holder = test.Node.Parent; holder is not null && _owners[test.File].TryGetValue(holder, out var type) && type.Node.Kind == CodeNodeKinds.Type; holder = type.Node.Parent)
+            {
+                foreach (var basis in BasesOf(type.Id).Where(seen.Add))
+                {
+                    pending.Push(basis);
+                }
+            }
+
+            while (pending.TryPop(out var id))
+            {
+                if (PartsOf(id).Any(part => part.Node.Parametrizes?.Contains(name, StringComparer.Ordinal) == true))
+                {
+                    return true;
+                }
+
+                foreach (var basis in BasesOf(id).Where(seen.Add))
+                {
+                    pending.Push(basis);
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>The bases of the type <paramref name="id"/>, by id, nearest first (<see cref="BaseRanksOf"/>).</summary>
         private IEnumerable<QualifiedName> BasesOf(QualifiedName id) => BaseRanksOf(id).SelectMany(rank => rank.Select(QualifiedName.Of));
 
@@ -3666,73 +3812,17 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// Each <c>tests</c> edge: from a test to each member it calls directly, as sure as the call - a test its own file
-        /// marks, and one that is a test by its type (<see cref="TestsByType"/>).
+        /// marks, and one that is a test by its type (<see cref="CodeGraphLinker.TestsByType"/>).
         /// </summary>
         private void Tests()
         {
             var tests = _declarations.Where(declaration => declaration.Node.Test).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
-            tests.UnionWith(TestsByType());
+            tests.UnionWith(TestsByType(_declarations.Select(declaration => declaration.Node), _edges));
 
             foreach (var call in _edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls && tests.Contains(edge.From)).ToList())
             {
                 _edges.Add(call with { Kind = CodeEdgeKinds.Tests });
             }
-        }
-
-        /// <summary>
-        /// The declarations that are tests by their type (<see cref="ExtractNode.TestByType"/>), by id: each type so marked
-        /// that is built on a type tests are built on (<see cref="ExtractNode.TestBase"/>) - along the <c>inherits</c> and
-        /// <c>mixesIn</c> edges found, however many levels up and through whatever types stand between, a type no file marks
-        /// among them - and each member so marked that such a type holds. Walked from the types tests are built on out along
-        /// the edges, each type once, so a chain of bases of any length, a cycle among them, is walked once.
-        /// </summary>
-        private List<string> TestsByType()
-        {
-            var bases = _declarations.Where(declaration => declaration.Node is { TestBase: true, Kind: CodeNodeKinds.Type }).Select(declaration => declaration.Id.Whole()).ToList();
-            var found = new List<string>();
-
-            if (bases.Count == 0)
-            {
-                return found;
-            }
-
-            var marked = _declarations.Where(declaration => declaration.Node.TestByType).ToList();
-            var types = marked.Where(declaration => declaration.Node.Kind == CodeNodeKinds.Type).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
-            var built = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-
-            foreach (var edge in _edges.Where(edge => edge.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.MixesIn))
-            {
-                Add(built, edge.To, edge.From);
-            }
-
-            // Every type built on one tests are built on is reached, so a type between them that no file marks - a base of a test
-            // file's class built on another module's TestCase subclass, declared where no runner looks - passes the walk on.
-            var reached = new HashSet<string>(bases, StringComparer.Ordinal);
-            var tested = new HashSet<string>(StringComparer.Ordinal);
-            var pending = new Stack<string>(bases);
-
-            while (pending.TryPop(out var type))
-            {
-                foreach (var derived in built.GetValueOrDefault(type) ?? [])
-                {
-                    if (!reached.Add(derived))
-                    {
-                        continue;
-                    }
-
-                    if (types.Contains(derived))
-                    {
-                        tested.Add(derived);
-                        found.Add(derived);
-                    }
-
-                    pending.Push(derived);
-                }
-            }
-
-            found.AddRange(marked.Where(declaration => declaration.Node.Kind == CodeNodeKinds.Member && declaration.Node.Parent is { } holder && tested.Contains(holder.Whole()))
-                .Select(declaration => declaration.Id.Whole()));
-            return found;
         }
 
         /// <summary>
@@ -4578,6 +4668,9 @@ public static class CodeGraphLinker
                     string.Join(PartEnd, (node.SuffixOf ?? []).Select(id => id.Whole())),
                     string.Join(PartEnd, node.Selectors ?? []),
                     string.Join(PartEnd, node.Templates ?? []),
+                    string.Join(PartEnd, node.Parametrizes ?? []),
+                    string.Join(PartEnd, WrittenBases(file)[node.Id]),
+                    node.Joined,
                     node.MembersByReceiver);
 
                 Named(Read.Name, node.Name, shape);
@@ -4648,7 +4741,9 @@ public static class CodeGraphLinker
         /// its kind within it, the scope it is declared in and the scope it is, the declaration that holds it, what it takes,
         /// its value's type, what it extends, the scope it is kept to, its qualified name, whether it is a prototype, and the
         /// names it is exported by and the nodes its names are written onto - each the extract's own text, held by reference,
-        /// never joined into a text of its own.
+        /// never joined into a text of its own - its selectors, its templates, the names it parametrizes tests by, the chains its
+        /// bases are written as, whether it is the own member of the type it extends, and whether its members are reached by a
+        /// receiver alone.
         /// </summary>
         private sealed record NodePart(
             QualifiedName Id,
@@ -4669,6 +4764,9 @@ public static class CodeGraphLinker
             string SuffixOf,
             string Selectors,
             string Templates,
+            string Parametrizes,
+            string Bases,
+            bool Joined,
             bool MembersByReceiver);
 
         /// <summary>The keys of the types whose bases are not what they were: what a finding that went through them read.</summary>

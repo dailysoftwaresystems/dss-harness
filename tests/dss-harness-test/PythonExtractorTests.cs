@@ -2235,6 +2235,65 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
     }
 
     /// <summary>
+    /// A class's own <c>parametrize</c> marks - its decorator's and its <c>pytestmark</c>'s, which pytest applies to every class built on
+    /// it - give each test of a class another file builds on it, any number of levels up, a value in place of the fixture of that name:
+    /// the class says the names its marks give, but one a mark routes to the fixture, and the link finds no fixture of such a name for
+    /// a test of a class built on it, nor counts it external or signs it; a test of a class built on no such base requires its fixture
+    /// still.
+    /// </summary>
+    [Fact]
+    public void AParametrizeMarkOfABaseClass_GivesTheTestsOfEachClassBuiltOnIt_AValueInPlaceOfTheFixture()
+    {
+        var conftest = Read("tests/conftest.py", """
+            import pytest
+
+
+            @pytest.fixture
+            def db():
+                return 2
+            """);
+        var bases = Read("tests/bases.py", """
+            import pytest
+
+
+            @pytest.mark.parametrize("user", ["admin"])
+            class Users:
+                pytestmark = pytest.mark.parametrize("db", [1], indirect=True)
+
+
+            class Between(Users):
+                pass
+            """);
+        var test = Read("tests/test_users.py", """
+            from .bases import Between
+
+
+            class TestLogin(Between):
+                def test_login(self, user, db):
+                    pass
+
+
+            class TestOther:
+                def test_other(self, user):
+                    pass
+            """);
+        var linked = Link(("tests/conftest.py", conftest), ("tests/bases.py", bases), ("tests/test_users.py", test));
+
+        Assert.Equal([("python:tests.bases.Users", "user")], bases.Nodes.Where(node => node.Parametrizes is not null).Select(node => (node.Id.Whole(), string.Join(',', node.Parametrizes!))));
+        Assert.Equal(
+            [("python:tests.test_users.TestLogin.test_login", "python:tests.conftest.db")],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.References && edge.To.StartsWith("python:tests.conftest.", StringComparison.Ordinal)).Select(edge => (edge.From, edge.To)));
+
+        // The one test whose user no base gives finds no fixture of it: counted external, and signed so.
+        Assert.Equal(
+            [("python:tests.test_users.TestOther.test_other", 1)],
+            linked.External.Where(pair => pair.Key.StartsWith("python:tests.test_users.", StringComparison.Ordinal)).Select(pair => (pair.Key, pair.Value)));
+        Assert.Equal(
+            [("python:tests.test_users.TestOther.test_other", CodeGraphLimit.UnprovidedFixture)],
+            linked.Signs.Where(pair => pair.Key.StartsWith("python:tests.test_users.", StringComparison.Ordinal)).Select(pair => (pair.Key, string.Join(',', pair.Value))));
+    }
+
+    /// <summary>
     /// A statement a text ends inside - an annotation with no type after its colon, an assignment with no value after its <c>=</c>, as a
     /// file being edited holds - declares what it writes and reads nothing past the text's end: a function's local and a class's field
     /// alike, the field's signature the text as written.

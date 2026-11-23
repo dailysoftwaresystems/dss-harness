@@ -793,7 +793,7 @@ public sealed partial class CodebaseGraphToolTests
 
         var search = await files.SearchAsync(
             tree.Tree,
-            new Regex("grazes|Geometry"),
+            new Regex("grazes|Geometry").IsMatch,
             path =>
             {
                 taken.Add(path);
@@ -1037,13 +1037,12 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// A name hundreds of key paths end with - a workflow's every step's <c>name</c> - is searched for by every one of them as an
-    /// environment variable writes it, by a pattern of one size however many there are: the pattern reads a line by the
-    /// double underscore every such path parts its places by, and each line and literal it reads is held to the paths whole,
-    /// so a line that writes one of them is a place and one that writes another name ending alike is none. No key path is
-    /// left out, the answer is given, and the coverage line says how many were searched so.
+    /// environment variable writes it, by no pattern however many there are: each line and literal is held to the paths whole,
+    /// all of them looked for in one pass of it, so a line that writes one of them is a place and one that writes another name
+    /// ending alike is none. No key path is left out, the answer is given, and the coverage line says how many were searched so.
     /// </summary>
     [Fact]
-    public async Task Sites_OfANameHundredsOfKeyPathsEndWith_SearchEachAsAnEnvironmentVariableWritesIt_ByAPatternOfOneSize()
+    public async Task Sites_OfANameHundredsOfKeyPathsEndWith_SearchEachAsAnEnvironmentVariableWritesIt_InOnePassOfALine()
     {
         const int Jobs = 300;
         var jobs = new StringBuilder("{\n  \"jobs\": {\n");
@@ -1080,11 +1079,8 @@ public sealed partial class CodebaseGraphToolTests
         // Another name ending alike, and a longer word that begins with a key path, are no places.
         Assert.DoesNotContain(lines, line => line.Contains("other__name", StringComparison.Ordinal) || line.Contains("__names", StringComparison.Ordinal) || line.Contains("nobody__name", StringComparison.Ordinal));
 
-        // The pattern is of one size, whatever the key paths: the word's, and their kind's.
-        var search = queries.SitesSearch("name", queries.DefinersOf("name"));
-
-        Assert.Equal(Jobs, search.Spellings.Count);
-        Assert.Equal(GraphSitesSearch.Of("name", ["any__name"]).Pattern.ToString(), search.Pattern.ToString());
+        // Every key path is searched, none left out.
+        Assert.Equal(Jobs, queries.SitesSearch("name", queries.DefinersOf("name")).Spellings.Count);
 
         // A key path is held whole whatever characters its places hold, each edge that is a word character at a word's edge.
         var spelt = GraphSitesSearch.Of("timeout", ["my-service__timeout", "Payments__timeout"]);
@@ -1093,6 +1089,44 @@ public sealed partial class CodebaseGraphToolTests
 
         Assert.Equal([.. held.Select(_ => true), .. other.Select(_ => false)], held.Concat(other).Select(spelt.Holds));
         Assert.Throws<ArgumentException>(() => GraphSitesSearch.Of("timeout", ["timeout_seconds"]));
+    }
+
+    /// <summary>
+    /// A quoted value however long is searched for by its characters alone - no pattern is compiled of it, so none is refused
+    /// for its length: a value of twenty thousand characters is answered, a line that holds it whole a place and one that holds
+    /// it with a word character after it none. The whole-word rule itself holds a word where its boundaries hold, though an
+    /// earlier place of its characters, one that place overlaps, is none.
+    /// </summary>
+    [Fact]
+    public async Task Sites_OfAQuotedValueOfTwentyThousandCharacters_IsSearchedByItsCharacters_AndAnswered()
+    {
+        var value = string.Concat(Enumerable.Repeat("okapi", 4000));
+        using var tree = await TreeAsync(("docs/long.txt", $"{value}\n{value}s\n"));
+        var tool = Tool(tree, await QueriesAsync(tree));
+        var asked = $$"""{"op":"sites","data":"\"{{value}}\""}""";
+
+        var first = await AskAsync(tool, asked);
+        var lines = new List<string>(first.Text.Split('\n'));
+
+        for (var page = 2; page <= (first.Paging?.Pages ?? 1); page++)
+        {
+            var later = await AskAsync(tool, $$"""{{asked[..^1]}},"page":{{page}}}""");
+
+            Assert.Equal(GraphToolOutcome.Answered, later.Outcome);
+            lines.AddRange(later.Text.Split('\n'));
+        }
+
+        // One hit of the two lines, zoo.txt holding none: the line the value ends with an 's' after is no place of it.
+        Assert.Equal(GraphToolOutcome.Answered, first.Outcome);
+        Assert.StartsWith("  docs/long.txt:1 okapiokapi", Assert.Single(lines, line => line.StartsWith("  docs/long.txt:", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains("coverage: 2 file(s) the graph lists only (.txt) searched by text - 1 hit(s)", lines);
+
+        // A word is held where its boundaries hold, an earlier place of its characters it overlaps none.
+        var word = GraphWord.Whole("abab");
+        string[] held = ["ababab abab", "abab.", "(abab)", "abab"];
+        string[] other = ["ababab", "xabab", "abab_", "abaabab", "aba"];
+
+        Assert.Equal([.. held.Select(_ => true), .. other.Select(_ => false)], held.Concat(other).Select(line => word.In(line)));
     }
 
     /// <summary>

@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using DssHarness.Core.Output;
 using DssHarness.Core.Text;
 
@@ -92,10 +91,11 @@ public sealed class CodebaseGraphQueries
             .SelectMany(file => (file.Value?.References ?? []).Where(reference => !reference.Probe).Select(reference => (reference.Name, Place: (file.Key, reference.From.Whole(), reference.Line))))
             .ToLookup(reference => reference.Name, reference => reference.Place, StringComparer.Ordinal));
 
-        // A file that declares a test - its implementation marks the test, or a declaration that is one by a type another file
-        // declares (<see cref="ExtractNode.TestByType"/>), which only a test file marks - is test code whole: its classes,
-        // fixtures and helpers beside the tests.
-        _testFiles = extracts.Where(file => file.Value?.Nodes.Any(node => node.Test || node.TestByType) == true).Select(file => file.Key).ToHashSet(StringComparer.Ordinal);
+        // A file that declares a test - its implementation marks the test, or the link finds a declaration a test by a type another
+        // file declares (CodeGraphLinker.TestsByType), never one its file only marks as one that may be, which no runner may
+        // collect - is test code whole: its classes, fixtures and helpers beside the tests.
+        var byType = CodeGraphLinker.TestsByType(extracts.Values.SelectMany(extract => extract?.Nodes ?? []), symbols.Edges).ToHashSet(StringComparer.Ordinal);
+        _testFiles = extracts.Where(file => file.Value?.Nodes.Any(node => node.Test || (node.TestByType && byType.Contains(node.Id.Whole()))) == true).Select(file => file.Key).ToHashSet(StringComparer.Ordinal);
 
         // Each file's nodes by their ids, made once a file rather than looked for once a node.
         var declared = extracts.ToDictionary(file => file.Key, file => (file.Value?.Nodes ?? []).ToLookup(node => node.Id), StringComparer.Ordinal);
@@ -576,22 +576,6 @@ public sealed class CodebaseGraphQueries
     }
 
     /// <summary>
-    /// The one whole-word rule every search the graph answers by reads - the text fallback's, and a <c>sites</c> answer's
-    /// read of the literals and of the files' text alike (<see cref="GraphSitesSearch"/>): <paramref name="word"/>, escaped, where
-    /// each of its two edges that is a word character - a letter, a digit or an underscore - has the line's or the value's
-    /// start or end beside it, or a character that is none of them; an edge that is no word character is its own boundary,
-    /// so <c>.btn-primary</c> is held by <c>button.btn-primary</c>. Each line and each value is asked whether it holds a
-    /// match, so the characters beside the word need no lookaround, and the one linear engine (<see cref="LinearRegex"/>)
-    /// matches it, never timed.
-    /// </summary>
-    /// <param name="word">The word, as it is asked.</param>
-    public static Regex WordPattern(string word)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(word);
-        return LinearRegex.Compile(WholeWord(word));
-    }
-
-    /// <summary>
     /// The bare name of the class's or the id's selector <paramref name="word"/> is written as - <c>.btn-primary</c> is the
     /// class <c>btn-primary</c>, <c>#main</c> the id <c>main</c>: a dot or a hash and then letters, digits, hyphens and
     /// underscores alone, as a rule names a class or an id - or null where it is no such selector.
@@ -617,11 +601,7 @@ public sealed class CodebaseGraphQueries
         return word[1..];
     }
 
-    /// <summary>The pattern <see cref="WordPattern"/> compiles: a boundary demanded only beside an edge that is a word character.</summary>
-    internal static string WholeWord(string word)
-        => $"{(WordCharacter(word[0]) ? @"(?:^|[^\p{L}\p{N}_])" : string.Empty)}{Regex.Escape(word)}{(WordCharacter(word[^1]) ? @"(?:$|[^\p{L}\p{N}_])" : string.Empty)}";
-
-    /// <summary>Whether <paramref name="character"/> is one a word is made of, as the pattern's own class reads it: a letter, a number or an underscore.</summary>
+    /// <summary>Whether <paramref name="character"/> is one a word is made of, as a whole word's boundaries read it (<see cref="GraphWord.Whole"/>): a letter, a number or an underscore.</summary>
     internal static bool WordCharacter(char character) => char.IsLetter(character) || char.IsNumber(character) || character == '_';
 
     /// <summary>
@@ -1824,22 +1804,23 @@ public sealed class CodebaseGraphQueries
 /// What a <c>sites</c> answer looks for its data by, in the literals and in the text it searches alike, and the one owner of
 /// whether a value or a line holds it (<see cref="Holds"/>): the word code and data write it by
 /// (<see cref="CodebaseGraphQueries.SitesSearch"/>, or a quoted literal's value) as a whole word
-/// (<see cref="CodebaseGraphQueries.WordPattern"/>); where the word is a class's or an id's selector as a rule writes it
+/// (<see cref="GraphWord.Whole"/>); where the word is a class's or an id's selector as a rule writes it
 /// (<c>.btn</c>, <c>#main</c>), the selector with no name character of a class after it - a hyphen among them, so
 /// <c>.btn</c> is not held by <c>.btn-primary</c> - and its bare name as a whole word of a class list - beside the start or
 /// the end, white space or a quote mark - as markup's class and id attributes and code's class names (<c>addClass('btn')</c>)
 /// write it; and, of any other word, each key path it names as an environment variable writes one, whole by the same rule.
-/// However many key paths it names, the pattern a line is read by is of one size (<see cref="Pattern"/>): the word's own,
-/// and one alternative of the key paths' kind - the double underscore each of them parts its places by - a line or a value
-/// that holds one then asked in code whether one of the key paths stands in it whole, all of them looked for in one pass of
-/// it, so no key path is left out and no pattern grows with how many there are.
+/// No pattern is compiled of any of them, so none is refused for its length and none grows with how many key paths the data
+/// names: the word is looked for by its characters (<see cref="GraphWord"/>), and every key path in one pass of the text for
+/// all of them at once, so no key path is left out.
 /// </summary>
 public sealed class GraphSitesSearch
 {
     /// <summary>What every key path an environment variable writes holds: the double underscore it parts its places by (<see cref="CodeKeyPaths.Environment"/>).</summary>
     private const string Separator = "__";
 
-    private readonly Regex _word;
+    /// <summary>The forms the word is held in: the word whole; or, of a selector, the selector as a rule writes it and its name as a class list does.</summary>
+    private readonly IReadOnlyList<GraphWord> _words;
+
     private readonly HashSet<string> _spellings;
     private readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> _spelt;
     private readonly SearchValues<string>? _starts;
@@ -1849,14 +1830,13 @@ public sealed class GraphSitesSearch
     {
         Word = word;
         Selector = selector;
-        _word = selector is not null
-            ? LinearRegex.Compile($"{Regex.Escape(word)}(?:$|[^\\p{{L}}\\p{{N}}_-])|(?:^|[\\s\"'`]){Regex.Escape(selector)}(?:$|[\\s\"'`])")
-            : LinearRegex.Compile(CodebaseGraphQueries.WholeWord(word));
+        _words = selector is not null
+            ? [new GraphWord(word, before: null, after: character => !CodebaseGraphQueries.WordCharacter(character) && character != '-'), new GraphWord(selector, ClassListEdge, ClassListEdge)]
+            : [GraphWord.Whole(word)];
         _spellings = spellings;
         _spelt = spellings.GetAlternateLookup<ReadOnlySpan<char>>();
         _starts = spellings.Count == 0 ? null : SearchValues.Create([.. spellings], StringComparison.Ordinal);
         _lengths = [.. spellings.Select(spelt => spelt.Length).Distinct().Order()];
-        Pattern = spellings.Count == 0 ? _word : LinearRegex.Compile($"{_word}|{Separator}");
     }
 
     /// <summary>
@@ -1892,6 +1872,9 @@ public sealed class GraphSitesSearch
     /// <summary>The word the data is looked for by.</summary>
     public string Word { get; }
 
+    /// <summary>Whether <paramref name="character"/>, beside a selector's bare name, parts it from the rest of a class list: white space or a quote mark.</summary>
+    private static bool ClassListEdge(char character) => char.IsWhiteSpace(character) || character is '"' or '\'' or '`';
+
     /// <summary>The bare name of the selector <see cref="Word"/> is written as (<see cref="CodebaseGraphQueries.SelectorName"/>), searched as a class list writes it too; null where it is none.</summary>
     public string? Selector { get; }
 
@@ -1899,15 +1882,9 @@ public sealed class GraphSitesSearch
     public IReadOnlyCollection<string> Spellings => _spellings;
 
     /// <summary>
-    /// The pattern a line is read by first, of one size however many key paths the data names: every line that holds the
-    /// data matches it, and a line that matches it holds the data where <see cref="Holds"/> says so.
-    /// </summary>
-    public Regex Pattern { get; }
-
-    /// <summary>
     /// Whether <paramref name="text"/> - a literal's value, a line - holds the data: its word as the word is looked for, or one
     /// of its key paths whole - each edge of it that is a word character beside the text's start or end or a character that
-    /// is none, as <see cref="CodebaseGraphQueries.WordPattern"/> reads a word - found by one pass over the text for every key
+    /// is none, as <see cref="GraphWord.Whole"/> reads a word - found by one pass over the text for every key
     /// path at once, each place one begins at asked once of each length a key path has.
     /// </summary>
     /// <param name="text">A literal's value, or a line.</param>
@@ -1915,9 +1892,12 @@ public sealed class GraphSitesSearch
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        if (_word.IsMatch(text))
+        foreach (var form in _words)
         {
-            return true;
+            if (form.In(text))
+            {
+                return true;
+            }
         }
 
         if (_starts is null)

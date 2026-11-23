@@ -117,18 +117,21 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
         Func<string, bool> mayRead,
         Func<AgentSearchHit, CancellationToken, ValueTask> found,
         CancellationToken cancellationToken)
-        => SearchAsync(directory, pattern, glob is null ? null : path => glob.Matches(path, comparison), context, mayRead, found, read: null, cancellationToken);
+    {
+        ArgumentNullException.ThrowIfNull(pattern);
+        return SearchAsync(directory, pattern.IsMatch, glob is null ? null : path => glob.Matches(path, comparison), context, mayRead, found, read: null, cancellationToken);
+    }
 
     /// <summary>
-    /// The lines under <paramref name="directory"/> that <paramref name="pattern"/> matches, as the search without
-    /// <paramref name="read"/> finds them, of the files <paramref name="take"/> takes, each file read to its end handed to
+    /// The lines under <paramref name="directory"/> that <paramref name="holds"/> takes - a pattern's matches, a word looked for by
+    /// its characters - as the search without <paramref name="read"/> finds them, of the files <paramref name="take"/> takes, each file read to its end handed to
     /// <paramref name="read"/> once it is: a file passed over, not read, or gone since its listing is never handed on, so a
     /// caller counts what was searched from what was read and never from what it chose. Every file is told by the one path
     /// its listing names it by - what <paramref name="take"/> takes it by, each hit's and each read's - never by one made again
     /// from where it stands.
     /// </summary>
     /// <param name="directory">The directory, absolute.</param>
-    /// <param name="pattern">The pattern, matched against each line.</param>
+    /// <param name="holds">Whether a line is a hit, asked of each line.</param>
     /// <param name="take">
     /// Whether a file is searched, by its path relative to <paramref name="directory"/> as the listing names it - a glob's, a
     /// scope its caller chose - asked before whether the agent may read it, so a file not taken is passed over by the caller's
@@ -141,7 +144,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
     /// <param name="cancellationToken">Stops the search.</param>
     public async Task<AgentSearch> SearchAsync(
         string directory,
-        Regex pattern,
+        Func<string, bool> holds,
         Func<string, bool>? take,
         int context,
         Func<string, bool> mayRead,
@@ -150,7 +153,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(directory);
-        ArgumentNullException.ThrowIfNull(pattern);
+        ArgumentNullException.ThrowIfNull(holds);
         ArgumentNullException.ThrowIfNull(mayRead);
         ArgumentNullException.ThrowIfNull(found);
         ArgumentOutOfRangeException.ThrowIfNegative(context);
@@ -204,7 +207,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
                 {
                     using var text = await StreamedText.OpenAsync(stream, file, null, cancellationToken).ConfigureAwait(false);
 
-                    await foreach (var hit in HitsAsync(text.LinesAsync(cancellationToken), path, pattern, context, cancellationToken).ConfigureAwait(false))
+                    await foreach (var hit in HitsAsync(text.LinesAsync(cancellationToken), path, holds, context, cancellationToken).ConfigureAwait(false))
                     {
                         await found(hit, cancellationToken).ConfigureAwait(false);
                         ofFile++;
@@ -244,14 +247,14 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
     }
 
     /// <summary>
-    /// The hits of a file's <paramref name="lines"/>, in order: each line <paramref name="pattern"/> matches, with the
+    /// The hits of a file's <paramref name="lines"/>, in order: each line <paramref name="holds"/> takes, with the
     /// <paramref name="context"/> lines before it and after it - the lines before held as they pass, a hit's lines after it
     /// taken as they come, and the hit given once it has them, or at the file's end.
     /// </summary>
     private static async IAsyncEnumerable<AgentSearchHit> HitsAsync(
         IAsyncEnumerable<string> lines,
         string path,
-        Regex pattern,
+        Func<string, bool> holds,
         int context,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -275,7 +278,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
                 yield return first.Hit with { After = first.After };
             }
 
-            if (pattern.IsMatch(line))
+            if (holds(line))
             {
                 var hit = new AgentSearchHit(path, number, line, [.. before], []);
 

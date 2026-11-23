@@ -1437,6 +1437,7 @@ internal sealed class JsReading
             SeenIn = seenIn,
             Modifiers = modifiers is { Count: > 0 } ? [.. modifiers] : [],
             Extends = extends,
+            Joined = extends is not null,
             MembersByReceiver = extends is not null,
         });
 
@@ -1913,7 +1914,8 @@ internal sealed class JsReading
     /// <summary>
     /// The members a statement adds to a type from outside its body, as a constructor function's and Backbone's prototype
     /// assignments do - <c>X.prototype.y = function () {}</c>, <c>ns.X.prototype.y = () =&gt; {}</c>, and <c>X.prototype = { y() {} }</c>,
-    /// whose object's keys are each one - each a member of the type the chain before <c>prototype</c> names, what its body calls
+    /// whose object's keys are each one, and a jQuery plugin, <c>$.fn.y = function () {}</c> - <c>fn</c> jQuery's name for its
+    /// prototype, <c>$</c> and <c>jQuery</c> its own (<see cref="PrototypeOf"/>) - each a member of the type the chain before <c>prototype</c> names, what its body calls
     /// its own: where the file declares that type in the frame the statement stands in - a class, a type <c>extend</c> builds, a
     /// function whose prototype the file assigns (<see cref="Constructed"/>), by its name or by the chain it is assigned to
     /// (<see cref="AssignedConstructor"/>) - one of its members, in its scope; else a member
@@ -1926,9 +1928,9 @@ internal sealed class JsReading
         var (names, past) = ChainAt(_scan, at, end);
         var assigned = _scan.Next(past);
         var stop = StatementEnd(at, end);
-        var whole = names.Count >= 2 && _scan.Is(names[^1], "prototype") && _scan.Is(past, "=") && _scan.Is(assigned, "{");
+        var whole = names.Count >= 2 && PrototypeOf(names, names.Count - 1) && _scan.Is(past, "=") && _scan.Is(assigned, "{");
 
-        if (!whole && (names.Count < 3 || !_scan.Is(names[^2], "prototype") || !_scan.Is(past, "=")))
+        if (!whole && (names.Count < 3 || !PrototypeOf(names, names.Count - 2) || !_scan.Is(past, "=")))
         {
             return -1;
         }
@@ -1978,6 +1980,14 @@ internal sealed class JsReading
 
         return last + 1;
     }
+
+    /// <summary>
+    /// Whether the name at <paramref name="at"/> among the chain <paramref name="names"/> is the prototype of the names before it: a
+    /// <c>prototype</c>; or <c>fn</c> after jQuery's own names alone, <c>$</c> or <c>jQuery</c>, its name for its prototype - what a
+    /// plugin is added to, <c>$.fn.y = function () {}</c>, and every jQuery object a call of <c>$</c> makes holds.
+    /// </summary>
+    private bool PrototypeOf(List<int> names, int at)
+        => _scan.Is(names[at], "prototype") || (at == 1 && _scan.Is(names[at], "fn") && (_scan.Is(names[0], "$") || _scan.Is(names[0], "jQuery")));
 
     /// <summary>Whether <paramref name="frame"/> is the file's top, or one a wrapper's body is read in (<see cref="Wrapping"/>): where a wrapper's body is read as the top is.</summary>
     private bool IsTop(ScanFrame frame) => ReferenceEquals(frame, _top) || _wrappers.Contains(frame);
@@ -3526,6 +3536,7 @@ internal sealed class JsReading
             SeenIn = seenIn,
             Exports = exports,
             Extends = extends,
+            Joined = extends is not null,
             MembersByReceiver = extends is not null,
         });
 
