@@ -201,6 +201,18 @@ internal sealed class JsReading
     /// <summary>The variables at the file's top no function or class is bound to: a call of one is through its value.</summary>
     private readonly HashSet<string> _values = new(StringComparer.Ordinal);
 
+    /// <summary>The names a function is declared by whose prototype the file writes: each a constructor function, read as the type it is (<see cref="Constructors"/>).</summary>
+    private HashSet<string> _constructors = new(StringComparer.Ordinal);
+
+    /// <summary>The frame of the file's top, once its reading begins.</summary>
+    private ScanFrame? _top;
+
+    /// <summary>The frame a script's wrappers' bodies are read in, its scope the file's alone (<see cref="Wrapping"/>), once one is.</summary>
+    private ScanFrame? _wrapping;
+
+    /// <summary>Whether the statements being read are an AMD factory's, whose <c>return</c> is the module's export (<see cref="Factory"/>).</summary>
+    private bool _factory;
+
     /// <summary>The specifiers a <c>require</c> or an <c>import(...)</c> imports already, each imported once.</summary>
     private readonly HashSet<string> _required = new(StringComparer.Ordinal);
 
@@ -273,9 +285,10 @@ internal sealed class JsReading
             _extract.Scope(_path, open: true, parent: null);
         }
 
-        Directives();
+        _constructors = Constructors();
+        Directives(0, _scan.Count);
 
-        var top = new ScanFrame(_scope, _scope, null, null);
+        var top = _top = new ScanFrame(_scope, _scope, null, null);
         _bodies = [];
 
         try
@@ -374,7 +387,8 @@ internal sealed class JsReading
 
             if ((_scan.Is(at, "require") && _scan.Is(next, "(") && IsText(_scan.Next(next)))
                 || (_scan.Is(at, "module") && _scan.Is(next, ".") && _scan.Is(_scan.Next(next), "exports"))
-                || (_scan.Is(at, "exports") && (_scan.Is(next, ".") || _scan.Is(next, "["))))
+                || (_scan.Is(at, "exports") && (_scan.Is(next, ".") || _scan.Is(next, "[")))
+                || AmdAt(at, _scan.Count) is not null)
             {
                 return true;
             }
@@ -408,9 +422,9 @@ internal sealed class JsReading
     /// Each import at the file's top: an <c>import</c> statement, TypeScript's <c>import x = require(...)</c>, an
     /// <c>export ... from</c>, and a <c>const</c>, <c>let</c> or <c>var</c> given a <c>require</c> of a specifier.
     /// </summary>
-    private void Directives()
+    private void Directives(int from, int to)
     {
-        for (var at = 0; at < _scan.Count; at = _scan.Opens(at) ? _scan.Past(at) : at + 1)
+        for (var at = from; at < to; at = _scan.Opens(at) ? _scan.Past(at) : at + 1)
         {
             if (IsStatement(at, "import"))
             {
@@ -1078,10 +1092,24 @@ internal sealed class JsReading
             return common;
         }
 
-        // A member Backbone adds to a type from outside its body - X.prototype.y = function () {} - is a member of that type.
-        if (Prototyped(start, head, at, end, frame, marks, decorators, seenIn) is var prototyped and >= 0)
+        // A member a statement adds to a type from outside its body - X.prototype.y = function () {} - is a member of that type.
+        if (Prototyped(start, head, at, end, frame, marks, decorators) is var prototyped and >= 0)
         {
             return prototyped;
+        }
+
+        // At the file's top, an AMD factory's return is the module's export, and a wrapper's body is read as the top is.
+        if (IsTop(frame))
+        {
+            if (_factory && _scan.Is(at, "return"))
+            {
+                return Factory(at, end, frame);
+            }
+
+            if (Wrapped(at, end) is { } wrapped)
+            {
+                return Wrapper(at, end, wrapped, frame, hidden);
+            }
         }
 
         // Code: what it calls is the module's - but the CommonJS exports its blocks hold, read as the top's are.
@@ -1305,7 +1333,7 @@ internal sealed class JsReading
     /// read by the framework's own rule (<see cref="Watched"/>), and a value is a member of <paramref name="fields"/> where it is
     /// given, as a Backbone object's fields are.
     /// </summary>
-    private void OptionMembers(int open, int end, QualifiedName key, ScanFrame members, string subKind, QualifiedName? seenIn, IReadOnlyDictionary<string, Hash>? hashes = null, string? fields = null)
+    private void OptionMembers(int open, int end, QualifiedName? key, ScanFrame members, string subKind, QualifiedName? seenIn, IReadOnlyDictionary<string, Hash>? hashes = null, string? fields = null, List<string>? modifiers = null, string? extends = null)
     {
         foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
         {
@@ -1313,23 +1341,23 @@ internal sealed class JsReading
             var next = _scan.Next(pieceStart);
 
             // A hash the framework reads by its own rule: a Backbone object's events or routes.
-            if (name is not null && hashes is not null && _scan.Is(next, ":") && _scan.Is(_scan.Next(next), "{") && hashes.TryGetValue(name, out var hash))
+            if (name is not null && hashes is not null && key is { } owner && _scan.Is(next, ":") && _scan.Is(_scan.Next(next), "{") && hashes.TryGetValue(name, out var hash))
             {
-                Watched(_scan.Next(next), pieceEnd, key, hash);
+                Watched(_scan.Next(next), pieceEnd, owner, hash);
                 continue;
             }
 
             if (MethodNameAt(pieceStart, pieceEnd) is var methodAt and >= 0 && FunctionAt(methodAt, pieceEnd, methodName: true) is { } method)
             {
-                Callable(pieceStart, pieceStart, methodAt, _scan.Text(methodAt), method, members, [], [], [], subKind, seenIn, exports: null);
+                Callable(pieceStart, pieceStart, methodAt, _scan.Text(methodAt), method, members, [], [], [.. modifiers ?? []], subKind, seenIn, exports: null, extends);
             }
             else if (name is not null && _scan.Is(next, ":") && FunctionAt(_scan.Next(next), pieceEnd) is { } function)
             {
-                Callable(pieceStart, pieceStart, _scan.Next(next), name, function, members, [], [], [], subKind, seenIn, exports: null);
+                Callable(pieceStart, pieceStart, _scan.Next(next), name, function, members, [], [], [.. modifiers ?? []], subKind, seenIn, exports: null, extends);
             }
             else if (name is not null && _scan.Is(next, ":"))
             {
-                var member = OptionMember(pieceStart, pieceEnd, name, members, fields ?? subKind, seenIn);
+                var member = OptionMember(pieceStart, pieceEnd, name, members, fields ?? subKind, seenIn, modifiers, extends);
                 var valueAt = _scan.Next(next);
                 Defer(() => Calls(_text, valueAt, pieceEnd, member, new Locals(), null));
             }
@@ -1340,14 +1368,17 @@ internal sealed class JsReading
         }
     }
 
-    /// <summary>A member of the component named <paramref name="name"/> over the piece from <paramref name="start"/> to <paramref name="end"/>; answers its key.</summary>
-    private QualifiedName OptionMember(int start, int end, string name, ScanFrame members, string subKind, QualifiedName? seenIn)
+    /// <summary>A member of the component named <paramref name="name"/> over the piece from <paramref name="start"/> to <paramref name="end"/>, with <paramref name="modifiers"/> and extending the type <paramref name="extends"/> where they are given; answers its key.</summary>
+    private QualifiedName OptionMember(int start, int end, string name, ScanFrame members, string subKind, QualifiedName? seenIn, List<string>? modifiers = null, string? extends = null)
         => _extract.Add(new ExtractNode(Id(members.Qualify(name)), CodeNodeKinds.Member, name, members.Qualify(name), _scan[start].Line, _scan[_scan.LastOf(end)].EndLine, ExtractText.Signature(name))
         {
             SubKind = subKind,
             Scope = members.Scope,
             Parent = members.Parent,
             SeenIn = seenIn,
+            Modifiers = modifiers is { Count: > 0 } ? [.. modifiers] : [],
+            Extends = extends,
+            MembersByReceiver = extends is not null,
         });
 
     /// <summary>
@@ -1553,8 +1584,8 @@ internal sealed class JsReading
         }
     }
 
-    /// <summary>Reads the tokens from <paramref name="from"/> to <paramref name="to"/> as code of the node of <paramref name="key"/>, once the file's declarations are read.</summary>
-    private void Code(int from, int to, QualifiedName key)
+    /// <summary>Reads the tokens from <paramref name="from"/> to <paramref name="to"/> as code of the node of <paramref name="key"/> - the file's top's where none is given - once the file's declarations are read.</summary>
+    private void Code(int from, int to, QualifiedName? key)
     {
         if (from < to)
         {
@@ -1727,70 +1758,403 @@ internal sealed class JsReading
     // ---- Backbone and Angular ----
 
     /// <summary>
-    /// A call of <c>extend</c> on a chain of names, given an object, from <paramref name="at"/>: what Backbone builds a type by -
-    /// <c>Backbone.View.extend({...})</c>, <c>BaseView.extend({...})</c> - the chain it extends and the braces of the object it is
-    /// given, the index past its closing brace among them; <see langword="null"/> where none is written there.
+    /// A call of <c>extend</c> on a chain of names that names a type, given what Backbone's <c>extend</c> takes and nothing past it,
+    /// from <paramref name="at"/> to <paramref name="end"/>: what Backbone builds a type by - <c>Backbone.View.extend({...})</c>,
+    /// <c>BaseView.extend({...}, {...})</c> - one object, the prototype's, or two, the second the type's static properties. The
+    /// link before <c>extend</c> names a type - written as a type's name is, capitalized, or a type the file declares - so a merge of
+    /// objects, <c>_.extend({}, a)</c> or <c>$.extend({ debug: false }, b)</c>, is none. Answers the chain it extends and the braces of
+    /// each object it is given; <see langword="null"/> where none is written there.
     /// </summary>
-    private (List<string> Chain, int Open, int Close)? ExtendedAt(int at, int end)
+    private (List<string> Chain, List<(int Open, int Close)> Objects)? ExtendedAt(int at, int end)
     {
         var (names, past) = ChainAt(_scan, at, end);
-        var open = _scan.Next(past);
 
-        if (names.Count < 2 || !_scan.Is(names[^1], "extend") || !_scan.Is(past, "(") || !_scan.Is(open, "{"))
+        if (names.Count < 2 || !_scan.Is(names[^1], "extend") || !_scan.Is(past, "("))
         {
             return null;
         }
 
-        return ([.. names[..^1].Select(index => _scan.Text(index))], open, Math.Min(_scan.Bounds(open, end).Past, end));
+        var extended = _scan.Text(names[^2]);
+
+        if (Builtins.Contains(extended) || !(IsTypeName(extended) || (_topKeys.TryGetValue(extended, out var keys) && keys.Any(key => _extract.Node(key).Kind == CodeNodeKinds.Type))))
+        {
+            return null;
+        }
+
+        var (inner, close) = _scan.Bounds(past, end);
+        var pieces = ScanCalls.Split(_scan, past + 1, Math.Min(inner, end), _types);
+        var objects = new List<(int Open, int Close)>();
+
+        // The call is the whole value, and each argument an object alone.
+        if (close < end || pieces.Count is < 1 or > 2)
+        {
+            return null;
+        }
+
+        foreach (var (pieceStart, pieceEnd) in pieces)
+        {
+            if (!_scan.Is(pieceStart, "{") || _scan.Bounds(pieceStart, pieceEnd).Past < pieceEnd)
+            {
+                return null;
+            }
+
+            objects.Add((pieceStart, pieceEnd));
+        }
+
+        return ([.. names[..^1].Select(index => _scan.Text(index))], objects);
     }
 
     /// <summary>
-    /// The type a call of <c>extend</c> builds, named <paramref name="name"/> at <paramref name="nameAt"/>, given the object from
-    /// <paramref name="open"/> to <paramref name="close"/>: a type node over the declarator, an <c>inherits</c> edge to what the
-    /// chain <paramref name="chain"/> names - <c>Backbone.View</c>, a repository type's - and the object its members, each function
-    /// a method and each value a field; its <c>events</c> hash's keys uses of the rules their selectors name and its handlers calls
-    /// of the methods they name, and its <c>routes</c>' handlers calls of theirs.
+    /// The type a call of <c>extend</c> builds, named <paramref name="name"/> at <paramref name="nameAt"/>, given the objects
+    /// <paramref name="objects"/>, over the declarator to <paramref name="last"/>: a type node, an <c>inherits</c> edge to what the
+    /// chain <paramref name="chain"/> names - <c>Backbone.View</c>, a repository type's - and each object's keys its members, each
+    /// function a method and each value a field, those of the second its static ones; the first's <c>events</c> hash's keys uses of
+    /// the rules their selectors name and its handlers calls of the methods they name, and its <c>routes</c>' handlers calls of
+    /// theirs. Its members are reached by a receiver alone, as a class's are (<see cref="ExtractNode.MembersByReceiver"/>).
     /// </summary>
-    private void Extended(int start, int head, int nameAt, string name, List<string> chain, int open, int close, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, QualifiedName? seenIn)
+    private void Extended(int start, int head, int nameAt, string name, List<string> chain, List<(int Open, int Close)> objects, int last, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, QualifiedName? seenIn)
     {
-        var key = DeclareType(start, head, _scan.LastOf(close), frame, name, "class", modifiers, marks, signatureEnd: open, seenIn);
+        var key = DeclareType(start, head, _scan.LastOf(last), frame, name, "class", modifiers, marks, signatureEnd: objects[0].Open, seenIn);
         var members = frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name);
 
         Mention(key, CodeEdgeKinds.Inherits, string.Join('.', chain), _scan[nameAt].Line);
         DecoratorCalls(key, decorators, frame.Owner);
-        OptionMembers(open, close, key, members, "method", _module ? QualifiedName.Of(_path) : null, BackboneHashes, "field");
+        OptionMembers(objects[0].Open, objects[0].Close, key, members, "method", seenIn: null, BackboneHashes, "field");
+
+        if (objects.Count > 1)
+        {
+            OptionMembers(objects[1].Open, objects[1].Close, key, members, "method", seenIn: null, null, "field", ["static"]);
+        }
     }
 
     /// <summary>The hashes of the object a call of <c>extend</c> is given, each read as Backbone reads it.</summary>
     private static readonly IReadOnlyDictionary<string, Hash> BackboneHashes = new Dictionary<string, Hash>(StringComparer.Ordinal) { ["events"] = Hash.Events, ["routes"] = Hash.Routes };
 
     /// <summary>
-    /// A member a statement adds to a type from outside its body, as Backbone's prototype assignments do -
-    /// <c>X.prototype.y = function () {}</c>, <c>ns.X.prototype.y = () =&gt; {}</c>: a member named <c>y</c> that extends the type the
-    /// chain before <c>prototype</c> names, what its body calls its own. Answers where the next statement begins, or -1 where no
-    /// such assignment stands at <paramref name="at"/>.
+    /// The members a statement adds to a type from outside its body, as a constructor function's and Backbone's prototype
+    /// assignments do - <c>X.prototype.y = function () {}</c>, <c>ns.X.prototype.y = () =&gt; {}</c>, and <c>X.prototype = { y() {} }</c>,
+    /// whose object's keys are each one - each a member of the type the chain before <c>prototype</c> names, what its body calls
+    /// its own: where the file declares that type in the frame the statement stands in - a class, a type <c>extend</c> builds, a
+    /// function whose prototype the file assigns (<see cref="Constructed"/>) - one of its members, in its scope; else a member
+    /// extending it (<see cref="ExtractNode.Extends"/>), in the scope the type's name names from here and in none a name written
+    /// alone looks in, reached by what is called on the type, never by the file's own names nor its exports. Answers where the
+    /// next statement begins, or -1 where no such assignment stands at <paramref name="at"/>.
     /// </summary>
-    private int Prototyped(int start, int head, int at, int end, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, QualifiedName? seenIn)
+    private int Prototyped(int start, int head, int at, int end, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators)
     {
         var (names, past) = ChainAt(_scan, at, end);
         var assigned = _scan.Next(past);
+        var stop = StatementEnd(at, end);
+        var whole = names.Count >= 2 && _scan.Is(names[^1], "prototype") && _scan.Is(past, "=") && _scan.Is(assigned, "{");
 
-        if (names.Count < 3 || !_scan.Is(names[^2], "prototype") || !_scan.Is(past, "=") || FunctionAt(assigned, StatementEnd(at, end)) is not { } function)
+        if (!whole && (names.Count < 3 || !_scan.Is(names[^2], "prototype") || !_scan.Is(past, "=")))
         {
             return -1;
         }
 
+        var function = whole ? null : FunctionAt(assigned, stop);
+
+        if (!whole && function is null)
+        {
+            return -1;
+        }
+
+        var extended = string.Join('.', names[..(whole ? ^1 : ^2)].Select(index => _scan.Text(index)));
+        var type = names.Count == (whole ? 2 : 3) ? DeclaredType(frame, extended) : null;
+
+        // The type's own scope where the file declares it, else the one its name names from here, which holds nothing else and
+        // is declared in the scope the statement stands in, so what its members' code names by itself is looked for there.
+        var scope = type is { } declared ? _extract.Node(declared).Qualified : frame.Qualify(extended);
+        var members = frame.Inside(scope, scope, type, extended);
+
+        if (type is null)
+        {
+            _extract.Scope(scope, open: true, parent: frame.Scope);
+        }
+
+        if (whole)
+        {
+            var close = Math.Min(_scan.Bounds(assigned, stop).Past, stop);
+            OptionMembers(assigned, close, type, members, "method", seenIn: null, fields: "field", extends: type is null ? extended : null);
+            return close;
+        }
+
         var nameAt = names[^1];
-        Bound(start, head, nameAt, _scan.Text(nameAt), function, frame, marks, decorators, [], "method", seenIn, exports: null, string.Join('.', names[..^2].Select(index => _scan.Text(index))));
+        Bound(start, head, nameAt, _scan.Text(nameAt), function!, members, marks, decorators, [], "method", seenIn: null, exports: null, type is null ? extended : null);
+        return function!.Last + 1;
+    }
+
+    /// <summary>Whether <paramref name="frame"/> is the file's top, or the one a script's wrappers are read in: where a wrapper's body is read as the top is.</summary>
+    private bool IsTop(ScanFrame frame) => ReferenceEquals(frame, _top) || ReferenceEquals(frame, _wrapping);
+
+    /// <summary>
+    /// The frame a script's wrappers' bodies are read in: a scope of the file's alone, its path, so what they declare is
+    /// its file's and no other script's, as a function's own names are; a module's are read in the module's own.
+    /// </summary>
+    private ScanFrame Wrapping()
+    {
+        if (_wrapping is null)
+        {
+            _extract.Scope(_path, open: false, parent: null);
+            _wrapping = _top!.Inside(QualifiedName.Of(_path), QualifiedName.Of(_path), null, null);
+        }
+
+        return _wrapping;
+    }
+
+    /// <summary>
+    /// The wrapper a statement at the file's top is, from <paramref name="at"/> to <paramref name="end"/>, where one is: an
+    /// AMD module's <c>define</c> given its factory (<see cref="AmdAt"/>), or a function called where it is written -
+    /// <c>(function ($) {...})(jQuery)</c>, <c>(function () {...}())</c>, <c>!function () {...}()</c>,
+    /// <c>(() =&gt; {...})()</c>, <c>(function () {...}).call(this)</c> - the statement whole. Answers the function, the index
+    /// it begins at, and each of its parameters by its name with the dependency an AMD factory is given for it, where one is;
+    /// <see langword="null"/> where the statement is none of them.
+    /// </summary>
+    private (FunctionShape Function, int Start, List<(string Name, string? Specifier)> Parameters, bool Factory)? Wrapped(int at, int end)
+    {
+        if (AmdAt(at, end) is { } amd)
+        {
+            return amd;
+        }
+
+        var head = _scan.Is(at, "!") || _scan.Is(at, "+") || _scan.Is(at, "-") || _scan.Is(at, "~") || _scan.Is(at, "void") ? _scan.Next(at) : at;
+        int start;
+        FunctionShape? function;
+        int call;
+
+        if (_scan.Is(head, "(") && _scan.Match(head) is var close and > 0 && close < end)
+        {
+            start = _scan.Next(head);
+            function = Block(FunctionAt(start, close));
+
+            if (function is null)
+            {
+                return null;
+            }
+
+            // (function () {...})() calls the group; (function () {...}()) is a call inside it, the group nothing more.
+            call = function.Last + 1 == close ? CallPast(close + 1, end) ?? -1 : CallPast(function.Last + 1, close) == close ? close + 1 : -1;
+        }
+        else if (head != at && _scan.Is(head, "function"))
+        {
+            start = head;
+            function = Block(FunctionAt(start, end));
+            call = function is null ? -1 : CallPast(function.Last + 1, end) ?? -1;
+        }
+        else
+        {
+            return null;
+        }
+
+        return function is not null && call >= 0 && IsEnded(call, end)
+            ? (function, start, [.. ParameterNames(start, function).Select(name => (name, (string?)null))], false)
+            : null;
+
+        // Its body a block: an arrow's expression holds no statement.
+        FunctionShape? Block(FunctionShape? shape) => shape is { Arrow: false, Body: >= 0 } && _scan.Is(shape.Body, "{") ? shape : null;
+    }
+
+    /// <summary>Where a call written at <paramref name="at"/> - <c>(...)</c>, <c>.call(...)</c>, <c>.apply(...)</c> - ends, before <paramref name="end"/>; <see langword="null"/> where none is written there.</summary>
+    private int? CallPast(int at, int end)
+    {
+        if (_scan.Is(at, ".") && (_scan.Is(_scan.Next(at), "call") || _scan.Is(_scan.Next(at), "apply")))
+        {
+            at = _scan.Next(_scan.Next(at));
+        }
+
+        return at < end && _scan.Is(at, "(") && _scan.Match(at) is var close and > 0 && close < end ? close + 1 : null;
+    }
+
+    /// <summary>
+    /// An AMD module's <c>define</c> at <paramref name="at"/>, given its factory last - its name and its dependencies, an array
+    /// of strings, written before it or not: <c>define(['backbone', './base'], function (Backbone, Base) {...})</c> - the
+    /// statement whole. Answers the factory, the index it begins at, and each of its parameters by its name with the
+    /// dependency the array gives it, by place; <see langword="null"/> where none is there.
+    /// </summary>
+    private (FunctionShape Function, int Start, List<(string Name, string? Specifier)> Parameters, bool Factory)? AmdAt(int at, int end)
+    {
+        var open = _scan.Next(at);
+
+        if (!_scan.Is(at, "define") || IsMember(_scan, _scan.Previous(at)) || !_scan.Is(open, "(") || _scan.Match(open) is not (var close and > 0) || close >= end || !IsEnded(close + 1, end))
+        {
+            return null;
+        }
+
+        var pieces = ScanCalls.Split(_scan, open + 1, close, _types);
+
+        if (pieces.Count is < 1 or > 3 || FunctionAt(pieces[^1].Start, pieces[^1].End) is not { Arrow: false, Body: >= 0 } factory || !_scan.Is(factory.Body, "{") || factory.Last + 1 != pieces[^1].End)
+        {
+            return null;
+        }
+
+        // Its own name first, which names no dependency; then its dependencies, an array of strings.
+        var heads = pieces[..^1];
+
+        if (heads.Count > 0 && IsText(heads[0].Start) && _scan.Next(heads[0].Start) == heads[0].End)
+        {
+            heads = heads[1..];
+        }
+
+        if (heads.Count > 1 || (heads.Count == 1 && (!_scan.Is(heads[0].Start, "[") || _scan.Match(heads[0].Start) + 1 != heads[0].End)))
+        {
+            return null;
+        }
+
+        List<string?> dependencies = heads.Count == 0
+            ? []
+            : [.. ScanCalls.Split(_scan, heads[0].Start + 1, _scan.Match(heads[0].Start), null).Select(item => IsText(item.Start) && _scan.Next(item.Start) == item.End ? Specifier(item.Start) : null)];
+
+        var names = ParameterNames(pieces[^1].Start, factory);
+        return (factory, pieces[^1].Start, [.. names.Select((name, place) => (name, place < dependencies.Count ? dependencies[place] : null))], true);
+    }
+
+    /// <summary>The names of the parameters of <paramref name="function"/>, written from <paramref name="start"/>, in order; a pattern's place none of them, so each name keeps its own.</summary>
+    private List<string> ParameterNames(int start, FunctionShape function)
+    {
+        var at = start;
+
+        while (at < function.Body && !_scan.Is(at, "("))
+        {
+            // x => {...}: the one parameter, written without parentheses.
+            if (_scan.IsName(at) && _scan.Is(_scan.Next(at), "=>"))
+            {
+                return [_scan.Text(at)];
+            }
+
+            at = _scan.Next(at);
+        }
+
+        if (at >= function.Body)
+        {
+            return [];
+        }
+
+        return [.. ScanCalls.Split(_scan, at + 1, _scan.Match(at), _types).Select(piece => _scan.IsName(piece.Start) ? _scan.Text(piece.Start) : string.Empty)];
+    }
+
+    /// <summary>
+    /// The wrapper at <paramref name="at"/>, <paramref name="wrapped"/>: what its function's body declares is the file's, read
+    /// as statements of its top are - in a module the module's own, in a script a scope of the file's alone
+    /// (<see cref="Wrapping"/>) - its imports and requires among them; each parameter an AMD factory is given a dependency for
+    /// an import of it by that name, as a <c>require</c> declared by it is, and each other a value the body reads; what the
+    /// statement does besides - the call it is, its dependencies and arguments, its parameters' defaults - the file's code.
+    /// An AMD factory's own <c>return</c> is the module's export (<see cref="Factory"/>). Answers where the next statement begins.
+    /// </summary>
+    private int Wrapper(int at, int end, (FunctionShape Function, int Start, List<(string Name, string? Specifier)> Parameters, bool Factory) wrapped, ScanFrame frame, QualifiedName? hidden)
+    {
+        var (function, functionStart, parameters, factory) = wrapped;
+        var stop = StatementEnd(at, end);
+        var line = _scan[at].Line;
+        var body = function.Body + 1;
+        var inner = function.Last;
+
+        foreach (var (name, specifier) in parameters.Where(parameter => parameter.Name.Length > 0))
+        {
+            if (specifier is not null)
+            {
+                Bind(name, specifier, null, line);
+            }
+            else if (name is not ("require" or "exports" or "module"))
+            {
+                _values.Add(name);
+            }
+        }
+
+        foreach (var (from, to) in ((int, int)[])[(at, functionStart), (function.Last + 1, stop), .. function.Parameters.Defaults])
+        {
+            if (to > from)
+            {
+                Defer(() => Calls(_text, from, to, null, new Locals(), null));
+            }
+        }
+
+        Directives(body, inner);
+
+        var inside = _module ? frame : Wrapping();
+        var outer = false;
+        _walks.Walk(
+            body,
+            inner,
+            statement => Statement(statement, inner, inside, _module ? hidden : null),
+            begin: () => (outer, _factory) = (_factory, factory),
+            end: () => _factory = outer);
+
+        return stop;
+    }
+
+    /// <summary>
+    /// An AMD factory's <c>return</c> at <paramref name="at"/>: what it returns the module's export, as
+    /// <c>module.exports = ...</c>'s is - a name it declares exported by default, an object's keys each by its own - and what
+    /// it computes besides the module's code. Answers where the next statement begins.
+    /// </summary>
+    private int Factory(int at, int end, ScanFrame frame)
+    {
+        var stop = StatementEnd(at, end);
+        var boundary = _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop;
+        var value = _scan.Next(at);
+
+        if (_scan.IsName(value) && _scan.Next(value) >= boundary && !Reserved.Contains(_scan.Text(value)))
+        {
+            _exported.Add((_scan.Text(value), "default", _scan[at].Line));
+        }
+        else if (_scan.Is(value, "{") && _scan.Bounds(value, boundary).Past >= boundary)
+        {
+            ExportedObject(value, boundary, frame);
+        }
+        else if (value < boundary)
+        {
+            Defer(() => Calls(_text, value, boundary, null, new Locals(), null));
+        }
+
+        return stop;
+    }
+
+    /// <summary>The key of the type <paramref name="frame"/> declares by the name <paramref name="name"/> - the last declared, as JavaScript's last binding of a name wins - where it is the file's top; <see langword="null"/> where it declares none.</summary>
+    private QualifiedName? DeclaredType(ScanFrame frame, string name)
+        => frame.Parent is null && _topKeys.TryGetValue(name, out var keys) && keys.LastOrDefault(key => _extract.Node(key).Kind == CodeNodeKinds.Type) is { } type ? type : null;
+
+    /// <summary>
+    /// The names a constructor function is declared by - <c>function Cart() {}</c>, <c>var Cart = function () {}</c> - each a name
+    /// whose prototype the file writes (<c>Cart.prototype</c>): read once, before the file's statements, so the function is read as
+    /// the type it is.
+    /// </summary>
+    private HashSet<string> Constructors()
+    {
+        var named = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var at = 0; at < _scan.Count; at++)
+        {
+            if (_scan.Is(at, "prototype") && IsMember(_scan, _scan.Previous(at)) && _scan.Previous(_scan.Previous(at)) is var name and >= 0
+                && _scan.IsName(name) && !IsMember(_scan, _scan.Previous(name)))
+            {
+                named.Add(_scan.Text(name));
+            }
+        }
+
+        return named;
+    }
+
+    /// <summary>
+    /// A constructor function, named <paramref name="name"/> at <paramref name="nameAt"/>, of <paramref name="function"/>'s shape: a
+    /// type node over it, as a class is - its members reached by a receiver alone (<see cref="ExtractNode.MembersByReceiver"/>) -
+    /// whose <c>constructor</c> is its body, what that calls its own, and whose prototype's members are its members
+    /// (<see cref="Prototyped"/>). Answers where the next declaration begins.
+    /// </summary>
+    private int Constructed(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, QualifiedName? seenIn)
+    {
+        var key = DeclareType(start, head, function.Last, frame, name, "class", modifiers, marks, signatureEnd: function.Body >= 0 ? function.Body : function.SignatureEnd, seenIn);
+        Callable(start, head, nameAt, "constructor", function, frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name), [], decorators, [], "constructor", seenIn: null, exports: null);
         return function.Last + 1;
     }
 
     /// <summary>
-    /// What an Angular <c>@Component</c>'s or <c>@Directive</c>'s object says of the type of <paramref name="key"/>, among its
-    /// <paramref name="decorators"/>: its <c>selector</c>'s element selectors the type is reached by from markup
-    /// (<see cref="ExtractNode.Selectors"/>); its <c>templateUrl</c> the file that is its template (<see cref="ExtractNode.Templates"/>),
-    /// imported as a page's script is; each of its <c>styleUrls</c> a file imported. An inline <c>template</c> and <c>styles</c> are
-    /// read as no markup and no style sheet.
+    /// What an Angular <c>@Component</c>'s, <c>@Directive</c>'s or <c>@Pipe</c>'s object says of the type of <paramref name="key"/>,
+    /// among its <paramref name="decorators"/> - a decorator an import of <c>@angular/core</c> binds (<see cref="AngularDecorator"/>):
+    /// a component's or a directive's <c>selector</c>'s element selectors, and a pipe's <c>name</c> after a bar, the names the type is
+    /// reached by from markup (<see cref="ExtractNode.Selectors"/>); a component's <c>templateUrl</c> the file that is its template
+    /// (<see cref="ExtractNode.Templates"/>), imported as a page's script is, and its <c>styleUrl</c> and each of its <c>styleUrls</c> a
+    /// file imported. What the object's code reads and the strings it holds are its decorator's call's (<see cref="DecoratorCalls"/>);
+    /// an inline <c>template</c> and <c>styles</c> are read as no markup and no style sheet.
     /// </summary>
     private void Angular(QualifiedName key, List<(int Start, int End)> decorators)
     {
@@ -1802,7 +2166,7 @@ internal sealed class JsReading
             var (names, past) = ChainAt(_scan, _scan.Next(start), end);
             var open = _scan.Next(past);
 
-            if (names.Count == 0 || _scan.Text(names[^1]) is not ("Component" or "Directive") || !_scan.Is(past, "(") || !_scan.Is(open, "{"))
+            if (names.Count == 0 || AngularDecorator([.. names.Select(index => _scan.Text(index))]) is not { } decorator || !_scan.Is(past, "(") || !_scan.Is(open, "{"))
             {
                 continue;
             }
@@ -1820,17 +2184,25 @@ internal sealed class JsReading
 
                 switch (option)
                 {
-                    case "selector" when _scan.Value(valueAt) is { } written:
-                        selectors.AddRange(written.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(part => part.Trim()).Where(Element));
+                    case "selector" when decorator is "Component" or "Directive" && _scan.Value(valueAt) is { } written:
+                        selectors.AddRange(written.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(part => part.Trim()).Where(ExtractNode.IsSelector));
                         break;
 
-                    case "templateUrl" when _scan.Value(valueAt) is { Length: > 0 } url:
+                    case "name" when decorator == "Pipe" && _scan.Value(valueAt) is { } pipe && ExtractNode.IsSelector($"|{pipe}"):
+                        selectors.Add($"|{pipe}");
+                        break;
+
+                    case "templateUrl" when decorator == "Component" && _scan.Value(valueAt) is { Length: > 0 } url:
                         var template = Beside(url);
                         templates.Add(template);
                         Run(template, line, null, null, export: false);
                         break;
 
-                    case "styleUrls" when _scan.Is(valueAt, "["):
+                    case "styleUrl" when decorator == "Component" && _scan.Value(valueAt) is { Length: > 0 } sheet:
+                        Run(Beside(sheet), line, null, null, export: false);
+                        break;
+
+                    case "styleUrls" when decorator == "Component" && _scan.Is(valueAt, "["):
                         foreach (var (itemStart, itemEnd) in ScanCalls.Split(_scan, valueAt + 1, Math.Min(_scan.Bounds(valueAt, pieceEnd).Inner, pieceEnd), null))
                         {
                             if (itemStart < itemEnd && _scan.Value(itemStart) is { Length: > 0 } style)
@@ -1853,16 +2225,30 @@ internal sealed class JsReading
         static string Beside(string path) => path.StartsWith("./", StringComparison.Ordinal) || path.StartsWith("../", StringComparison.Ordinal) ? path : "./" + path;
     }
 
-    /// <summary>Whether <paramref name="selector"/> names an element alone - <c>app-cart</c>, <c>table</c> - and no class, attribute or pseudo-class of one, or a combinator.</summary>
-    private static bool Element(string selector)
-        => selector.Length > 0 && char.IsAsciiLetter(selector[0]) && selector.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
+    /// <summary>
+    /// The Angular decorator the chain <paramref name="written"/> names - <c>Component</c>, <c>Directive</c> or <c>Pipe</c> - by what
+    /// it is: what an import of <c>@angular/core</c> binds its first name to, the export it names or, through the package's namespace,
+    /// the name after it; <see langword="null"/> where it is no import's of that package, a decorator of the same name another
+    /// package or the repository declares among them.
+    /// </summary>
+    private string? AngularDecorator(IReadOnlyList<string> written)
+    {
+        if (!_bindings.TryGetValue(written[0], out var binding) || binding.Specifier != "@angular/core")
+        {
+            return null;
+        }
+
+        var export = written.Count == 1 ? binding.Export : written.Count == 2 && binding.Export is null ? written[1] : null;
+        return export is "Component" or "Directive" or "Pipe" ? export : null;
+    }
 
     /// <summary>
-    /// Angular's decorators - <c>@Component</c>, <c>@Directive</c>, <c>@Injectable</c>, <c>@Pipe</c>, <c>@NgModule</c>, and a
-    /// member's <c>@Input</c> and <c>@Output</c> - metadata the framework reads and the reader reads itself (<see cref="Angular"/>), so
-    /// never a call the repository does not declare.
+    /// Whether the chain <paramref name="written"/> a decorator names is what an import of a package binds - a bare specifier's, no
+    /// path's: a framework's decorator, <c>@Component</c> of <c>@angular/core</c>, a decorator library's - which the repository need
+    /// not declare, so its call asks whether it does (<see cref="ExtractReference.Probe"/>).
     /// </summary>
-    private static readonly HashSet<string> AngularDecorators = new(StringComparer.Ordinal) { "Component", "Directive", "Injectable", "Pipe", "NgModule", "Input", "Output" };
+    private bool Packaged(IReadOnlyList<string> written)
+        => _bindings.TryGetValue(written[0], out var binding) && !(binding.Specifier is "." or ".." || binding.Specifier.StartsWith("./", StringComparison.Ordinal) || binding.Specifier.StartsWith("../", StringComparison.Ordinal));
 
     // ---- Decorators ----
 
@@ -1894,27 +2280,44 @@ internal sealed class JsReading
         return at;
     }
 
-    /// <summary>What each decorator of <paramref name="decorators"/> calls, from the node of <paramref name="key"/>: one written with its arguments a call, one written alone a call of what it names - but an Angular decorator, which is read as the metadata it is (<see cref="Angular"/>), no call.</summary>
+    /// <summary>
+    /// What each decorator of <paramref name="decorators"/> calls, from the node of <paramref name="key"/>: a call of what it names -
+    /// of as many arguments as it is given, of none it says where it is written alone - and what its arguments' code reads and calls
+    /// and the strings it holds, the node's, read whole whatever the decorator is: an Angular <c>@NgModule</c>'s declarations, a
+    /// component's providers and imports among them. A decorator an import of a package binds (<see cref="Packaged"/>) asks whether
+    /// the repository declares it (<see cref="ExtractReference.Probe"/>): a framework's, which is no doubt where it declares none.
+    /// </summary>
     private void DecoratorCalls(QualifiedName key, List<(int Start, int End)> decorators, string? owner)
     {
         foreach (var (start, end) in decorators)
         {
             var (names, past) = ChainAt(_scan, _scan.Next(start), end);
 
-            if (_typescript && names.Count > 0 && AngularDecorators.Contains(_scan.Text(names[^1])))
+            if (names.Count == 0)
             {
-                continue;
-            }
-
-            if (past < end)
-            {
-                Calls(_text, start + 1, end, key, new Locals(), owner);
                 continue;
             }
 
             var written = names.Select(index => _scan.Text(index)).ToList();
+            var open = past;
+            int? arity = null;
+
+            // Its type's arguments are types it names: @Decorator<Options>(...).
+            if (_typescript && _scan.Is(open, "<"))
+            {
+                open = Angle(_scan, open, end);
+                TypeReferences(key, _scan.Next(past), _scan.Previous(open));
+            }
+
+            if (open < end && _scan.Is(open, "("))
+            {
+                var close = Math.Min(_scan.Bounds(open, end).Inner, end);
+                arity = ScanCalls.CallArity(_scan, open, close, _calls);
+                Calls(_text, open + 1, close, key, new Locals(), owner);
+            }
+
             var (name, qualifier) = written.Count == 1 ? Callee(written[0]) : (written[^1], ChainQualifier(written[..^1], null, out _));
-            _extract.Reference(key, CodeEdgeKinds.Calls, name, _scan[names[^1]].Line, qualifier: qualifier);
+            _extract.Reference(key, CodeEdgeKinds.Calls, name, _scan[names[^1]].Line, arity, qualifier, probe: Packaged(written));
         }
     }
 
@@ -2201,6 +2604,7 @@ internal sealed class JsReading
             Summary = ScanComments.Summary(_scan, start),
             Modifiers = [.. modifiers, .. marks],
             SeenIn = seenIn,
+            MembersByReceiver = subKind == "class",
         };
 
     /// <summary>Notes that the node of <paramref name="key"/>, named <paramref name="name"/>, stands at the file's top where <paramref name="frame"/> is the top's: what an export list names.</summary>
@@ -2723,6 +3127,12 @@ internal sealed class JsReading
             _exported.Add((name, "default", _scan[start].Line));
         }
 
+        // A function whose prototype the file writes is a constructor function: the type it is.
+        if (name != "default" && !generator && !modifiers.Contains("async", StringComparer.Ordinal) && _constructors.Contains(name))
+        {
+            return Constructed(start, head, nameAt, name, function, frame, marks, decorators, modifiers, seenIn);
+        }
+
         return Bound(start, head, nameAt, name, function, frame, marks, decorators, modifiers, "function", seenIn, exports: null);
     }
 
@@ -2784,6 +3194,13 @@ internal sealed class JsReading
 
             if (valueAt >= 0 && FunctionAt(valueAt, pieceEnd) is { } function)
             {
+                // A function whose prototype the file writes is a constructor function - an arrow is none - the type it is.
+                if (!function.Arrow && !_scan.Is(function.SignatureEnd, "=>") && _constructors.Contains(name))
+                {
+                    Constructed(begins, header, nameAt, name, function, frame, marks, decorators, named, seenIn);
+                    return index + 1;
+                }
+
                 Bound(begins, header, nameAt, name, function, frame, marks, decorators, named, "function", seenIn, exports: null);
                 return index + 1;
             }
@@ -2795,10 +3212,10 @@ internal sealed class JsReading
             }
 
             // A type Backbone builds by a call of extend on another - `var View = Backbone.View.extend({...})`: a type that
-            // inherits what it extends, the object it is given its members.
+            // inherits what it extends, the objects it is given its members.
             if (valueAt >= 0 && ExtendedAt(valueAt, pieceEnd) is { } extended)
             {
-                Extended(begins, header, nameAt, name, extended.Chain, extended.Open, extended.Close, frame, marks, decorators, named, seenIn);
+                Extended(begins, header, nameAt, name, extended.Chain, extended.Objects, pieceEnd, frame, marks, decorators, named, seenIn);
                 return index + 1;
             }
 
@@ -2924,9 +3341,15 @@ internal sealed class JsReading
             SeenIn = seenIn,
             Exports = exports,
             Extends = extends,
+            MembersByReceiver = extends is not null,
         });
 
-        Registered(key, frame, name);
+        // A member extending a type from outside its body binds no name of its file's: what is called on the type reaches it.
+        if (extends is null)
+        {
+            Registered(key, frame, name);
+        }
+
         var own = function.Own.Where(_typeParameters.Add).ToList();
 
         try
@@ -4786,56 +5209,19 @@ internal sealed class JsReading
             : (word, null);
 
     /// <summary>
-    /// The rules each JSX attribute's string of the markup <paramref name="token"/> names, as markup's own class and id do
-    /// (<see cref="MarkupDialect.Read"/>): a <c>className</c> or <c>class</c> a use of each class of its list, an <c>id</c> a use
-    /// of the id, each looked for among rules alone. The attribute's name is read where it stands, before the string's quote -
-    /// a few characters, by position; a value a hole writes, or an attribute of another name, none.
+    /// The rules each JSX attribute's string of the markup <paramref name="token"/> names, by the one rule of markup's class and id
+    /// (<see cref="MarkupDialect.Selected"/>, JSX's: a <c>className</c> or <c>class</c> a use of each class of its list, an
+    /// <c>id</c> a use of the id), each looked for among rules alone; the attribute's name the whole one its lexer read before the
+    /// string (<see cref="ScannedText.MarkupStrings"/>), so <c>data-id</c> is no <c>id</c>. A value a hole writes, or an attribute of
+    /// another name, none.
     /// </summary>
     private void Selects(ScannedText scan, ScanToken token, Func<QualifiedName> from)
     {
-        var source = scan.Source;
-
-        foreach (var (value, start, _, line) in scan.MarkupStrings(token))
+        foreach (var (name, value, _, _, line) in scan.MarkupStrings(token))
         {
-            var at = start - 1;
-
-            if (at < 0 || source[at] is not ('"' or '\''))
+            foreach (var selector in MarkupDialect.Jsx.Selected(name, value))
             {
-                continue;
-            }
-
-            for (at--; at >= 0 && char.IsWhiteSpace(source[at]); at--)
-            {
-            }
-
-            if (at < 0 || source[at] != '=')
-            {
-                continue;
-            }
-
-            for (at--; at >= 0 && char.IsWhiteSpace(source[at]); at--)
-            {
-            }
-
-            var end = at + 1;
-
-            for (; at >= 0 && (char.IsAsciiLetterOrDigit(source[at]) || source[at] is '_' or '$'); at--)
-            {
-            }
-
-            switch (source.Slice(at + 1, end))
-            {
-                case "className" or "class":
-                    foreach (var named in MarkupDialect.Classes(value))
-                    {
-                        _extract.Reference(from(), CodeEdgeKinds.Uses, $".{named}", line, qualifier: MarkupDialect.Selector);
-                    }
-
-                    break;
-
-                case "id" when MarkupDialect.Plain(value) is { } id:
-                    _extract.Reference(from(), CodeEdgeKinds.Uses, $"#{id}", line, qualifier: MarkupDialect.Selector);
-                    break;
+                _extract.Reference(from(), CodeEdgeKinds.Uses, selector, line, qualifier: MarkupDialect.Selector);
             }
         }
     }

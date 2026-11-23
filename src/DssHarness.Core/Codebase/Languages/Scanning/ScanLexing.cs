@@ -583,4 +583,7 @@ internal sealed record ScanLiteralRead(long End, IReadOnlyList<ScanLiteralPart> 
 
     /// <summary>Where the name of each tag it opens stands, where it is a JSX element; <see langword="null"/> where it is a string.</summary>
     public IReadOnlyList<(long Start, long End)>? Tags { get; init; }
+
+    /// <summary>Where it is a JSX element, where the name of the attribute each of its parts is the value of stands (<see cref="ScanLiteral.Names"/>); <see langword="null"/> where it is a string.</summary>
+    public IReadOnlyList<(long Start, long End)>? Names { get; init; }
 }

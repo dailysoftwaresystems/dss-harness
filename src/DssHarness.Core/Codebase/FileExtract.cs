@@ -582,6 +582,16 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public bool Part { get; init; }
 
     /// <summary>
+    /// Whether members are reached from their own code by a receiver alone - <c>this</c> - and never by a name written alone,
+    /// as a JavaScript class's are: said by a type of its own members, and by a member a file adds to a type from outside its
+    /// body (<see cref="Extends"/>) of the members of the scope it is declared in. A name such members' code writes by itself
+    /// is looked for past that scope, its bases passed over too, so a method's call of a function of the module that shares
+    /// its name reaches the function, not the method.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MembersByReceiver { get; init; }
+
+    /// <summary>
     /// The type a value of it is declared with - a field's, a property's, an event's - as a type qualifier names it, where
     /// the code says one: what a call on that value is looked for through.
     /// </summary>
@@ -624,12 +634,13 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public IReadOnlyList<QualifiedName>? SuffixOf { get; init; }
 
     /// <summary>
-    /// The element selectors a component declares itself by, as Angular's <c>@Component</c> writes them -
-    /// <c>app-cart</c> - each the name of an element of markup, so a tag markup writes (<c>&lt;app-cart&gt;</c>)
-    /// instantiates the component whose selector it is: a name the repository finds the declaration by, as its own
-    /// name, from markup alone - for no code's name holds a dash, nothing code writes reaches one. Only a selector
-    /// that names an element alone is kept; a class's, an attribute's or a combinator's names none.
-    /// <see langword="null"/> where it declares none.
+    /// The names markup reaches a declaration by, each a name the repository finds it by as its own, from markup alone: an
+    /// element selector a component or a directive declares itself by, as Angular's <c>@Component</c> and <c>@Directive</c>
+    /// write them - <c>app-cart</c>, an element's name with a dash, so a tag markup writes (<c>&lt;app-cart&gt;</c>)
+    /// instantiates the component whose selector it is - and a pipe's name after a bar, as a <c>@Pipe</c>'s <c>name</c> gives
+    /// it - <c>|money</c>, so a template's <c>{{ total | money }}</c> instantiates the pipe. No code's name holds a dash or a bar,
+    /// so nothing code writes reaches one (<see cref="IsSelector"/>). A selector naming a class, an attribute or a combinator, or
+    /// an element with no dash, names none. <see langword="null"/> where it declares none.
     /// </summary>
     public IReadOnlyList<string>? Selectors { get; init; }
 
@@ -672,10 +683,19 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(id => string.IsNullOrWhiteSpace(id.Whole()))) ? "a node its names are written onto is empty, or it names none"
             : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
             : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
-            : Selectors is { } selectors && (selectors.Count == 0 || selectors.Any(string.IsNullOrWhiteSpace)) ? "an element selector it declares is empty, or it declares none"
+            : Selectors is { } selectors && (selectors.Count == 0 || !selectors.All(IsSelector)) ? "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"
             : Templates is { } templates && (templates.Count == 0 || templates.Any(string.IsNullOrWhiteSpace)) ? "a template it names is empty, or it names none"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
+
+    /// <summary>
+    /// Whether <paramref name="selector"/> is one a declaration may be reached by from markup (<see cref="Selectors"/>): an element's
+    /// name - an ASCII letter, then letters, digits and dashes - holding a dash; or a bar, then a name of ASCII letters, digits,
+    /// <c>_</c> and <c>$</c> that does not begin with a digit.
+    /// </summary>
+    internal static bool IsSelector(string selector)
+        => selector is ['|', var first, .. var rest] ? (char.IsAsciiLetter(first) || first is '_' or '$') && rest.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '$')
+            : selector.Length > 0 && char.IsAsciiLetter(selector[0]) && selector.Contains('-', StringComparison.Ordinal) && selector.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
 }
 
 /// <summary>One named container a file's declarations are put in.</summary>
@@ -862,7 +882,8 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
     /// <summary>
     /// Whether it asks whether a declaration is there rather than naming one the code depends on: where none is, that is no doubt -
     /// never counted an external callee of the node it is made from, so it makes no node unsure - as a method's name asked of its
-    /// type's bases is in a language where no word says it overrides; where one is, an edge is made as of any reference.
+    /// type's bases is in a language where no word says it overrides, and a decorator an import of a package binds is, which is that
+    /// package's where the repository declares none; where one is, an edge is made as of any reference.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Probe { get; init; }

@@ -108,6 +108,15 @@ internal static class JsLexer
         /// <summary>Its attributes' strings.</summary>
         public List<ScanLiteralPart> Strings { get; } = [];
 
+        /// <summary>Where the name of the attribute each of its strings is the value of stands, by the string's place among <see cref="Strings"/>: an empty stretch where no name and <c>=</c> stand before it.</summary>
+        public List<(long Start, long End)> Names { get; } = [];
+
+        /// <summary>Where the last name read of its tag stands, while the tag is read: an attribute's, whose string may follow it.</summary>
+        public (long Start, long End) Attribute { get; set; }
+
+        /// <summary>Whether an <c>=</c> follows <see cref="Attribute"/>, so a string read next is its value.</summary>
+        public bool Assigned { get; set; }
+
         /// <summary>Where each run of code its braces hold begins and ends, none empty.</summary>
         public List<(long Start, long End)> Spans { get; } = [];
 
@@ -657,6 +666,8 @@ internal static class JsLexer
 
                     element.At = at;
                     element.Part = ElementPart.Attributes;
+                    element.Attribute = (at, at);
+                    element.Assigned = false;
                     return false;
 
                 case ElementPart.Attributes:
@@ -664,19 +675,37 @@ internal static class JsLexer
                     {
                         if (text[at] == '{')
                         {
+                            element.Assigned = false;
                             Begin(element, at + 1, readings);
                             return false;
                         }
 
                         if (text[at] is '\'' or '"')
                         {
-                            // An attribute's string: a string the element holds.
+                            // An attribute's string: a string the element holds, with the name of the attribute it is the value of.
                             var close = text.Find(text[at], at + 1, end);
                             element.Strings.Add(Part(at + 1, close < 0 ? end : close));
+                            element.Names.Add(element.Assigned ? element.Attribute : (at, at));
+                            element.Assigned = false;
                             at = close < 0 ? end : close + 1;
                         }
                         else
                         {
+                            // An attribute's name - data-id, xlink:href - read whole, an = after it, and nothing else between them and its string.
+                            if (IsAttributeName(text[at]))
+                            {
+                                element.Attribute = at > 0 && IsAttributeName(text[at - 1]) && element.Attribute.End == at ? (element.Attribute.Start, at + 1) : (at, at + 1);
+                                element.Assigned = false;
+                            }
+                            else if (text[at] == '=')
+                            {
+                                element.Assigned = element.Attribute.End > element.Attribute.Start;
+                            }
+                            else if (!char.IsWhiteSpace(text[at]))
+                            {
+                                element.Assigned = false;
+                            }
+
                             element.SelfClosing = text[at] == '/' && at + 1 < end && text[at + 1] == '>';
                             at++;
                         }
@@ -736,10 +765,13 @@ internal static class JsLexer
             element.At = Math.Min(close + 1, element.End);
         }
 
+        /// <summary>Whether <paramref name="character"/> is one an attribute's name is written with in JSX: a name's, a dash, a namespace's colon.</summary>
+        private static bool IsAttributeName(char character) => IsNamePart(character) || character is '-' or ':';
+
         /// <summary>
         /// <paramref name="element"/>, read: its token, the name of each tag it opens, and its strings - markup is no
-        /// string, and what it holds as strings are its attributes' values, its text and tags none of them - kept for the
-        /// scans of its code; answers that it is read.
+        /// string, and what it holds as strings are its attributes' values, its text and tags none of them - each with the
+        /// name of the attribute it is the value of, kept for the scans of its code; answers that it is read.
         /// </summary>
         private bool Read(ElementReading element)
         {
@@ -750,8 +782,8 @@ internal static class JsLexer
                 Elements[element.Start] = element.Tags;
             }
 
-            KeepLiteral(element.Start, new ScanLiteral(element.Strings, ScanEscapes.Html) { Markup = true });
-            Closes.Keep(element.Start, new ScanLiteralRead(at, element.Strings, element.Spans) { Tags = element.Tags });
+            KeepLiteral(element.Start, new ScanLiteral(element.Strings, ScanEscapes.Html) { Markup = true, Names = element.Names });
+            Closes.Keep(element.Start, new ScanLiteralRead(at, element.Strings, element.Spans) { Tags = element.Tags, Names = element.Names });
             Add(ScanTokenKind.Text, element.Start, at);
             element.At = at;
             return true;
@@ -781,7 +813,7 @@ internal static class JsLexer
                 Elements[start] = [.. tags];
             }
 
-            KeepLiteral(start, new ScanLiteral(read.Parts, ScanEscapes.Html) { Markup = true });
+            KeepLiteral(start, new ScanLiteral(read.Parts, ScanEscapes.Html) { Markup = true, Names = read.Names });
             Add(ScanTokenKind.Text, start, read.End);
             return read.End;
         }

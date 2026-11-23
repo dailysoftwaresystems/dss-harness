@@ -139,6 +139,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     Prototype = node.Prototype,
                     Test = node.Test,
                     Part = node.Part,
+                    MembersByReceiver = node.MembersByReceiver,
                     ValueType = node.ValueType,
                     Extends = node.Extends,
                     SeenIn = node.SeenIn is { } seenIn ? Name("scope", seenIn) : null,
@@ -252,6 +253,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         Prototype = stored.Prototype,
                         Test = stored.Test,
                         Part = stored.Part,
+                        MembersByReceiver = stored.MembersByReceiver,
                         ValueType = stored.ValueType,
                         Extends = stored.Extends,
                         SeenIn = stored.SeenIn is { } seenIn ? Name(seenIn, "scope") : null,
@@ -364,6 +366,9 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool Part { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool MembersByReceiver { get; init; }
 
         public string? ValueType { get; init; }
 

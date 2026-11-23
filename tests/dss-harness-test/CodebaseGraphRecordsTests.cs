@@ -62,6 +62,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Null((sound with { Nodes = [Node with { Summary = "An \U0001F600 A." }] }).Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Exports = ["default"] }], AddressRoots = [new ExtractAddressRoot("pkg", "src/index.ts") { Whole = true }] }).Problem("toy", 3));
         Assert.Null((sound with { Literals = LiteralRow.Table(new LiteralRow("held by a node", 2, "toy:A.b"), new LiteralRow("held by the file", 3)) }).Problem("toy", 3));
+        Assert.Null((sound with { Nodes = [Node with { Selectors = ["app-cart", "x-1", "|money", "|$x_2"] }] }).Problem("toy", 3));
 
         var wrong = new (FileExtract Extract, string Problem)[]
         {
@@ -89,6 +90,11 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { Exports = [] }] }, "a name it is exported by is empty, or it lists none"),
             (sound with { Nodes = [Node with { Exports = ["default", " "] }] }, "a name it is exported by is empty, or it lists none"),
             (sound with { Nodes = [Node with { Exports = ["x\uD83D"] }] }, "a surrogate cut from its pair"),
+            (sound with { Nodes = [Node with { Selectors = ["cart"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = ["app-cart", ".cart"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = ["|"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = ["|1x"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = [] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
             (sound with { Nodes = [Node with { ValueType = "x\uD83D" }] }, "a surrogate cut from its pair"),
             (sound with { Nodes = [Node, Node with { Id = "toy:B", Parent = "toy:Z" }] }, "is declared inside 'toy:Z', which it holds no node of"),
             (sound with { Nodes = [Node with { End = 2 }, Node with { Id = "toy:B", Start = 2, End = 3, Parent = "toy:A" }] }, "whose lines do not hold it"),

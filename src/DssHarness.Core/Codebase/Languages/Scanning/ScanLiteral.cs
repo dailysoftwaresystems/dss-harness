@@ -86,6 +86,13 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     public bool Markup { get; init; }
 
     /// <summary>
+    /// Where it is <see cref="Markup"/>, where the name of the attribute each part is the value of stands, by the part's place
+    /// among <see cref="Parts"/> - an empty stretch where no name and <c>=</c> stand before it - as its lexer read the tag;
+    /// <see langword="null"/> for a string.
+    /// </summary>
+    public IReadOnlyList<(long Start, long End)>? Names { get; init; }
+
+    /// <summary>
     /// How many characters of white space each of its lines begins with that are no part of its value - a heredoc's
     /// closing indentation, which PHP takes off every line - none past that many, and none of a part's that begins after
     /// a hole on its line.

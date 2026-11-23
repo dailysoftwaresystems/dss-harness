@@ -1,3 +1,6 @@
+using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
+
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
@@ -15,11 +18,14 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>&lt;style&gt;</c> by the style sheet's, in the syntax its <c>lang</c> or <c>type</c> names (<c>text/less</c>,
 /// <c>text/x-scss</c>), each embedded as every markup embeds code (<see cref="EmbeddedCode"/>), so its declarations carry
 /// the lines they stand on and nothing its reader saw is lost.
-/// A file whose content is an Angular template - an element's <c>(click)</c>, <c>[x]</c>, <c>*ngFor</c> or <c>#x</c>, a control-flow
-/// block in its text - is read as one (<see cref="MarkupDialect.Angular"/>, <see cref="MarkupTemplates"/>): its component tags - the
-/// selectors of the components declared elsewhere - instantiates, each attribute's and text's code read by the JavaScript reader as
-/// Angular's compiler writes it, each name it reads by itself a member of the component that names this file its template by
-/// <c>templateUrl</c> (<see cref="ExtractNode.Templates"/>), which the linker joins.
+/// A file whose content is an Angular template - an element's <c>(click)</c>, <c>[x]</c>, <c>*ngFor</c> or <c>#x</c>, a <c>{{ }}</c>
+/// or a control-flow block in its text - is read as one, its elements closing as Angular closes them (<see cref="MarkupDialect.Angular"/>,
+/// <see cref="MarkupTemplates"/>): its component tags - the selectors of the components declared elsewhere - instantiates, each
+/// pipe its expressions name an instantiates of the pipe by its name, each attribute's and text's code read by the JavaScript reader
+/// as Angular's compiler writes it, each name it reads by itself a member of the component that names this file its template by
+/// <c>templateUrl</c> (<see cref="ExtractNode.Templates"/>), which the linker joins. A file whose texts or attribute values write a
+/// tag of a template engine the graph does not read - Jinja's <c>{% %}</c>, Handlebars' <c>{{# }}</c> - is read as a page, each
+/// of the engine's tags marked dynamic (<see cref="OtherEngine"/>).
 /// </summary>
 public sealed class HtmlExtractor : ICodeGraphExtractor
 {
@@ -51,14 +57,16 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on; a file whose content is an Angular template - an element's (click), [x], *ngFor or #x, a {{ }} or an @if or @for block in its text - read as one: its component tags, the selectors of components declared elsewhere, as instantiates, and each attribute's, mustache's and block's code read by the JavaScript reader as Angular compiles it - (click)=\"save()\" a call of save, [x] and {{ }} what their expressions read, *ngFor's list and @for's list with their aliases, #x a name declared - each name read by itself a member of the component whose templateUrl names the file, joined where a TypeScript file declares it",
+        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it - a class a {{ }} writes none - a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on; a file whose content is an Angular template - an element's (click), [x], *ngFor or #x, a {{ }} or a control-flow block in its text, no script's or style's text among them - read as one, a component's self-closing tag closed as Angular closes it: its component tags, the selectors of components declared elsewhere, as instantiates, but ng-container, ng-template and ng-content, and each attribute's, mustache's and block's code read by the JavaScript reader as Angular compiles it - (click)=\"save()\" statements its event runs, [x], bind-x and {{ }} what their expressions read, a {{ }} in an attribute's value among them, [class.x] a use of the rule .x besides, each pipe - {{ total | money: 'USD' }} - an instantiates of the pipe whose @Pipe name it is, its operand and its arguments code, the pipes Angular's common package declares (date, async, currency and the rest) none; a structural directive's microsyntax - *ngFor's let item of items, index as i and trackBy: trackItem, *ngIf's user$ | async as user and else, any *x - its expressions code and its let and as names its own; @if with its as, @for with its track, its let names and $index and the rest of its context, @switch, @case, @defer's when conditions, @placeholder, @loading, @error, and @let, whose name is the view's; #x and ref-x a name declared over the whole view its element stands in - the template, an ng-template's content, an element a structural directive is written on, a block's body - and let-x one over what its ng-template holds - each name read by itself a member of the component whose templateUrl names the file, joined where a TypeScript file declares it; a file whose texts or attribute values write a tag of a template engine the graph does not read - {% %} and {# #} (Jinja, Django, Liquid, Twig), {{# }}, {{/ }}, {{^ }}, {{> }} and {{!-- --}} (Handlebars, Mustache) - read as a page, every tag of the engine, its {{ }} among them, marked dynamic",
         [
             "a style attribute's declarations: no rule of their own",
             "a script of another type - a JSON block, an import map, a template a framework reads: its text read as no code",
             "a style element of another syntax (lang=\"stylus\", a template's type): its text read as no style sheet",
             "an element with no id and no landmark tag: no node of its own, its lines its enclosing section's",
             "an href or src that names no file of the tree - another site's, a rooted path, an anchor, data: - no import of it",
-            "an Angular template no component names by templateUrl, and one written in a file of another extension: its names are bound to no component, so a call or a read its code makes by itself reaches nothing; a template of another engine in an .html file (Handlebars, Jinja): its {{ }} read as a framework's expressions, bound to no component alike",
+            "an Angular template no component names by templateUrl, and one written in a file of another extension: its names are bound to no component, so a call or a read its code makes by itself reaches nothing; a template of another engine that writes no tag but {{ }}: read as Angular's, bound to no component alike",
+            "an Angular @defer's on triggers, which name an event and a template's element, and a structural directive's context keys (index in index as i): no code read",
+            new CodeGraphLimit("a template of another engine in an .html file - Jinja, Django, Liquid, Twig, Handlebars, Mustache - as a tag only such an engine writes tells it: read as a page, its sections, classes and ids a page's, its engine's tags read as no code - each marked dynamic, the names it writes bound to nothing") { Signs = [OtherEngine] },
             "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why",
         ])
     {
@@ -78,8 +86,18 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         }
 
         var markup = MarkupText.Read(text, MarkupDialect.Html.ClosesAsHtml);
+
+        // A template of an engine the graph does not read is a page whose engine's tags are marked; an Angular template is read
+        // again as Angular closes its elements, a component's /> closing it.
+        var engine = Engine(markup);
+        var angular = engine.Count == 0 && Angular(markup);
+
+        if (angular)
+        {
+            markup = MarkupText.Read(text, MarkupDialect.Angular.ClosesAsHtml, MarkupDialect.Angular.ClosesSelf);
+        }
+
         var elements = markup.Elements;
-        var angular = Angular(markup);
         var lineCount = input.Lines.Count;
         var ids = new ExtractIds();
         var nodes = new List<ExtractNode>();
@@ -187,23 +205,86 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         // each element's references its own section's.
         if (angular && MarkupTemplates.Read(markup, MarkupDialect.Angular, body.Id, references, null, element => holders[element]) is { Count: > 0 } regions)
         {
-            embedded.Add(MarkupTemplates.Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript: false)));
+            embedded.Add(MarkupTemplates.Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript: false), MarkupDialect.Angular));
         }
 
-        return EmbeddedCode.Merged(new FileExtract([.. nodes]) { References = references, Imports = imports }, embedded);
+        return EmbeddedCode.Merged(new FileExtract([.. nodes]) { References = references, Imports = imports, Dynamic = engine }, embedded);
     }
 
     /// <summary>
     /// Whether the markup is an Angular template, as its content says: an element writes one of Angular's attributes - an event's
-    /// <c>(click)</c>, a binding's <c>[x]</c>, a loop's <c>*ngFor</c>, a name's <c>#x</c> - its text a control-flow block or a
-    /// <c>{{ }}</c>, which every framework's template writes and this reader reads as a framework's expression. A component's
-    /// <c>templateUrl</c> names it its template at link time wherever it stands (<see cref="ExtractNode.Templates"/>); its content is
-    /// what tells its reader, which sees the one file.
+    /// <c>(click)</c>, a binding's <c>[x]</c>, a structural directive's <c>*ngFor</c>, a name's <c>#x</c> - its text a control-flow
+    /// block or a <c>{{ }}</c>, which every framework's template writes and this reader reads as Angular's expression where no tag of
+    /// another engine says otherwise (<see cref="Engine"/>); a script's or a style's text none of them (<see cref="MarkupText.Texts"/>).
+    /// A component's <c>templateUrl</c> names it its template at link time wherever it stands (<see cref="ExtractNode.Templates"/>); its
+    /// content is what tells its reader, which sees the one file.
     /// </summary>
     private static bool Angular(MarkupText markup)
         => markup.Elements.Any(element => element.Attributes.Any(attribute => MarkupDialect.Angular.Role(attribute) != MarkupRole.None))
-            || markup.Texts.Any(text => !markup.InsideRaw(text.Start, text.End) && markup.Text.Find("{{", text.Start, text.End) >= 0)
+            || markup.Texts.Any(text => markup.Text.Find("{{", text.Start, text.End) >= 0)
             || MarkupDialect.Angular.Blocks(markup).Any();
+
+    /// <summary>The kind of the marks a template of another engine's tags make: the sign of the limit that says such a file is not read as a template.</summary>
+    internal const string OtherEngine = "template-engine";
+
+    /// <summary>
+    /// A tag only a template engine the graph does not read writes: a statement's or a comment's - Jinja's, Django's, Liquid's,
+    /// Twig's <c>{% %}</c> and <c>{# #}</c> - or a section's, a partial's or a comment's - Handlebars' and Mustache's <c>{{# }}</c>,
+    /// <c>{{/ }}</c>, <c>{{^ }}</c>, <c>{{&gt; }}</c>, <c>{{!-- --}}</c>.
+    /// </summary>
+    private static readonly Regex EngineTag = LinearRegex.Compile(@"\{%[\s\S]*?%\}|\{#[\s\S]*?#\}|\{\{[#/^>][\s\S]*?\}\}|\{\{!--[\s\S]*?--\}\}");
+
+    /// <summary>Every tag such an engine writes: its statements, its comments, and its expressions, <c>{{ }}</c>.</summary>
+    private static readonly Regex EngineAny = LinearRegex.Compile(@"\{%[\s\S]*?%\}|\{#[\s\S]*?#\}|\{\{[\s\S]*?\}\}");
+
+    /// <summary>
+    /// Where the markup is a template of an engine the graph does not read - its texts or its attributes' values write a tag only
+    /// such an engine writes (<see cref="EngineTag"/>) - a mark of each tag of the engine it writes, its expressions among them, in
+    /// the order written: what the graph cannot bind, so the file is searched by text and its limit said
+    /// (<see cref="OtherEngine"/>); none for any other markup, which is read as a page or as an Angular template.
+    /// </summary>
+    private static List<ExtractDynamic> Engine(MarkupText markup)
+    {
+        var elements = markup.Elements;
+        var texts = markup.Texts;
+
+        if (!texts.Any(text => EngineTag.IsMatch(markup.Text.Slice(text.Start, text.End)))
+            && !elements.Any(element => element.Attributes.Any(attribute => EngineTag.IsMatch(attribute.Value))))
+        {
+            return [];
+        }
+
+        var marks = new List<ExtractDynamic>();
+        var next = 0;
+
+        void Mark(int line) => marks.Add(new ExtractDynamic(line, "a tag of a template engine the graph does not read: the names it writes are bound to nothing") { Kind = OtherEngine });
+
+        for (var at = 0; at <= elements.Count; at++)
+        {
+            var start = at < elements.Count ? elements[at].Start : long.MaxValue;
+
+            for (; next < texts.Count && texts[next].Start < start; next++)
+            {
+                foreach (Match tag in EngineAny.Matches(markup.Text.Slice(texts[next].Start, texts[next].End)))
+                {
+                    Mark(markup.LineAt(texts[next].Start + tag.Index));
+                }
+            }
+
+            if (at < elements.Count)
+            {
+                foreach (var attribute in elements[at].Attributes)
+                {
+                    for (var tags = EngineAny.Count(attribute.Value); tags > 0; tags--)
+                    {
+                        Mark(attribute.Line);
+                    }
+                }
+            }
+        }
+
+        return marks;
+    }
 
     /// <summary>The name a section is given: its id, where it has one; its tag otherwise.</summary>
     private static string SectionName(MarkupElement element)

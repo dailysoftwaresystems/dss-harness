@@ -37,7 +37,7 @@ public sealed class VueExtractor : ICodeGraphExtractor
     public string Language => "vue";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".vue");
@@ -106,7 +106,7 @@ public sealed class VueExtractor : ICodeGraphExtractor
         if (blocks.FirstOrDefault(block => block.Name == "template") is { } template && template.Attribute("src") is null && template.Attribute("lang") is null or "html"
             && MarkupTemplates.Read(markup, MarkupDialect.Vue, component.Id, references, template) is { Count: > 0 } regions)
         {
-            embedded.Add(MarkupTemplates.Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript)));
+            embedded.Add(MarkupTemplates.Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript), MarkupDialect.Vue));
         }
 
         if (scripts.Count > 0)

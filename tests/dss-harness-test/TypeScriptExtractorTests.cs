@@ -842,6 +842,71 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.Null(Node(extract, "typescript:src/cart.component.ts.HighlightDirective").Selectors);
     }
 
+    /// <summary>
+    /// Angular's metadata is read where the decorator is what an import of <c>@angular/core</c> binds: a pipe's <c>name</c> a name it
+    /// is reached by after a bar, a component's element selectors each with a dash - a dashless one names no custom element - and its
+    /// <c>styleUrl</c> a file imported; and every decorator's arguments are read whatever it is, an <c>@NgModule</c>'s among them,
+    /// its own call asked of the repository where a package's import binds it.
+    /// </summary>
+    [Fact]
+    public void AngularsMetadata_IsReadByWhatTheDecoratorIs_AndEveryDecoratorsArgumentsAreCode()
+    {
+        var extract = Read("src/app.module.ts", """
+            import { Component, NgModule, Pipe } from '@angular/core';
+
+            const routes = [];
+            function makeCart(r) { return r; }
+
+            @Pipe({ name: 'money' })
+            export class MoneyPipe {}
+
+            @Component({ selector: 'cart, app-cart', templateUrl: './cart.html', styleUrl: './cart.css' })
+            export class CartComponent {}
+
+            @NgModule({ providers: [makeCart(routes)] })
+            export class AppModule {}
+            """);
+        var module = "typescript:src/app.module.ts.AppModule";
+
+        Assert.Equal(["|money"], Node(extract, "typescript:src/app.module.ts.MoneyPipe").Selectors);
+        Assert.Equal(["app-cart"], Node(extract, "typescript:src/app.module.ts.CartComponent").Selectors);
+        Assert.Equal(["./cart.html", "./cart.css"], extract.Imports.Where(import => import.Form == CodeImportForms.Relative).Select(import => import.Target));
+        Assert.Equal(
+            [("makeCart", (int?)1, false), ("NgModule", 1, true)],
+            extract.References.Where(reference => reference.From == module && reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Arity, reference.Probe)));
+        Assert.Equal(["routes"], extract.References.Where(reference => reference.From == module && reference.Kind == CodeEdgeKinds.Uses).Select(reference => reference.Name));
+    }
+
+    /// <summary>
+    /// A decorator named as one of Angular's that no import of <c>@angular/core</c> binds - vue-property-decorator's
+    /// <c>@Component</c> - is a call of what it names and no metadata; a member's decorator a call too, and one the repository's
+    /// import binds asks nothing of it.
+    /// </summary>
+    [Fact]
+    public void ADecoratorOfAnotherPackage_IsACallOfWhatItNames_AndNoMetadata()
+    {
+        var extract = Read("src/panel.ts", """
+            import { Component } from 'vue-property-decorator';
+            import { Input } from '@angular/core';
+            import { track } from './metrics';
+
+            @Component({ selector: 'x-panel' })
+            @track('panel')
+            export class Panel {
+              @Input() items = [];
+            }
+            """);
+        var panel = "typescript:src/panel.ts.Panel";
+
+        Assert.Null(Node(extract, panel).Selectors);
+        Assert.Equal(
+            [("Component", (int?)1, true), ("track", 1, false)],
+            extract.References.Where(reference => reference.From == panel && reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Arity, reference.Probe)));
+        Assert.Equal(
+            [("Input", (int?)0, true)],
+            extract.References.Where(reference => reference.From == $"{panel}.items" && reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Arity, reference.Probe)));
+    }
+
     private static FileExtract Read(string path, string text) => new TypeScriptExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

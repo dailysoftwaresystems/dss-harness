@@ -1858,6 +1858,39 @@ public sealed class CodeGraphLinkerTests
             null,
             File("Views/_ViewImports.cshtml", [], imports: [Import(CodeImportForms.Directory, "Shop.Web")]) with { Language = "razor" });
 
+        // A declaration's selectors, names it is found by as its own: one come that the reference names.
+        reader = "t:Go";
+        Case(
+            "a declaration's selectors",
+            [File("use.t", [go], [Ref("Go", CodeEdgeKinds.Instantiates, "x-cart")])],
+            File("cart.t", [Type("Cart")]),
+            File("cart.t", [Type("Cart") with { Selectors = ["x-cart"] }]));
+
+        // The templates a declaration names: a template's own name, read on the declaration that names its file its template.
+        reader = "t:Body";
+        Case(
+            "the templates a declaration names",
+            [File("cart.t", [Member("Body", 0)], [Call("Body", "Save", 0, new ExtractQualifier(CodeQualifierKinds.This))])],
+            File("comp.t", [Type("Comp"), Member("Comp.Save", 0) with { Parent = "t:Comp" }]),
+            File("comp.t", [Type("Comp") with { Templates = ["./cart.t"] }, Member("Comp.Save", 0) with { Parent = "t:Comp" }]));
+
+        // Whether a type's members are reached by a receiver alone: its scope passed over by a name its member writes alone.
+        reader = "t:lib.Cart.Go";
+        Case(
+            "whether a type's members are reached by a receiver alone",
+            [File("b.t", [Member("lib.Cart.Go", 0), Member("lib.Cart.Run", 0)], [Call("lib.Cart.Go", "Run", 0)]), File("c.t", [Member("lib.Run", 0)])],
+            File("a.t", [Type("lib.Cart")]),
+            File("a.t", [Type("lib.Cart") with { MembersByReceiver = true }]));
+
+        // Whether a member added to a type from outside its body is reached by a receiver alone: the scope it is declared in passed over.
+        reader = "t:lib.X.Go";
+        var outside = new ExtractScope("lib.X", Open: true) { Parent = QualifiedName.Of("lib") };
+        Case(
+            "whether a member added from outside its type is reached by a receiver alone",
+            [File("b.t", [Member("lib.X.Go", 0)], [Call("lib.X.Go", "Run", 0)], scopes: [outside]), File("c.t", [Member("lib.Run", 0)])],
+            File("a.t", [Member("lib.X.Run", 0) with { Extends = "X" }]),
+            File("a.t", [Member("lib.X.Run", 0) with { Extends = "X", MembersByReceiver = true }]));
+
         // The keys' join: a key come that a member's name and a literal name, each now a use of it.
         reader = "t:Reader";
         Case(
@@ -1867,6 +1900,39 @@ public sealed class CodeGraphLinkerTests
             new CodeGraphFile("app.json", "json", Extract([new ExtractNode("json:app.json#timeout", CodeNodeKinds.Member, "timeout", "timeout", 1, 1, "timeout") { SubKind = CodeSubKinds.Key }])));
 
         return cases;
+    }
+
+    /// <summary>
+    /// A member extending a type of a name several types are - none an import or the member's scopes name - reads its own
+    /// <c>this</c> on each of them, never on the first alone: a member one of them declares is found unique, never exact.
+    /// </summary>
+    [Fact]
+    public void AMemberExtendingATypeSeveralAreNamed_ReadsItsThisOnEachOfThem()
+    {
+        var linked = Link(
+            File("lib/w.t", [Type("lib.Widget"), Member("lib.Widget.Draw", 0) with { Parent = "t:lib.Widget" }]),
+            File("app/w.t", [Type("app.Widget"), Member("app.Widget.Size", 0) with { Parent = "t:app.Widget" }]),
+            File("ext.t", [Member("Ext.Paint", 0) with { Extends = "Widget" }], [Call("Ext.Paint", "Draw", 0, new ExtractQualifier(CodeQualifierKinds.This)), Call("Ext.Paint", "Size", 0, new ExtractQualifier(CodeQualifierKinds.This))]));
+
+        Assert.Equal(
+            [Edge("t:Ext.Paint", "t:lib.Widget.Draw", CodeEdgeKinds.Calls, CodeConfidences.Unique), Edge("t:Ext.Paint", "t:app.Widget.Size", CodeEdgeKinds.Calls, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.From == "t:Ext.Paint" && edge.Kind == CodeEdgeKinds.Calls));
+    }
+
+    /// <summary>
+    /// A name written alone in a member's code passes over the scope of members reached by a receiver alone - a type's own that
+    /// says so, and the one a member added from outside its type is declared in - and finds what the scope around holds: never
+    /// the member itself, nor its sibling.
+    /// </summary>
+    [Fact]
+    public void ANameWrittenAlone_PassesOverTheScopeOfMembersReachedByAReceiverAlone()
+    {
+        var linked = Link(
+            File("lib.t", [Type("lib.Cart") with { MembersByReceiver = true }, Member("lib.Cart.render", 1) with { Parent = "t:lib.Cart" }, Member("lib.render", 1)], [Call("lib.Cart.render", "render", 1)]),
+            File("ext.t", [Member("lib.Box.paint", 0) with { Extends = "Box", MembersByReceiver = true }, Member("lib.Box.draw", 0) with { Extends = "Box", MembersByReceiver = true }, Member("lib.draw", 0)], [Call("lib.Box.paint", "draw", 0)], scopes: [new ExtractScope("lib.Box", Open: true) { Parent = QualifiedName.Of("lib") }]));
+
+        Assert.Equal([Edge("t:lib.Cart.render", "t:lib.render", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Cart.render"));
+        Assert.Equal([Edge("t:lib.Box.paint", "t:lib.draw", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Box.paint"));
     }
 
     /// <summary>Two files of one path are no tree: the linker refuses them.</summary>

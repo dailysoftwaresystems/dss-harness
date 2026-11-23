@@ -59,13 +59,19 @@ internal sealed class ScannedText
         => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Values(Source) : [];
 
     /// <summary>
-    /// Each string the markup <paramref name="token"/> holds - a JSX element's attribute values - decoded, with where the
-    /// string is written, past its quote and before it, and its line; none of a token that is no markup. The attribute's
-    /// name is read where it stands, before the string, by whoever asks (<see cref="JsReading"/>).
+    /// Each string the markup <paramref name="token"/> holds - a JSX element's attribute values - decoded, with the name of the
+    /// attribute it is the value of as its lexer read the tag (<see cref="ScanLiteral.Names"/>, written as the text writes it -
+    /// <c>className</c>, <c>data-id</c> - and empty where no name and <c>=</c> stand before it), where the string is written,
+    /// past its quote and before it, and its line; none of a token that is no markup.
     /// </summary>
-    public IEnumerable<(string Value, long Start, long End, int Line)> MarkupStrings(ScanToken token)
+    public IEnumerable<(string Name, string Value, long Start, long End, int Line)> MarkupStrings(ScanToken token)
         => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) && literal.Markup
-            ? literal.Parts.Select(part => (ScanLiteral.Decode(Source, part.Start, part.End, literal.Escapes, 0, lineStart: false), part.Start, part.End, part.Line))
+            ? literal.Parts.Select((part, at) => (
+                literal.Names is { } names && at < names.Count ? Source.Slice(names[at].Start, names[at].End) : string.Empty,
+                ScanLiteral.Decode(Source, part.Start, part.End, literal.Escapes, 0, lineStart: false),
+                part.Start,
+                part.End,
+                part.Line))
             : [];
 
     /// <summary>
