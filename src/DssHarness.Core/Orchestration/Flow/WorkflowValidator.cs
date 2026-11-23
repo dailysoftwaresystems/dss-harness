@@ -738,6 +738,12 @@ public static class WorkflowValidator
                         // hand needs no audit, and a hotspot of one touch is every home.
                         Expression(entry, entry.Step.Classes ?? string.Empty, "classes");
                         Expression(entry, entry.Step.Record ?? string.Empty, "record");
+
+                        if (entry.Step.Arms?.Expression is { } listed)
+                        {
+                            Expression(entry, listed, "arms");
+                        }
+
                         Positive(entry.Step.Touches, $"{where}: touches");
                         Positive(entry.Step.Hotspot, $"{where}: hotspot");
 

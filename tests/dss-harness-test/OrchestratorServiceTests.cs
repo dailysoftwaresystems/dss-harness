@@ -148,6 +148,28 @@ public sealed class OrchestratorServiceTests
     }
 
     /// <summary>
+    /// A copy of a commit a run's sweep made in the run's temp and never took away - the run cut off before it could -
+    /// goes with the orchestrator, and so does git's record of it: no worktree of the main checkout is left naming a
+    /// directory the deletion took.
+    /// </summary>
+    [Fact]
+    public async Task AnOrchestratorsDeletion_TakesAwayTheCopiesItsRunsLeft_AndGitsRecordOfThem()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var commit = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        var copy = Path.Combine(kit.Layout.TempDirectory, "sweep-rounds#1.items@0.item-arms");
+        Assert.True((await kit.Harness.WorktreeService.CreateCopyAsync(kit.Main, copy, commit, Token)).Succeeded);
+        Assert.Single(await kit.Harness.GitClient.ListWorktreesAsync(kit.Main, Token), worktree => !worktree.IsMain);
+
+        var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.False(Directory.Exists(copy), $"{copy} was left behind");
+        Assert.DoesNotContain(await kit.Harness.GitClient.ListWorktreesAsync(kit.Main, Token), worktree => !worktree.IsMain);
+    }
+
+    /// <summary>
     /// The mutation workers kept in an agent's worktree are no worktrees below its orchestrator, and nothing a removal
     /// left: the listing says nothing of them, deleting the agent removes them before its worktree, and the orchestrator
     /// then goes with nothing left below it.

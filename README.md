@@ -754,11 +754,15 @@ a reopened-twice class, the one mechanism whichever cause asks. A reopened findi
 the item's, exactly as its plan or its record spells it, and every finding is graded on the route's
 scale: a reviewer whose finding does not is asked again in its own conversation, never sent to the
 recovery. Each item's
-own arms are swept too, beside its review and never holding it: `item-arms` runs the arms the
-builder's answer lists, pending only, on a copy of the commit its fold landed as - made and taken
-away under the main tree's lock, so other items folding at the same time never move the bytes under
-it - and an arm that is not as it should be goes back to the builder as `rearm`, whose fix goes the
-way a rework's does before the sweep runs again on the bytes it landed as. The run's report and its
+own arms are swept too, beside its review: `item-arms` runs the arms the builder's answer lists -
+which the class-closure check holds to the arms its record names, and none where it names none -
+pending only, on a copy of the commit its fold landed as, made and taken away under the main tree's
+lock, so other items folding at the same time never move the bytes under it nor wait for it; a copy
+a stop, a pause or a crash left behind is taken away before the sweep runs again, and deleting the
+orchestrator takes away any left still. Only the item's own release waits for its arms. An arm that
+is violated, survived or unattributed goes back to the builder as `rearm`, whose fix goes the way a
+rework's does before the sweep runs again on the bytes it landed as; any other failure of the sweep
+is the machine's, and goes where the item's other failures go. The run's report and its
 pull request's body carry the counts by which a repository sees whether its rounds converge: each
 item's closing claim - the universe, never a case - the classes its reviews reopened with how often,
 the homes touched often enough to name, and the issues carried to a later round; the self-audit

@@ -766,4 +766,22 @@ public sealed class FlowOthersTests
         Assert.Equal([new FlowClaim(FlowClaims.Main, FlowClaimKind.Read), new FlowClaim("a4", FlowClaimKind.Read)], FlowClaims.Of(agents, new Facts(), "a4"));
         Assert.Equal([new FlowClaim(FlowClaims.Main, FlowClaimKind.Read), new FlowClaim("make", FlowClaimKind.Read)], FlowClaims.Of(agents, new Facts(), agent: null));
     }
+
+    /// <summary>
+    /// A sweep runs on the tree it works in - the main tree, or the agent's its <c>in</c> names - and one whose
+    /// <c>base</c> names a commit, the item's own or one written out, holds no tree at all: it runs on a copy of its own,
+    /// so no fold and no other sweep waits for it.
+    /// </summary>
+    [Fact]
+    public void ASweep_RunsTheTreeItWorksIn_AndOneOfACommit_HoldsNoTree()
+    {
+        var main = new WorkflowStep { Name = "sweep", Type = "check-mutations" };
+        var agents = main with { In = "make" };
+
+        Assert.Equal([new FlowClaim(FlowClaims.Main, FlowClaimKind.Run)], FlowClaims.Of(main, new Facts()));
+        Assert.Equal([new FlowClaim("a4", FlowClaimKind.Run)], FlowClaims.Of(agents, new Facts(), "a4"));
+        Assert.Empty(FlowClaims.Of(main with { Base = "item" }, new Facts()));
+        Assert.Empty(FlowClaims.Of(main with { Base = "0123abc" }, new Facts()));
+        Assert.Empty(FlowClaims.Of(agents with { Base = "item" }, new Facts(), "a4"));
+    }
 }

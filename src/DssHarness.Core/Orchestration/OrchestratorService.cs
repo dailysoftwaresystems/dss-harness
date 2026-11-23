@@ -390,8 +390,15 @@ public sealed class OrchestratorService(
                 ]);
         }));
 
+        // The copies of commits a run's steps make in its directory - a sweep's, on the bytes an item's fold landed as - are
+        // worktrees git records in the main checkout: one a run cut off before taking it away left has gone with the
+        // run's directory, and its record is taken away with it, by the one owner of a copy's removal.
         return outcome.Succeeded
-            ? outcome with { Details = [.. outcome.Details ?? [], .. RemoveEmptyGroup(group)], Facts = new OrchestratorDeleted(name, deleteEvidence) }
+            ? outcome with
+            {
+                Details = [.. outcome.Details ?? [], .. await _worktrees.RemoveCopiesUnderAsync(layout.MainCheckoutRoot, orchestrator.Directory).ConfigureAwait(false), .. RemoveEmptyGroup(group)],
+                Facts = new OrchestratorDeleted(name, deleteEvidence),
+            }
             : outcome;
     }
 

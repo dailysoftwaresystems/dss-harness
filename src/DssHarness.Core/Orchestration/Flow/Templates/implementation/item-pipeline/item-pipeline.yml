@@ -169,6 +169,7 @@ steps:
     in: item-agent
     classes: 'input.item.classes'
     record: 'implement.latest.closure'
+    arms: 'implement.latest.arms'
     base: '{input.orient.startCommit}'
     dependsOn: [verify, mend]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
@@ -297,8 +298,10 @@ steps:
     dependsOn: [checkpoint]
     when: 'input.orient.hasRemote'
     onFailure: '{input.failTo}'
-  # The item's own arms, swept on a copy of the commit its fold landed as - never the main tree as it moves - beside
-  # the review, holding nothing: the checkpoint and its push are done, and no other item waits for this.
+  # The item's own arms - those its builder's answer lists, which each class-closure check holds to the arms its record
+  # names, and none where it lists none - swept on a copy of the commit its fold landed as, never the main tree as it
+  # moves, beside the review, holding no tree: the checkpoint and its push are done, no other item waits for this, and
+  # only the item's own release waits for its arms to stand.
   - name: item-arms
     type: check-mutations
     pending: true
@@ -307,13 +310,15 @@ steps:
     dependsOn: [checkpoint-push]
     when: "input.orient.hasLegs && input.orient.hasMutations && (item-blocked.answer ?? 'continue') != 'skip'"
     onFailure: '{input.failTo}'
-  # An arm that is not as it should be goes back to the builder with the sweep's own words for it, and its change goes
-  # the way a rework's does - tested, checked against the classes, folded and committed - before the sweep runs again
-  # on the bytes the fix landed as.
+  # An arm that is not as it should be - violated (1), survived (2) or unattributed (8) - goes back to the builder with
+  # the sweep's own words for it, and its change goes the way a rework's does - tested, checked against the classes,
+  # folded and committed - before the sweep runs again on the bytes the fix landed as. Every other failure of the sweep
+  # is the machine's, not the arm's, and goes where the pipeline's machine failures go.
   - name: rearm
     on:
       step: item-arms
       outcome: failure
+      codes: [1, 2, 8]
     then: item-arms
     maxVisits: 2
     onFailure: pause
@@ -342,6 +347,7 @@ steps:
         in: item-agent
         classes: 'input.item.classes'
         record: 'implement.latest.closure'
+        arms: 'implement.latest.arms'
         base: '{input.orient.startCommit}'
         dependsOn: [rearm-work, rearm-verify]
         onFailure: '{input.failTo}'
@@ -575,6 +581,7 @@ steps:
             in: item-agent
             classes: 'input.item.classes'
             record: 'implement.latest.closure'
+            arms: 'implement.latest.arms'
             base: '{input.orient.startCommit}'
             dependsOn: [rework, reverify, remend]
             onFailure: '{input.failTo}'

@@ -292,7 +292,11 @@ public sealed class ClassClosureStepRunner(
             TouchesRequired: run.Step.Touches ?? WorkflowStepTypes.DefaultTouches,
             HotspotAt: run.Step.Hotspot ?? WorkflowStepTypes.DefaultHotspot,
             ReopenedTwice: reopened,
-            platform.PathComparison));
+            platform.PathComparison)
+        {
+            // The arms the item's own sweep runs, as the answer lists them beside the record: held to the record's own.
+            ListedArms = FlowStepKeys.NamesOf(run.Step.Arms, run, "arms"),
+        });
 
         var output = new JsonObject
         {

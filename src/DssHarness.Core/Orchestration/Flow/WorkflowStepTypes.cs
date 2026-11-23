@@ -216,7 +216,7 @@ public static class WorkflowStepTypes
             ["base"],
             "red",
             "SweepStepRunner: IMutationLegs through MutationService, over LegRunService, IAgentIsolation.ForExecutionAsync",
-            ["run(tree)"],
+            ["run(tree) where base names no commit"],
             "maxParallelProcesses",
             LegsOutput(arms: true)),
         new(
@@ -299,6 +299,7 @@ public static class WorkflowStepTypes
                 new("in", "the create-agent step whose agent's work it judges - its worktree, its stored streams, its fold - which it waits for through dependsOn") { Required = true },
                 new("classes", "an expression yielding the classes the item's plan declares") { Required = true },
                 new("record", "an expression yielding the closing record the builder answered") { Required = true },
+                new("arms", "the arms the item's own sweep runs, by id, written out or as an expression yielding them - held to the arms the record names, each class's own"),
                 new("base", "the commit the home's touches are counted from"),
                 new("touches", $"how many touches of a home by other work require a home audit; {DefaultTouches} where the file says nothing"),
                 new("hotspot", $"how many touches name a home a hotspot; {DefaultHotspot} where the file says nothing"),
@@ -602,12 +603,18 @@ public static class WorkflowStepTypes
     /// whose lines the digest's ranges number, and where the run's records are.
     /// </summary>
     private static string LegsOutput(bool arms) => ObjectOf(
-        ("passed", Flag),
-        ("exitCode", WholeNumber),
-        ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), ("digest", DigestOutput), ("log", TextOrNull), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
-        ("runDirectory", TextOrNull),
-        ("isolation", IsolationOutput));
+        [
+            ("passed", Flag),
+            ("exitCode", WholeNumber),
+            ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
+            ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), ("digest", DigestOutput), ("log", TextOrNull), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
+            ("runDirectory", TextOrNull),
+            ("isolation", IsolationOutput),
+
+            // A sweep's alone: what it says where its arms named none and nothing was swept, and the copy of a commit
+            // it ran on, with what of it could not be taken away.
+            .. arms ? new[] { ("swept", Text), ("copy", ObjectOrNullOf(("path", Text), ("left", TextOrNull))) } : [],
+        ]);
 
     /// <summary>
     /// What a red entry's digest holds, as a model reads it: the counts by severity and outcome over the whole output,

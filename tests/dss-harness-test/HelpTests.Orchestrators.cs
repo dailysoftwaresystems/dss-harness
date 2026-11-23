@@ -265,7 +265,8 @@ public sealed partial class HelpTests
                 + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
                 + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
                 + "and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
-                + "goes with it and is never counted among what --delete-evidence guards.",
+                + "goes with it and is never counted among what --delete-evidence guards, as does a copy of a commit a run's sweep made "
+                + "in its directory and was cut off before taking away, git's record of it with it.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }

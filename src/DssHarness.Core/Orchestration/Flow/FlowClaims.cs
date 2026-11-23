@@ -100,6 +100,11 @@ public static class FlowClaims
                 case "run(tree)" when !writesTree && tree is not null:
                     claims.Add(new(tree, FlowClaimKind.Run));
                     break;
+                case "run(tree) where base names no commit" when string.IsNullOrEmpty(step.Base) && tree is not null:
+                    // A sweep whose base names a commit runs on a copy of its own, made and taken away under the main
+                    // tree's lock: it holds nothing of any tree, so no fold and no other sweep waits for it.
+                    claims.Add(new(tree, FlowClaimKind.Run));
+                    break;
                 case "write(tree) where its runner says writesTree" when writesTree && tree is not null:
                     claims.Add(new(tree, FlowClaimKind.Write));
                     break;

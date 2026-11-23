@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
@@ -713,6 +714,32 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(
             [("remend", "reverify"), ("reclose-class", "reverify"), ("rehome-audit", "reverify"), ("rereconcile", "reverify"), ("recite", "reverify")],
             [.. revise.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
+    }
+
+    /// <summary>
+    /// The item's own sweep runs the arms its builder's answer lists, pending, on the item's own commit; an arm that is
+    /// not as it should be - violated, survived or unattributed, the verdicts only an arm reaches - goes back to the
+    /// builder by the rearm, and every other failure of the sweep is the machine's. Each class-closure check of the item
+    /// - the first, the rearm's and the review fix's - holds the same answer's arms to the record it judges.
+    /// </summary>
+    [Fact]
+    public void TheItemsSweep_RunsTheArmsItsBuilderLists_AndOnlyAnArmsOwnVerdictsGoBackToTheBuilder()
+    {
+        var items = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items");
+        var sweep = StepAt(items.Steps, "item-arms");
+        var rearm = StepAt(items.Steps, "rearm");
+
+        Assert.Equal(
+            ("check-mutations", true, "implement.latest.arms", SweepStepRunner.ItemBase),
+            (sweep.Type, sweep.Pending, sweep.Arms?.Expression, sweep.Base));
+        Assert.Equal(("item-arms", "failure", "item-arms"), (rearm.On!.Step, rearm.On.Outcome, rearm.Then));
+        Assert.Equal([LegExit.Violated, LegExit.Survived, LegExit.Unattributed], rearm.On.Codes);
+        Assert.Equal(
+            [("class-closure", "implement.latest.arms"), ("rearm-closure", "implement.latest.arms"), ("reclass-closure", "implement.latest.arms")],
+            [
+                .. new[] { StepAt(items.Steps, "class-closure"), StepAt(items.Steps, "rearm", "rearm-closure"), StepAt(items.Steps, "fix", "revise", "reclass-closure") }
+                    .Select(step => (step.Name, step.Arms?.Expression)),
+            ]);
     }
 
     /// <summary>

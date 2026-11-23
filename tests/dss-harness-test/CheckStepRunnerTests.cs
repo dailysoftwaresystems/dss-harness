@@ -1182,6 +1182,47 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// The arms the builder's answer lists for the item's own sweep are the arms its record names, each class's own, and
+    /// no other: an arm the record names that the list leaves out would never be swept, and one listed that no class arms
+    /// would be swept for nothing the record claims - both named in one problem. An arm is one id however its case is
+    /// written, as the registry keeps them; the order is the answer's own; and a record that arms nothing lists nothing.
+    /// </summary>
+    [Fact]
+    public void TheArmsTheAnswerListsForTheItemsSweep_AreTheArmsItsRecordNames()
+    {
+        ClassClosureRecord Armed(string id, string? arm)
+        {
+            var entry = Entry(id, home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+
+            if (arm is not null)
+            {
+                entry["arm"] = new JsonObject { ["id"] = arm };
+            }
+
+            return ClassClosureRecord.In(entry)!;
+        }
+
+        IReadOnlyList<ClassClosureRecord> record = [Armed("c-rate", "RATE-1"), Armed("c-tax", "TAX-1"), Armed("c-none", null)];
+
+        IReadOnlyList<string> Problems(IReadOnlyList<ClassClosureRecord> judged, IReadOnlyList<string>? listed)
+            => ClassClosureRules.Judge([], judged, ClassClosureProof.Manual(arms: null, StringComparison.Ordinal) with { ListedArms = listed }).Problems;
+
+        Assert.Empty(Problems(record, ["TAX-1", "RATE-1"]));
+        Assert.Empty(Problems(record, ["rate-1", "Tax-1", "RATE-1"]));
+        Assert.Empty(Problems([Armed("c-none", null)], []));
+        Assert.Empty(Problems(record, null));
+        Assert.Equal(
+            ["the arms the answer lists for the item's own sweep are not those its record names: 'TAX-1' armed by the record and not listed; 'FEE-1', 'OLD-2' listed and armed by no class of the record - list each arm the record names, and no other"],
+            Problems(record, ["RATE-1", "FEE-1", "OLD-2"]));
+        Assert.Equal(
+            ["the arms the answer lists for the item's own sweep are not those its record names: 'RATE-1', 'TAX-1' armed by the record and not listed - list each arm the record names, and no other"],
+            Problems(record, []));
+        Assert.Equal(
+            ["the arms the answer lists for the item's own sweep are not those its record names: 'RATE-1' listed and armed by no class of the record - list each arm the record names, and no other"],
+            Problems([Armed("c-none", null)], ["RATE-1"]));
+    }
+
+    /// <summary>
     /// A neighbour measured by a call is held to what the call's own record says it measured, never to the closing record's
     /// word for it: a call whose record cannot be read is refused, naming where the record is; a call that measured another
     /// cell says nothing of this one; and a call that answered otherwise than the closing record says - failed or

@@ -376,6 +376,12 @@ public sealed record ClassClosureProof(
     public bool ByHand => Calls is null;
 
     /// <summary>
+    /// The arms the item's own sweep runs, as the builder's answer lists them beside its record, by id; null where nothing
+    /// lists them - a manual lane, or a check that reads no list. Held to the arms the record names, each once.
+    /// </summary>
+    public IReadOnlyList<string>? ListedArms { get; init; }
+
+    /// <summary>
     /// Whether <paramref name="path"/> and <paramref name="other"/> name one file of the tree, as the plan check that held
     /// the class's paths reads them: either separator (<see cref="ClassClosureReading.PathOf"/>), compared as this machine
     /// compares paths. The one comparison of a class's paths - its home's and its sites', in the plan and in the record,
@@ -509,7 +515,43 @@ public static class ClassClosureRules
             problems.Add("the record names no class: a row closes by the record of each class it closes, and an empty one closes none");
         }
 
+        if (proof.ListedArms is { } listed && ArmsProblem(record, listed) is { } arms)
+        {
+            problems.Add(arms);
+        }
+
         return new ClassClosureJudged(problems, audits, hotspots, touches);
+    }
+
+    /// <summary>
+    /// Why the arms an item's own sweep runs - <paramref name="listed"/>, as the builder's answer lists them - are not the
+    /// arms its <paramref name="record"/> names, each class's own; null where they are the same, whatever their order: an
+    /// arm the record names and the list leaves out would never be swept, and one the list names that no class arms would
+    /// be swept for nothing the record claims. An id is one arm however its case is written, as the registry keeps its
+    /// ids unique and a sweep selects them (<see cref="DssHarness.Core.Mutations.MutationRegistry.Find"/>).
+    /// </summary>
+    /// <param name="record">The record.</param>
+    /// <param name="listed">The arms the answer lists beside it.</param>
+    private static string? ArmsProblem(IReadOnlyList<ClassClosureRecord> record, IReadOnlyList<string> listed)
+    {
+        List<string> armed = [.. record.Select(entry => entry.ArmId).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)];
+        List<string> unarmed = [.. listed.Distinct(StringComparer.OrdinalIgnoreCase).Where(arm => !armed.Contains(arm, StringComparer.OrdinalIgnoreCase))];
+        List<string> unlisted = [.. armed.Where(arm => !listed.Contains(arm, StringComparer.OrdinalIgnoreCase))];
+
+        if (unarmed.Count == 0 && unlisted.Count == 0)
+        {
+            return null;
+        }
+
+        List<string> said =
+        [
+            .. unlisted.Count == 0 ? [] : new[] { $"{Quoted(unlisted)} armed by the record and not listed" },
+            .. unarmed.Count == 0 ? [] : new[] { $"{Quoted(unarmed)} listed and armed by no class of the record" },
+        ];
+
+        return $"the arms the answer lists for the item's own sweep are not those its record names: {string.Join("; ", said)} - list each arm the record names, and no other";
+
+        static string Quoted(IEnumerable<string> arms) => string.Join(", ", arms.Select(arm => $"'{arm}'"));
     }
 
     /// <summary>The problems of one entry of the record, judged against its class's plan and the proof.</summary>

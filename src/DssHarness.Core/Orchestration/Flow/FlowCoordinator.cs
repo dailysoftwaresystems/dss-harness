@@ -12353,7 +12353,7 @@ public sealed class FlowCoordinator
             "anchor-balance" => [("rows", step.Rows?.Expression, true, StartRead.Names)],
             "check-mutations" => [("arms", step.Arms?.Expression, true, StartRead.Names)],
             "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
-            "class-closure" => [("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value)],
+            "class-closure" => [("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value), ("arms", step.Arms?.Expression, true, StartRead.Names)],
             "route-findings" => [("findings", step.Findings, false, StartRead.Value), ("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value)],
             "fold" or "delete-agent" =>
             [

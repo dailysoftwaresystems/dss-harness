@@ -1458,6 +1458,7 @@ public static class WorkflowFileParser
                 {
                     Classes = ScalarIn(keys, $"{where}.classes", problems),
                     Record = ScalarIn(keys, $"{where}.record", problems),
+                    Arms = FlowListIn(keys, $"{where}.arms", problems),
                     Base = ScalarIn(keys, $"{where}.base", problems),
                     Touches = IntIn(keys, $"{where}.touches", problems),
                     Hotspot = IntIn(keys, $"{where}.hotspot", problems),
