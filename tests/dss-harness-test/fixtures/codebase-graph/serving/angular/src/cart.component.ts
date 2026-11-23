@@ -55,4 +55,14 @@ export class CartComponent {
   hasRoom(): boolean {
     return this.lines.length < CartComponent.MAX_LINES;
   }
+
+  /** Marks an element as the primary action, as the style sheet's .btn-primary styles it. */
+  markPrimary(element: HTMLElement): void {
+    element.classList.add('btn-primary');
+  }
+
+  /** The primary action, found by the selector the style sheet writes. */
+  primaryAction(): Element | null {
+    return document.querySelector('button.btn-primary');
+  }
 }

@@ -85,9 +85,9 @@ For every defect the plan fixes and every behaviour it changes, write the class 
 2. Find the one home that should decide it - or say that no place does today, and creating the home is the fix.
 3. Find every site that decides it today, by searching the data - the kind, the key, the diagnostic, the verb, the
    literal - across every tier, format, target and file kind, never the file the defect was seen in alone. The
-   graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, implements or
-   overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched
-   by text alone, for nothing is assumed of a language with no extractor. Its find, node and related beside it for
+   graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, references,
+   inherits, implements or overrides it, every literal that holds it and every key it names - and its coverage lines
+   say what it searched by text alone, for nothing is assumed of a language with no extractor. Its find, node and related beside it for
    the names and for what reads and calls them, and text search for what the graph does not see, each such text
    search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.

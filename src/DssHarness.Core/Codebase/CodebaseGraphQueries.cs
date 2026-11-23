@@ -122,6 +122,7 @@ public sealed class CodebaseGraphQueries
         }
 
         Unheld = [.. unheld];
+        _unheld = unheld;
         _symbols = kept.ToDictionary(node => node.Id, StringComparer.Ordinal);
         _handles = kept.ToDictionary(node => node.Handle, node => node.Id, StringComparer.Ordinal);
         _nodes = nodes;
@@ -269,6 +270,9 @@ public sealed class CodebaseGraphQueries
     /// <summary>The files, by path, whose extract the view no longer holds - one that does not read, or no longer declares what the link names - their declarations in no answer.</summary>
     public IReadOnlyList<string> Unheld { get; }
 
+    /// <summary>The files of <see cref="Unheld"/>, looked up by path.</summary>
+    private readonly IReadOnlySet<string> _unheld;
+
     /// <summary>
     /// The path the view holds <paramref name="path"/> at - as given, or with its backslashes read as separators, as a path
     /// typed on Windows is - or null where it holds neither.
@@ -356,9 +360,10 @@ public sealed class CodebaseGraphQueries
     /// Every declaration the view holds that <paramref name="data"/> names: the one node it names by itself - its handle, its
     /// id, a <c>path:line</c> - or else every node any rule a name is read by finds, where <see cref="Resolve"/> takes the
     /// first rule that finds one - by its qualified name, by its simple name, by one written with its language's own
-    /// separators (<see cref="Dotted"/>), or by a qualified name it ends with at a dot - each once, ordered by id then by path:
-    /// the definers of the data, whose calls, uses, instantiations, implementations and overrides the <c>sites</c> operation
-    /// answers beside them. A data the view holds no declaration of answers empty, which that answer says - the graph's
+    /// separators (<see cref="Dotted"/>) or spelt as a key path is (<see cref="CodeKeyPaths.Dotted"/>), by a qualified name it
+    /// ends with at a dot, or, of a key path, by a key whose own name spells it (<see cref="NamedBy"/>) - each once, ordered by
+    /// id then by path: the definers of the data, whose calls, uses, references, inheritors, implementations and overrides the
+    /// <c>sites</c> operation answers beside them. A data the view holds no declaration of answers empty, which that answer says - the graph's
     /// silence is never read as the data's absence, for the text search answers beside it.
     /// </summary>
     /// <param name="data">What an agent wrote: a symbol as <see cref="Resolve"/> reads one, a key path, a diagnostic id.</param>
@@ -404,40 +409,83 @@ public sealed class CodebaseGraphQueries
     }
 
     /// <summary>
-    /// The ids each rule a written name is read by finds, in the rules' order: its qualified name, its simple name, its
-    /// qualified name written with its language's own separators (<see cref="Dotted"/>), and the qualified names it ends
-    /// at a dot - a name written with some of its scopes (Order.Total) names each node whose qualified name ends with it.
+    /// The ids each rule a written name is read by finds, in the rules' order: its qualified name, its simple name, the
+    /// qualified name it is written as with its language's own separators (<see cref="Dotted"/>) and as .NET's configuration
+    /// spells a key path (<see cref="CodeKeyPaths.Dotted"/>: <c>Payments:TimeoutSeconds</c>, <c>Payments__TimeoutSeconds</c>),
+    /// the qualified names either ends at a dot - a name written with some of its scopes (Order.Total) names each node whose
+    /// qualified name ends with it - and, last, each key whose own name spells such a path as .NET's configuration reads a
+    /// key's name - an environment variable's (<c>Payments__TimeoutSeconds</c> under a compose file's <c>environment</c>), a
+    /// settings file's flat key - which names that path wherever it stands (<see cref="CodeKeyPaths.Spellings"/>). A key path
+    /// in any spelling so finds the same keys, and a name the earlier rules find resolves as it did.
     /// </summary>
     private IEnumerable<IReadOnlyList<string>> NamedBy(string symbol)
     {
         yield return [.. _byQualified[symbol]];
         yield return [.. _bySimple[symbol]];
 
-        var dotted = Dotted(symbol);
+        var forms = Forms(symbol);
 
-        if (dotted != symbol)
+        foreach (var form in forms.Where(form => form != symbol))
         {
-            yield return [.. _byQualified[dotted]];
+            yield return [.. _byQualified[form]];
         }
 
-        if (LastPart(symbol) is var last && last != dotted)
+        foreach (var form in forms)
         {
-            yield return [.. _bySimple[last].Where(id => Card(id).Qualified.EndsWith("." + dotted, StringComparison.Ordinal))];
+            if (LastPlace(form) is var last && last != form)
+            {
+                yield return [.. _bySimple[last].Where(id => Card(id).Qualified.EndsWith("." + form, StringComparison.Ordinal))];
+            }
+        }
+
+        foreach (var spelt in forms.SelectMany(CodeKeyPaths.Spellings).Distinct(StringComparer.Ordinal))
+        {
+            yield return [.. _bySimple[spelt].Where(id => string.Equals(Card(id).SubKind, CodeSubKinds.Key, StringComparison.Ordinal))];
         }
     }
 
     /// <summary>
+    /// The qualified names <paramref name="symbol"/> may be written as, each once: with its language's own separators written
+    /// as dots (<see cref="Dotted"/>), and, where it is spelt as .NET's configuration spells a key path, that path
+    /// (<see cref="CodeKeyPaths.Dotted"/>), as the key's own reader writes it.
+    /// </summary>
+    private static IReadOnlyList<string> Forms(string symbol)
+        => CodeKeyPaths.Dotted(symbol) is { } spelt && spelt != Dotted(symbol) ? [Dotted(symbol), spelt] : [Dotted(symbol)];
+
+    /// <summary>
     /// The last part of a name written with some of its scopes - <c>Total</c> of <c>Order.Total</c>, of <c>Order::Total</c>
-    /// (<see cref="Dotted"/>) - the simple name it ends with, which its references name; the whole name, dotted, where it
-    /// is written with none - a selector's leading dot no scope of it.
+    /// (<see cref="Dotted"/>) - the simple name it ends with, which its references name; of a key path, in any spelling its
+    /// reader reads (<see cref="CodeKeyPaths.Dotted"/>), its last key, as data writes it - <c>TimeoutSeconds</c> of
+    /// <c>Payments:TimeoutSeconds</c>, <c>value</c> of <c>limits[1].value</c>, <c>limits</c> of <c>limits[1]</c> - its places
+    /// read by the one reader of a path (<see cref="CodeKeyPaths.Places"/>), so a quoted name's dot parts nothing; the whole
+    /// name where it is written with none - a selector's leading dot no scope of it.
     /// </summary>
     /// <param name="symbol">A name as an agent wrote it.</param>
     public static string LastPart(string symbol)
     {
         ArgumentNullException.ThrowIfNull(symbol);
+        return LastPlace(CodeKeyPaths.Dotted(symbol) ?? Dotted(symbol));
+    }
 
-        var dotted = Dotted(symbol);
-        return dotted.LastIndexOf('.') is > 0 and var dot && dot < dotted.Length - 1 ? dotted[(dot + 1)..] : dotted;
+    /// <summary>
+    /// The last place of <paramref name="path"/> that is a name and no item or quoted name in brackets, which no text writes
+    /// as it is; the whole path where it has no such place, or is a selector, whose leading dot is its own.
+    /// </summary>
+    private static string LastPlace(string path)
+    {
+        if (SelectorName(path) is not null)
+        {
+            return path;
+        }
+
+        string? last = null;
+
+        foreach (var (start, end) in CodeKeyPaths.Places(path))
+        {
+            last = path[start] == '[' ? last : path[start..end];
+        }
+
+        return last ?? path;
     }
 
     /// <summary>
@@ -493,20 +541,47 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// What a <c>sites</c> answer looks for its data by, in the literals and in the text it searches alike: the data as a
-    /// whole word (<see cref="WordPattern"/>); and, where it is a class's or an id's selector as a rule writes it
-    /// (<c>.btn</c>, <c>#main</c>), the selector with no name character of a class after it - a hyphen among them, so
-    /// <c>.btn</c> is not held by <c>.btn-primary</c> - and its bare name as a whole word of a class list - beside the start
-    /// or the end, white space or a quote mark - as markup's class and id attributes and code's class names
+    /// whole word (<see cref="WordPattern"/>), and each of <paramref name="spellings"/> as one - the paths of the keys it names
+    /// as an environment variable writes them (<see cref="KeySpellings"/>); and, where it is a class's or an id's selector as
+    /// a rule writes it (<c>.btn</c>, <c>#main</c>), the selector with no name character of a class after it - a hyphen among
+    /// them, so <c>.btn</c> is not held by <c>.btn-primary</c> - and its bare name as a whole word of a class list - beside the
+    /// start or the end, white space or a quote mark - as markup's class and id attributes and code's class names
     /// (<c>addClass('btn')</c>) write it.
     /// </summary>
     /// <param name="word">The data as it is asked: a name, or a quoted literal's value.</param>
-    public static Regex SitesPattern(string word)
+    /// <param name="spellings">The other words it is looked for by, each a whole word; none where it is left out.</param>
+    public static Regex SitesPattern(string word, IReadOnlyList<string>? spellings = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(word);
 
         return SelectorName(word) is { } bare
             ? LinearRegex.Compile($"{Regex.Escape(word)}(?:$|[^\\p{{L}}\\p{{N}}_-])|(?:^|[\\s\"'`]){Regex.Escape(bare)}(?:$|[\\s\"'`])")
-            : LinearRegex.Compile(WholeWord(word));
+            : LinearRegex.Compile(string.Join("|", (spellings ?? []).Where(spelt => spelt.Length > 0 && spelt != word).Prepend(word).Select(WholeWord)));
+    }
+
+    /// <summary>
+    /// The words a <c>sites</c> answer looks for a key path by beside its last key (<see cref="LastPart"/>), each once, in
+    /// order: the path of each key among <paramref name="definers"/>, and the path <paramref name="written"/> names where it is
+    /// spelt as .NET's configuration spells one (<see cref="CodeKeyPaths.Dotted"/>), each as an environment variable writes
+    /// it (<see cref="CodeKeyPaths.Environment"/>) - <c>Payments__TimeoutSeconds</c>, which a whole word of the last key is
+    /// never held by, as <c>Payments:TimeoutSeconds</c> and a key's own line are.
+    /// </summary>
+    /// <param name="written">The data as it is written.</param>
+    /// <param name="definers">The data's definers.</param>
+    public static IReadOnlyList<string> KeySpellings(string written, IReadOnlyList<GraphCard> definers)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+        ArgumentNullException.ThrowIfNull(definers);
+
+        return [.. definers
+            .Where(card => string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal))
+            .Select(card => card.Qualified)
+            .Append(CodeKeyPaths.Dotted(written))
+            .OfType<string>()
+            .Select(CodeKeyPaths.Environment)
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
     }
 
     /// <summary>
@@ -547,7 +622,8 @@ public sealed class CodebaseGraphQueries
     /// data - each file for the first of these it is - or null where the graph answers what the file holds of the data, and
     /// the answer reads it from the graph alone: the view does not hold the file; holds it in a state no implementation of a
     /// language read it in (<see cref="ReadByALanguage"/>) - listed by the fallback alone, no extractor reading its language,
-    /// or unreadable, ambiguous and the rest; is not sure of it (<see cref="UnsureOfFile"/>); holds it outlined, its values
+    /// or unreadable, ambiguous and the rest; holds it read, but no longer the extract it read (<see cref="Unheld"/>), its
+    /// declarations in no answer; is not sure of it (<see cref="UnsureOfFile"/>); holds it outlined, its values
     /// and text held by no literal of the graph; holds a reference of it named the data that the linker bound to nothing of
     /// that name (<paramref name="unbound"/>, <see cref="UnboundNaming"/>); or, for a quoted value, holds it at all, for the
     /// graph holds a value only where code writes it as a string literal. The one rule of what the graph's silence is never
@@ -569,6 +645,7 @@ public sealed class CodebaseGraphQueries
         var entry = _read.Files[held];
 
         return !ReadByALanguage(held) ? new(GraphTextReason.Unread, entry.State)
+            : _unheld.Contains(held) ? new(GraphTextReason.Unextracted)
             : UnsureOfFile(held) is not null ? new(GraphTextReason.Unsure)
             : string.Equals(entry.State, CodeFileStates.Outlined, StringComparison.Ordinal) ? new(GraphTextReason.Outlined)
             : unbound.Contains(held) ? new(GraphTextReason.Unbound)
@@ -696,6 +773,14 @@ public sealed class CodebaseGraphQueries
             ? Card(id, path)
             : null;
 
+    /// <summary>
+    /// How many cards of a node as a file declares it this view has made, each walking the node's callers and callees: the
+    /// work an answer is counted by, so a reading that makes a card of every node of a file to find one is seen.
+    /// </summary>
+    internal long CardsMade => Interlocked.Read(ref _cardsMade);
+
+    private long _cardsMade;
+
     /// <summary>The cards of the node <paramref name="id"/> names, one for each file that declares a part of it, by path.</summary>
     /// <param name="id">A node's id, the view's.</param>
     public IReadOnlyList<GraphCard> Parts(string id)
@@ -707,6 +792,8 @@ public sealed class CodebaseGraphQueries
     /// </summary>
     private GraphCard Card(string id, string? path)
     {
+        Interlocked.Increment(ref _cardsMade);
+
         var symbol = _symbols[id];
         var at = _nodes[id];
         var (where, node) = at.Where(one => one.Path == path).OrderBy(one => one.Node.Start).FirstOrDefault() ?? Representative(symbol, at);
@@ -770,6 +857,9 @@ public sealed class CodebaseGraphQueries
     /// <summary>A node's overrides both ways: what it overrides, and what overrides it.</summary>
     private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Overriding = [(GraphSide.Out, CodeEdgeKinds.Overrides), (GraphSide.In, CodeEdgeKinds.Overrides)];
 
+    /// <summary>What names a node by its kind without making it: a type mention, a test of a value's kind.</summary>
+    private static readonly IReadOnlyList<(GraphSide Side, string Kind)> Referrers = [(GraphSide.In, CodeEdgeKinds.References)];
+
     /// <summary>
     /// Each way a place decides that the definers' own edges reach (<see cref="SitesOf"/>), with the edges that reach it - a
     /// relation's own where one walks them (<see cref="GraphRelations.Edges"/>), the <c>node</c> operation's groups' else.
@@ -779,6 +869,8 @@ public sealed class CodebaseGraphQueries
         (GraphSiteHows.Calls, GraphRelations.Edges(GraphRelations.Callers)),
         (GraphSiteHows.Uses, Users),
         (GraphSiteHows.Instantiates, Makers),
+        (GraphSiteHows.References, Referrers),
+        (GraphSiteHows.Inherits, GraphRelations.Edges(GraphRelations.Derived)),
         (GraphSiteHows.Implements, GraphRelations.Edges(GraphRelations.Implementations)),
         (GraphSiteHows.Overrides, Overriding),
     ];
@@ -786,9 +878,10 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// What decides of a <c>sites</c> ask's data beside its definers: one hop off each definer's own edges - every other part
     /// of its declaration walked as the definer itself - each way of deciding a group (<see cref="GraphSiteHows"/>): what
-    /// calls it, uses it, makes it, implements it or answers it for a type through its dispatches, overrides it or is
-    /// overridden by it; each node a group reaches once, with the surest confidence of the edges that reach it. No reached
-    /// node's own edges are walked, so a hub is listed and never gone through.
+    /// calls it, uses it, makes it, names it by its kind - a type mention, an <c>isinstance</c>, an <c>instanceof</c>, a
+    /// <c>catch</c> - inherits it or mixes it in, implements it or answers it for a type through its dispatches, overrides it
+    /// or is overridden by it; each node a group reaches once, with the surest confidence of the edges that reach it. No
+    /// reached node's own edges are walked, so a hub is listed and never gone through.
     /// </summary>
     /// <param name="definers">The definers, by id, the view's.</param>
     public IReadOnlyList<GraphSiteGroup> SitesOf(IReadOnlyList<string> definers)
@@ -1241,53 +1334,251 @@ public sealed class CodebaseGraphQueries
     }
 
     /// <summary>
-    /// The innermost node of the file at <paramref name="path"/> whose lines hold <paramref name="line"/>, as a text hit is
-    /// turned to a card where one covers its line and a <c>path:line</c> names one: the one that begins last, of those the
-    /// one that ends first; of nodes with the same lines, one no other of them is declared inside - a landmark, not the body
-    /// of a page with no body element around it, a type's only member on its line, not the type - and never the file's own
-    /// node, which holds every node the file declares, a Vue component or a Markdown section that spans the whole file among
-    /// them; of those, one that makes a reference at the line - a Razor page's markup, not the class it compiles to, whose
-    /// lines are its page's too - and then the first by id. So the node at a line is the one the file's references at it
-    /// are made from, never one of its enclosing nodes by the order of their ids.
+    /// The node of the file at <paramref name="path"/> at <paramref name="line"/>, as a text hit is turned to a card where one
+    /// covers its line and a <c>path:line</c> names one - the file's own node, which holds every node the file declares, only
+    /// where no other holds the line. Of the nodes whose lines hold it, those of the tightest lines - the ones that begin last,
+    /// of those the ones that end first - and of them the innermost, one no other of them is declared inside: a landmark, not
+    /// the body of a page with no body element around it; a type's only member on its line, not the type; a Vue component that
+    /// spans its file. Where several are innermost, the line declares them all inside one of the tightest - a positional
+    /// record's parameters, an enum's members, a one-line object's keys - and that one is the node at the line, the record,
+    /// the enum, the object; else the one of them that makes a reference at the line - a Razor page's markup, not the class it
+    /// compiles to, whose lines are its page's too - and else the nearest node they are all declared inside, the file's own
+    /// where they share none. Never one of them by the order of their ids. Read from the file's line index, made once a file a
+    /// view (<see cref="LineIndex"/>), and one card made for the answer: a search of a file's every line asks it in time
+    /// linear in the file's nodes and its references.
     /// </summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     /// <param name="line">A line of that file, from 1.</param>
     public GraphCard? AtLine(string path, int line)
     {
-        var spanning = (_inFile.TryGetValue(path, out var ids) ? ids : [])
-            .Select(id => Card(id, path))
-            .Where(card => card.Path == path && card.Start <= line && line <= card.End)
-            .OrderByDescending(card => card.Start)
-            .ThenBy(card => card.End)
-            .ToList();
+        ArgumentNullException.ThrowIfNull(path);
 
-        if (spanning.Count == 0)
+        if (_lines.GetOrAdd(path, LineIndexOf).At(line) is { } id)
         {
-            return null;
+            return Card(id, path);
         }
 
-        // The nodes of the tightest lines, and of them those no other is declared inside: the file's own node holds every one.
-        var tightest = spanning.TakeWhile(card => card.Start == spanning[0].Start && card.End == spanning[0].End).ToList();
-        var outer = tightest.SelectMany(card => AroundOf(card.Id, path)).ToHashSet(StringComparer.Ordinal);
-        var inner = tightest.Where(card => !outer.Contains(card.Id) && !string.Equals(card.Kind, CodeNodeKinds.File, StringComparison.Ordinal)).ToList();
+        // Where no node the file declares holds the line, its own node does, as far as its lines go.
+        return Part(CodeGraphIds.FileId(path), path) is { } file && file.Start <= line && line <= file.End ? file : null;
+    }
 
-        return (inner.Count > 0 ? inner : tightest)
-            .OrderByDescending(card => _out[card.Id].Any(edge => edge.Line == line))
-            .ThenBy(card => card.Id, StringComparer.Ordinal)
-            .First();
+    /// <summary>Each file's line index, by the path asked, as <see cref="AtLine(string, int)"/> first made it.</summary>
+    private readonly ConcurrentDictionary<string, LineIndex> _lines = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The line index of the file at <paramref name="path"/>: each node its extract declares there, by the lines the card
+    /// of it in that file spans (<see cref="Card(string, string?)"/>: its first declaration there) and the node it is declared
+    /// inside, and the nodes each line's references are made from - a probe, which asks whether a declaration is there,
+    /// making none.
+    /// </summary>
+    private LineIndex LineIndexOf(string path)
+    {
+        var declared = (_inFile.TryGetValue(path, out var ids) ? ids : [])
+            .Select(id => (Id: id, At: _nodes[id].Where(at => at.Path == path).OrderBy(at => at.Node.Start).FirstOrDefault()))
+            .Where(one => one.At is not null)
+            .Select(one => new LineIndex.Spanned(one.Id, one.At!.Node.Start, one.At.Node.End, one.At.Node.Parent?.Whole()))
+            .ToList();
+        var references = (_extracts.TryGetValue(path, out var extract) ? extract?.References : null) ?? [];
+
+        return new LineIndex(declared, references.Where(reference => !reference.Probe).Select(reference => (reference.Line, reference.From.Whole())));
     }
 
     /// <summary>
-    /// The nodes the node <paramref name="id"/> is declared inside, as the file at <paramref name="path"/> declares it: its
-    /// parent, that one's, and so on - each once, so a parent named twice ends the walk.
+    /// The node at each line of one file, as <see cref="AtLine(string, int)"/> answers it, made once by one sweep of the
+    /// file's nodes in the order they begin, with an explicit stack of the nodes open at a line: a node is pushed on the line
+    /// it begins on and passed over once a line past its end is reached, so the top of the stack is a node of the tightest
+    /// lines, and the nodes of exactly its lines lie beneath it - the tightest at every line from one change of the top to
+    /// the next. Each such set is weighed once, where it is first on top; a line asked reads its set by a search of the
+    /// changes. Linear in the nodes and the references, besides the sort; no walk visits a node twice.
     /// </summary>
-    private IEnumerable<string> AroundOf(string id, string path)
+    private sealed class LineIndex
     {
-        var seen = new HashSet<string>(StringComparer.Ordinal) { id };
+        private readonly List<(int From, Tightest? Tightest)> _changes = [];
+        private readonly Dictionary<string, string?> _parents = new(StringComparer.Ordinal);
+        private readonly ILookup<int, string> _references;
 
-        for (var at = id; _nodes.TryGetValue(at, out var placed) && placed.FirstOrDefault(one => one.Path == path)?.Node.Parent?.Whole() is { } parent && seen.Add(parent); at = parent)
+        /// <summary>One node the file declares: its id, the lines it spans, and the node it is declared inside, where one is.</summary>
+        /// <param name="Id">The node's id.</param>
+        /// <param name="Start">Its first line.</param>
+        /// <param name="End">Its last line.</param>
+        /// <param name="Parent">The node it is declared inside, by id; null for one declared at the file's top.</param>
+        public sealed record Spanned(string Id, int Start, int End, string? Parent);
+
+        /// <param name="nodes">The file's nodes, each once.</param>
+        /// <param name="references">Each reference's line and the node it is made from.</param>
+        public LineIndex(IReadOnlyList<Spanned> nodes, IEnumerable<(int Line, string From)> references)
         {
-            yield return parent;
+            foreach (var node in nodes)
+            {
+                _parents.TryAdd(node.Id, node.Parent);
+            }
+
+            _references = references.ToLookup(reference => reference.Line, reference => reference.From);
+
+            // Every line the open nodes can change at: where one begins, and the line after one ends.
+            var sorted = nodes.Where(node => node.Start <= node.End)
+                .OrderBy(node => node.Start)
+                .ThenByDescending(node => node.End)
+                .ThenBy(node => node.Id, StringComparer.Ordinal)
+                .ToList();
+            var lines = sorted.Select(node => node.Start).Concat(sorted.Select(node => node.End + 1)).Distinct().Order().ToList();
+            var open = new List<int>();
+            var weighed = new Dictionary<int, Tightest>();
+            var next = 0;
+
+            foreach (var line in lines)
+            {
+                while (next < sorted.Count && sorted[next].Start <= line)
+                {
+                    open.Add(next++);
+                }
+
+                // A node past its end leaves once it is on top: one beneath an open node that began later cannot be the tightest.
+                while (open.Count > 0 && sorted[open[^1]].End < line)
+                {
+                    open.RemoveAt(open.Count - 1);
+                }
+
+                Tightest? tightest = null;
+
+                if (open.Count > 0 && !weighed.TryGetValue(open[^1], out tightest))
+                {
+                    // The nodes of exactly the top's lines lie right beneath it: they began on its line, pushed before it, and leave with it.
+                    var top = sorted[open[^1]];
+                    var members = new List<string>();
+
+                    for (var at = open.Count - 1; at >= 0 && sorted[open[at]].Start == top.Start && sorted[open[at]].End == top.End; at--)
+                    {
+                        members.Add(sorted[open[at]].Id);
+                    }
+
+                    weighed[open[^1]] = tightest = new Tightest(this, members);
+                }
+
+                if (_changes.Count == 0 || !ReferenceEquals(_changes[^1].Tightest, tightest))
+                {
+                    _changes.Add((line, tightest));
+                }
+            }
+        }
+
+        /// <summary>The node at <paramref name="line"/>, by id, as <see cref="AtLine(string, int)"/> says it; null where no node of the file holds the line.</summary>
+        public string? At(int line)
+        {
+            // The last change at or before the line.
+            var low = 0;
+            var high = _changes.Count - 1;
+            var found = -1;
+
+            while (low <= high)
+            {
+                var middle = low + ((high - low) / 2);
+
+                if (_changes[middle].From <= line)
+                {
+                    found = middle;
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle - 1;
+                }
+            }
+
+            if (found < 0 || _changes[found].Tightest is not { } tightest)
+            {
+                return null;
+            }
+
+            if (tightest.Innermost.Count == 1)
+            {
+                return tightest.Innermost[0];
+            }
+
+            if (tightest.Declaring is { } declaring)
+            {
+                return declaring;
+            }
+
+            // Of several innermost no node of the tightest holds, the one that makes a reference at the line.
+            var making = _references[line].Where(tightest.Holds).Distinct(StringComparer.Ordinal).ToList();
+
+            return making.Count == 1 ? making[0] : making.Count > 1 ? Around(making, _ => true) : tightest.Around;
+        }
+
+        /// <summary>
+        /// The nearest node every one of <paramref name="ids"/> is declared inside, walking their parents while
+        /// <paramref name="within"/> takes each: the first one's parents in order, each other's until it meets one of those -
+        /// each walk knowing what it passed, so a parent named twice ends it; null where they meet at none.
+        /// </summary>
+        private string? Around(IReadOnlyList<string> ids, Func<string, bool> within)
+        {
+            var chain = new Dictionary<string, int>(StringComparer.Ordinal);
+            var order = new List<string>();
+
+            for (var at = _parents.GetValueOrDefault(ids[0]); at is not null && within(at) && chain.TryAdd(at, order.Count); at = _parents.GetValueOrDefault(at))
+            {
+                order.Add(at);
+            }
+
+            var met = 0;
+
+            foreach (var id in ids.Skip(1))
+            {
+                var passed = new HashSet<string>(StringComparer.Ordinal);
+                var at = _parents.GetValueOrDefault(id);
+
+                while (at is not null && within(at) && !chain.ContainsKey(at) && passed.Add(at))
+                {
+                    at = _parents.GetValueOrDefault(at);
+                }
+
+                if (at is null || !chain.TryGetValue(at, out var index))
+                {
+                    return null;
+                }
+
+                met = Math.Max(met, index);
+            }
+
+            return order.Count == 0 ? null : order[met];
+        }
+
+        /// <summary>
+        /// The nodes of one file's tightest lines at some line, weighed once: those no other of them is declared inside, the
+        /// one of them every such is declared inside where there are several, and the nearest node they are all declared
+        /// inside beyond them.
+        /// </summary>
+        private sealed class Tightest
+        {
+            private readonly HashSet<string> _members;
+            private readonly HashSet<string> _innermost;
+            private readonly Lazy<string?> _around;
+
+            public Tightest(LineIndex index, IReadOnlyList<string> members)
+            {
+                _members = members.ToHashSet(StringComparer.Ordinal);
+
+                // A node declared inside another of the same lines has its parent among them: every node between holds them too.
+                var outer = members.Select(member => index._parents.GetValueOrDefault(member)).OfType<string>().Where(_members.Contains).ToHashSet(StringComparer.Ordinal);
+
+                Innermost = [.. members.Where(member => !outer.Contains(member)).Order(StringComparer.Ordinal)];
+                _innermost = Innermost.ToHashSet(StringComparer.Ordinal);
+                Declaring = Innermost.Count > 1 ? index.Around(Innermost, _members.Contains) : null;
+                _around = new(() => index.Around(Innermost, _ => true));
+            }
+
+            /// <summary>Those no other of them is declared inside, by id, in order.</summary>
+            public IReadOnlyList<string> Innermost { get; }
+
+            /// <summary>Where several are innermost, the one of the tightest they are all declared inside, nearest them; null else.</summary>
+            public string? Declaring { get; }
+
+            /// <summary>The nearest node every innermost one is declared inside, of any lines; null where they share none.</summary>
+            public string? Around => _around.Value;
+
+            /// <summary>Whether <paramref name="id"/> is one of those no other of them is declared inside.</summary>
+            public bool Holds(string id) => _innermost.Contains(id);
         }
     }
 

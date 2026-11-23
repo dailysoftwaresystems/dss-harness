@@ -117,18 +117,23 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
         Func<string, bool> mayRead,
         Func<AgentSearchHit, CancellationToken, ValueTask> found,
         CancellationToken cancellationToken)
-        => SearchAsync(directory, pattern, glob, comparison, context, mayRead, found, read: null, cancellationToken);
+        => SearchAsync(directory, pattern, glob is null ? null : path => glob.Matches(path, comparison), context, mayRead, found, read: null, cancellationToken);
 
     /// <summary>
     /// The lines under <paramref name="directory"/> that <paramref name="pattern"/> matches, as the search without
-    /// <paramref name="read"/> finds them, each file read to its end handed to <paramref name="read"/> once it is: a file
-    /// passed over, not read, or gone since its listing is never handed on, so a caller counts what was searched from what
-    /// was read and never from what it chose.
+    /// <paramref name="read"/> finds them, of the files <paramref name="take"/> takes, each file read to its end handed to
+    /// <paramref name="read"/> once it is: a file passed over, not read, or gone since its listing is never handed on, so a
+    /// caller counts what was searched from what was read and never from what it chose. Every file is told by the one path
+    /// its listing names it by - what <paramref name="take"/> takes it by, each hit's and each read's - never by one made again
+    /// from where it stands.
     /// </summary>
     /// <param name="directory">The directory, absolute.</param>
     /// <param name="pattern">The pattern, matched against each line.</param>
-    /// <param name="glob">The files searched, by their paths relative to <paramref name="directory"/>; null for every one.</param>
-    /// <param name="comparison">How a path is compared with <paramref name="glob"/>.</param>
+    /// <param name="take">
+    /// Whether a file is searched, by its path relative to <paramref name="directory"/> as the listing names it - a glob's, a
+    /// scope its caller chose - asked before whether the agent may read it, so a file not taken is passed over by the caller's
+    /// own will and counted nowhere, never among those it may not read; null for every one.
+    /// </param>
     /// <param name="context">How many lines before and after each hit are given, any number.</param>
     /// <param name="mayRead">Whether the agent may read a file, by its absolute path.</param>
     /// <param name="found">Takes each hit, as it is found.</param>
@@ -137,8 +142,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
     public async Task<AgentSearch> SearchAsync(
         string directory,
         Regex pattern,
-        GlobPattern? glob,
-        StringComparison comparison,
+        Func<string, bool>? take,
         int context,
         Func<string, bool> mayRead,
         Func<AgentSearchHit, CancellationToken, ValueTask> found,
@@ -163,7 +167,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (glob is not null && !glob.Matches(path, comparison))
+            if (take is not null && !take(path))
             {
                 continue;
             }
@@ -551,19 +555,13 @@ public sealed record AgentSearch(
     /// left out, and the files it could not read, with why the first was not.
     /// </summary>
     /// <param name="said">How a file is said, from its path relative to the directory searched.</param>
-    /// <param name="refused">
-    /// How many files the reader may not read were left out, where the caller knows better than the search: a search
-    /// whose reader passed over files for a reason of its own - out of its scope, though readable - says the search's own
-    /// count less those, so a file merely out of scope is never said to be one the reader may not read; null for the
-    /// search's own count.
-    /// </param>
-    public IEnumerable<string> LeftOut(Func<string, string> said, int? refused = null)
+    public IEnumerable<string> LeftOut(Func<string, string> said)
     {
         ArgumentNullException.ThrowIfNull(said);
 
-        if ((refused ?? Refused) > 0)
+        if (Refused > 0)
         {
-            yield return AgentListing.Refused(refused ?? Refused);
+            yield return AgentListing.Refused(Refused);
         }
 
         if (Passed > 0)

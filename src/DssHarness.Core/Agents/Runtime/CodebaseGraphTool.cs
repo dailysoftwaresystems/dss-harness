@@ -30,7 +30,7 @@ public enum GraphOp
     /// <summary>The exact lines of nodes, read fresh.</summary>
     Body,
 
-    /// <summary>Every place that decides data: what defines, calls, uses, makes, implements or overrides it, every literal that holds it and every key it names.</summary>
+    /// <summary>Every place that decides data: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it and every key it names.</summary>
     Sites,
 
     /// <summary>A node's lines replaced where its hash is unchanged.</summary>
@@ -473,7 +473,7 @@ public sealed class CodebaseGraphTool(
             [GraphOp.Related] = $"related - the nodes a relation reaches, as many hops as you ask, {RelatedLines} a page",
             [GraphOp.Outline] = $"outline - a file's or a type's declarations, or the repository's, {OutlineLines} a page",
             [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
-            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path, a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
+            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted, or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
@@ -910,18 +910,20 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>
     /// <c>sites</c>: every place that decides the data named - what defines it, holds it as a key, calls it, uses it, makes
-    /// it, implements or overrides it (<see cref="CodebaseGraphQueries.SitesOf"/>, the definers' own edges alone, one hop
-    /// each, so a hub is listed and never walked through), every literal that holds it, and every line that holds it of the
-    /// files the graph does not answer of it (<see cref="CodebaseGraphQueries.TextScopeOf"/>) - each place one card, the node
-    /// at it, saying every way it decides, the cards grouped by file kind and tier (<see cref="CodebaseGraphQueries.KindOf"/>,
+    /// it, names it by its kind, inherits it, implements or overrides it (<see cref="CodebaseGraphQueries.SitesOf"/>, every
+    /// definer's own edges alone, one hop each, so a hub is listed and never walked through), every literal that holds it,
+    /// and every line that holds it of the files the graph does not answer of it
+    /// (<see cref="CodebaseGraphQueries.TextScopeOf"/>) - each place one card, the node at it, saying every way it decides,
+    /// the cards grouped by file kind and tier (<see cref="CodebaseGraphQueries.KindOf"/>,
     /// <see cref="CodebaseGraphQueries.TierOf"/>), and a raw line where the graph read no node of its file. A data that names
     /// a node by itself - its handle, its id, a <c>path:line</c> - asks of that node, its name the word its literals and the
     /// text are searched for (<see cref="CodebaseGraphQueries.SitesPattern"/>), and a name written with its scopes or a key
-    /// path is searched for by its last part (<see cref="CodebaseGraphQueries.LastPart"/>), as code and data write it; a
-    /// quoted one asks by its value alone, never the symbols. Every place passes the step's reads at one gate
-    /// (<see cref="SiteList"/>), and those they do not reach are
-    /// counted. The coverage lines that end the answer say what the text search read, each file counted once it was read, and
-    /// why; then every limit of each language whose files the graph read (<see cref="Unseen"/>).
+    /// path in any spelling its reader reads is searched for by its last part (<see cref="CodebaseGraphQueries.LastPart"/>),
+    /// as code and data write it, and a key path by its places as an environment variable writes them too
+    /// (<see cref="CodebaseGraphQueries.KeySpellings"/>); a quoted one asks by its value alone, never the symbols. Every place
+    /// passes the step's reads at one gate (<see cref="SiteList"/>), and those they do not reach are counted. The coverage
+    /// lines that end the answer say what the text search read, each file counted once it was read, and why; then every limit
+    /// of each language whose files the graph read (<see cref="Unseen"/>).
     /// </summary>
     private async Task<GraphToolAnswer> SitesAsync(JsonObject input, CancellationToken cancellationToken)
     {
@@ -943,11 +945,11 @@ public sealed class CodebaseGraphTool(
                 sites.Add(card, string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal) ? GraphSiteHows.HoldsTheKey : GraphSiteHows.Defines);
             }
 
-            // What decides of the data beside its definers, off the definers the step may read: one hop each, a part walked
-            // as the node itself, each node with how sure the surest edge that reaches it is.
-            var named = definers.Where(Reads).Select(card => card.Id).ToList();
-
-            foreach (var group in on.SitesOf(named))
+            // What decides of the data beside its definers: one hop off every definer, a part walked as the node itself, each
+            // node with how sure the surest edge that reaches it is - each place it reaches held to the step's reads where it
+            // stands, so a readable caller of a definer the reads do not reach is listed, which tells nothing the step cannot
+            // read itself.
+            foreach (var group in on.SitesOf([.. definers.Select(card => card.Id)]))
             {
                 foreach (var edge in group.Edges)
                 {
@@ -956,11 +958,13 @@ public sealed class CodebaseGraphTool(
             }
 
             // The word the literals and the text are searched for: the value, the name of the node the data names by itself,
-            // or the last part of the data as it is written - a name written with its scopes, a key path, is written in code
-            // and in data by its last part (shape.Area(), "TimeoutSeconds": 30), and a whole word of that part is held by
-            // every longer name that ends with it - one pattern for both.
+            // or the last part of the data as it is written - a name written with its scopes, a key path in any spelling, is
+            // written in code and in data by its last part (shape.Area(), "TimeoutSeconds": 30), and a whole word of that part
+            // is held by every longer name that ends with it - one pattern for both; and each key path the data names as an
+            // environment variable writes it, which no whole word of its last key is held by.
             var word = quoted ?? on.NamedExactly(written)?.Name ?? CodebaseGraphQueries.LastPart(written);
-            var pattern = CodebaseGraphQueries.SitesPattern(word);
+            var spellings = quoted is null ? CodebaseGraphQueries.KeySpellings(written, definers) : [];
+            var pattern = CodebaseGraphQueries.SitesPattern(word, spellings);
 
             foreach (var place in on.LiteralSites(pattern))
             {
@@ -968,33 +972,26 @@ public sealed class CodebaseGraphTool(
             }
 
             // The text search: every file the graph does not answer of the data, each for the first reason it is so, counted
-            // once the search read it; a name's references the linker bound to nothing of its name tell files of it.
+            // once the search read it; a name's references the linker bound to nothing of its name tell files of it. Each file
+            // is told by the one path its listing names it by - what the search takes it by, each hit's and each read's - and
+            // a file the graph answers of is never taken, so it is never counted among those the reader may not read.
             IReadOnlyList<string> names = quoted is null ? [.. definers.Select(card => card.Name).Append(CodebaseGraphQueries.LastPart(word)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)] : [];
             var unbound = on.UnboundNaming(names);
             var scopes = new Dictionary<string, GraphTextScope>(StringComparer.Ordinal);
             var read = new Dictionary<GraphTextScope, List<string>>();
             var hits = new Dictionary<GraphTextScope, int>();
-            var outOfScope = 0;
             var search = await TextSearchAsync(
                 on,
                 pattern,
-                relative =>
+                listed =>
                 {
-                    if (scopes.ContainsKey(relative))
+                    if (on.TextScopeOf(listed, unbound, quoted is not null) is not { } scope)
                     {
-                        return true;
+                        return false;
                     }
 
-                    if (on.TextScopeOf(relative, unbound, quoted is not null) is { } scope)
-                    {
-                        scopes[relative] = scope;
-                        return true;
-                    }
-
-                    // A file the graph answers of is passed over by the search's own will, not because it may not be read:
-                    // counted, so the notes never say of it what they say of a file the reader may not read.
-                    outOfScope++;
-                    return false;
+                    scopes[listed] = scope;
+                    return true;
                 },
                 hit =>
                 {
@@ -1002,12 +999,12 @@ public sealed class CodebaseGraphTool(
                     hits[scope] = hits.GetValueOrDefault(scope) + 1;
                     sites.AddHit(hit, scope);
                 },
-                path => (read.TryGetValue(scopes[path], out var files) ? files : read[scopes[path]] = []).Add(path),
+                listed => (read.TryGetValue(scopes[listed], out var files) ? files : read[scopes[listed]] = []).Add(listed),
                 token).ConfigureAwait(false);
 
-            var notes = new List<string>(Coverage(read, hits, word, names));
+            var notes = new List<string>(Coverage(read, hits, word, names, spellings));
             notes.AddRange(Unseen(on));
-            notes.AddRange(search.LeftOut(ReportText.Printable, search.Refused - outOfScope));
+            notes.AddRange(search.LeftOut(ReportText.Printable));
 
             // A place left out may be a node or a literal's line where the graph read no node: places, either way.
             if (sites.Left > 0)
@@ -1026,7 +1023,8 @@ public sealed class CodebaseGraphTool(
                     : "the graph holds no literal that holds it, and no line of the files searched by text holds it");
             }
 
-            return new GraphAnswer(leading, sections, notes, named, []);
+            // What the ask named, as the facts hold it: its definers the step may read.
+            return new GraphAnswer(leading, sections, notes, [.. definers.Where(Reads).Select(card => card.Id)], []);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -1034,11 +1032,12 @@ public sealed class CodebaseGraphTool(
     /// The coverage lines a <c>sites</c> answer ends with, of the files its text search read - each file once it was read,
     /// by why it was searched (<paramref name="read"/>), with the hits it gave: the files the graph lists only and the files it
     /// is unsure of always, said where none was; and, where any was, the files held in another state no implementation of a
-    /// language read them in, by the state, those the graph does not hold, those it outlines, those holding a reference named
-    /// the data it bound to nothing of that name, and those read for a value; the forms a selector was searched in; and,
-    /// where any file the graph lists only was searched, that nothing is assumed of a language with no extractor.
+    /// language read them in, by the state, those the graph does not hold, those whose extract it no longer holds, those it
+    /// outlines, those holding a reference named the data it bound to nothing of that name, and those read for a value; the
+    /// forms a selector was searched in, and the spellings of a key path (<paramref name="spellings"/>); and, where any file
+    /// the graph lists only was searched, that nothing is assumed of a language with no extractor.
     /// </summary>
-    private static IEnumerable<string> Coverage(IReadOnlyDictionary<GraphTextScope, List<string>> read, IReadOnlyDictionary<GraphTextScope, int> hits, string word, IReadOnlyList<string> names)
+    private static IEnumerable<string> Coverage(IReadOnlyDictionary<GraphTextScope, List<string>> read, IReadOnlyDictionary<GraphTextScope, int> hits, string word, IReadOnlyList<string> names, IReadOnlyList<string> spellings)
     {
         string Searched(GraphTextScope scope, string said, bool too = false)
             => $"coverage: {ReportText.Counted(read[scope].Count, "file")} {said} searched by text{(too ? " too" : string.Empty)} - {ReportText.Counted(hits.GetValueOrDefault(scope), "hit")}";
@@ -1048,6 +1047,7 @@ public sealed class CodebaseGraphTool(
         var listed = new GraphTextScope(GraphTextReason.Unread, CodeFileStates.Listed);
         var unsure = new GraphTextScope(GraphTextReason.Unsure);
         var unheld = new GraphTextScope(GraphTextReason.Unheld);
+        var unextracted = new GraphTextScope(GraphTextReason.Unextracted);
         var outlined = new GraphTextScope(GraphTextReason.Outlined);
         var unbound = new GraphTextScope(GraphTextReason.Unbound);
         var value = new GraphTextScope(GraphTextReason.Value);
@@ -1063,6 +1063,11 @@ public sealed class CodebaseGraphTool(
         if (read.ContainsKey(unheld))
         {
             yield return Searched(unheld, $"the graph does not hold, written since its last sync or kept out of it ({Kinds(unheld)}),");
+        }
+
+        if (read.ContainsKey(unextracted))
+        {
+            yield return Searched(unextracted, $"whose extract the graph no longer holds, their declarations in no answer ({Kinds(unextracted)}),");
         }
 
         yield return read.ContainsKey(unsure) ? Searched(unsure, "the graph is unsure of,", too: true) : "coverage: no file the graph is unsure of was searched by text";
@@ -1085,6 +1090,11 @@ public sealed class CodebaseGraphTool(
         if (CodebaseGraphQueries.SelectorName(word) is { } bare)
         {
             yield return $"coverage: '{ReportText.Printable(word)}' searched as a rule writes it and as the name '{ReportText.Printable(bare)}', a whole word of a class list";
+        }
+
+        if (spellings.Count > 0)
+        {
+            yield return $"coverage: '{ReportText.Printable(word)}' searched as a whole word, and the key path as an environment variable writes it: {string.Join(", ", spellings.Select(spelt => $"'{ReportText.Printable(spelt)}'"))}";
         }
 
         if (read.ContainsKey(listed))
@@ -1212,15 +1222,15 @@ public sealed class CodebaseGraphTool(
         }
 
         /// <summary>
-        /// A line the text search found: under the card of the node at it where the graph read its file by a language and holds
-        /// one there, and passed over where a literal there already says the place; a raw line else. The search reads only
-        /// files the step may read.
+        /// A line the text search found: under the card of the node at it where the graph holds what a language read of its
+        /// file and a node there, and passed over where a literal there already says the place; a raw line else. The search
+        /// reads only files the step may read.
         /// </summary>
         public void AddHit(AgentSearchHit hit, GraphTextScope scope)
         {
             var held = view.HeldPath(hit.Path) ?? hit.Path;
 
-            if (scope.Reason is not (GraphTextReason.Unheld or GraphTextReason.Unread) && view.AtLine(held, (int)hit.Line) is { } card)
+            if (scope.Reason is not (GraphTextReason.Unheld or GraphTextReason.Unread or GraphTextReason.Unextracted) && view.AtLine(held, (int)hit.Line) is { } card)
             {
                 Of(card)?.Find(held, hit.Line, HitLine(held, hit));
                 return;
@@ -1231,7 +1241,8 @@ public sealed class CodebaseGraphTool(
 
         /// <summary>
         /// The answer's sections: one for each file kind and tier the places stand in, in order, each of how many places it
-        /// holds - every place's card and its lines, by path, then line, then id, at <see cref="RelatedLines"/> places a page.
+        /// holds - every place's card and its lines, by path, then line, then id, at <see cref="RelatedLines"/> places a page,
+        /// each place a block its card heads (<see cref="Site.Entries"/>), so its lines never stand on a page without it.
         /// </summary>
         public IReadOnlyList<GraphSection> Sections()
         {
@@ -1304,23 +1315,27 @@ public sealed class CodebaseGraphTool(
             }
 
             /// <summary>
-            /// Its entries: its card with every way it decides, in the order <see cref="GraphSiteHows.All"/> says them, each
-            /// edge's of other than exact with how sure it is; then its lines, by path and line, each counting no place, a text
-            /// hit's a hit.
+            /// Its entries, one block of its node (<see cref="GraphEntry.Node"/>, named by its qualified name): its card with
+            /// every way it decides, in the order <see cref="GraphSiteHows.All"/> says them, each edge's of other than exact with
+            /// how sure it is - the place, counted once, at the block's head; then its lines, by path and line, each counting no
+            /// place, a text hit's a hit. A page gives the block whole where a page holds it - one that cannot ends before it -
+            /// and one wider than a page in parts, each page after its first beginning with the card again
+            /// (<see cref="Paging"/>).
             /// </summary>
             public IReadOnlyList<GraphEntry> Entries()
             {
                 var hows = GraphSiteHows.All
                     .Where(_hows.ContainsKey)
                     .Select(how => string.Equals(_hows[how], CodeConfidences.Exact, StringComparison.Ordinal) ? how : $"{how} ({_hows[how]})");
+                var block = ReportText.Printable(Card.Qualified);
 
                 return [
-                    new GraphEntry($"  {GraphLines.Of(Card)} | {string.Join(", ", hows)}"),
+                    new GraphEntry($"  {GraphLines.Of(Card)} | {string.Join(", ", hows)}", GoesOn: block, Node: Card.Id),
                     .. _lines
                         .OrderBy(line => line.Path, StringComparer.Ordinal)
                         .ThenBy(line => line.Line)
                         .ThenBy(line => line.Hit)
-                        .Select(line => new GraphEntry("      " + line.Said, Lines: 0, Hit: line.Hit))];
+                        .Select(line => new GraphEntry("      " + line.Said, Lines: 0, GoesOn: block, Node: Card.Id, Hit: line.Hit))];
             }
         }
     }
@@ -1673,7 +1688,7 @@ public sealed class CodebaseGraphTool(
         // No bound on the hits, nor on a file's bytes, nor on a hit's line: the answer's pages hold them all, at the text
         // fallback's size a page, a line wider than a page given in pieces.
         var hits = new List<AgentSearchHit>();
-        var search = await TextSearchAsync(_queries, CodebaseGraphQueries.WordPattern(word), _ => true, hit => hits.Add(hit), read: null, cancellationToken).ConfigureAwait(false);
+        var search = await TextSearchAsync(_queries, CodebaseGraphQueries.WordPattern(word), take: null, hit => hits.Add(hit), read: null, cancellationToken).ConfigureAwait(false);
 
         return new(
             [.. hits.Select(hit => new GraphEntry("  " + HitLine(hit.Path, hit), Lines: 1, Hit: true))],
@@ -1682,19 +1697,19 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>
     /// The one text search the tool runs, the text fallback's and a <c>sites</c> answer's alike: every file under
-    /// <paramref name="view"/>'s tree the step may read - held to the tree as well as to what the graph may read, for the
-    /// search decides again where each file it opened stands, and a link put on its way since may lead out of the tree, where
-    /// no relative path reads - that <paramref name="scope"/> takes by its path relative to the tree, each hit handed to
-    /// <paramref name="found"/> and each file read to its end to <paramref name="read"/>.
+    /// <paramref name="view"/>'s tree that <paramref name="take"/> takes, where one is given, by the path the tree's listing
+    /// names it by - the one path the file is told by, each hit handed to <paramref name="found"/> and each file read to its
+    /// end to <paramref name="read"/> naming it so - and the step may read: held to the tree as well as to what the graph may
+    /// read, for the search decides again where each file it opened stands, and a link put on its way since may lead out of
+    /// the tree, where no relative path reads.
     /// </summary>
-    private Task<AgentSearch> TextSearchAsync(CodebaseGraphQueries view, Regex pattern, Func<string, bool> scope, Action<AgentSearchHit> found, Action<string>? read, CancellationToken cancellationToken)
+    private Task<AgentSearch> TextSearchAsync(CodebaseGraphQueries view, Regex pattern, Func<string, bool>? take, Action<AgentSearchHit> found, Action<string>? read, CancellationToken cancellationToken)
         => _files.SearchAsync(
             view.Tree,
             pattern,
-            null,
-            StringComparison.Ordinal,
+            take,
             0,
-            file => _paths.Read(file).Full is not null && _mayRead(Relative(file)) && scope(Relative(file)),
+            file => _paths.Read(file).Full is not null && _mayRead(Relative(file)),
             (hit, _) =>
             {
                 found(hit);
@@ -1792,7 +1807,12 @@ public sealed class CodebaseGraphTool(
 
     private string Full(string path) => Path.Combine(_queries.Tree, path.Replace('/', Path.DirectorySeparatorChar));
 
-    private string Relative(string full) => Path.GetRelativePath(_queries.Tree, full).Replace('\\', '/');
+    /// <summary>
+    /// The path <paramref name="full"/> stands at relative to the tree, with forward separators: what <see cref="Full"/>
+    /// makes of a path read back, and a listing's path as the listing names it - only the system's own separator read as one,
+    /// so a backslash a file's name holds where it is no separator stays the name's.
+    /// </summary>
+    private string Relative(string full) => Path.GetRelativePath(_queries.Tree, full).Replace(Path.DirectorySeparatorChar, '/');
 
     private bool Reads(GraphCard card) => _mayRead(card.Path);
 
@@ -1999,7 +2019,7 @@ public sealed class CodebaseGraphTool(
         ("depth", "integer", "how many hops, from 1; 1 where it is left out."),
         ("symbols", "array", "the nodes to read, one or more, each a handle, an id or a name."),
         ("full", "boolean", "whether a type's members' bodies are given too."),
-        ("data", "string", "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone."),
+        ("data", "string", "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path, dotted or as .NET's configuration writes one (Payments:TimeoutSeconds, Payments__TimeoutSeconds), or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone."),
         ("hash", "string", "the node's hash as you last saw it; the edit is refused where its lines moved since."),
         ("text", "string", "the node's new lines."),
         ("reason", "string", "why the whole file is needed."),

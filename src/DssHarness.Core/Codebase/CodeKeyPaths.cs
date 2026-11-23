@@ -86,6 +86,72 @@ public static class CodeKeyPaths
     }
 
     /// <summary>
+    /// The path <paramref name="path"/> names as an environment variable writes one for .NET's configuration - its places
+    /// joined by double underscores, an item by its digits (<c>Payments__TimeoutSeconds</c>, <c>Limits__1__Value</c>): the
+    /// one spelling of a path <see cref="Dotted"/> reads back that a whole word of a line holds, for an underscore is a
+    /// character of a word and a colon is none; <see langword="null"/> where no such spelling is read back as the path.
+    /// </summary>
+    /// <param name="path">A key's path, as <see cref="Of"/> writes one.</param>
+    public static string? Environment(string path) => Joined(path, "__");
+
+    /// <summary>
+    /// Each name a key may be written with that names <paramref name="path"/> as .NET's configuration reads a key's name -
+    /// its places joined by colons (<c>Payments:TimeoutSeconds</c>, a flat key of a settings file) and by double
+    /// underscores (<c>Payments__TimeoutSeconds</c>, an environment variable's), an item by its digits - each one
+    /// <see cref="Dotted"/> reads back as the path; none where the path has one place, or a place no such name can write.
+    /// </summary>
+    /// <param name="path">A key's path, as <see cref="Of"/> writes one.</param>
+    public static IEnumerable<string> Spellings(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        foreach (var separator in Spelt)
+        {
+            if (Joined(path, separator) is { } spelt)
+            {
+                yield return spelt;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The places of <paramref name="path"/> joined by <paramref name="separator"/>, an item by its digits; null where the
+    /// path has one place, holds a quoted name, or is not read back as itself (<see cref="Dotted"/>) - a place that holds the
+    /// separator of its own (<c>Payments__TimeoutSeconds</c> under <c>environment</c>, which no environment variable's name
+    /// writes) is no place of that spelling.
+    /// </summary>
+    private static string? Joined(string path, string separator)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        var places = new List<string>();
+
+        foreach (var (start, end) in Places(path))
+        {
+            if (path[start] != '[')
+            {
+                places.Add(path[start..end]);
+            }
+            else if (end - start > 2 && path[start + 1] != '"')
+            {
+                places.Add(path[(start + 1)..(end - 1)]);
+            }
+            else
+            {
+                return null;
+            }
+        }
+
+        if (places.Count < 2)
+        {
+            return null;
+        }
+
+        var spelt = string.Join(separator, places);
+        return string.Equals(Dotted(spelt), path, StringComparison.Ordinal) ? spelt : null;
+    }
+
+    /// <summary>
     /// Each place <paramref name="path"/> is written of, in order, by where its text begins and ends: a name up to the dot
     /// or the bracket after it, the dot left out; an item or a quoted name with its brackets - a quoted name's escapes read
     /// as <see cref="ReportText.Quoted"/> writes them, so a dot or a bracket inside the quotes parts nothing. A path is read

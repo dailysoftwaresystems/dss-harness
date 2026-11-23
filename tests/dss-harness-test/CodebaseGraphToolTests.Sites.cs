@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
@@ -10,7 +11,7 @@ namespace DssHarness.Tests;
 public sealed partial class CodebaseGraphToolTests
 {
     /// <summary>What a <c>sites</c> call's data is, as the tool's schema and every usage line about it say it.</summary>
-    internal const string DataDescription = "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone.";
+    internal const string DataDescription = "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path, dotted or as .NET's configuration writes one (Payments:TimeoutSeconds, Payments__TimeoutSeconds), or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone.";
 
     /// <summary>The coverage line every answer that searched a file the graph lists only ends its coverage with.</summary>
     private const string NoExtractor = "coverage: nothing is assumed of a language with no extractor; those files are read by text alone";
@@ -137,6 +138,7 @@ public sealed partial class CodebaseGraphToolTests
                 ListedZoo,
                 "coverage: 2 file(s) the graph is unsure of, searched by text too - 0 hit(s)",
                 "coverage: 2 file(s) the graph outlines (.json, .md), their values and their text held by no literal of it, searched by text too - 1 hit(s)",
+                "coverage: 'TimeoutSeconds' searched as a whole word, and the key path as an environment variable writes it: 'Payments__TimeoutSeconds'",
                 NoExtractor,
                 .. LimitsOf("csharp", [CodeGraphLimit.Candidates]),
                 .. LimitsOf("json"),
@@ -148,7 +150,9 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// A step whose reads do not reach a file is shown no place in it - a definer's caller, a literal's node, a hit - and the
-    /// places left out are counted; where every place the graph holds of the data is in such a file, the answer says so.
+    /// places left out are counted; where every place the graph holds of the data is in such a file, the answer says so. A
+    /// file the graph answers of is never taken by the text search, so it is never counted among the files the reader may not
+    /// read, as a file the search would have read is.
     /// </summary>
     [Fact]
     public async Task Sites_ShowNoPlaceInAFileTheStepsReadsDoNotReach_AndCountThem()
@@ -162,6 +166,10 @@ public sealed partial class CodebaseGraphToolTests
         var quoted = (await AskAsync(tool, """{"op":"sites","data":"\"Area\""}""")).Text.Split('\n');
         var hidden = (await AskAsync(tool, """{"op":"sites","data":"'Hidden value'"}""")).Text.Split('\n');
         var fallback = (await AskAsync(tool, """{"op":"find","query":"Okapi"}""")).Text.Split('\n')[^1];
+
+        // The text fallback takes every file, Keys.cs and Hidden.cs among them; a sites answer of a name never takes those two,
+        // which the graph is sure of, and counts the rest the fallback counts - Geometry.cs, which it is unsure of, among them.
+        var counted = int.Parse(fallback.Split(' ')[0][1..], CultureInfo.InvariantCulture);
 
         // Total, which calls the definers, stands in Geometry.cs and Keys.Of's literal in Keys.cs: both left out and counted,
         // and Geometry.cs is never searched by text.
@@ -179,15 +187,16 @@ public sealed partial class CodebaseGraphToolTests
                 NoExtractor,
                 .. LimitsOf("csharp"),
                 .. LimitsOf("markdown"),
-                fallback,
+                $"[{(counted - 2).ToString(CultureInfo.InvariantCulture)} file(s) you may not read were left out]",
                 "2 place(s) left out: in files your reads do not reach",
             ],
             named.Text.Split('\n'));
         Assert.Equal(["csharp:Demo.Circle.Area()", "csharp:Demo.Generated.Square.Area()", "csharp:Demo.IShape.Area()"], named.Facts.Asked);
 
-        // A literal a file the reads do not reach holds is no place shown, and is counted.
+        // A literal a file the reads do not reach holds is no place shown, and is counted; a quoted value takes every file the
+        // graph read, so the files it may not read are the fallback's.
         Assert.DoesNotContain(quoted, line => line.Contains("src/Keys.cs", StringComparison.Ordinal));
-        Assert.Equal("1 place(s) left out: in files your reads do not reach", quoted[^1]);
+        Assert.Equal([fallback, "1 place(s) left out: in files your reads do not reach"], quoted[^2..]);
 
         // Where every place is in such a file, the answer says so, and what it searched by text holds none.
         Assert.Equal(
@@ -217,8 +226,14 @@ public sealed partial class CodebaseGraphToolTests
         var tool = Tool(tree, queries, sync: false);
 
         var answer = (await AskAsync(tool, """{"op":"sites","data":"Okapi"}""")).Text.Split('\n');
-        var fallback = (await AskAsync(tool, """{"op":"find","query":"Okapi"}""")).Text.Split('\n');
         var guide = queries.AtLine("docs/guide.md", 3)!;
+
+        // The text fallback's notes of the same tree, from a find no node's name, summary or path matches: the guide's section
+        // holds Okapi in its summary, so a find of Okapi is answered by the graph and searches nothing.
+        var fallback = (await AskAsync(tool, """{"op":"find","query":"Quagga"}""")).Text.Split('\n');
+
+        Assert.Equal(["no node matched", "text: no line holds 'Quagga'"], fallback[..2]);
+        Assert.Matches(@"^\[\d+ file\(s\) you may not read were left out\]$", fallback[^2]);
 
         Assert.Equal(
             [
@@ -643,41 +658,322 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// The node at a line - a text hit's card, a <c>path:line</c>'s node - is the innermost: of nodes with the same lines, the
-    /// one declared inside the other, never one of them by the order of their ids - a page's landmark before the body of the
-    /// same lines, a type's only member on its line before the type, and a Vue component that spans its whole file before the
-    /// file's own node, whose id the order would put first - and of those no other is declared inside, the one that makes a
-    /// reference at the line: a Razor page's markup, not the class it compiles to, whose id the order would put first.
+    /// The node at a line - a text hit's card, a <c>path:line</c>'s node - is of the nodes of the tightest lines the innermost,
+    /// never one of them by the order of their ids: a page's landmark before the body of the same lines, a type's only member
+    /// on its line before the type, and a Vue component that spans its whole file before the file's own node. Where several
+    /// are innermost, the line declares them inside one of those lines, which is the node at it - a positional record, not its
+    /// first parameter by id though one of them makes a reference there; a one-line enum, not the member whose name sorts
+    /// first; a one-line object of a JSON list, not its first key - else the one that makes a reference at the line - a Razor
+    /// page's markup, not the class it compiles to - else the nearest node they are all declared inside: two fields on one
+    /// line, their type.
     /// </summary>
     [Fact]
-    public async Task TheNodeAtALine_IsTheInnermost_OfNodesWithTheSameLinesTheOneDeclaredInside()
+    public async Task TheNodeAtALine_IsTheInnermost_OrTheNodeTheLineDeclaresSeveralInside_NeverOneByTheOrderOfIds()
     {
         using var tree = await TreeAsync(
             ("web/page.html", "<main>\n  <p>Okapi</p>\n</main>\n"),
             ("src/One.cs", "namespace Demo;\n\npublic sealed class One { public int Two() => 2; }\n"),
             ("src/Cart.vue", "<template>\n  <p>{{ total() }}</p>\n</template>\n<script setup>\nfunction total() { return 1; }\n</script>\n"),
             ("src/CartService.cs", "namespace Shop;\n\npublic sealed class CartService\n{\n    public int Total() => 0;\n}\n"),
-            ("src/Pages/_Total.cshtml", "@model Shop.CartService\n\n<p>Total: @Model.Total()</p>\n"));
+            ("src/Pages/_Total.cshtml", "@model Shop.CartService\n\n<p>Total: @Model.Total()</p>\n"),
+            ("src/Events.cs", "namespace Demo;\n\npublic interface IEvent\n{\n}\n\npublic sealed class Product\n{\n}\n\npublic sealed record OrderPlaced(System.Guid Id, decimal Total) : IEvent;\n\npublic sealed record Line(Product Item, int Count);\n"),
+            ("src/Enums.cs", "namespace Demo;\n\npublic enum Shipping { Standard, Express }\n\npublic enum Color { Red, Green, Blue }\n"),
+            ("src/Pair.cs", "namespace Demo;\n\npublic sealed class Pair\n{\n    public int Left; public int Right;\n}\n"),
+            ("config/limits.json", "{\n  \"limits\": [\n    { \"kind\": \"depth\", \"value\": 8 },\n    { \"kind\": \"size\", \"value\": 9 }\n  ]\n}\n"));
         var queries = await QueriesAsync(tree);
+
+        string Qualified(string path, int line) => queries.AtLine(path, line)!.Qualified;
 
         Assert.Equal("landmark", queries.AtLine("web/page.html", 2)!.SubKind);
         Assert.Equal("Two", queries.AtLine("src/One.cs", 3)!.Name);
         Assert.Equal(("vue:src/Cart.vue", CodeNodeKinds.Type), (queries.AtLine("src/Cart.vue", 2)!.Id, queries.AtLine("src/Cart.vue", 2)!.Kind));
         Assert.Equal("razor:src/Pages/_Total.cshtml#view", queries.AtLine("src/Pages/_Total.cshtml", 3)!.Id);
+
+        // Each line here declares several of the same lines inside one: the record, the enum, the object.
+        Assert.Equal(
+            ["Demo.OrderPlaced", "Demo.Line", "Demo.Shipping", "Demo.Color", "config/limits.json#limits[0]", "config/limits.json#limits[1]"],
+            [Qualified("src/Events.cs", 11), Qualified("src/Events.cs", 13), Qualified("src/Enums.cs", 3), Qualified("src/Enums.cs", 5), Qualified("config/limits.json", 3), Qualified("config/limits.json", 4)]);
+
+        // Two fields on a line of their type: neither of them, but the type they are declared inside.
+        Assert.Equal("Demo.Pair", Qualified("src/Pair.cs", 5));
+
+        // A line no node but the file's own holds is the file's; one past its end is none.
+        Assert.Equal(CodeNodeKinds.File, queries.AtLine("config/limits.json", 1)!.Kind);
+        Assert.Null(queries.AtLine("src/Enums.cs", 400));
     }
 
     /// <summary>
-    /// What a search says it left out of the files the reader may not read is the caller's count where it gives one - a
-    /// search that passed over readable files by its own will says fewer, and none where none is left - and the search's own
-    /// where it gives none.
+    /// The node at a line is read from the file's line index, made once a file: asking it of every line of a file of thousands
+    /// of nodes makes one card a line answered, never a card of every node of the file a line - which made a search of a
+    /// file's every line cost its lines times its nodes.
     /// </summary>
     [Fact]
-    public void ASearchsLeftOutFiles_AreTheCallersCount_AndNoneWhereItIsNone()
+    public async Task TheNodeAtEveryLineOfAFile_MakesOneCardALine()
     {
-        var search = new AgentSearch([], 0, Refused: 5, Passed: 0, Searched: 3, new AgentListing([], 0, 0, null), 0, null);
+        const int Keys = 500;
+        var json = new StringBuilder("{\n");
 
-        Assert.Empty(search.LeftOut(path => path, refused: 0));
-        Assert.Equal(["[2 file(s) you may not read were left out]"], search.LeftOut(path => path, refused: 2));
-        Assert.Equal(["[5 file(s) you may not read were left out]"], search.LeftOut(path => path));
+        for (var at = 0; at < Keys; at++)
+        {
+            json.Append(CultureInfo.InvariantCulture, $"  \"key{at}\": {{ \"version\": \"1.{at}\", \"name\": \"package{at}\" }}{(at < Keys - 1 ? "," : string.Empty)}\n");
+        }
+
+        using var tree = await TreeAsync(("data/lock.json", json.Append("}\n").ToString()));
+        var queries = await QueriesAsync(tree);
+        var before = queries.CardsMade;
+        var answered = Enumerable.Range(1, Keys + 2).Count(line => queries.AtLine("data/lock.json", line) is not null);
+
+        Assert.Equal(Keys + 2, answered);
+        Assert.Equal(Keys + 2, queries.CardsMade - before);
+        Assert.Equal("data/lock.json#key7", queries.AtLine("data/lock.json", 9)!.Qualified);
+    }
+
+    /// <summary>
+    /// A search's caller takes each file by the path its listing names it by, before the search asks whether the reader may
+    /// read it: a file not taken is passed over by the caller's own will and counted nowhere - never among the files the
+    /// reader may not read - and each hit and each file read is named by that same path.
+    /// </summary>
+    [Fact]
+    public async Task ASearch_TakesEachFileByItsListedPath_BeforeItsReadGate_AndCountsNoFileItDidNotTake()
+    {
+        using var tree = await TreeAsync(("src/Keys.cs", "namespace Demo;\n\npublic static class Keys\n{\n    public static string Of() => \"grazes\";\n}\n"));
+        var files = new AgentFiles(tree.Harness.GitClient, tree.Harness.FileSystem);
+        var taken = new List<string>();
+        var hits = new List<string>();
+        var read = new List<string>();
+
+        var search = await files.SearchAsync(
+            tree.Tree,
+            new Regex("grazes|Geometry"),
+            path =>
+            {
+                taken.Add(path);
+                return path is "docs/zoo.txt" or "src/Geometry.cs";
+            },
+            0,
+            full => !full.EndsWith("Geometry.cs", StringComparison.Ordinal) && !full.EndsWith("Keys.cs", StringComparison.Ordinal),
+            (hit, _) =>
+            {
+                hits.Add($"{hit.Path}:{hit.Line.ToString(CultureInfo.InvariantCulture)}");
+                return ValueTask.CompletedTask;
+            },
+            read.Add,
+            TestContext.Current.CancellationToken);
+
+        // Keys.cs, which the reader may not read either, was never taken: Geometry.cs alone is counted as left out.
+        Assert.Contains("src/Keys.cs", taken);
+        Assert.Equal(1, search.Refused);
+        Assert.Equal(["[1 file(s) you may not read were left out]"], search.LeftOut(path => path));
+        Assert.Equal(["docs/zoo.txt:1"], hits);
+        Assert.Equal(["docs/zoo.txt"], read);
+    }
+
+    /// <summary>
+    /// What decides of the data is walked from every definer, one the step's reads do not reach among them, each place it
+    /// reaches held to the reads where it stands: a readable caller of a definer in a file the reads do not reach is listed -
+    /// it tells nothing the step cannot read itself - and the definer counted as left out; the answer never says every place
+    /// is in a file the reads do not reach where one is not.
+    /// </summary>
+    [Fact]
+    public async Task Sites_WalkFromEveryDefiner_ListingAReadableCallerOfOneTheReadsDoNotReach()
+    {
+        using var tree = await TreeAsync(
+            ("lib/Util.cs", "namespace Demo.Lib;\n\npublic static class Util\n{\n    public static int Helper() => 1;\n}\n"),
+            ("src/App.cs", "namespace Demo.App;\n\npublic static class App\n{\n    public static int Run() => Demo.Lib.Util.Helper();\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries, mayRead: path => path != "lib/Util.cs");
+
+        var answer = await AskAsync(tool, """{"op":"sites","data":"Helper"}""");
+        var lines = answer.Text.Split('\n');
+
+        Assert.Equal(["every place that decides 'Helper':", "csharp in directory src/ (1):", $"  {GraphLines.Of(CardOf(queries, "App.Run"))} | calls", ListedZoo], lines[..4]);
+        Assert.Equal("1 place(s) left out: in files your reads do not reach", lines[^1]);
+        Assert.Empty(answer.Facts.Asked);
+    }
+
+    /// <summary>
+    /// A key path is read in every spelling the one owner of a key path's spellings reads - dotted, a colon between its places
+    /// as .NET's configuration writes one in code, a double underscore as an environment variable writes one - each asking of
+    /// the same keys: the key at that path, and a key whose own name spells it, an environment variable's under a compose
+    /// file's <c>environment</c>; and it is searched for by its last key, as data and code write it, and by its places as an
+    /// environment variable writes them, which a whole word of its last key is never held by - the line that writes the path
+    /// so said under its key's card, and the spelling said in the coverage lines. A name spelt so of a place that holds a
+    /// separator of its own is no spelling of the path, for it is never read back as it.
+    /// </summary>
+    [Fact]
+    public async Task Sites_OfAKeyPathInAnySpelling_AnswerTheSameKeys_AndSearchItAsCodeDataAndTheEnvironmentWriteIt()
+    {
+        using var tree = await TreeAsync(
+            ("config/app.json", "{\n  \"Payments\": {\n    \"TimeoutSeconds\": 30\n  }\n}\n"),
+            ("src/Settings.cs", "namespace Demo;\n\npublic static class Settings\n{\n    public static string Timeout(System.Collections.Generic.IDictionary<string, string> config)\n    {\n        return config[\"Payments:TimeoutSeconds\"];\n    }\n}\n"),
+            ("deploy/compose.yml", "environment:\n  Payments__TimeoutSeconds: 60\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+        var key = queries.Card("json:config/app.json#Payments.TimeoutSeconds");
+        var variable = queries.AtLine("deploy/compose.yml", 2)!;
+
+        Assert.Equal(("Payments__TimeoutSeconds", CodeSubKinds.Key), (variable.Name, variable.SubKind));
+
+        foreach (var data in new[] { "Payments:TimeoutSeconds", "Payments__TimeoutSeconds", "Payments.TimeoutSeconds" })
+        {
+            var answer = await AskAsync(tool, $$"""{"op":"sites","data":"{{data}}"}""");
+            var lines = answer.Text.Split('\n');
+
+            Assert.Equal([key.Id, variable.Id], answer.Facts.Asked);
+            Assert.Contains($"  {GraphLines.Of(key)} | holds the key, a line holds it", lines);
+            Assert.Contains("      config/app.json:3 \"TimeoutSeconds\": 30", lines);
+            Assert.Contains("      src/Settings.cs:7 holds the literal 'Payments:TimeoutSeconds'", lines);
+            Assert.Contains($"  {GraphLines.Of(variable)} | holds the key, a line holds it", lines);
+            Assert.Contains("      deploy/compose.yml:2 Payments__TimeoutSeconds: 60", lines);
+            Assert.Contains("coverage: 'TimeoutSeconds' searched as a whole word, and the key path as an environment variable writes it: 'Payments__TimeoutSeconds'", lines);
+        }
+
+        // The last key of a path in each spelling, a quoted name's dot no separator; each path as an environment variable writes it,
+        // and each name a key may be written with that names it, none of a place that holds a separator of its own.
+        Assert.Equal(
+            ["TimeoutSeconds", "TimeoutSeconds", "Value", "limits", "value", "Total", ".btn", "MAX_SIZE"],
+            new[] { "Payments:TimeoutSeconds", "Payments__TimeoutSeconds", "Limits:1:Value", "limits[1]", "packages[\"a.b\"].value", "Order::Total", ".btn", "MAX_SIZE" }.Select(CodebaseGraphQueries.LastPart));
+        Assert.Equal(
+            ["Payments__TimeoutSeconds", "Limits__1__Value", null, null, null],
+            new[] { "Payments.TimeoutSeconds", "Limits[1].Value", "packages[\"\"].name", "Payments", "environment.Payments__TimeoutSeconds" }.Select(CodeKeyPaths.Environment));
+        Assert.Equal(["Limits:1:Value", "Limits__1__Value"], CodeKeyPaths.Spellings("Limits[1].Value"));
+        Assert.Equal(["environment:Payments__TimeoutSeconds"], CodeKeyPaths.Spellings("environment.Payments__TimeoutSeconds"));
+    }
+
+    /// <summary>
+    /// A file whose extract the graph no longer holds - its declarations in no answer - is searched by text and said by why,
+    /// each of its lines that holds the data a raw line: the graph's silence of it is never read as the data's absence.
+    /// </summary>
+    [Fact]
+    public async Task Sites_SearchAFileWhoseExtractTheGraphNoLongerHolds_AndSayIt()
+    {
+        using var tree = await TreeAsync();
+        File.Delete(tree.Run.GraphExtractFile(tree.Manifest().Files["src/Geometry.cs"].Extract!));
+        var queries = new CodebaseGraphQueries((await tree.ReadOnlyAsync())!);
+
+        var lines = (await AskAsync(Tool(tree, queries, sync: false), """{"op":"sites","data":"Total"}""")).Text.Split('\n');
+
+        Assert.Equal("every place that decides 'Total':", lines[0]);
+        Assert.Contains("  src/Geometry.cs:5 public static double Total(IShape[] shapes)", lines);
+        Assert.Contains("  src/Geometry.cs:18 return Total([shape, shape]);", lines);
+        Assert.Contains("coverage: 1 file(s) whose extract the graph no longer holds, their declarations in no answer (.cs), searched by text - 2 hit(s)", lines);
+    }
+
+    /// <summary>
+    /// What names a definer by its kind - a parameter's type, an <c>is</c> test, Python's <c>isinstance</c> - and what is built
+    /// on it - a type inheriting it - are its places, each saying so, as the <c>node</c> operation lists both edges.
+    /// </summary>
+    [Fact]
+    public async Task Sites_ReachWhatNamesTheDefinerByItsKind_AndWhatInheritsIt()
+    {
+        using var tree = await TreeAsync(
+            ("src/Shipments.cs", "namespace Demo.Shipping;\n\npublic class Shipment\n{\n}\n\npublic sealed class ExpressShipment : Shipment\n{\n}\n\npublic static class Days\n{\n    public static int Of(Shipment shipment) => shipment is ExpressShipment ? 1 : 5;\n}\n"),
+            ("shop/__init__.py", ""),
+            ("shop/orders.py", "class Order:\n    pass\n\n\nclass ExpressOrder(Order):\n    pass\n"),
+            ("shop/ship.py", "from shop.orders import ExpressOrder\n\n\ndef days(o):\n    return 1 if isinstance(o, ExpressOrder) else 5\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        async Task<string[]> Lines(string data) => (await AskAsync(tool, $$"""{"op":"sites","data":"{{data}}"}""")).Text.Split('\n');
+
+        var shipment = GraphLines.Of(CardOf(queries, "Demo.Shipping.Shipment"));
+        var express = GraphLines.Of(CardOf(queries, "ExpressShipment"));
+        var days = GraphLines.Of(CardOf(queries, "Days.Of"));
+
+        Assert.Equal(["every place that decides 'Shipment':", "csharp in directory src/ (3):", $"  {shipment} | defines", $"  {express} | inherits", $"  {days} | references", ListedZoo], (await Lines("Shipment"))[..6]);
+        Assert.Equal(["every place that decides 'ExpressShipment':", "csharp in directory src/ (2):", $"  {express} | defines", $"  {days} | references", ListedZoo], (await Lines("ExpressShipment"))[..5]);
+
+        // Python's: a test of a value's kind, and a class built on one.
+        Assert.Contains(await Lines("ExpressOrder"), line => line.StartsWith($"  {GraphLines.Of(CardOf(queries, "days"))} | references", StringComparison.Ordinal));
+        Assert.Contains(await Lines("Order"), line => line.StartsWith($"  {GraphLines.Of(CardOf(queries, "ExpressOrder"))} | inherits", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A place's lines never stand on a page without its card: a page that gives anything before a place it cannot hold whole
+    /// ends before its card, and the next page gives it whole; a place no page holds is given in parts, the page that ends
+    /// inside it saying it goes on and each page after beginning with its card again, said as going on and counted nothing -
+    /// every place counted once, every line given once.
+    /// </summary>
+    [Fact]
+    public async Task Sites_GiveAPlacesLinesOnlyBesideItsCard_WholeOnAPageThatHoldsIt_ItsCardAgainOnEachPageAfter()
+    {
+        const int Long = 900;
+        const int Short = 200;
+        var code = new StringBuilder("// <auto-generated/>\nnamespace Demo.Big;\n\npublic static class Tally\n{\n    public static int Long(int zebu)\n    {\n        var total = 0;\n");
+
+        code.Append(string.Concat(Enumerable.Repeat("        total += zebu;\n", Long)));
+        code.Append("        return total;\n    }\n\n    public static int Short(int zebu)\n    {\n        var total = 0;\n");
+        code.Append(string.Concat(Enumerable.Repeat("        total += zebu;\n", Short)));
+        code.Append("        return total;\n    }\n}\n");
+
+        using var tree = await TreeAsync(("src/Big.g.cs", code.ToString()));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+        var longCard = $"  {GraphLines.Of(CardOf(queries, "Tally.Long"))} | a line holds it";
+        var shortCard = $"  {GraphLines.Of(CardOf(queries, "Tally.Short"))} | a line holds it";
+        var shortStart = CardOf(queries, "Tally.Short").Start;
+
+        var first = await AskAsync(tool, """{"op":"sites","data":"zebu"}""");
+        var pages = new List<string[]> { first.Text.Split('\n') };
+
+        for (var page = 2; page <= first.Paging!.Pages; page++)
+        {
+            pages.Add((await AskAsync(tool, $$"""{"op":"sites","data":"zebu","page":{{page}}}""")).Text.Split('\n'));
+        }
+
+        Assert.Equal(3, pages.Count);
+        Assert.Equal(2, first.Paging.Total);
+
+        // Page 1 ends inside the long place, saying so; page 2 begins with its card again, then goes on with its lines.
+        Assert.Equal("… Demo.Big.Tally.Long goes on", pages[0][^1]);
+        Assert.Equal(["every place that decides 'zebu':", "csharp in directory src/ (2):", $"{longCard} … goes on"], pages[1][1..4]);
+
+        // The short place, which page 2 has no room left for whole, begins page 3 and is given whole on it.
+        Assert.DoesNotContain(pages[1], line => line.StartsWith(shortCard, StringComparison.Ordinal) || line.Contains($"src/Big.g.cs:{shortStart.ToString(CultureInfo.InvariantCulture)} ", StringComparison.Ordinal));
+        Assert.Equal(shortCard, pages[2][3]);
+
+        // Every line of a place stands beneath its own card on its page, and every line is given once.
+        var given = new List<int>();
+
+        foreach (var lines in pages)
+        {
+            string? card = null;
+
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("  ", StringComparison.Ordinal) && !line.StartsWith("      ", StringComparison.Ordinal))
+                {
+                    card = line;
+                }
+                else if (line.StartsWith("      src/Big.g.cs:", StringComparison.Ordinal))
+                {
+                    var at = int.Parse(line["      src/Big.g.cs:".Length..line.IndexOf(' ', "      src/Big.g.cs:".Length)], CultureInfo.InvariantCulture);
+                    Assert.NotNull(card);
+                    Assert.StartsWith(at < shortStart ? longCard : shortCard, card, StringComparison.Ordinal);
+                    given.Add(at);
+                }
+            }
+        }
+
+        Assert.Equal(Long + Short + 2, given.Count);
+        Assert.Distinct(given);
+    }
+
+    /// <summary>
+    /// A file whose name holds a backslash - an ordinary character of a name off Windows - is told by the one path its listing
+    /// names it by, where the search takes it, where its hits and its read name it: searched, its hit given, nothing thrown.
+    /// </summary>
+    [Fact]
+    public async Task Sites_ReadAFileWhoseNameHoldsABackslash_ByThePathItsListingNamesItBy()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows cannot hold a backslash in a file name.");
+
+        using var tree = await TreeAsync(("docs/a\\b.txt", "A zebu grazes here.\n"));
+        var tool = Tool(tree, await QueriesAsync(tree));
+
+        var answer = await AskAsync(tool, """{"op":"sites","data":"zebu"}""");
+
+        Assert.Equal(GraphToolOutcome.Answered, answer.Outcome);
+        Assert.Equal(["every place that decides 'zebu':", ".txt in directory docs/ (1):", "  docs/a\\b.txt:1 A zebu grazes here."], answer.Text.Split('\n')[..3]);
     }
 }

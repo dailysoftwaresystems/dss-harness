@@ -189,6 +189,15 @@ public static class GraphSiteHows
     /// <summary>A member that overrides a definer, or one a definer overrides.</summary>
     public const string Overrides = "overrides";
 
+    /// <summary>
+    /// A node that names a definer by its kind without making it: a type mention - an annotation, a parameter's or a field's
+    /// type - and a test of a value's kind, as <c>isinstance</c>, <c>instanceof</c> and a <c>catch</c> or an <c>except</c> make one.
+    /// </summary>
+    public const string References = "references";
+
+    /// <summary>A type built on a definer: one inheriting it, or mixing it in.</summary>
+    public const string Inherits = "inherits";
+
     /// <summary>A node whose code holds a string literal that is the data or holds it.</summary>
     public const string HoldsTheLiteral = "holds the literal";
 
@@ -196,7 +205,7 @@ public static class GraphSiteHows
     public const string Text = "a line holds it";
 
     /// <summary>Every way a place decides, in the order a card says them.</summary>
-    public static IReadOnlyList<string> All { get; } = [Defines, HoldsTheKey, Calls, Uses, Instantiates, Implements, Overrides, HoldsTheLiteral, Text];
+    public static IReadOnlyList<string> All { get; } = [Defines, HoldsTheKey, Calls, Uses, Instantiates, References, Inherits, Implements, Overrides, HoldsTheLiteral, Text];
 }
 
 /// <summary>What one way of deciding reaches off a <c>sites</c> ask's definers: the nodes, each with the surest confidence of the edges that reach it.</summary>
@@ -212,6 +221,13 @@ public enum GraphTextReason
 
     /// <summary>The view holds the file in a state no implementation of a language read it in: listed alone, unreadable, ambiguous, and the rest.</summary>
     Unread,
+
+    /// <summary>
+    /// The view holds the file as an implementation of a language read it, but no longer the extract it read: one that does
+    /// not read, or no longer declares what the link names (<see cref="CodebaseGraphQueries.Unheld"/>) - its declarations in
+    /// no answer.
+    /// </summary>
+    Unextracted,
 
     /// <summary>The graph is not sure of the file (<see cref="CodebaseGraphQueries.UnsureOfFile"/>).</summary>
     Unsure,

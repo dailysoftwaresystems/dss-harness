@@ -49,6 +49,16 @@ function clear(): void {
 function hasRoom(): boolean {
   return lines.length < MAX_LINES;
 }
+
+/** Marks an element as the primary action, as the style sheet's .btn-primary styles it. */
+function markPrimary(element: HTMLElement): void {
+  element.classList.add('btn-primary');
+}
+
+/** The primary action, found by the selector the style sheet writes. */
+function primaryAction(): Element | null {
+  return document.querySelector('button.btn-primary');
+}
 </script>
 
 <template>

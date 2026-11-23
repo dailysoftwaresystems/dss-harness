@@ -4467,13 +4467,19 @@ sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language.
 is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
 `Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
 language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`), the
-scope whose declarations alone see it (`SeenIn`), the element selectors a component is named by (`Selectors`) and the
-files that are its templates (`Templates`) among what they say - the scopes they are put in (open to
+scope whose declarations alone see it (`SeenIn`), the element selectors a component is named by (`Selectors`), the
+files that are its templates (`Templates`) and whether its members are reached from their own code by a receiver alone and
+never by a name written alone (`MembersByReceiver`: a name such members' code writes by itself is looked for past the scope
+they are declared in and its bases - said by a type of its own members, and by a member a file adds to a type from outside
+its body of the members of the scope it is declared in) among what they say - the scopes they are put in (open to
 other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending, directory (a scope every file under a directory imports) or a path under a root of the layout (`Rooted`), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`), an import of a file whose imports this one shares (`Shares`), one whose names are the file's importers' too (`Reexports`), one that takes the names a file publishes alone (`Published`), one that names a place a bare name is looked for (`Layout`), one whose prefix stands for the one name it shows (`Binds`), one of two places a name may stand at that the file cannot tell apart (`Either`) and one that serves one qualifier's references alone (`Serves`),
 address roots, the names the file publishes (`Published`, with `PublishesTaken` where what its own such imports take is
 among them), whether its names are bound within it (`BoundWithin`), whether its directory is a unit of its language's
 layout (`FolderUnit`) and the roots of the layout it declares (`LayoutRoots`), references by name with their qualifiers -
-one that asks whether a declaration is there, and is no external callee where none is (`Probe`), among them - the string literals the file holds - every
+one that asks whether a declaration is there, and is no external callee where none is (`Probe`), one made around the node
+it is made from rather than in that node's body - a decorator, a parameter's annotation or default - looked for from where
+the node is declared, its body's own closed scope passed over (`Around`), and one whose qualifier names a fixture, reached by
+the nodes of the fixture sub-kind alone (`CodeQualifierKinds.Fixture`, `CodeSubKinds.Fixture`), among them - the string literals the file holds - every
 one that holds a character, however short and however many, each value once in the file's own
 table (`ExtractLiteral`) with every place it is written, its line and the node whose code holds it
 (none where the file's own
@@ -5251,20 +5257,29 @@ nodes it reached and never reaches one again, so it is linear in the edges it fo
 reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
 found its lines moved, and reads a file whole whatever it holds. `sites` answers "every place that decides this" of one datum
 (`data`: a symbol as `symbol` takes one - a handle, an id or a `path:line`, which names its one node, or a qualified or simple
-name - a key path, a diagnostic id, a rule's selector as a rule writes it, or a quoted literal, asked by its value alone and
-never by the symbols): every definer of it across files and languages (`CodebaseGraphQueries.DefinersOf`, by the one reading
-of what an agent writes `Resolve` reads too - the node a handle, an id or a `path:line` names alone, else every node any rule
-of a name finds, a qualified name, a simple one, one written with a language's `::` or `\`, or with some of its scopes, where
+name - a key path, dotted or as .NET's configuration spells one (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`), a
+diagnostic id, a rule's selector as a rule writes it, or a quoted literal, asked by its value alone and never by the symbols):
+every definer of it across files and languages (`CodebaseGraphQueries.DefinersOf`, by the one reading of what an agent writes
+`Resolve` reads too - the node a handle, an id or a `path:line` names alone, else every node any rule of a name finds, a
+qualified name, a simple one, one written with a language's `::` or `\`, one spelt as the one owner of a key path's spellings
+reads it (`CodeKeyPaths.Dotted`), or with some of its scopes, and, last, of a key path every key whose own name spells it as
+.NET's configuration reads a key's name - an environment variable's, a settings file's flat key (`CodeKeyPaths.Spellings`:
+`Payments__TimeoutSeconds` under a compose file's `environment`) - so a key path in any spelling finds the same keys, where
 `Resolve` takes the first rule that finds one - a selector's own leading dot kept, so `.header` is never the element rule
-`header` or a key of that name), then one hop off the definers' own edges (`CodebaseGraphQueries.SitesOf`, each way a group
-read from the relations' own edges - `GraphRelations.Edges` - and the `node` operation's): their callers, their users, what
-makes them, what implements them or answers an interface's member for a type through its dispatches, what overrides them and
-what they override, a part of a declaration walked as the node itself, each node with how sure the surest edge that reaches it
-is - and no site's own edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds
+`header` or a key of that name), then one hop off every definer's own edges, a definer the step's reads do not reach among
+them, each place it reaches held to the reads where it stands (`CodebaseGraphQueries.SitesOf`, each way a group read from the
+relations' own edges - `GraphRelations.Edges` - and the `node` operation's): their callers, their users, what makes them, what
+names them by their kind - a type mention, an `isinstance`, an `instanceof`, a `catch` or an `except` - what inherits them or
+mixes them in, what implements them or answers an interface's member for a type through its dispatches, what overrides them
+and what they override, a part of a declaration walked as the node itself, each node with how sure the surest edge that
+reaches it is - and no site's own edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds
 it as a whole word (`CodebaseGraphQueries.LiteralSites`, read once an ask over the literals of every extract the view holds -
 no node of the graph is a literal's, so the read is the one index of them) - the datum searched for by the name of the node it
-names by itself, else by its last part (`CodebaseGraphQueries.LastPart`), for a name written with its scopes and a key path are
-written in code and in data by their last part (`shape.Area()`, `"TimeoutSeconds": 30`) - by the one whole-word rule every
+names by itself, else by its last part (`CodebaseGraphQueries.LastPart`, a path's places read by `CodeKeyPaths.Places`, so a
+quoted name's dot parts nothing), for a name written with its scopes and a key path in any spelling are written in code and in
+data by their last part (`shape.Area()`, `"TimeoutSeconds": 30`), and each key path it names by its places as an environment
+variable writes them too (`CodebaseGraphQueries.KeySpellings`, `CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which
+no whole word of its last key is held by) - by the one whole-word rule every
 search of the graph reads (`CodebaseGraphQueries.WordPattern`: a boundary beside each edge of the word that is a word character,
 an edge that is none its own boundary, so `.btn-primary` is held by `button.btn-primary`) and, for a selector, the selector with
 no character of a class's name after it, so `.btn` is not held by `.btn-primary`, and its bare name as a whole word of a class
@@ -5273,27 +5288,36 @@ names (`CodeSubKinds.Key`), held and never defined. What the graph does not answ
 searched by text with the same pattern, by the one search the text fallback runs too, and said
 (`CodebaseGraphQueries.TextScopeOf`, each file for the first of these it is): a file the view does not hold; one it holds in
 a state no implementation of a language read it in - listed by the fallback alone, which no extractor reads the language of,
-unreadable, ambiguous; one it is unsure of (`CodebaseGraphQueries.UnsureOfFile`); one an implementation outlines, whose values
+unreadable, ambiguous; one it holds read but no longer the extract of (`CodebaseGraphQueries.Unheld`), its declarations in no
+answer; one it is unsure of (`CodebaseGraphQueries.UnsureOfFile`); one an implementation outlines, whose values
 and text no literal of the graph holds; one a node of which makes a reference of the datum's name the linker bound to nothing of
 that name (`CodebaseGraphQueries.UnboundNaming` - an import it could not follow, a receiver it could not type), the sign the
 graph may be silent of one datum, for counting every external reference toward a file's unsureness would make a file unsure
 for every library call it makes; and, for a quoted value, every other file, for the graph holds a value only where code writes
-it as a string literal - the search passing over every other readable file by its own will and never counting one such as a
-file the reader may not read (`AgentSearch.LeftOut`'s refused count). Each place is one card, the node at it, saying every way
+it as a string literal - each file told by the one path its listing names it by, which the search takes it by before it asks
+whether the reader may read it, and each hit and each read names (`AgentFiles.SearchAsync`'s take), so a backslash a file's
+name holds where it is no separator stays the name's, and a file the graph answers of is passed over by the search's own will
+and counted nowhere, never as one the reader may not read. Each place is one card, the node at it, saying every way
 it decides - an edge's other than exact with how sure it is, as the `node` operation marks a candidates edge - with the lines
-a literal and a text hit stand on beneath it, a hit at a line a literal already names passed over - a hit's node the innermost
-at its line (`CodebaseGraphQueries.AtLine`: the one that begins last, of those the one that ends first; of nodes with the same
-lines one no other of them is declared inside, never the file's own node, which holds them all, and of those one that makes a
-reference at the line - so a Vue component spanning its file is never the file's node, a page's landmark never its body of
-the same lines, and a Razor page's markup never the class it compiles to, by the order of their ids); or a raw
-line where the graph read no node of the file. The cards are grouped by file kind and tier, as part 02 has it (`CodebaseGraphQueries.KindOf`: the
+a literal and a text hit stand on beneath it, a hit at a line a literal already names passed over - a hit's node the one at
+its line (`CodebaseGraphQueries.AtLine`: of the nodes that begin last, of those the ones that end first, the innermost, one no
+other of them is declared inside; where several are, the one of those lines they are all declared inside - the record of a
+positional record's parameters, the enum of a one-line enum's members, the object of a one-line object's keys - else the one
+of them that makes a reference at the line, else the nearest node they are all declared inside; never the file's own node
+where another holds the line, nor one by the order of the ids - so a Vue component spanning its file is never the file's
+node, a page's landmark never its body of the same lines, a type's only member on its line never the type, and a Razor page's
+markup never the class it compiles to - read from each file's line index, made once a file a view by one sweep of its nodes
+with an explicit stack of those open at a line, so a search of a file's every line costs its nodes and references once); or a
+raw line where the graph read no node of the file. The cards are grouped by file kind and tier, as part 02 has it (`CodebaseGraphQueries.KindOf`: the
 language that read the file, else its extension or its name; `CodebaseGraphQueries.TierOf`: the project nearest above it as
 the repository's map names its projects, else its top directory as the outline names it), at `CodebaseGraphTool.RelatedLines`
-places a page; and every place passes the step's reads at one gate, a definer, a node an edge reaches, a literal's place and a
+places a page, each place a block its card heads - the place counted once, its lines riding on it - so a page holds it whole
+where a page can, a page that gives anything before it ending before it, and one no page holds is given in parts, each page
+after its first beginning with its card again (`Pages\Paging`); and every place passes the step's reads at one gate, a definer, a node an edge reaches, a literal's place and a
 hit alike, those they do not reach counted. Every `sites` answer ends with its coverage lines: how many files of each kind of
 what the graph does not answer were searched - each counted once the search read it to its end, never as it was chosen - with
 their hits, the kinds of them named, the files it lists only and those it is unsure of said where none was; the forms a
-selector was searched in; and, where any file the graph lists only was searched, that nothing is assumed of a language with no
+selector and a key path were searched in; and, where any file the graph lists only was searched, that nothing is assumed of a language with no
 extractor, its files read by text alone - so a plan's site list is never read as covered where the graph was silent. Where none
 of it holds a place, the answer says only what was searched: no line of the files searched by text, never no line at all. It
 ends besides with every limit of each language whose files the graph read, one rule for every language (`CodebaseGraphTool.Unseen`):
@@ -5314,7 +5338,10 @@ less what the pages reserve and the answer's leading lines - an entry wider than
 boundaries, never inside a surrogate pair, a page each, each marked with `…` where it goes on or went on, and the page
 that ends inside one saying it goes on; the notes an answer ends with follow its last entry within the same room, each
 whole or in pieces, on as many pages as they take, every file whose extract is gone named; a block's head rides only with its block's first counted line, so the page that
-serves a node's lines names it, and a block is told by its node's id, so two overloads are two blocks. An answer of more
+serves a node's lines names it, and a block is told by its node's id, so two overloads are two blocks; a result's block - its
+head an entry that counts, the lines beneath it riding on it, as a `sites` place's card and its lines are - is given whole on
+a page that holds it, a page that gives anything before it ending before it, and one wider than a page in parts, each page
+after its first beginning with the head again, said as going on and counting nothing. An answer of more
 than one page starts with the line `page k of n` - on every page but the last the exact total, counted never estimated,
 and how to ask for the next with `page`, from 1, `offset` and `limit` refused naming it; the last says it is the last -
 and an answer with no header holds all of it; a page past the last is refused with the answer's range. A write is no
