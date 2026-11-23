@@ -98,7 +98,12 @@ public sealed class MutationLegs(MutationService sweeps) : IMutationLegs
     private static RecordedArms? Held(MutationLegsRequest request)
         => request.Held is { } carried ? RecordedArms.OfCarried(Convert.FromBase64String(carried)) : null;
 
-    private static MutationRequest Request(MutationLegsRequest request)
+    /// <summary>
+    /// What <paramref name="request"/> asks of the sweep's service: every member the use case reads, the run's priority
+    /// among them, so a member the request carries is one the sweep acts on.
+    /// </summary>
+    /// <param name="request">What the command, or a flow's step, asked of the use case.</param>
+    internal static MutationRequest Request(MutationLegsRequest request)
         => new(
             request.Directory,
             request.LegNames,
@@ -114,6 +119,7 @@ public sealed class MutationLegs(MutationService sweeps) : IMutationLegs
         {
             Watch = request.Watch,
             Isolation = request.Isolation,
+            Priority = request.Priority,
         };
 
     /// <summary>

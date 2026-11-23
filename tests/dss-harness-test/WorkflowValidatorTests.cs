@@ -3259,6 +3259,27 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// A run's priority is any whole number from 1: it multiplies the run's share of the machine's dispatch queue, and
+    /// nothing sets a ceiling on it, so only one below 1 is refused.
+    /// </summary>
+    [Fact]
+    public void ARunsPriority_IsAnyWholeNumberFromOne()
+    {
+        static IReadOnlyList<string> Given(string priority) => Problems(
+            $"""
+            name: default
+            priority: {priority}
+            steps:
+              - name: orient
+                type: orient
+            """);
+
+        Assert.Empty(Given("1000"));
+        Assert.Empty(Given("1"));
+        Assert.Equal(["priority must be from 1 to 2,147,483,647, found 0"], Given("0"));
+    }
+
+    /// <summary>
     /// The workflow's own bounds and its loops' are the ranges the help gives; a loop past its rounds with no bound but
     /// the budget needs a budget; a tier and a model are never named together; asking is bounded; a plan update may be
     /// given no iteration at all.

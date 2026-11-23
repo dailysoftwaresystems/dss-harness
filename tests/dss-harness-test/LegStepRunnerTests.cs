@@ -464,6 +464,40 @@ public sealed class LegStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// Every leg step asks its legs at its run's priority, as the run's workflow declares it - a build's, a test's, a
+    /// run's and a sweep's alike - so every unit of the run is charged against its tenant's share by the one priority;
+    /// a workflow that declares none asks at 1.
+    /// </summary>
+    [Fact]
+    public async Task EachLegStep_AsksItsLegsAtItsRunsPriority()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var legs = new FakeLegs();
+        IFlowStepTypeRunner[] runners =
+        [
+            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GitClient),
+        ];
+        var urgent = new FlowRunPlace(repository.Path, "r1", null, Flow with { Priority = 3 });
+
+        foreach (var runner in runners)
+        {
+            var step = new WorkflowStep { Name = runner.Type, Type = runner.Type, Runner = runner.Type == "run" ? "probe" : null };
+            var declared = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-urgent") with { Place = urgent }, Token);
+            var undeclared = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-plain"), Token);
+
+            Assert.True(declared.Passed, declared.Error);
+            Assert.True(undeclared.Passed, undeclared.Error);
+        }
+
+        Assert.Equal(
+            [("build", 3), ("build", 1), ("test", 3), ("test", 1), ("run", 3), ("run", 1), ("check-mutations", 3), ("check-mutations", 1)],
+            legs.Asked.Select(asked => (asked switch { BuildLegsRequest => "build", TestLegsRequest => "test", RunnerLegsRequest => "run", _ => "check-mutations" }, asked.Priority)));
+    }
+
+    /// <summary>
     /// A sweep that names a commit in <c>base</c> runs on a copy of that commit - made and taken away under the main
     /// tree's lock, so other items' folds never move the bytes under it - and <c>item</c> is the newest commit the
     /// run's ledger attributes to the item the step is one of. Its arms it takes from what the engine read where it

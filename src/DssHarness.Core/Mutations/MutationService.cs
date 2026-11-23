@@ -62,6 +62,12 @@ public sealed record MutationRequest(
 
     /// <summary>What holds the work of each leg this machine sweeps inside the operating system's isolation (<see cref="LegRunRequest.Isolation"/>); <see langword="null"/> where none does.</summary>
     public ILegIsolation? Isolation { get; init; }
+
+    /// <summary>
+    /// The run's priority, as a workflow declared it: what multiplies its tenant's share of the dispatch queue's fair order
+    /// for every arm of the sweep it admits (<see cref="LegRunRequest.Priority"/>), 1 where nothing declared one.
+    /// </summary>
+    public int Priority { get; init; } = 1;
 }
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
@@ -289,6 +295,7 @@ public sealed class MutationService(
                     HostNotes = records ? NotesOf(context) : null,
                     Watch = request.Watch,
                     Isolation = request.Isolation,
+                    Priority = request.Priority,
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)

@@ -473,6 +473,7 @@ public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPl
                 Pending = run.Step.Pending == true,
                 Watch = watch,
                 Isolation = isolation,
+                Priority = run.Place?.Definition.Priority ?? 1,
             },
             RunId.New(),
             cancellationToken);
