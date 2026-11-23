@@ -39,6 +39,9 @@ internal enum StyleScope
 /// </summary>
 internal sealed class CssReading
 {
+    /// <summary>The kind of the marks the reading makes, the sign of a limit of the style sheets' help (<see cref="CodeGraphLimit.Signs"/>): what an interpolation writes.</summary>
+    internal const string Interpolation = "interpolation";
+
     /// <summary>The name of a sheet's top node: what its top does outside every node, never a name a sheet or code writes.</summary>
     private const string SheetName = "(sheet)";
 
@@ -708,7 +711,7 @@ internal sealed class CssReading
             return _scan.IsName(at) ? CssLexer.Unescaped(_scan.Text(at)) : null;
         }
 
-        _extract.Dynamic(LineOf(at), "a name an interpolation writes, whose node is not read");
+        _extract.Dynamic(LineOf(at), "a name an interpolation writes, whose node is not read", Interpolation);
         return null;
     }
 
@@ -808,7 +811,7 @@ internal sealed class CssReading
 
             if (target is null)
             {
-                _extract.Dynamic(LineOf(token), "an import whose path an interpolation writes, which is no import");
+                _extract.Dynamic(LineOf(token), "an import whose path an interpolation writes, which is no import", Interpolation);
                 Uses(token, past, place.From, place.Locals, names: false);
                 continue;
             }
@@ -1074,7 +1077,7 @@ internal sealed class CssReading
 
         if (read.Interpolated)
         {
-            _extract.Dynamic(LineOf(selector), "a selector an interpolation writes, whose rule is no node");
+            _extract.Dynamic(LineOf(selector), "a selector an interpolation writes, whose rule is no node", Interpolation);
         }
 
         var parameters = _syntax == StyleSyntax.Less ? LessParameters(selector, head.Stop) : [];

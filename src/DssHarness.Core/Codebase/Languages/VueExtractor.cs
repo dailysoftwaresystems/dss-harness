@@ -54,7 +54,10 @@ public sealed class VueExtractor : ICodeGraphExtractor
             ("scriptless", "a component with no script block: the type alone, and nothing of its own members"),
             ("mixins", "what a mixin or an extends option adds, a prop defineModel declares and one defineProps is given by a type another file declares: no member of the component"),
             ("module-strings", "a module block's classes read through what useCssModule() returns, or by a string ($style['red-x']): no use of them"),
-            ("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why"),
+            new CodeGraphLimit("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why") { Signs = [MarkupText.HugeFile] },
+            .. JsHelp.Unseen,
+            .. TypeScriptExtractor.TypesUnseen,
+            .. CssExtractor.SheetUnseen,
         ])
     {
         Holds = "AngleSharp's text source, which keeps every character the tokenizer decodes - its HTML tokenizer reads a source of its buffered kind alone (a TextSource over a stream), and the source that lets go of what it read is offered to its parser alone, which builds a document rather than the tokens this reader matches - so reading a file holds its markup's text once, in pieces, never as one string",

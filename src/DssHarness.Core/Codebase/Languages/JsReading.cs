@@ -41,6 +41,17 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </remarks>
 internal sealed class JsReading
 {
+    /// <summary>
+    /// The kinds of the marks the reading makes, each the sign of a limit of JavaScript's help and TypeScript's
+    /// (<see cref="CodeGraphLimit.Signs"/>): a call through a function value, an import of a module the code computes, code a
+    /// string holds, and a call on a value typed any.
+    /// </summary>
+    internal const string
+        FunctionValue = "function-value",
+        ComputedImport = "computed-import",
+        ComputedCode = "computed-code",
+        AnyValue = "any-value";
+
     /// <summary>JavaScript's reserved words, and the few TypeScript reserves beside them.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
@@ -4467,7 +4478,7 @@ internal sealed class JsReading
                 }
                 else if (scan.Is(at, "[") && scan.Match(at) is var closing and > 0 && scan.Is(scan.Next(closing), "(") && EndsOperand(scan, scan.Previous(at)))
                 {
-                    _extract.Dynamic(token.Line, "a call through a computed member");
+                    _extract.Dynamic(token.Line, "a call through a computed member", FunctionValue);
                 }
                 else if (scan.Is(at, "[") && scan.Match(at) is var shut and > 0 && EndsOperand(scan, scan.Previous(at)) && StringMember(text, at, shut) is { } named)
                 {
@@ -4544,7 +4555,7 @@ internal sealed class JsReading
                     case "import" or "require" when scan.Is(next, "(") && !locals.HoldsValue(word) && !_bindings.ContainsKey(word):
                         if (WholeSpecifier(scan, next) is not { } specifier)
                         {
-                            _extract.Dynamic(line, $"an {(word == "import" ? "import" : "import by require")} of a module the code computes");
+                            _extract.Dynamic(line, $"an {(word == "import" ? "import" : "import by require")} of a module the code computes", ComputedImport);
                         }
                         else if (_required.Add(specifier))
                         {
@@ -4554,7 +4565,7 @@ internal sealed class JsReading
                         continue;
 
                     case "eval" when scan.Is(next, "("):
-                        _extract.Dynamic(line, "a call of eval");
+                        _extract.Dynamic(line, "a call of eval", ComputedCode);
                         continue;
 
                     case "as" or "satisfies" when _typescript && !scan.Is(next, "const"):
@@ -4642,7 +4653,7 @@ internal sealed class JsReading
 
             if (locals.Binds(word) || _values.Contains(word))
             {
-                _extract.Dynamic(line, $"a call through the function value {word}");
+                _extract.Dynamic(line, $"a call through the function value {word}", FunctionValue);
                 continue;
             }
 
@@ -5208,7 +5219,7 @@ internal sealed class JsReading
 
         if (word is "apply" or "construct" && scan.Is(before, "Reflect") && !IsMember(scan, scan.Previous(before)))
         {
-            _extract.Dynamic(line, $"a call through Reflect.{word}");
+            _extract.Dynamic(line, $"a call through Reflect.{word}", FunctionValue);
             return;
         }
 
@@ -5217,18 +5228,18 @@ internal sealed class JsReading
         // A function value's call or apply - f.call(this, x) - and not a method of that name a type the file says has.
         if (word is "call" or "apply" && IsValueReceiver(receiver) && anyValue is null)
         {
-            _extract.Dynamic(line, $"a call through a function value's {word}");
+            _extract.Dynamic(line, $"a call through a function value's {word}", FunctionValue);
             return;
         }
 
         if (anyValue is not null)
         {
-            _extract.Dynamic(line, $"a call on the any value {anyValue}");
+            _extract.Dynamic(line, $"a call on the any value {anyValue}", AnyValue);
         }
 
         if (receiver is { Kind: CodeQualifierKinds.This, Name: null } && owner is not null && _functionFields.TryGetValue(owner, out var fields) && fields.Contains(word))
         {
-            _extract.Dynamic(line, $"a call through the function value {word}");
+            _extract.Dynamic(line, $"a call through the function value {word}", FunctionValue);
             return;
         }
 
@@ -5442,7 +5453,7 @@ internal sealed class JsReading
 
         if (locals.HoldsValue(names[0]) || locals.IsFunctionValue(names[0]))
         {
-            _extract.Dynamic(line, $"a component held by the value {names[0]}");
+            _extract.Dynamic(line, $"a component held by the value {names[0]}", FunctionValue);
             return;
         }
 
@@ -5479,7 +5490,7 @@ internal sealed class JsReading
 
         if (written is ["Function"])
         {
-            _extract.Dynamic(scan[at].Line, "a function made by new Function");
+            _extract.Dynamic(scan[at].Line, "a function made by new Function", ComputedCode);
             return past;
         }
 

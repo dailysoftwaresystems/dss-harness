@@ -18,7 +18,7 @@ public sealed class ComposerExtractor : ICodeGraphExtractor
     public string Language => "composer";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("composer.json")], []);

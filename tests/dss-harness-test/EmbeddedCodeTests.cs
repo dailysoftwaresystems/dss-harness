@@ -34,7 +34,7 @@ public sealed class EmbeddedCodeTests
         Assert.Equal([new ExtractScope("x.html", false)], merged.Scopes);
         Assert.Equal([("./one.js", 2), ("./two.js", 5)], merged.Imports.Select(import => (import.Target, import.Line)));
         Assert.Equal([new ExtractAddressRoot("@", "src"), new ExtractAddressRoot("@", "src")], merged.AddressRoots);
-        Assert.Equal([new ExtractDynamic(2, "one"), new ExtractDynamic(5, "two")], merged.Dynamic);
+        Assert.Equal([new ExtractDynamic(2, "one", "one-kind"), new ExtractDynamic(5, "two", "two-kind")], merged.Dynamic);
         Assert.Equal([.. Enumerable.Range(0, 2_500).Select(index => $"value {index}"), "one", "one-2", "two", "two-2"], LiteralRow.Of(merged).Select(literal => literal.Value));
 
         // The second script's literal is held by its own node, under the id the merge gave it.
@@ -119,7 +119,7 @@ public sealed class EmbeddedCodeTests
         Imports = [new ExtractImport(CodeImportForms.Relative, $"./{name}.js", line)],
         AddressRoots = [new ExtractAddressRoot("@", "src")],
         References = [new ExtractReference("html:open", CodeEdgeKinds.Calls, name, line)],
-        Dynamic = [new ExtractDynamic(line, name)],
+        Dynamic = [new ExtractDynamic(line, name, $"{name}-kind")],
         Literals = LiteralRow.Table(new LiteralRow(name, line, "html:open"), new LiteralRow($"{name}-2", line, "html:open.inner")),
         Generated = name == "one" ? "the first says" : null,
     };

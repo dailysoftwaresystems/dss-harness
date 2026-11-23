@@ -185,7 +185,7 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         var placeless = Read("tag.yml", "x: 1\ny: !<> b\nz: 3\n");
 
         Assert.Equal(["yaml:tag.yml#x"], placeless.Nodes.Select(node => node.Id.Whole()));
-        Assert.Equal([new ExtractDynamic(2, "the file stops reading as YAML past here (Tag value must not be empty. (Parameter 'value')), and nothing after it is read")], placeless.Dynamic);
+        Assert.Equal([new ExtractDynamic(2, "the file stops reading as YAML past here (Tag value must not be empty. (Parameter 'value')), and nothing after it is read", DataNodes.Stop)], placeless.Dynamic);
 
         foreach (var text in new[] { string.Empty, "# a file of comments\n\n# and more\n", "---\n...\n" })
         {

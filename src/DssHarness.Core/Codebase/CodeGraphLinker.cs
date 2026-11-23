@@ -226,11 +226,15 @@ public static class CodeGraphLinker
         Extending,
     }
 
-    /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
+    /// <summary>One reference's finding: its edges, whether it named nothing, the sign it gives of what the graph does not see, and every key it read.</summary>
     /// <param name="Edges">The edges it makes.</param>
     /// <param name="External">Whether it named nothing the repository declares, so it makes none and is counted external.</param>
+    /// <param name="Sign">
+    /// What the finding shows the graph does not see where the reference is made (<see cref="CodeGraphLimit.Signs"/>): why it named
+    /// nothing, or why it left candidates, where the linker knows; <see langword="null"/> where it gives none.
+    /// </param>
     /// <param name="Reads">Every key its finding read.</param>
-    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, KeptReads Reads);
+    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, string? Sign, KeptReads Reads);
 
     /// <summary>
     /// What a finding read, kept so that a part many findings read is kept once: the keys read directly, as
@@ -585,6 +589,9 @@ public static class CodeGraphLinker
 
         private readonly List<CodeEdge> _edges = [];
         private readonly Dictionary<string, int> _external = new(StringComparer.Ordinal);
+
+        /// <summary>The signs each node's references and each file's imports gave of what the graph does not see, by the node's id (<see cref="CodeGraphLinked.Signs"/>).</summary>
+        private readonly Dictionary<string, SortedSet<string>> _signs = new(StringComparer.Ordinal);
 
         /// <summary>
         /// Each type's bases, by id, that a finding looks through now - none in the first round of the bases - as
@@ -960,6 +967,7 @@ public static class CodeGraphLinker
 
             return new CodeGraphLinked(symbols, edges, _external, _resolved.Count)
             {
+                Signs = _signs.ToDictionary(signs => signs.Key, IReadOnlyList<string> (signs) => [.. signs.Value], StringComparer.Ordinal),
                 Memory = new LinkMemory(_keys, _byPath, _found.ToDictionary(found => found.Key.Path, found => found.Value, StringComparer.Ordinal), rounds, _folders),
                 ChainLinks = _chainLinks,
                 ExposedFiles = _exposedFiles,
@@ -1143,6 +1151,22 @@ public static class CodeGraphLinker
             {
                 Count(_external, from.Id.Whole());
             }
+
+            if (finding.Sign is { } sign)
+            {
+                Signed(from.Id.Whole(), sign);
+            }
+        }
+
+        /// <summary>Keeps <paramref name="sign"/> among those the node <paramref name="id"/> gave, each once.</summary>
+        private void Signed(string id, string sign)
+        {
+            if (!_signs.TryGetValue(id, out var signs))
+            {
+                _signs[id] = signs = new SortedSet<string>(StringComparer.Ordinal);
+            }
+
+            signs.Add(sign);
         }
 
         /// <summary>What a written name or a chain was found to be while other bases were known may be otherwise now.</summary>
@@ -1178,7 +1202,7 @@ public static class CodeGraphLinker
 
                 if (found.Count == 0)
                 {
-                    return new Finding([], External: true, _reads.Kept());
+                    return new Finding([], External: true, SignOf(from, reference, found), _reads.Kept());
                 }
 
                 var sure = found.Count == 1 ? confidence : CodeConfidences.Candidates;
@@ -1191,12 +1215,104 @@ public static class CodeGraphLinker
                         reference.Line,
                         sure))],
                     External: false,
+                    sure == CodeConfidences.Candidates ? SignOf(from, reference, found) : null,
                     _reads.Kept());
             }
             finally
             {
                 _reads = outer;
             }
+        }
+
+        /// <summary>
+        /// The sign <paramref name="reference"/>, made from <paramref name="from"/>, gives of what the graph does not see there
+        /// (<see cref="CodeGraphLimit.Signs"/>), told by what it found - nothing, or <paramref name="found"/>, several - and the way it is
+        /// written, no language named. Where it found nothing: a fixture no scope of the test declares and no import serving fixtures
+        /// holds (<see cref="CodeGraphLimit.UnprovidedFixture"/>); a name, or its qualifier's head, that imports of the file bind and none
+        /// of them names a file of the tree (<see cref="CodeGraphLimit.OutsideImport"/>); a name written alone that no import lets, in a
+        /// file that binds its names within it (<see cref="CodeGraphLimit.Unbound"/>). Where it left candidates: each in a file an import
+        /// of the file binding its name takes as one of several places (<see cref="CodeGraphLimit.CandidateImports"/>), else
+        /// <see cref="CodeGraphLimit.Candidates"/>. None of a use, which is recall and never a doubt, of a probe that found nothing,
+        /// which misses nothing, nor where nothing tells why. Read while the finding reads, so a change that would tell otherwise finds
+        /// the reference again.
+        /// </summary>
+        private string? SignOf(Declaration from, ExtractReference reference, IReadOnlyList<Declaration> found)
+        {
+            if (CodeEdgeKinds.Recall(reference.Kind) || (found.Count == 0 && reference.Probe))
+            {
+                return null;
+            }
+
+            if (found.Count == 0 && reference.Qualifier is { Kind: CodeQualifierKinds.Fixture })
+            {
+                return CodeGraphLimit.UnprovidedFixture;
+            }
+
+            var binding = BindingImports(from.File, reference);
+
+            if (found.Count == 0)
+            {
+                return binding.Count > 0 ? binding.All(made => FilesOf(made.Import, made.File).Count == 0) ? CodeGraphLimit.OutsideImport : null
+                    : reference.Qualifier is null && BoundWithin(from) ? CodeGraphLimit.Unbound
+                    : null;
+            }
+
+            var places = binding.Count > 0 ? SeveralPlaces(from.File) : [];
+
+            return found.Select(target => target.File.Path).Distinct(StringComparer.Ordinal).Count() > 1 && found.All(target => places.Contains(target.File.Path))
+                ? CodeGraphLimit.CandidateImports
+                : CodeGraphLimit.Candidates;
+        }
+
+        /// <summary>
+        /// The imports <paramref name="file"/> makes, or is given, that bind the name <paramref name="reference"/> is reached by: each whose
+        /// prefix its qualifier's name - or the name itself, written alone - is, or begins with at a name's boundary
+        /// (<see cref="BeginsWith"/>), as an import's prefix is read past the scopes; and, for a name written alone, each with no prefix
+        /// that lets it. None of a scope, which binds no name of its own, nor of a directory, which is the scope import of the files under
+        /// it and names no file - another file's that every file of the language is given among them - nor where the qualifier names no
+        /// head an import could bind - <c>this</c>, a base, a selector, a value by no name.
+        /// </summary>
+        private List<(ExtractImport Import, CodeGraphFile File)> BindingImports(CodeGraphFile file, ExtractReference reference)
+        {
+            var written = reference.Qualifier switch
+            {
+                null => reference.Name,
+                { Kind: CodeQualifierKinds.Prefix or CodeQualifierKinds.Type or CodeQualifierKinds.Named or CodeQualifierKinds.Value, Name: { } name } => name.Whole(),
+                _ => null,
+            };
+
+            return written is null
+                ? []
+                : [.. ImportsOf(file).Where(made => made.Import.Form is not (CodeImportForms.Scope or CodeImportForms.Directory)
+                    && (made.Import.Prefix is { } prefix ? BeginsWith(written, prefix) : reference.Qualifier is null && made.Import.Lets(written)))];
+        }
+
+        /// <summary>Whether <paramref name="written"/>, a name of dots, is <paramref name="prefix"/> or begins with it and a dot: the prefix at a name's boundary.</summary>
+        private static bool BeginsWith(string written, string prefix)
+            => written.StartsWith(prefix, StringComparison.Ordinal) && (written.Length == prefix.Length || written[prefix.Length] == '.');
+
+        /// <summary>
+        /// The files the imports <paramref name="file"/> makes name where the linker takes an import as several places - each a candidate,
+        /// as its <c>imports</c> edges to them are (<see cref="ImportConfidence"/>).
+        /// </summary>
+        private HashSet<string> SeveralPlaces(CodeGraphFile file)
+        {
+            var places = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var run in TakenRuns(file))
+            {
+                foreach (var import in run.Where(import => import.Form is not (CodeImportForms.Scope or CodeImportForms.Directory)))
+                {
+                    var targets = FilesOf(import, file);
+
+                    if (ImportConfidence(run, import, targets) == CodeConfidences.Candidates)
+                    {
+                        places.UnionWith(targets);
+                    }
+                }
+            }
+
+            return places;
         }
 
         /// <summary>
@@ -2348,7 +2464,7 @@ public static class CodeGraphLinker
         /// </summary>
         private IReadOnlyList<Declaration> Aliased(CodeGraphFile file, string written)
             => Distinct(ImportsOf(file)
-                .Where(made => made.Import.Prefix is { } prefix && written.StartsWith(prefix, StringComparison.Ordinal) && (written.Length == prefix.Length || written[prefix.Length] == '.'))
+                .Where(made => made.Import.Prefix is { } prefix && BeginsWith(written, prefix))
                 .SelectMany(made => AliasedThrough(made.Import, made.File, written[made.Import.Prefix!.Length..])));
 
         /// <summary>
@@ -3079,9 +3195,21 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// Each file's <c>imports</c> edges: to a scope the repository declares, and to each file a path names - <c>exact</c>
-        /// where the path says the one file, <c>unique</c> where an ending or a root of the layout finds one, and
-        /// <c>candidates</c> where they find several or a run takes two places a name may stand at.
+        /// How sure the <c>imports</c> edges of <paramref name="import"/>, one of the <paramref name="run"/> a file's imports are taken
+        /// as (<see cref="TakenRuns"/>), to the files it names, <paramref name="targets"/>, are: <c>exact</c> where the path says the one
+        /// file, <c>unique</c> where an ending or a root of the layout finds one, and <c>candidates</c> where they find several or the run
+        /// takes two places a name may stand at. The one rule of an import of several places.
+        /// </summary>
+        private static string ImportConfidence(IReadOnlyList<ExtractImport> run, ExtractImport import, IReadOnlyList<string> targets)
+            => run.Count > 1 ? CodeConfidences.Candidates
+                : import.Form is CodeImportForms.Ending or CodeImportForms.Rooted
+                    ? targets.Count == 1 ? CodeConfidences.Unique : CodeConfidences.Candidates
+                    : CodeConfidences.Exact;
+
+        /// <summary>
+        /// Each file's <c>imports</c> edges: to a scope the repository declares, and to each file a path names, as sure as
+        /// <see cref="ImportConfidence"/> says - a file an import of which names files as candidates giving the sign of it
+        /// (<see cref="CodeGraphLimit.CandidateImports"/>).
         /// </summary>
         private void Imports()
         {
@@ -3104,14 +3232,16 @@ public static class CodeGraphLinker
                         }
 
                         var targets = FilesOf(import, file);
-                        var sure = run.Count > 1 ? CodeConfidences.Candidates
-                            : import.Form is CodeImportForms.Ending or CodeImportForms.Rooted
-                                ? targets.Count == 1 ? CodeConfidences.Unique : CodeConfidences.Candidates
-                                : CodeConfidences.Exact;
+                        var sure = ImportConfidence(run, import, targets);
 
                         foreach (var target in targets)
                         {
                             _edges.Add(new CodeEdge(from, FileIdOf(target), CodeEdgeKinds.Imports, import.Line, sure));
+                        }
+
+                        if (sure == CodeConfidences.Candidates && targets.Count > 0)
+                        {
+                            Signed(from, CodeGraphLimit.CandidateImports);
                         }
                     }
                 }
@@ -4709,6 +4839,13 @@ public sealed record CodeGraphLinked(
     IReadOnlyDictionary<string, int> External,
     int References)
 {
+    /// <summary>
+    /// For each node, the signs its references - and, of a file's node, its imports - gave of what the graph does not see where they
+    /// are made (<see cref="CodeGraphLimit.Signs"/>), each once, in order: why a reference counted external named nothing, why one was
+    /// left candidates, an import taken as several places. A node that gave none is not here.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Signs { get; init; } = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
     /// <summary>What the link keeps for one made again from it (<see cref="CodeGraphLinker.Relink"/>).</summary>
     internal CodeGraphLinker.LinkMemory? Memory { get; init; }
 

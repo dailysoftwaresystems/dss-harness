@@ -95,7 +95,8 @@ internal sealed class PythonReading
         ComputedCode = "computed-code",
         FunctionValue = "function-value",
         ComputedExports = "computed-exports",
-        Unclosed = "unclosed";
+        Unclosed = "unclosed",
+        UnreadHead = "unread-head";
 
     /// <summary>
     /// The keywords a compound statement begins with: its header to a colon, then its suite. <c>async for</c> and <c>async
@@ -1622,7 +1623,7 @@ internal sealed class PythonReading
 
         if (!_scan.IsName(nameAt) || close < 0 || colon < 0)
         {
-            _extract.Dynamic(_scan[def].Line, "a def whose head the reader cannot read: its lines read as the code around it");
+            _extract.Dynamic(_scan[def].Line, "a def whose head the reader cannot read: its lines read as the code around it", UnreadHead);
             return;
         }
 
@@ -1928,7 +1929,7 @@ internal sealed class PythonReading
 
         if (colon < 0)
         {
-            _extract.Dynamic(_scan[at].Line, "a class whose head the reader cannot read: its lines read as the code around it");
+            _extract.Dynamic(_scan[at].Line, "a class whose head the reader cannot read: its lines read as the code around it", UnreadHead);
             return;
         }
 

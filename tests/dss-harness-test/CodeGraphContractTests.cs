@@ -96,6 +96,23 @@ public sealed class CodeGraphContractTests
         Red(() => CodeGraphContract.Sound(new Toy(), [B with { Nodes = [new("toy:B", CodeNodeKinds.Type, (1, 2))] }]));
     }
 
+    /// <summary>
+    /// A dynamic mark of a kind no limit of the implementation's help names as its sign fails - of a fixture and of a cut of one
+    /// alike - for an answer would say of the file no limit in full where it shows one; a mark its help's limit names passes.
+    /// </summary>
+    [Fact]
+    public void SoundAndTolerant_Fail_OnAMarkWhoseKindNoLimitOfItsHelpNames()
+    {
+        var marked = new CodeGraphFixture("src/c.toy", "class C\ndyn D\n") { Nodes = [new("toy:C", CodeNodeKinds.Type, (1, 1))] };
+
+        Assert.Equal([new ExtractDynamic(2, "a call through D", Toy.Dyn)], new Toy().Extract(new CodeFileInput(marked.Path, marked.Text)).Dynamic);
+        CodeGraphContract.Sound(new Toy(), [marked]);
+        CodeGraphContract.Tolerant(new Toy(), [marked]);
+
+        Red(() => CodeGraphContract.Sound(new Toy { Help = new("toy files", [("dyn-calls", "a call through dyn: marked dynamic")]) }, [marked]), "as 'dyn-call' (a call through D), which no limit of its help names as its sign");
+        Red(() => CodeGraphContract.Tolerant(new Toy { Answer = input => Toy.Read(input) with { Dynamic = [.. Toy.Read(input).Dynamic.Select(mark => mark with { Kind = "other-call" })] } }, [marked]), "as 'other-call'");
+    }
+
     /// <summary>An exception on an empty file, and an unsound extract of a cut of a fixture, each fail.</summary>
     [Fact]
     public void Tolerant_Fails_OnAnExceptionOrAnUnsoundExtract_OfACutOrAnEmptyFile()
@@ -206,7 +223,10 @@ public sealed class CodeGraphContractTests
 
         public bool Outlines => false;
 
-        public CodeGraphExtractorHelp Help { get; } = new("toy files", []);
+        /// <summary>The kind of the mark <c>dyn Y</c> makes, the sign of its help's one limit.</summary>
+        public const string Dyn = "dyn-call";
+
+        public CodeGraphExtractorHelp Help { get; init; } = new("toy files", [new CodeGraphLimit("dyn-calls", "a call through dyn: marked dynamic") { Signs = [Dyn] }]);
 
         public Func<CodeFileInput, FileExtract>? Answer { get; init; }
 
@@ -215,6 +235,7 @@ public sealed class CodeGraphContractTests
             var lines = input.Lines;
             var nodes = new List<ExtractNode>();
             var references = new List<ExtractReference>();
+            var marks = new List<ExtractDynamic>();
 
             for (var at = 0; at < lines.Count; at++)
             {
@@ -226,9 +247,13 @@ public sealed class CodeGraphContractTests
                 {
                     references.Add(new ExtractReference(nodes[^1].Id, CodeEdgeKinds.Calls, called, at + 1));
                 }
+                else if (Named(lines[at], "dyn ") is { } through)
+                {
+                    marks.Add(new ExtractDynamic(at + 1, $"a call through {through}", Dyn));
+                }
             }
 
-            return new FileExtract(nodes) { References = references };
+            return new FileExtract(nodes) { References = references, Dynamic = marks };
         }
 
         public FileExtract Extract(CodeFileInput input) => (Answer ?? Read)(input);

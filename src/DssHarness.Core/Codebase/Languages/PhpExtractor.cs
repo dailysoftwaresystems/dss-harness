@@ -14,7 +14,7 @@ public sealed class PhpExtractor : ICodeGraphExtractor
     public string Language => "php";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".php", ".phtml");
@@ -29,8 +29,8 @@ public sealed class PhpExtractor : ICodeGraphExtractor
             ("inferred-types", "types inferred: a call on a value whose type the file does not write - a local given a call's result, a property a docblock alone types, a method's result - is bound by its name alone"),
             ("string-classes", "a class a string names - to the autoloader, a container, class_exists - a callable written as a string or an array, and a member only a magic method answers (__call, __callStatic, __get): not seen as a reference"),
             ("name-case", "PHP's names of classes, functions and methods alike whatever their case: a name written in another case than its declaration is not linked, but one a use declaration names"),
-            ("variable-calls", "a call of a method or a function the code names by a variable ($obj->$name(), $f()), of a value it computes ($handlers['k'](), $obj->{$name}(), make()()), a new or a static call of a class the code computes, call_user_func and eval: marked dynamic, and not linked"),
-            ("computed-includes", "an inclusion whose path the code computes, past __DIR__ or dirname(__DIR__) joined to a text: marked dynamic; one of a text is the path from the file's directory, though PHP looks along its include_path first"),
+            new CodeGraphLimit("variable-calls", "a call of a method or a function the code names by a variable ($obj->$name(), $f()), of a value it computes ($handlers['k'](), $obj->{$name}(), make()()), a new or a static call of a class the code computes, call_user_func and eval: marked dynamic, and not linked") { Signs = [PhpReading.VariableCall] },
+            new CodeGraphLimit("computed-includes", "an inclusion whose path the code computes, past __DIR__ or dirname(__DIR__) joined to a text, and one whose dirname climbs above the tree's root: marked dynamic; one of a text is the path from the file's directory, though PHP looks along its include_path first") { Signs = [PhpReading.UnfollowedInclude] },
             ("closures", "closures, arrow functions and anonymous classes are not nodes: what they call is the calls of the declaration they are written in"),
             ("test-classes", "a test class is one that extends a TestCase, or is named for a test and extends a class: its public methods named test..., and its methods - or a trait's - marked #[Test] or @test, are tests; a test written through a helper of its own is not seen as a test"),
             ("template-engines", "code a template engine compiles (Blade, Twig): read as PHP's text and code are; and <? before white space opens code, whether or not PHP's short_open_tag is on"),

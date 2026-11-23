@@ -19,7 +19,7 @@ public sealed class JsonExtractor : ICodeGraphExtractor
     public string Language => "json";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".json", ".jsonc", ".json5");
@@ -31,7 +31,7 @@ public sealed class JsonExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "JSON data files (.json, .jsonc, .json5, comments and trailing commas allowed): each scalar key anywhere in the file, however deep, as a key node named by its path (an item by its place, [0]; a name empty or of white space in brackets, [\"\"]) with its value as its summary, each member that holds others as a section over its lines inside the one that holds it, and a $schema or a $ref naming another file by a relative path - its # pointer left out - as an import of it",
         [
-            ("json5", "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number: where the reader stops, nothing in it is read, the line it stops at marked dynamic with the reader's reason"),
+            new CodeGraphLimit("json5", "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number - and any other text that is no JSON: where the reader stops, nothing in it is read, the line it stops at marked dynamic with the reader's reason") { Signs = [DataNodes.Stop] },
             ("external-refs", "a $ref of a pointer into this file, of an address with a scheme (https:, urn:) or of a rooted path: no import"),
             ("manifests", "the named manifests - package.json, tsconfig.json, jsconfig.json, composer.json - which their own extractors read"),
         ]);

@@ -120,6 +120,12 @@ internal sealed class MarkupText
     /// </summary>
     public const long MostCharacters = int.MaxValue;
 
+    /// <summary>
+    /// The kind of the mark a markup file of more than <see cref="MostCharacters"/> gives, the sign of the limit of every markup
+    /// implementation's help that says so (<see cref="CodeGraphLimit.Signs"/>).
+    /// </summary>
+    internal const string HugeFile = "huge-file";
+
     /// <summary>The text read, its line endings each one line feed.</summary>
     public CodeText Text { get; }
 
@@ -149,7 +155,7 @@ internal sealed class MarkupText
         ArgumentNullException.ThrowIfNull(text);
 
         return text.Length > MostCharacters
-            ? new FileExtract([]) { Dynamic = [new ExtractDynamic(text.LineIndex.LineAt(MostCharacters), string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {MostCharacters:N0} the HTML tokenizer (AngleSharp) counts a position in, so it is not read"))] }
+            ? new FileExtract([]) { Dynamic = [new ExtractDynamic(text.LineIndex.LineAt(MostCharacters), string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {MostCharacters:N0} the HTML tokenizer (AngleSharp) counts a position in, so it is not read"), HugeFile)] }
             : null;
     }
 

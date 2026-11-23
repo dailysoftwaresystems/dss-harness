@@ -111,7 +111,8 @@ public sealed class PyprojectExtractorTests : CodeGraphExtractorContractTests<Py
         var open = Read("pyproject.toml", "[tool.setuptools.packages.find]\nwhere = [\"src\",\n");
 
         Assert.Equal(["src"], open.LayoutRoots!);
-        Assert.Equal([2], open.Dynamic.Select(mark => mark.Line));
+        Assert.Equal([(2, PyprojectExtractor.Unclosed)], open.Dynamic.Select(mark => (mark.Line, mark.Kind)));
+        CodeGraphContract.Signed(new PyprojectExtractor(), open, "pyproject.toml");
     }
 
     /// <summary>
@@ -175,7 +176,8 @@ public sealed class PyprojectExtractorTests : CodeGraphExtractorContractTests<Py
 
         Assert.Null(open.LayoutRoots);
         Assert.Equal("shop", Assert.Single(open.Nodes).Name);
-        Assert.Equal([(2, "a string that never closes on its line: the rest of the line is read as it")], open.Dynamic.Select(mark => (mark.Line, mark.Why)));
+        Assert.Equal([(2, "a string that never closes on its line: the rest of the line is read as it", PyprojectExtractor.Unclosed)], open.Dynamic.Select(mark => (mark.Line, mark.Why, mark.Kind)));
+        CodeGraphContract.Signed(new PyprojectExtractor(), open, "pyproject.toml");
 
         var cfg = Read("setup.cfg", "[options.packages.find]\n  where = src\n  exclude = tests\n[tool:pytest]  ; pytest's\npythonpath = lib\n");
 

@@ -1143,10 +1143,10 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// The signs the file at <paramref name="path"/> gives of what the implementation of its language does not see
-    /// (<see cref="CodeGraphLimit.Signs"/>): the kind of each dynamic mark its reading made, <see cref="CodeGraphLimit.Candidates"/>
-    /// where the linker left any reference of it candidates, and <see cref="CodeGraphLimit.External"/> where it counted any reference
-    /// of a node of it external (<see cref="CodeGraphLinked.External"/>) - however few, each such is that limit - each once, in order;
-    /// none of a limit no sign is named for. Read once a file a view, where first asked.
+    /// (<see cref="CodeGraphLimit.Signs"/>): the kind of each dynamic mark its reading made, and each sign the linker found its nodes'
+    /// references and its imports give (<see cref="CodeGraphSymbolsFile.Signs"/>) - why one counted external named nothing, why one was
+    /// left candidates, an import taken as several places - however few, each such is the limit it names; each once, in order. Read
+    /// once a file a view, where first asked.
     /// </summary>
     /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
     public IReadOnlyList<string> SignsOf(string path)
@@ -1157,24 +1157,12 @@ public sealed class CodebaseGraphQueries
         }
 
         return _signs.GetOrAdd(held, file =>
-        {
-            var signs = ((_extracts.TryGetValue(file, out var extract) ? extract : _read.Extract(file))?.Dynamic ?? [])
-                .Where(mark => mark.Kind is not null)
-                .Select(mark => mark.Kind!)
-                .ToList();
-
-            if (LeftCandidates(file) is { Unsure: > 0 })
-            {
-                signs.Add(CodeGraphLimit.Candidates);
-            }
-
-            if ((_inFile.TryGetValue(file, out var own) ? own : []).Any(id => _read.Symbols.External.GetValueOrDefault(id) > 0))
-            {
-                signs.Add(CodeGraphLimit.External);
-            }
-
-            return [.. signs.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
-        });
+            [
+                .. ((_extracts.TryGetValue(file, out var extract) ? extract : _read.Extract(file))?.Dynamic ?? []).Select(mark => mark.Kind)
+                    .Concat((_inFile.TryGetValue(file, out var own) ? own : []).SelectMany(id => _read.Symbols.Signs.GetValueOrDefault(id) ?? []))
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal),
+            ]);
     }
 
     /// <summary>The signs each file gives, by the path the view holds it at, as <see cref="SignsOf"/> first read them.</summary>

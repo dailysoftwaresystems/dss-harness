@@ -102,7 +102,10 @@ public sealed class PubspecExtractorTests : CodeGraphExtractorContractTests<Pubs
             Assert.Equal("pubspec.yaml", Assert.Single(extract.Nodes).Name);
             Assert.Empty(extract.References);
             Assert.Empty(extract.AddressRoots);
-            Assert.Equal(line, Assert.Single(extract.Dynamic).Line);
+            var mark = Assert.Single(extract.Dynamic);
+
+            Assert.Equal((line, PubspecExtractor.NotAMapping), (mark.Line, mark.Kind));
+            CodeGraphContract.Signed(new PubspecExtractor(), extract, "pubspec.yaml");
         }
 
         var unnamed = Read("tool/pubspec.yaml", "description: no name\n");

@@ -1501,8 +1501,9 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
             [new CodeEdge("file:tests/test_util.py", "file:lib/util/__init__.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates), new CodeEdge("file:tests/test_util.py", "file:src/util/__init__.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates)],
             linked.Edges.Where(edge => edge.From == "file:tests/test_util.py" && edge.Kind == CodeEdgeKinds.Imports).OrderBy(edge => edge.To, StringComparer.Ordinal));
 
-        // What the graph cannot reach that way is counted external, which the limits that name it carry as their sign.
-        Assert.Equal(3, new PythonExtractor().Help.DoesNotSee.Count(limit => limit.Signs.Contains(CodeGraphLimit.External)));
+        // A module under several roots is an import of several places, the sign of the one limit that says so.
+        Assert.Equal([CodeGraphLimit.CandidateImports], linked.Signs["file:tests/test_util.py"]);
+        Assert.Equal(["ambiguous-imports"], new PythonExtractor().Help.DoesNotSee.Where(limit => limit.Signs.Contains(CodeGraphLimit.CandidateImports)).Select(limit => limit.Name));
     }
 
     /// <summary>
@@ -1599,9 +1600,11 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         var generic = Read("pkg/generic.py", "def first[T](items: list[T]) -> T:\n    return items[0]\n");
         Assert.Equal(("function", 1, 1), (Node(generic, "python:pkg.generic.first").SubKind!, Node(generic, "python:pkg.generic.first").MinArity!.Value, Node(generic, "python:pkg.generic.first").MaxArity!.Value));
         Assert.Empty(generic.References);
+        var broken = Read("pkg/broken.py", "def (x):\n    pass\nclass :\n    pass\n");
         Assert.Equal(
-            [(1, "a def whose head the reader cannot read: its lines read as the code around it"), (3, "a class whose head the reader cannot read: its lines read as the code around it")],
-            Read("pkg/broken.py", "def (x):\n    pass\nclass :\n    pass\n").Dynamic.Select(mark => (mark.Line, mark.Why)));
+            [(1, "a def whose head the reader cannot read: its lines read as the code around it", PythonReading.UnreadHead), (3, "a class whose head the reader cannot read: its lines read as the code around it", PythonReading.UnreadHead)],
+            broken.Dynamic.Select(mark => (mark.Line, mark.Why, mark.Kind)));
+        CodeGraphContract.Signed(new PythonExtractor(), broken, "pkg/broken.py");
 
         // A soft keyword is a name wherever it heads no statement of its own: a function called match, and a field named case.
         var soft = Read("pkg/soft.py", "def match(rule, path):\n    return rule\n\n\ndef route(path):\n    return match(RULES, path)\n\n\ncase: int = 2\nmatch(RULES, \"x\")\n");

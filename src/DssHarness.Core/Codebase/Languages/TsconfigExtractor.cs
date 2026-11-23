@@ -18,7 +18,7 @@ public sealed class TsconfigExtractor : ICodeGraphExtractor
     public string Language => "tsconfig";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("tsconfig.json"), new("jsconfig.json")], []);
@@ -73,7 +73,7 @@ public sealed class TsconfigExtractor : ICodeGraphExtractor
         {
             References = references,
             AddressRoots = roots,
-            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why)],
+            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why, JsonOutline.NotAnObject)],
         };
     }
 

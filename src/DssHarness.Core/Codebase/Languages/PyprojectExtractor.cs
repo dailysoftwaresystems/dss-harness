@@ -41,6 +41,9 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
     /// <summary>The keys of a pyproject.toml that name the project.</summary>
     private static readonly string[][] TomlNames = [["project", "name"], ["tool", "poetry", "name"]];
 
+    /// <summary>The kind of the marks the reading makes, the sign of the limit of its help that says them (<see cref="CodeGraphLimit.Signs"/>): a value that never closes.</summary>
+    internal const string Unclosed = "unclosed";
+
     /// <inheritdoc/>
     public string Language => "pyproject";
 
@@ -59,7 +62,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
         [
             ("other-keys", "dependencies, optional dependencies, the build backend, scripts and entry points, and every tool's configuration but the roots: not read - no key of the file is a node and no value a literal, so the sites operation searches the file by its text"),
             ("computed-roots", "a root a value computes - a setup.cfg's interpolation, a setup.py's code - and a directory package-dir maps one package to: no root"),
-            ("unclosed-values", "a value whose bracket or string never closes: the rest of the file is read as that value - a one-line string's, the rest of its line - and the line it begins on is marked dynamic"),
+            new CodeGraphLimit("unclosed-values", "a value whose bracket or string never closes: the rest of the file is read as that value - a one-line string's, the rest of its line - and the line it begins on is marked dynamic") { Signs = [Unclosed] },
         ]);
 
     /// <inheritdoc/>
@@ -440,7 +443,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
 
                         if (written is null)
                         {
-                            dynamic.Add(new ExtractDynamic(begins + 1, "a string that never closes: the rest of the file is read as it"));
+                            dynamic.Add(new ExtractDynamic(begins + 1, "a string that never closes: the rest of the file is read as it", Unclosed));
                             return lines.Count;
                         }
 
@@ -458,7 +461,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
                     else
                     {
                         // A one-line string that never closes on its line, which TOML refuses: the rest of its line read as it.
-                        dynamic.Add(new ExtractDynamic(line + 1, "a string that never closes on its line: the rest of the line is read as it"));
+                        dynamic.Add(new ExtractDynamic(line + 1, "a string that never closes on its line: the rest of the line is read as it", Unclosed));
                         at = text.Length;
                     }
 
@@ -484,7 +487,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
 
         if (nests.Count > 0)
         {
-            dynamic.Add(new ExtractDynamic(begins + 1, "a bracket that never closes: the rest of the file is read as its value"));
+            dynamic.Add(new ExtractDynamic(begins + 1, "a bracket that never closes: the rest of the file is read as its value", Unclosed));
         }
 
         return lines.Count;

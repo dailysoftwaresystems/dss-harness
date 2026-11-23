@@ -508,6 +508,8 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.Equal(
             ["a call on the any value loose", "a call through the function value onChange", "a call through the function value run"],
             extract.Dynamic.Select(dynamic => dynamic.Why));
+        Assert.Equal([JsReading.AnyValue, JsReading.FunctionValue, JsReading.FunctionValue], extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new TypeScriptExtractor(), extract, "src/q.ts");
 
         var linked = Link(("src/q.ts", "export class Service { read() {} }\nexport class Q {\n  constructor(private service: Service) {}\n  go() { this.service.read(); }\n}"));
 
@@ -706,7 +708,8 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.Equal(
             [("post", "value", "api"), ("apply", "type", "Patch"), ("m", "value", null), ("take", null, null)],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
-        Assert.Equal(["a call on the any value x as any"], extract.Dynamic.Select(dynamic => dynamic.Why));
+        Assert.Equal([("a call on the any value x as any", JsReading.AnyValue)], extract.Dynamic.Select(dynamic => (dynamic.Why, dynamic.Kind)));
+        CodeGraphContract.Signed(new TypeScriptExtractor(), extract, "src/c.ts");
         Assert.DoesNotContain(extract.References, reference => reference.Name is "T" or "U" or "V");
         Assert.Contains(extract.References, reference => reference is { Name: "Item", Kind: CodeEdgeKinds.References });
 

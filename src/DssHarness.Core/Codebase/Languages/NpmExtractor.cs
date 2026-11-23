@@ -28,7 +28,7 @@ public sealed class NpmExtractor : ICodeGraphExtractor
     public string Language => "npm";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("package.json")], []);

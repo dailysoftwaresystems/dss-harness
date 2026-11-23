@@ -151,9 +151,9 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
         Assert.All(broken, extract => Assert.Empty(extract.Nodes));
         Assert.Equal(
             [
-                new ExtractDynamic(2, "the file stops reading as JSON here (',' is an invalid start of a property name. Expected a '\"'), and nothing of it is read"),
-                new ExtractDynamic(2, "the file stops reading as JSON here ('2' is an invalid end of a number. Expected a delimiter), and nothing of it is read"),
-                new ExtractDynamic(1, "the file stops reading as JSON here ('{' is invalid after a single JSON value. Expected end of data), and nothing of it is read"),
+                new ExtractDynamic(2, "the file stops reading as JSON here (',' is an invalid start of a property name. Expected a '\"'), and nothing of it is read", DataNodes.Stop),
+                new ExtractDynamic(2, "the file stops reading as JSON here ('2' is an invalid end of a number. Expected a delimiter), and nothing of it is read", DataNodes.Stop),
+                new ExtractDynamic(1, "the file stops reading as JSON here ('{' is invalid after a single JSON value. Expected end of data), and nothing of it is read", DataNodes.Stop),
             ],
             broken.SelectMany(extract => extract.Dynamic));
 

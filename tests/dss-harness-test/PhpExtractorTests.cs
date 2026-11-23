@@ -706,6 +706,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 (10, "a static call on the class the code names by $class"), (11, "an inclusion of a file whose path the code computes"),
             ],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(Enumerable.Repeat(PhpReading.VariableCall, 8).Append(PhpReading.UnfollowedInclude), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new PhpExtractor(), extract, "src/d.php");
         Assert.Empty(extract.References);
     }
 
@@ -1037,6 +1039,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 (11, "a call of the value a call or a parenthesis gives"),
             ],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(Enumerable.Repeat(PhpReading.VariableCall, 5), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new PhpExtractor(), extract, "src/v.php");
         Assert.Equal(["make", "inside", "m", "wrap"], Calls(extract, "php:go"));
         Assert.Single(Read("src/w.php", "<?php function go($c) { return new ($c)(); }").Dynamic);
     }
@@ -1184,6 +1188,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 (4, "an inclusion of a file outside the tree: dirname climbs 40 directories, above the tree's root"),
             ],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(Enumerable.Repeat(PhpReading.UnfollowedInclude, 3), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new PhpExtractor(), extract, "src/i.php");
         Assert.Equal(["c\\d.php", "e$f.php"], extract.Imports.Select(import => import.Target));
     }
 
@@ -1203,7 +1209,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         var extract = Read(path, text);
 
         Assert.Equal([(string.Concat(Enumerable.Repeat("../", 40)) + "root.php", 2)], extract.Imports.Select(import => (import.Target, import.Line)));
-        Assert.Equal([(3, "an inclusion of a file outside the tree: dirname climbs 41 directories, above the tree's root")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal([(3, "an inclusion of a file outside the tree: dirname climbs 41 directories, above the tree's root", PhpReading.UnfollowedInclude)], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why, dynamic.Kind)));
+        CodeGraphContract.Signed(new PhpExtractor(), extract, path);
         Assert.Empty(extract.References);
 
         var linked = Link((path, text), ("root.php", "<?php\nfunction root() {}\n"));

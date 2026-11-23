@@ -81,11 +81,21 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// <summary>The compiler's code for a parse its own guard ended short of stack: the whole text a skipped token, no member read.</summary>
     private const string ShortOfStack = "CS8078";
 
+    /// <summary>
+    /// The kinds of the marks the reading makes, each the sign of a limit of C#'s help and of every implementation's whose C# it reads
+    /// (<see cref="CodeGraphLimit.Signs"/>): a call it cannot bind, a file of more characters than the compiler counts, and one that
+    /// nests deeper than any thread's stack can be given to parse.
+    /// </summary>
+    internal const string
+        DynamicCall = "dynamic-call",
+        HugeFile = "huge-file",
+        TooDeep = "too-deep";
+
     /// <inheritdoc/>
     public string Language => "csharp";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 4;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".cs");
@@ -93,20 +103,30 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// <inheritdoc/>
     public bool Outlines => false;
 
+    /// <summary>
+    /// What the reading of C# does not see in the code it reads, wherever that code stands: a .cs file's, and that of every
+    /// implementation whose C# this reader reads (<see cref="Read"/>) - a Razor file's - whose help says them too.
+    /// </summary>
+    internal static IReadOnlyList<CodeGraphLimit> CodeUnseen { get; } =
+    [
+        ("preprocessor-branches", "code under a preprocessor branch the parse does not take: it defines no symbol, so code under #if DEBUG is out"),
+        ("untyped-values", "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone"),
+        ("local-functions", "local functions and lambdas as nodes of their own: what they call, the member they are written in calls"),
+        new CodeGraphLimit("dynamic-calls", "a call on a dynamic value, a member named by a string to reflection, Activator.CreateInstance and a delegate's invocation: marked dynamic, and not linked") { Signs = [DynamicCall] },
+        ("generic-extensions", "a generic extension method on a type parameter with no constraint, found by its name alone; a constructor's base(...) in a part of a partial class whose base list is in another file"),
+        ("untyped-reads", "a read of a member through a value no declaration types, linked by the member's name alone; a read of another file's field or property whose name its type's members also carry, linked to each of them"),
+        ("generated-sources", "code a source generator writes while the project builds, which is in no file of the tree"),
+        ("same-named-types", "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's"),
+        ("assembly-attributes", "what an assembly's or a module's attribute names or reads - [assembly: InternalsVisibleTo(...)] - which no node of the file declares: only its strings are kept, held by the file"),
+        new CodeGraphLimit("deep-nesting", "a file that nests so deep - some hundreds of thousands of levels - that no thread can be given the stack the compiler's parser needs for it, a .NET thread's stack being counted in an Int32: nothing in it parsed, the line it nests deepest on marked dynamic, with why") { Signs = [TooDeep] },
+    ];
+
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
         "C# (.cs), through the compiler's own parser and its syntax alone, nothing built: every namespace, type and member with its signature, summary and body; usings, base lists, overrides and test attributes; each call with what its receiver is where the file says; each member a member reads or writes without calling it - a field, a property, a constant, an enum member, and any name a nameof names - and each string literal the file holds, an interpolated string's constant parts each one of its own, by its value as the compiler reads it, its line and the node it is written in",
         [
-            ("preprocessor-branches", "code under a preprocessor branch the parse does not take: it defines no symbol, so code under #if DEBUG is out"),
-            ("untyped-values", "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone"),
-            ("local-functions", "local functions and lambdas as nodes of their own: what they call, the member they are written in calls"),
-            ("dynamic-calls", "a call on a dynamic value, a member named by a string to reflection, Activator.CreateInstance and a delegate's invocation: marked dynamic, and not linked"),
-            ("generic-extensions", "a generic extension method on a type parameter with no constraint, found by its name alone; a constructor's base(...) in a part of a partial class whose base list is in another file"),
-            ("untyped-reads", "a read of a member through a value no declaration types, linked by the member's name alone; a read of another file's field or property whose name its type's members also carry, linked to each of them"),
-            ("generated-sources", "code a source generator writes while the project builds, which is in no file of the tree"),
-            ("same-named-types", "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's"),
-            ("assembly-attributes", "what an assembly's or a module's attribute names or reads - [assembly: InternalsVisibleTo(...)] - which no node of the file declares: only its strings are kept, held by the file"),
-            ("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the compiler counts a text's characters in (SourceText.Length): nothing in it parsed, the line its count ends on marked dynamic, with why"),
+            .. CodeUnseen,
+            new CodeGraphLimit("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the compiler counts a text's characters in (SourceText.Length): nothing in it parsed, the line its count ends on marked dynamic, with why") { Signs = [HugeFile] },
         ])
     {
         Holds = "the compiler's syntax tree of the file, whole by the compiler's design - as Roslyn's documentation has it, a syntax tree holds every bit of the text it was parsed from: every token and every run of trivia is an entry of it, its text kept where it is 42 characters or more and a shorter one shared - so reading a file holds as much as its code writes, though the text itself is given the compiler by position (SourceText over the core's text), never as one string",
@@ -134,7 +154,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
         return root is not null
             ? new Reading($"{language}:", input.Path, lines, root).Read()
-            : new FileExtract([]) { Dynamic = [new ExtractDynamic(lines.LineAt(unread!.Value.At), unread.Value.Why)] };
+            : new FileExtract([]) { Dynamic = [new ExtractDynamic(lines.LineAt(unread!.Value.At), unread.Value.Why, unread.Value.Kind)] };
     }
 
     /// <summary>
@@ -144,12 +164,12 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// is more than one thread can be given, where it nests deepest and why it is not read: the one way a file goes
     /// unread, and said.
     /// </summary>
-    private static (CompilationUnitSyntax? Root, (long At, string Why)? Unread) Parse(CodeText text)
+    private static (CompilationUnitSyntax? Root, (long At, string Why, string Kind)? Unread) Parse(CodeText text)
     {
         // Roslyn counts a text's characters in an Int32 (SourceText.Length): a file of more is no text it can be given.
         if (text.Length > int.MaxValue)
         {
-            return (null, (int.MaxValue, string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {int.MaxValue:N0} the C# compiler's text counts in an Int32 (SourceText.Length), so it is not parsed")));
+            return (null, (int.MaxValue, string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {int.MaxValue:N0} the C# compiler's text counts in an Int32 (SourceText.Length), so it is not parsed"), HugeFile));
         }
 
         var (depth, deepest) = Nesting.Of(text);
@@ -166,7 +186,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             catch (InsufficientExecutionStackException exception)
             {
                 var deeper = levels > Math.Max(depth, 1) ? $" - deeper as the parser reads it, which ran short of stack with room for {levels / 2} -" : string.Empty;
-                return (null, (deepest, $"the file nests {depth} levels deep here{deeper}, which no thread can be given the stack to parse ({exception.Message.TrimEnd('.')})"));
+                return (null, (deepest, $"the file nests {depth} levels deep here{deeper}, which no thread can be given the stack to parse ({exception.Message.TrimEnd('.')})", TooDeep));
             }
 
             if (!root.ContainsDiagnostics || !root.GetDiagnostics().Any(diagnostic => diagnostic.Id == ShortOfStack))
@@ -2200,7 +2220,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 Qualifier = qualifier is null ? null : new ExtractQualifier(CodeQualifierKinds.Type, qualifier),
             });
 
-        private void Dynamic(SyntaxNode at, string why) => _dynamic.Add(new ExtractDynamic(Line(at.SpanStart), why));
+        private void Dynamic(SyntaxNode at, string why) => _dynamic.Add(new ExtractDynamic(Line(at.SpanStart), why, DynamicCall));
 
         private void Scope(QualifiedName name, QualifiedName? parent, bool open = true) => _scopes.TryAdd(name, new ExtractScope(name, open) { Parent = parent });
 

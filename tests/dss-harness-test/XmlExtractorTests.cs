@@ -259,7 +259,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         var refused = Read("doc.xml", "<!DOCTYPE root [<!ENTITY x \"y\">]>\n<root>&x;</root>");
 
         Assert.Empty(refused.Nodes);
-        Assert.Equal([new ExtractDynamic(1, "the file declares a DTD, which is never read, and nothing after it is read")], refused.Dynamic);
+        Assert.Equal([new ExtractDynamic(1, "the file declares a DTD, which is never read, and nothing after it is read", XmlExtractor.RefusedDtd)], refused.Dynamic);
 
         // A root whose x:Class names no type - one ending in a dot - is a section, as every other root is.
         Assert.Equal(
@@ -317,7 +317,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         var broken = Read("broken.xml", "<root>\n  <item name=\"a\">\n</root>\n");
 
         Assert.Equal(["xml:broken.xml#root", "xml:broken.xml#root/item/a"], broken.Nodes.Select(node => node.Id.Whole()));
-        Assert.Equal([new ExtractDynamic(3, "the file stops reading as XML here (The 'item' start tag on line 2 position 4 does not match the end tag of 'root'), and nothing after it is read")], broken.Dynamic);
+        Assert.Equal([new ExtractDynamic(3, "the file stops reading as XML here (The 'item' start tag on line 2 position 4 does not match the end tag of 'root'), and nothing after it is read", DataNodes.Stop)], broken.Dynamic);
     }
 
     private static FileExtract Read(string path, string text) => new XmlExtractor().Extract(new CodeFileInput(path, text));

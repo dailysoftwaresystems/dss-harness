@@ -1,0 +1,1 @@
+{"nodes":[{"id":"composer:packages/billing/composer.json","kind":"project","name":"acme/billing","qualified":"packages/billing/composer.json","start":1,"end":4,"signature":"\"name\": \"acme/billing\",","modifiers":[]}],"scopes":[],"imports":[],"addressRoots":[],"references":[],"dynamic":[]}

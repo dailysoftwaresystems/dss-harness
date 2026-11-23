@@ -109,22 +109,48 @@ public sealed record CodeGraphClaim(string Value, Func<CodeText, bool>? ContentT
 /// <param name="Says">What it does not see: a clause with no final stop.</param>
 public sealed record CodeGraphLimit(string Name, string Says)
 {
-    /// <summary>The sign of a file some of whose references the linker left candidates, however few (<see cref="CodebaseGraphQueries.SignsOf"/>).</summary>
+    /// <summary>
+    /// The sign of a file some of whose references the linker left candidates, however few, other than among the places of an
+    /// import of several (<see cref="CandidateImports"/>) - a receiver's members by their name alone, each override of one
+    /// (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
     public const string Candidates = "candidates";
 
     /// <summary>
-    /// The sign of a file some of whose references the linker bound to nothing the repository declares, each counted external
-    /// (<see cref="CodeGraphLinked.External"/>): where a language binds its names within the file (<see cref="FileExtract.BoundWithin"/>),
-    /// a callee the tree does declare that the file reaches by a way the graph does not read - a root of a layout it does not
-    /// know, a name bound by nothing the file says - is counted so, and the limit that names that way says why.
+    /// The sign of a file an import of which the linker took as several files - each a candidate: an ending several files of the
+    /// tree end with, two places one name may stand at - or a reference of which it left candidates among the files such an import
+    /// names (<see cref="CodeGraphLinked.Signs"/>).
     /// </summary>
-    public const string External = "external";
+    public const string CandidateImports = "candidate-imports";
 
     /// <summary>
-    /// The signs a file gives that the limit applies to it: <see cref="Candidates"/>, <see cref="External"/>, or the kind of a
-    /// dynamic mark its reading made (<see cref="ExtractDynamic.Kind"/>) - a sign names one limit as another may name it, where
-    /// both tell of one thing. None where no sign of it is named: the limit is said of every file of its language all the same,
-    /// and marked of none.
+    /// The sign of a file a reference of which the linker bound to nothing, counted external, where the name it is written by - or
+    /// its qualifier's head - is bound by imports of the file alone and none of them names a file of the tree: a module installed
+    /// from outside the tree, or one under a root the graph does not know (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string OutsideImport = "outside-import";
+
+    /// <summary>
+    /// The sign of a file a name written alone in which no scope declares and no import of the file lets, where its language binds
+    /// its names within the file (<see cref="FileExtract.BoundWithin"/>): bound to nothing, counted external
+    /// (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string Unbound = "unbound";
+
+    /// <summary>
+    /// The sign of a file a fixture a test is given by its parameter's name (<see cref="CodeQualifierKinds.Fixture"/>) in which no
+    /// scope of the test declares and no import serving fixtures holds: bound to nothing, counted external
+    /// (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string UnprovidedFixture = "unprovided-fixture";
+
+    /// <summary>
+    /// The signs a file gives that the limit applies to it: what the linker found of its references - <see cref="Candidates"/>,
+    /// <see cref="CandidateImports"/>, <see cref="OutsideImport"/>, <see cref="Unbound"/>, <see cref="UnprovidedFixture"/>, each
+    /// one thing it knows, no language named - or the kind of a dynamic mark its reading made (<see cref="ExtractDynamic.Kind"/>),
+    /// which every mark has. A sign names one limit as another may name it, where both tell of that one thing; a limit that says
+    /// what a reader marks names the kind of the mark. None where no sign of it is named: the limit is said of every file of its
+    /// language all the same, by its name, and in full of none.
     /// </summary>
     public IReadOnlyList<string> Signs { get; init; } = [];
 

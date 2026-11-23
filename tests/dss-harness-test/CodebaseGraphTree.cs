@@ -318,12 +318,15 @@ internal sealed class DynamicExtractor : ICodeGraphExtractor
 
     public bool Outlines => false;
 
-    public CodeGraphExtractorHelp Help { get; } = new("dyn files", []);
+    /// <summary>The kind of every mark it makes, the sign of its one limit.</summary>
+    public const string DynCall = "dyn-call";
+
+    public CodeGraphExtractorHelp Help { get; } = new("dyn files", [new CodeGraphLimit("dyn-calls", "a call through dyn: marked dynamic") { Signs = [DynCall] }]);
 
     public FileExtract Extract(CodeFileInput input)
         => new([])
         {
-            Dynamic = [.. input.Lines.Select((line, at) => (line, at)).Where(one => one.line.StartsWith("dyn", StringComparison.Ordinal)).Select(one => new ExtractDynamic(one.at + 1, $"a call through {one.line}"))],
+            Dynamic = [.. input.Lines.Select((line, at) => (line, at)).Where(one => one.line.StartsWith("dyn", StringComparison.Ordinal)).Select(one => new ExtractDynamic(one.at + 1, $"a call through {one.line}", DynCall))],
         };
 }
 

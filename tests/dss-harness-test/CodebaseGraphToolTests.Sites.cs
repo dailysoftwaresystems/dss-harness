@@ -367,10 +367,11 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// Every limit of each language whose files a <c>sites</c> answer read is said where the answer ends, one rule for every
-    /// language: a limit whose sign the files read show - the kind of a dynamic mark one holds, a reference the linker left
-    /// candidates, or one it counted external - in full, as its help says it, with how many show it; and every other by its short
-    /// name, on one line for the language that points to <c>help codebase-graph-languages</c>, which says each in full under that
-    /// name - nothing left unsaid, and the answer small. Read before what the answer says of their files is trusted.
+    /// language: a limit whose sign the files read show - the kind of a dynamic mark one holds, or what the linker found of its
+    /// references and its imports, each sign one thing it knows - in full, as its help says it, with how many show it; and every
+    /// other by its short name, on one line for the language that points to <c>help codebase-graph-languages</c>, which says each
+    /// in full under that name - nothing left unsaid, the answer small, and no limit said in full of a file that does not show it.
+    /// Read before what the answer says of their files is trusted.
     /// </summary>
     [Fact]
     public async Task Sites_EndWithEveryLimitOfEachLanguageRead_TheOnesItsFilesShowMarkedWithHowMany()
@@ -406,10 +407,10 @@ public sealed partial class CodebaseGraphToolTests
         Assert.DoesNotContain(Tail(computed), line => line.Contains(Says("a duck-typed receiver"), StringComparison.Ordinal));
         Assert.Equal(
             [
-                "csharp also does not see ('help codebase-graph-languages' says each): preprocessor-branches, untyped-values, local-functions, dynamic-calls, generic-extensions, untyped-reads, generated-sources, same-named-types, assembly-attributes, huge-files.",
+                "csharp also does not see ('help codebase-graph-languages' says each): preprocessor-branches, untyped-values, local-functions, dynamic-calls, generic-extensions, untyped-reads, generated-sources, same-named-types, assembly-attributes, deep-nesting, huge-files.",
                 "markdown also does not see ('help codebase-graph-languages' says each): fenced-headings, html-headings.",
                 $"python does not see {Says("computed attribute access")} - shown by 1 file(s) read.",
-                "python also does not see ('help codebase-graph-languages' says each): dynamic-imports, unseen-roots, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unclosed, module-getattr, unbound-names, outside-fixtures, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
+                "python also does not see ('help codebase-graph-languages' says each): dynamic-imports, unseen-roots, ambiguous-imports, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unclosed, unreadable-heads, module-getattr, unbound-names, outside-fixtures, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
             ],
             Tail(computed));
         Assert.All(
@@ -422,28 +423,60 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal([PythonReading.ComputedAttribute], Assert.Single(limits, limit => limit.Says.StartsWith("computed attribute access", StringComparison.Ordinal)).Signs);
         Assert.Equal([CodeGraphLimit.Candidates, PythonReading.FunctionValue], Assert.Single(limits, limit => limit.Says.StartsWith("a duck-typed receiver", StringComparison.Ordinal)).Signs);
 
-        // Every limit whose sign the code can give: the two above, and the others the reader marks or the linker counts.
-        Assert.Equal(9, limits.Count(limit => limit.Signs.Count > 0));
+        // Every limit whose sign the code can give: the two above, and the others the reader marks or the linker finds.
+        Assert.Equal(11, limits.Count(limit => limit.Signs.Count > 0));
 
-        // A file whose bracket never closes, a file whose call the linker bound to nothing the tree declares - counted external, the
-        // sign of each limit that names a way the graph does not read - and a page another template engine writes: each shows the
-        // limits its sign names, of its own language.
+        // A file whose bracket never closes; one whose call reaches through an import that names no file of the tree; one whose
+        // call names what nothing the file says binds; a test given a fixture no conftest.py provides; a script whose bare import
+        // stands at two places, its call through it a candidate of each; and a page another template engine writes. Each shows
+        // the limits its own sign names, of its own language, and no other: a library's call shows no name nothing binds and no
+        // fixture, and a call through an import of two places no duck-typed receiver.
         using var signed = await TreeAsync(
             ("shop/total.py", "def total(cart):\n    return sum(\n"),
             ("shop/rates.py", "from vendor.rates import convert\n\n\ndef rate():\n    return convert(1)\n"),
+            ("shop/tally.py", "def tally():\n    return undeclared_total()\n"),
+            ("tests/test_rates.py", "def test_rate(tmp_path):\n    assert tmp_path\n"),
+            ("tools/run.py", "import helper\n\n\ndef run():\n    return helper.pack()\n"),
+            ("tools/helper.py", "def pack():\n    return 1\n"),
+            ("helper.py", "def pack():\n    return 2\n"),
             ("web/page.html", "<main>\n  <p>{% if user %}Hello{% endif %}</p>\n</main>\n"));
-        var shown = Tail((await AskAsync(Tool(signed, await QueriesAsync(signed)), """{"op":"sites","data":"total"}""")).Text.Split('\n'));
-        var engine = Assert.Single(CodeGraphExtractors.OfThisBuild.Find("html")!.Help.DoesNotSee, limit => limit.Signs.Contains(HtmlExtractor.OtherEngine)).Says;
+        var signedQueries = await QueriesAsync(signed);
+        var shown = Tail((await AskAsync(Tool(signed, signedQueries), """{"op":"sites","data":"total"}""")).Text.Split('\n'));
+
+        // Each file's own signs, as the view reads them: the kind of its mark, and what the linker found of its references and imports.
+        Assert.Equal([PythonReading.Unclosed], signedQueries.SignsOf("shop/total.py"));
+        Assert.Equal([CodeGraphLimit.OutsideImport], signedQueries.SignsOf("shop/rates.py"));
+        Assert.Equal([CodeGraphLimit.Unbound], signedQueries.SignsOf("shop/tally.py"));
+        Assert.Equal([CodeGraphLimit.UnprovidedFixture], signedQueries.SignsOf("tests/test_rates.py"));
+        Assert.Equal([CodeGraphLimit.CandidateImports], signedQueries.SignsOf("tools/run.py"));
+        Assert.Empty(signedQueries.SignsOf("tools/helper.py"));
+        Assert.Empty(signedQueries.SignsOf("helper.py"));
+        Assert.Equal([HtmlExtractor.OtherEngine], signedQueries.SignsOf("web/page.html"));
 
         Assert.Equal(
-            [.. LimitsOf("csharp", [CodeGraphLimit.Candidates]), .. LimitsOf("html", [HtmlExtractor.OtherEngine]), .. LimitsOf("markdown"), .. LimitsOf("python", [PythonReading.Unclosed], [CodeGraphLimit.External])],
+            [
+                .. LimitsOf("csharp", [CodeGraphLimit.Candidates]),
+                .. LimitsOf("html", [HtmlExtractor.OtherEngine]),
+                .. LimitsOf("markdown"),
+                $"python does not see {Says("a root of the path")} - shown by 1 file(s) read.",
+                $"python does not see {Says("two places or more")} - shown by 1 file(s) read.",
+                $"python does not see {Says("never closes")} - shown by 1 file(s) read.",
+                $"python does not see {Says("neither declares nor imports")} - shown by 1 file(s) read.",
+                $"python does not see {Says("no conftest.py")} - shown by 1 file(s) read.",
+                "python also does not see ('help codebase-graph-languages' says each): computed-attributes, dynamic-imports, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unreadable-heads, module-getattr, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
+            ],
             shown);
-        Assert.Contains($"html does not see {engine} - shown by 1 file(s) read.", shown);
-        Assert.All(
-            new[] { "never closes", "a root of the path", "neither declares nor imports", "no conftest.py" },
-            names => Assert.Contains($"python does not see {Says(names)} - shown by 1 file(s) read.", shown));
-        Assert.Equal([PythonReading.Unclosed], Assert.Single(limits, limit => limit.Says.Contains("never closes", StringComparison.Ordinal)).Signs);
-        Assert.Equal(3, limits.Count(limit => limit.Signs.Contains(CodeGraphLimit.External)));
+        Assert.Contains($"html does not see {Assert.Single(CodeGraphExtractors.OfThisBuild.Find("html")!.Help.DoesNotSee, limit => limit.Signs.Contains(HtmlExtractor.OtherEngine)).Says} - shown by 1 file(s) read.", shown);
+
+        // Each sign the linker gives is one thing it knows, the sign of one limit of Python's alone.
+        string[] Named(string sign) => [.. limits.Where(limit => limit.Signs.Contains(sign)).Select(limit => limit.Name)];
+
+        Assert.Equal(["unseen-roots"], Named(CodeGraphLimit.OutsideImport));
+        Assert.Equal(["unbound-names"], Named(CodeGraphLimit.Unbound));
+        Assert.Equal(["outside-fixtures"], Named(CodeGraphLimit.UnprovidedFixture));
+        Assert.Equal(["ambiguous-imports"], Named(CodeGraphLimit.CandidateImports));
+        Assert.Equal(["duck-typing"], Named(CodeGraphLimit.Candidates));
+        Assert.Equal(["unclosed"], Named(PythonReading.Unclosed));
     }
 
     /// <summary>The words of the one Python limit whose clause holds <paramref name="names"/>, as its help says them.</summary>

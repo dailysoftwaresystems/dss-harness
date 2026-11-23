@@ -532,6 +532,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 "a call through Function.apply", "a call on the dynamic value loose",
             ],
             extract.Dynamic.Select(dynamic => dynamic.Why));
+        Assert.Equal(Enumerable.Repeat(DartReading.FunctionValue, 7).Append(DartReading.DynamicValue), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new DartExtractor(), extract, "lib/f.dart");
         Assert.Equal(["anything"], Calls(extract, "dart:lib/f.dart.W.go"));
     }
 
@@ -1079,7 +1081,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         Assert.Equal(
             [(5, "value a.b.c.d.e.f.g.h"), (6, "value a.b.c.d.e.f.g.h.i"), (7, "value")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
-        Assert.Equal([(7, "a call on the dynamic value d")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal([(7, "a call on the dynamic value d", DartReading.DynamicValue)], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why, dynamic.Kind)));
+        CodeGraphContract.Signed(new DartExtractor(), extract, "lib/run.dart");
         Assert.Equal([("closed.dart", 2)], extract.Imports.Select(import => (import.Target, import.Line)));
     }
 

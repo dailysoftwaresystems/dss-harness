@@ -12,7 +12,7 @@ public sealed class CExtractor : ICodeGraphExtractor
     public string Language => "c";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([], [new(".c"), new(".h", probe => !CFamilyReading.HasCppMark(probe))]);
@@ -24,10 +24,10 @@ public sealed class CExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "C (.c, and .h with no mark of C++), through a structural scanner of the tool's own: every function (one defined in the old style too, its parameters declared after their list), prototype, struct, union, enum, typedef, variable and macro with its signature, summary and body; #includes; each call by its name and arity; each member a member reads or writes without calling it, and each string literal the file holds - a prefixed one's and a raw one's too, as GCC's GNU dialects read one, a character constant none - by its value as the compiler reads its escapes, its line and the node it is written in",
         [
-            ("macros", "macros expanded: a declaration a macro writes is not seen; a macro standing in the place of one or between its specifiers and the rest of it, a call of what a macro's parameter stands for, and a call of a function-like macro - one the file defines, or one named in capitals as macros are - are marked dynamic, the last still linked to the macro by its name"),
-            ("if-branches", "which branch of an #if is taken: every branch is read, so a function defined under each of two conditions is two nodes of one name, each marked conditional - a function or a type whose head is written under each and whose body is one is read by its first head, the heads the other branches write none of its body, and a bracket one branch leaves open and no other does is read as holding nothing, marked dynamic"),
-            ("pointer-calls", "a call through a member, which C makes through a function pointer, through an element, and through a function pointer the file shows as one: marked dynamic, and not linked - one whose pointer type a typedef names is linked by its name"),
-            ("ambiguous-includes", "which file an #include names where several of the tree end so: beside the including file first, else each of them, as candidates"),
+            new CodeGraphLimit("macros", "macros expanded: a declaration a macro writes is not seen; a macro standing in the place of one or between its specifiers and the rest of it, a call of what a macro's parameter stands for, and a call of a function-like macro - one the file defines, or one named in capitals as macros are - are marked dynamic, the last still linked to the macro by its name") { Signs = [CFamilyReading.UnexpandedMacro] },
+            new CodeGraphLimit("if-branches", "which branch of an #if is taken: every branch is read, so a function defined under each of two conditions is two nodes of one name, each marked conditional - a function or a type whose head is written under each and whose body is one is read by its first head, the heads the other branches write none of its body, and a bracket one branch leaves open and no other does is read as holding nothing, marked dynamic") { Signs = [CFamilyReading.OpenBranch] },
+            new CodeGraphLimit("pointer-calls", "a call through a member, which C makes through a function pointer, through an element, and through a function pointer the file shows as one: marked dynamic, and not linked - one whose pointer type a typedef names is linked by its name") { Signs = [CFamilyReading.PointerCall] },
+            new CodeGraphLimit("ambiguous-includes", "which file an #include names where several of the tree end so: beside the including file first, else each of them, as candidates") { Signs = [CodeGraphLimit.CandidateImports] },
             ("untyped-calls", "types: a call is bound by its name and arity - exact where its own file declares the name static, at most unique otherwise"),
             ("header-statics", "which includer's copy a header's static name is: a header's static names, as its macros, are the repository's, so two headers' of one name are one"),
             ("c-headers", "a header with no mark of C++ is C's: a C++ file's definition of what it declares is a node of its own, which no declares edge reaches from it"),

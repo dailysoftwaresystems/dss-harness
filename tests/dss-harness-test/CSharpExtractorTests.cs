@@ -859,6 +859,8 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 (10, "a type made by Activator.CreateInstance"),
             ],
             extract.Dynamic.Select(mark => (mark.Line, mark.Why)));
+        Assert.Equal(Enumerable.Repeat(CSharpExtractor.DynamicCall, 4), extract.Dynamic.Select(mark => mark.Kind));
+        CodeGraphContract.Signed(Extractor, extract, "src/App/Program.cs");
         Assert.DoesNotContain(extract.References, reference => reference.Name is "Spin" or "twice" or "Report");
 
         const string Text = """
@@ -901,6 +903,8 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 (18, "a member named by a string to reflection (InvokeMember)"),
             ],
             marked.Dynamic.Select(mark => (mark.Line, mark.Why)));
+        Assert.Equal(Enumerable.Repeat(CSharpExtractor.DynamicCall, 10), marked.Dynamic.Select(mark => mark.Kind));
+        CodeGraphContract.Signed(Extractor, marked, "C.cs");
         Assert.DoesNotContain(marked.References, reference => reference.Name is "Go" or "Invoke" or "loose" or "handle");
 
         // A dynamic value says no type its calls are found through.
@@ -1539,9 +1543,10 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         Assert.Empty(extract.References);
         Assert.Equal(
             [
-                new ExtractDynamic(5, string.Create(CultureInfo.InvariantCulture, $"the file nests {Depth} levels deep here, which no thread can be given the stack to parse (a call {Depth} levels deep, of {CSharpExtractor.FrameBytes} bytes a level, needs {(Depth * CSharpExtractor.FrameBytes) + DeepCalls.SizedBaseBytes} bytes of stack, and a .NET thread's stack is given as an int count of bytes, at most {int.MaxValue}: no one thread can hold it)")),
+                new ExtractDynamic(5, string.Create(CultureInfo.InvariantCulture, $"the file nests {Depth} levels deep here, which no thread can be given the stack to parse (a call {Depth} levels deep, of {CSharpExtractor.FrameBytes} bytes a level, needs {(Depth * CSharpExtractor.FrameBytes) + DeepCalls.SizedBaseBytes} bytes of stack, and a .NET thread's stack is given as an int count of bytes, at most {int.MaxValue}: no one thread can hold it)"), CSharpExtractor.TooDeep),
             ],
             extract.Dynamic);
+        CodeGraphContract.Signed(Extractor, extract, "src/Deep.cs");
     }
 
     /// <summary>

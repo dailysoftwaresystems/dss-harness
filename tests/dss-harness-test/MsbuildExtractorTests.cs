@@ -134,7 +134,8 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
         var extract = Extractor.Extract(new CodeFileInput("Entity.csproj", Text));
 
         Assert.Equal(["One.csproj"], extract.References.Select(reference => reference.Name));
-        Assert.Equal([6], extract.Dynamic.Select(mark => mark.Line));
+        Assert.Equal([(6, DataNodes.Stop)], extract.Dynamic.Select(mark => (mark.Line, mark.Kind)));
+        CodeGraphContract.Signed(Extractor, extract, "Entity.csproj");
     }
 
     /// <summary>
@@ -158,7 +159,7 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
         Assert.Equal(["One.csproj"], extract.References.Select(reference => reference.Name));
         Assert.Equal(("Broken.csproj", 1, 6), (Assert.Single(extract.Nodes).Name, extract.Nodes[0].Start, extract.Nodes[0].End));
-        Assert.Equal([new ExtractDynamic(4, "the file stops reading as XML here (The 'ItemGroup' start tag on line 2 position 4 does not match the end tag of 'Wrong'), and nothing after it is read")], extract.Dynamic);
+        Assert.Equal([new ExtractDynamic(4, "the file stops reading as XML here (The 'ItemGroup' start tag on line 2 position 4 does not match the end tag of 'Wrong'), and nothing after it is read", DataNodes.Stop)], extract.Dynamic);
         Assert.Empty(Extractor.Extract(new CodeFileInput("src/Shapes/Shapes.csproj", Shapes)).Dynamic);
     }
 
@@ -189,7 +190,8 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
             [("One", 3), ("Two", 4), ("Three", 5), ("Four", 5), ("Five", 7)],
             extract.References.Select(reference => (reference.Name, reference.Line)));
         Assert.All(extract.References, reference => Assert.Equal((CodeEdgeKinds.Uses, new ExtractQualifier(CodeQualifierKinds.Key, "xml")), (reference.Kind, reference.Qualifier)));
-        Assert.Equal([10], extract.Dynamic.Select(mark => mark.Line));
+        Assert.Equal([(10, DataNodes.Stop)], extract.Dynamic.Select(mark => (mark.Line, mark.Kind)));
+        CodeGraphContract.Signed(Extractor, extract, "Uses.csproj");
     }
 
     /// <summary>

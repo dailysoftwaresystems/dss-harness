@@ -51,7 +51,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
     public string Language => "razor";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".cshtml", ".razor");
@@ -65,7 +65,8 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         [
             ("tag-helpers", "what a tag helper is, and an element no component of the tree names: an instantiates that resolves nowhere, counted as such"),
             ("untyped-attributes", "a component attribute written without an @ whose parameter is no string - Count=\"Items.Count\" - read as text: the parameter's type is the component's, which the file does not say"),
-            ("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why"),
+            new CodeGraphLimit("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why") { Signs = [MarkupText.HugeFile] },
+            .. CSharpExtractor.CodeUnseen,
         ])
     {
         Holds = "AngleSharp's text source, which keeps every character the tokenizer decodes - its HTML tokenizer reads a source of its buffered kind alone (a TextSource over a stream), and the source that lets go of what it read is offered to its parser alone, which builds a document rather than the tokens this reader matches - so reading a file holds its markup's text once, in pieces, never as one string; and the C# compiler's syntax tree of each run of code, which the compiler is given as a string of its own and keeps whole, as the C# reader's says",

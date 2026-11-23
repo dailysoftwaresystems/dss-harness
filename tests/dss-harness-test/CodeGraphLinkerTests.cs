@@ -1519,6 +1519,7 @@ public sealed class CodeGraphLinkerTests
                 Assert.Equal(whole.Edges, again.Edges);
                 Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
                 Assert.Equal([.. whole.External], [.. again.External]);
+                Assert.Equal(SignsOf(whole), SignsOf(again));
 
                 (tree, linked) = (after, again);
             }
@@ -1581,13 +1582,14 @@ public sealed class CodeGraphLinkerTests
         Again(before, after);
     }
 
-    /// <summary>What the references of the declaration <paramref name="reader"/> found in <paramref name="linked"/>: its edges, and its count of names found nowhere.</summary>
+    /// <summary>What the references of the declaration <paramref name="reader"/> found in <paramref name="linked"/>: its edges, its count of names found nowhere, and the signs they gave.</summary>
     private static string Found(CodeGraphLinked linked, string reader)
         => string.Join(
             '\n',
             linked.Edges.Where(edge => edge.From == reader)
                 .Select(edge => $"{edge.To} {edge.Kind} {edge.Confidence}")
-                .Append($"external {linked.External.GetValueOrDefault(reader)}"));
+                .Append($"external {linked.External.GetValueOrDefault(reader)}")
+                .Append($"signs {string.Join(", ", linked.Signs.GetValueOrDefault(reader) ?? [])}"));
 
     /// <summary>Every thing <see cref="Reading"/> changes alone.</summary>
     public static TheoryData<string> ThingsAFindingReads() => [.. Reading().Keys];
@@ -1622,6 +1624,14 @@ public sealed class CodeGraphLinkerTests
         // What a file imported by its path declares at its top.
         var importsLib = File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Prefix = "p" }]);
         Case("a name, at the top of a file imported by its path", [importsLib], File("lib.t", [Member("Stop", 0)]), File("lib.t", [Member("Stop", 0), Member("Run", 0)]));
+
+        // Whether the file an import binding a name names is in the tree: come, so the name is no longer one only an import naming no
+        // file of it binds - counted external alike, but its sign gone.
+        Case(
+            "whether an import binding a name names a file of the tree",
+            [Within(File("use.t", [go], [Call("Go", "Run", 0)], imports: [Import(CodeImportForms.Relative, "far.t") with { Show = ["Run"] }]))],
+            null,
+            File("far.t", [Member("Stop", 0)]));
 
         // Whether a declaration of a file imported by its path is at its top: one held by another is not.
         Case(
@@ -2035,6 +2045,72 @@ public sealed class CodeGraphLinkerTests
         Assert.Empty(Reached(Member("c.sample", 0)));
     }
 
+    /// <summary>
+    /// What a reference found - nothing, or several - gives its node the sign of why, as the way it is written tells it, no language
+    /// named, each one thing the linker knows: a fixture no scope and no serving import provides; a name, or a prefix, only an import
+    /// that names no file of the tree binds; a name written alone nothing binds, in a file that binds its names within it - none in a
+    /// file that does not, and none where an import naming a file of the tree binds the name, though each is counted external
+    /// alike - a directory's import, which every file of its language is given, naming a scope and no file, binds none of them;
+    /// candidates among the places of an import of two places, as that import's file's own node is signed beside its edges;
+    /// and any other candidates. A use, which is recall, and a probe that found nothing, which misses nothing, give none.
+    /// </summary>
+    [Fact]
+    public void AFinding_GivesItsNodeTheSignOfWhyItFoundNothingOrSeveral()
+    {
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+
+        var linked = Link(
+            Within(File("t/test.t", [Member("UsesFixture", 0)], [Ref("UsesFixture", CodeEdgeKinds.References, "sample") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Fixture) }])),
+            Within(File(
+                "outside.t",
+                [Member("Outside", 0), Member("Prefixed", 0)],
+                [Call("Outside", "convert", 1), Call("Prefixed", "get", 0, Prefix("requests"))],
+                imports: [Import(CodeImportForms.Relative, "vendor/rates.t") with { Show = ["convert"] }, Import(CodeImportForms.Relative, "requests.t") with { Prefix = "requests" }])),
+            Within(File(
+                "unbound.t",
+                [Member("Unbound", 0), Member("UsesOnly", 0), Member("Probing", 0)],
+                [Call("Unbound", "nowhere", 0), Ref("UsesOnly", CodeEdgeKinds.Uses, "absent"), Ref("Probing", CodeEdgeKinds.Calls, "absent") with { Probe = true }])),
+            File("open.t", [Member("Open", 0)], [Call("Open", "nowhere", 0)]),
+            Within(File("present.t", [Member("Present", 0)], [Call("Present", "missing", 0)], imports: [Import(CodeImportForms.Relative, "lib.t") with { Show = ["missing"] }])),
+            File("lib.t", [Member("Other", 0)]),
+            Within(File(
+                "tools/run.t",
+                [Member("Run", 0)],
+                [Call("Run", "pack", 0, Prefix("h"))],
+                imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true }])),
+            File("tools/helper.t", [Member("pack", 0) with { Id = "t:near.pack" }]),
+            File("helper.t", [Member("pack", 0) with { Id = "t:far.pack" }]),
+            File("duck.t", [Member("Duck", 0)], [Call("Duck", "quack", 0, new ExtractQualifier(CodeQualifierKinds.Value))]),
+            File("ducks/a.t", [Member("quack", 0) with { Id = "t:a.quack" }]),
+            File("ducks/b.t", [Member("quack", 0) with { Id = "t:b.quack" }]),
+            File("top.t", [], imports: [Import(CodeImportForms.Directory, "far") with { Global = true }]));
+
+        Assert.Equal(
+            [
+                "file:tools/run.t: candidate-imports",
+                "t:Duck: candidates",
+                "t:Outside: outside-import",
+                "t:Prefixed: outside-import",
+                "t:Run: candidate-imports",
+                "t:Unbound: unbound",
+                "t:UsesFixture: unprovided-fixture",
+            ],
+            SignsOf(linked));
+
+        // Counted external all the same - a name the repository declares nowhere, one an import of a file of the tree binds - but no
+        // sign of either: nothing the linker knows tells why. A directory's import, given to every file of the language, names a
+        // scope and no file: it makes no name an outside import's.
+        Assert.Equal(1, linked.External["t:Open"]);
+        Assert.Equal(1, linked.External["t:Present"]);
+        Assert.Equal(
+            [Edge("t:Run", "t:far.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates), Edge("t:Run", "t:near.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.From == "t:Run").OrderBy(edge => edge.To, StringComparer.Ordinal));
+    }
+
+    /// <summary>The signs each node of <paramref name="linked"/> gave, a line a node, in the order of their ids.</summary>
+    private static string[] SignsOf(CodeGraphLinked linked)
+        => [.. linked.Signs.OrderBy(signs => signs.Key, StringComparer.Ordinal).Select(signs => $"{signs.Key}: {string.Join(", ", signs.Value)}")];
+
     /// <summary>Two files of one path are no tree: the linker refuses them.</summary>
     [Fact]
     public void TwoFilesOfOnePath_AreRefused()
@@ -2052,6 +2128,7 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(whole.Edges, again.Edges);
         Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
         Assert.Equal([.. whole.External], [.. again.External]);
+        Assert.Equal(SignsOf(whole), SignsOf(again));
         Assert.True(again.References <= whole.References);
         return again;
     }

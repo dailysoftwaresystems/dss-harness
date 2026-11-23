@@ -752,6 +752,8 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal([("a", 1, "const a = ()"), ("b", 2, "b = ()")], extract.Nodes.Where(node => node.Name is "a" or "b").Select(node => (node.Name, node.Start, node.Signature)));
         Assert.Null(Assert.Single(extract.References, reference => reference.Name == "f").Arity);
         Assert.Equal(["an import of a module the code computes", "an import by require of a module the code computes"], extract.Dynamic.Select(dynamic => dynamic.Why));
+        Assert.Equal([JsReading.ComputedImport, JsReading.ComputedImport], extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new JavaScriptExtractor(), extract, "src/v.js");
     }
 
     /// <summary>
@@ -868,6 +870,8 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
                 "a call through the function value handler", "a component held by the value Icon",
             ],
             extract.Dynamic.Select(dynamic => dynamic.Why));
+        Assert.Equal(new[] { JsReading.FunctionValue, JsReading.ComputedCode, JsReading.ComputedCode }.Concat(Enumerable.Repeat(JsReading.FunctionValue, 7)), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new JavaScriptExtractor(), extract, "src/d.jsx");
         Assert.Equal(["make", "pick"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
     }
 

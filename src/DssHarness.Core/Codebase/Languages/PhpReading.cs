@@ -36,6 +36,14 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </remarks>
 internal sealed class PhpReading
 {
+    /// <summary>
+    /// The kinds of the marks the reading makes, each the sign of a limit of PHP's help (<see cref="CodeGraphLimit.Signs"/>): a call of
+    /// what the code names by a variable or computes, and an inclusion the reader cannot follow to a file of the tree.
+    /// </summary>
+    internal const string
+        VariableCall = "variable-call",
+        UnfollowedInclude = "unfollowed-include";
+
     /// <summary>The words a parenthesis follows that call nothing: PHP's statements and the constructs that read like calls.</summary>
     private static readonly HashSet<string> NoCalls = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -478,14 +486,14 @@ internal sealed class PhpReading
 
         if (above is { } levels)
         {
-            _extract.Dynamic(line, $"an inclusion of a file outside the tree: dirname climbs {levels} directories, above the tree's root");
+            _extract.Dynamic(line, $"an inclusion of a file outside the tree: dirname climbs {levels} directories, above the tree's root", UnfollowedInclude);
             return stop;
         }
 
         if (path is null)
         {
             // What computes it is read as the code it is.
-            _extract.Dynamic(line, "an inclusion of a file whose path the code computes");
+            _extract.Dynamic(line, "an inclusion of a file whose path the code computes", UnfollowedInclude);
             return scan.Next(at);
         }
 
@@ -1483,7 +1491,7 @@ internal sealed class PhpReading
 
             if (scan.Is(at, "(") && Computed(scan, at) is { } computed)
             {
-                _extract.Dynamic(token.Line, computed);
+                _extract.Dynamic(token.Line, computed, VariableCall);
             }
 
             if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && OpensSignature(scan, at) && !IsWord(scan, scan.Previous(at), "use"))
@@ -1582,19 +1590,19 @@ internal sealed class PhpReading
 
         if (IsVariable(scan, at))
         {
-            _extract.Dynamic(line, $"a call through the function value {word}");
+            _extract.Dynamic(line, $"a call through the function value {word}", VariableCall);
             return at;
         }
 
         if (IsWord(scan, at, "eval"))
         {
-            _extract.Dynamic(line, "a call of eval");
+            _extract.Dynamic(line, "a call of eval", VariableCall);
             return at;
         }
 
         if (word.Equals("call_user_func", StringComparison.OrdinalIgnoreCase) || word.Equals("call_user_func_array", StringComparison.OrdinalIgnoreCase))
         {
-            _extract.Dynamic(line, $"a call through {word.ToLowerInvariant()}");
+            _extract.Dynamic(line, $"a call through {word.ToLowerInvariant()}", VariableCall);
             return at;
         }
 
@@ -1790,7 +1798,7 @@ internal sealed class PhpReading
 
         if (IsVariable(scan, at))
         {
-            _extract.Dynamic(line, $"a call of a method the code names by the variable {word}");
+            _extract.Dynamic(line, $"a call of a method the code names by the variable {word}", VariableCall);
             return;
         }
 
@@ -1808,7 +1816,7 @@ internal sealed class PhpReading
             }
             else if (IsVariable(scan, before) && !scan.Is(scan.Previous(before), "->") && !scan.Is(scan.Previous(before), "?->") && !scan.Is(scan.Previous(before), "::"))
             {
-                _extract.Dynamic(line, $"a static call on the class the code names by {scan.Text(before)}");
+                _extract.Dynamic(line, $"a static call on the class the code names by {scan.Text(before)}", VariableCall);
             }
             else if (scan.IsName(before) && !IsVariable(scan, before) && ClassName(scan.Text(before)) is { } type)
             {
@@ -1902,7 +1910,7 @@ internal sealed class PhpReading
 
         if (IsVariable(scan, name) || scan.Is(name, "("))
         {
-            _extract.Dynamic(line, "a new of a class the code computes");
+            _extract.Dynamic(line, "a new of a class the code computes", VariableCall);
             return name + 1;
         }
 

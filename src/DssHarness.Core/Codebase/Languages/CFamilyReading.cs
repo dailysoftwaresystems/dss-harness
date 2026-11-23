@@ -28,6 +28,15 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </remarks>
 internal sealed class CFamilyReading
 {
+    /// <summary>
+    /// The kinds of the marks the reading makes, each the sign of a limit of C's help and of C++'s (<see cref="CodeGraphLimit.Signs"/>):
+    /// a macro the reader does not expand, a call through a function pointer, and a bracket one branch of a conditional leaves open.
+    /// </summary>
+    internal const string
+        UnexpandedMacro = "macro",
+        PointerCall = "pointer-call",
+        OpenBranch = "open-branch";
+
     /// <summary>The names of C no call is made by: its statements, its types, its qualifiers and what it asks of the compiler.</summary>
     private static readonly HashSet<string> CKeywords = new(StringComparer.Ordinal)
     {
@@ -273,7 +282,7 @@ internal sealed class CFamilyReading
 
         foreach (var stranded in _scan.Stranded)
         {
-            _extract.Dynamic(_scan[stranded].Line, "a bracket one branch of a conditional leaves open and no other does: read as holding nothing");
+            _extract.Dynamic(_scan[stranded].Line, "a bracket one branch of a conditional leaves open and no other does: read as holding nothing", OpenBranch);
         }
 
         _walks.Walk(0, _scan.Count, at => Declaration(at, _scan.Count, ScanFrame.Top, local: false));
@@ -1196,7 +1205,7 @@ internal sealed class CFamilyReading
                 return Macro(named, end, rest);
             }
 
-            _extract.Dynamic(_scan[named].Line, $"the macro {_scan.Text(named)} stands in a declaration, which is not expanded");
+            _extract.Dynamic(_scan[named].Line, $"the macro {_scan.Text(named)} stands in a declaration, which is not expanded", UnexpandedMacro);
             specified.AddRange(_scan.Code(at, named).Select(index => _scan.Text(index)));
             at = rest;
         }
@@ -1208,7 +1217,7 @@ internal sealed class CFamilyReading
             && (Beginners.Contains(_scan.Text(after)) || _scan.Is(after, "}")
                 || (IsMacroName(_scan.Text(at)) && _scan.IsName(after) && _scan.IsName(_scan.Next(after)))))
         {
-            _extract.Dynamic(_scan[at].Line, $"the macro {_scan.Text(at)} stands here in the place of a declaration, which is not seen");
+            _extract.Dynamic(_scan[at].Line, $"the macro {_scan.Text(at)} stands here in the place of a declaration, which is not seen", UnexpandedMacro);
             return after;
         }
 
@@ -1232,7 +1241,7 @@ internal sealed class CFamilyReading
 
         if (body >= 0)
         {
-            _extract.Dynamic(_scan[at].Line, "a body follows what declares no function this reader knows - a macro's - and is not read");
+            _extract.Dynamic(_scan[at].Line, "a body follows what declares no function this reader knows - a macro's - and is not read", UnexpandedMacro);
             return past;
         }
 
@@ -1240,7 +1249,7 @@ internal sealed class CFamilyReading
 
         if (declarators.All(found => found.Name is null) && _scan.IsName(at) && !_keywords.Contains(_scan.Text(at)) && !Specifiers.Contains(_scan.Text(at)))
         {
-            _extract.Dynamic(_scan[at].Line, $"the macro {_scan.Text(at)} stands here in the place of a declaration, which is not seen");
+            _extract.Dynamic(_scan[at].Line, $"the macro {_scan.Text(at)} stands here in the place of a declaration, which is not seen", UnexpandedMacro);
             return stop;
         }
 
@@ -1262,7 +1271,7 @@ internal sealed class CFamilyReading
     /// <summary>A macro standing where a declaration begins: marked, its arguments passed over - and its body, where one follows.</summary>
     private int Macro(int at, int end, int past)
     {
-        _extract.Dynamic(_scan[at].Line, $"the macro {_scan.Text(at)} stands here in the place of a declaration, which is not seen");
+        _extract.Dynamic(_scan[at].Line, $"the macro {_scan.Text(at)} stands here in the place of a declaration, which is not seen", UnexpandedMacro);
 
         if (_scan.Is(past, ";"))
         {
@@ -2132,7 +2141,7 @@ internal sealed class CFamilyReading
                     {
                         if (!reader.Declares(scan, scan.Previous(at), close: -1))
                         {
-                            reader._extract.Dynamic(scan[at].Line, $"a call through the function pointer {scan.Text(scan.Next(star))}");
+                            reader._extract.Dynamic(scan[at].Line, $"a call through the function pointer {scan.Text(scan.Next(star))}", PointerCall);
                         }
                         else
                         {
@@ -2157,13 +2166,13 @@ internal sealed class CFamilyReading
                     }
                     else if ((scan.Is(at, ".") || scan.Is(at, "->")) && scan.Is(scan.Next(at), "*"))
                     {
-                        reader._extract.Dynamic(scan[at].Line, "a call through a pointer to a member");
+                        reader._extract.Dynamic(scan[at].Line, "a call through a pointer to a member", PointerCall);
                     }
                     else if (scan.Is(at, "]") && scan.Is(scan.Next(at), "(") && scan.Match(at) is var index and >= 0 && _bounds?.Contains(at) != true
                         && ((scan.IsName(scan.Previous(index)) && !reader._keywords.Contains(scan.Text(scan.Previous(index)))) || scan.Is(scan.Previous(index), ")") || scan.Is(scan.Previous(index), "]")))
                     {
                         // An element called - table[0](1) - is a function pointer; a lambda's captures, which follow no value, are not.
-                        reader._extract.Dynamic(scan[at].Line, "a call through an element, a function pointer");
+                        reader._extract.Dynamic(scan[at].Line, "a call through an element, a function pointer", PointerCall);
                     }
 
                     continue;
@@ -2220,7 +2229,7 @@ internal sealed class CFamilyReading
         {
             if (!_cpp)
             {
-                _extract.Dynamic(line, $"a call through the member {word}, which C makes through a function pointer");
+                _extract.Dynamic(line, $"a call through the member {word}, which C makes through a function pointer", PointerCall);
                 return;
             }
 
@@ -2228,7 +2237,7 @@ internal sealed class CFamilyReading
 
             if (receiver.Kind == CodeQualifierKinds.This ? IsFieldPointer(owner, word) : receiver is { Kind: CodeQualifierKinds.Type, Name: { } type } && IsFieldPointer(type.PastLastDot(), word))
             {
-                _extract.Dynamic(line, $"a call through the function pointer {word}");
+                _extract.Dynamic(line, $"a call through the function pointer {word}", PointerCall);
                 return;
             }
 
@@ -2254,23 +2263,23 @@ internal sealed class CFamilyReading
 
         if (taken?.Contains(word) == true)
         {
-            _extract.Dynamic(line, $"a call of what the macro's parameter {word} stands for");
+            _extract.Dynamic(line, $"a call of what the macro's parameter {word} stands for", UnexpandedMacro);
             return;
         }
 
         if (pointers.Contains(word) || (!locals.ContainsKey(word) && (_pointers.Contains(word) || IsFieldPointer(owner, word))))
         {
-            _extract.Dynamic(line, $"a call through the function pointer {word}");
+            _extract.Dynamic(line, $"a call through the function pointer {word}", PointerCall);
             return;
         }
 
         if (_functionMacros.Contains(word))
         {
-            _extract.Dynamic(line, $"a call of the function-like macro {word}, which is not expanded");
+            _extract.Dynamic(line, $"a call of the function-like macro {word}, which is not expanded", UnexpandedMacro);
         }
         else if (IsMacroName(word))
         {
-            _extract.Dynamic(line, $"a call of {word}, named as a macro is - one another file defines, which is not expanded");
+            _extract.Dynamic(line, $"a call of {word}, named as a macro is - one another file defines, which is not expanded", UnexpandedMacro);
         }
 
         _extract.Reference(key, CodeEdgeKinds.Calls, word, line, call.Arity);

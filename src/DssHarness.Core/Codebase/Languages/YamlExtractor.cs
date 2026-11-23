@@ -32,7 +32,7 @@ public sealed class YamlExtractor : ICodeGraphExtractor
     public string Language => "yaml";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".yml", ".yaml");
@@ -48,7 +48,7 @@ public sealed class YamlExtractor : ICodeGraphExtractor
             ("alias-keys", "a key reached only through an alias or a merge, as a node of its own where the alias is written: it is the anchor's node, which the uses edge reaches, and a key path written through the alias reaches it through that edge"),
             ("top-merges", "a merge key at a file's top, which no node holds: what it merges is reached by its keys' names alone"),
             ("complex-keys", "a key that is no scalar - a list or a mapping written as a key: no node of it"),
-            ("broken-yaml", "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic"),
+            new CodeGraphLimit("broken-yaml", "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic") { Signs = [DataNodes.Stop] },
             ("foreign-actions", "a uses: that names an action or a workflow of a marketplace or of another repository by its owner: no import of it"),
         ]);
 

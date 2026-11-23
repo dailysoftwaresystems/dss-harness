@@ -55,7 +55,7 @@ public sealed class CodebaseGraphRecordsTests
             AddressRoots = [new ExtractAddressRoot("package:x/", "lib")],
             References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 2) { Arity = 1, Qualifier = new ExtractQualifier(CodeQualifierKinds.Named, "B") }],
             Generated = "a generator wrote it",
-            Dynamic = [new ExtractDynamic(3, "a call through a pointer")],
+            Dynamic = [new ExtractDynamic(3, "a call through a pointer", "pointer-call")],
         };
 
         Assert.Null(sound.Problem("toy", 3));
@@ -133,8 +133,8 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, " ") }] }, "its qualifier's name is empty"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.This, " ") }] }, "its qualifier's name is empty"),
             (sound with { Generated = " " }, "it says it is generated and not why"),
-            (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
-            (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "", "macro")] }, "it marks a line dynamic and not why"),
+            (sound with { Dynamic = [new ExtractDynamic(9, "macro", "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
             (sound with { Literals = LiteralRow.Table(new LiteralRow("value", 2, "toy:Z")) }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
             (sound with { Nodes = [Node with { Selectors = ["app-cart", " "] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, TestByType = true }] }, "it is a test by its type, and a node of kind 'namespace' is neither a type nor a member a type holds"),
@@ -169,8 +169,9 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { LayoutRoots = [] }, "a root of its layout it names is empty, or it names none"),
             (sound with { LayoutRoots = ["src", ""] }, "a root of its layout it names is empty, or it names none"),
             (sound with { LayoutRoots = ["src\uD83D"] }, "a surrogate cut from its pair"),
-            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__") { Kind = " " }] }, "it marks line 1 dynamic with a kind that is empty"),
-            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__") { Kind = "computed\uD83D" }] }, "a surrogate cut from its pair"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__", null!)] }, "it marks line 1 dynamic and names no kind of what it saw"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__", " ")] }, "it marks line 1 dynamic with a kind that is empty"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__", "computed\uD83D")] }, "a surrogate cut from its pair"),
         };
 
         Assert.All(wrong, pair => Assert.Contains(pair.Problem, pair.Extract.Problem("toy", 3), StringComparison.Ordinal));
@@ -211,7 +212,7 @@ public sealed class CodebaseGraphRecordsTests
             BoundWithin = true,
             FolderUnit = true,
             LayoutRoots = ["src", "."],
-            Dynamic = [new ExtractDynamic(3, "a module's __all__ the code computes") { Kind = "computed-exports" }],
+            Dynamic = [new ExtractDynamic(3, "a module's __all__ the code computes", "computed-exports")],
         };
 
         Assert.Null(extract.Problem("toy", 3));
@@ -359,7 +360,7 @@ public sealed class CodebaseGraphRecordsTests
                 new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Save", 3) { Arity = 0, Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "repo.Store") },
             ],
             Generated = "a generator wrote it",
-            Dynamic = [new ExtractDynamic(3, "a call through a pointer")],
+            Dynamic = [new ExtractDynamic(3, "a call through a pointer", "pointer-call")],
         }.WithDigests(Text);
         var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "toy", 1, Blob, "src/a.toy", lines.Count, extract);
         var file = layout.GraphExtractFile(CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 1));
@@ -618,6 +619,50 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName("toy:A.Inner"), "654321", CodeNodeKinds.Type, ["a.toy"])), written[3]);
         Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName(".Deepest", Kept: 11, At: 2), "fedcba", CodeNodeKinds.Type, ["a.toy"])), written[4]);
         Assert.Equal(Json(nested), Json(store.ReadGraphSymbols(layout)!));
+    }
+
+    /// <summary>
+    /// A link result keeps each node's signs of what the graph does not see on a line of its own after the counts - the node by its
+    /// place, its signs in order - and reads them back as written; signs of no node it holds, a node given no sign or an empty one,
+    /// and a node's signs said twice are refused.
+    /// </summary>
+    [Fact]
+    public void ALinkResult_KeepsEachNodesSigns_AfterItsCounts_AndRefusesThoseOfNoNodeOrNoSign()
+    {
+        using var directory = new TempDirectory();
+        var (store, layout) = Store(directory);
+        var symbols = Symbols() with
+        {
+            Signs = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["file:a.toy"] = [CodeGraphLimit.CandidateImports], ["toy:A"] = [CodeGraphLimit.OutsideImport, CodeGraphLimit.Unbound] },
+        };
+
+        Assert.Null(symbols.Problem());
+        store.WriteGraphSymbols(layout, symbols);
+
+        Assert.Equal(
+            [
+                Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1) { Signs = 2 }),
+                Json(new CodeGraphSymbolLine(new StoredName("file:a.toy"), "abcdef", CodeNodeKinds.File, ["a.toy"])),
+                Json(new CodeGraphSymbolLine(new StoredName("toy:A"), "123456", CodeNodeKinds.Type, ["a.toy"])),
+                Json(new CodeGraphEdgeLine(0, 1, CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)),
+                Json(new CodeGraphCountLine(1, 1)),
+                Json(new CodeGraphSignLine(0, [CodeGraphLimit.CandidateImports])),
+                Json(new CodeGraphSignLine(1, [CodeGraphLimit.OutsideImport, CodeGraphLimit.Unbound])),
+                "",
+            ],
+            File.ReadAllText(layout.GraphSymbolsFile).Split('\n'));
+        Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
+
+        const string NoSign = "that is no node of it or no sign of one";
+
+        Assert.Equal($"it says signs of what the graph does not see of 'toy:Z', and {NoSign}", (symbols with { Signs = new Dictionary<string, IReadOnlyList<string>> { ["toy:Z"] = [CodeGraphLimit.Unbound] } }).Problem());
+        Assert.Equal($"it says signs of what the graph does not see of 'toy:A', and {NoSign}", (symbols with { Signs = new Dictionary<string, IReadOnlyList<string>> { ["toy:A"] = [] } }).Problem());
+        Assert.Equal($"it says signs of what the graph does not see of 'toy:A', and {NoSign}", (symbols with { Signs = new Dictionary<string, IReadOnlyList<string>> { ["toy:A"] = [CodeGraphLimit.Unbound, " "] } }).Problem());
+
+        var lines = File.ReadAllLines(layout.GraphSymbolsFile);
+        string[] twice = [.. lines[..5], lines[6], lines[6]];
+        File.WriteAllText(layout.GraphSymbolsFile, string.Concat(twice.Select(line => line + "\n")));
+        Assert.Contains("it says the signs of the node 'toy:A' twice", Assert.Throws<HarnessException>(() => store.ReadGraphSymbols(layout)).Message, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -211,6 +211,13 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
                 (12, "a call of MAX, named as a macro is - one another file defines, which is not expanded"),
             ],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)).Order());
+        Assert.Equal(
+            [
+                (1, CFamilyReading.UnexpandedMacro), (3, CFamilyReading.UnexpandedMacro), (6, CFamilyReading.UnexpandedMacro), (7, CFamilyReading.PointerCall),
+                (8, CFamilyReading.PointerCall), (9, CFamilyReading.PointerCall), (11, CFamilyReading.PointerCall), (12, CFamilyReading.UnexpandedMacro),
+            ],
+            extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Kind)).Order());
+        CodeGraphContract.Signed(new CExtractor(), extract, "d.c");
         Assert.Equal(["CALL", "MAX", "done", "read"], Calls(extract, "c:d.c:run"));
         Assert.Empty(Calls(extract, "c:d.c:CALL"));
     }
@@ -381,7 +388,8 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Equal(["c:ok"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal((4, 4), Lines(extract, "c:ok"));
         Assert.Equal(["done"], Calls(extract, "c:ok"));
-        Assert.Contains(extract.Dynamic, dynamic => dynamic is { Line: 2, Why: "a bracket one branch of a conditional leaves open and no other does: read as holding nothing" });
+        Assert.Contains(extract.Dynamic, dynamic => dynamic is { Line: 2, Why: "a bracket one branch of a conditional leaves open and no other does: read as holding nothing", Kind: CFamilyReading.OpenBranch });
+        CodeGraphContract.Signed(new CExtractor(), extract, "u.c");
     }
 
     /// <summary>An include guard is read as one written <c>#ifndef</c>, <c>#if !defined X</c> or <c>#if !defined(X)</c>, after a <c>#pragma once</c> too: its macro no node, what it holds marked no conditional.</summary>
@@ -458,6 +466,8 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Equal(
             [(1, "the macro EXPORT stands in a declaration, which is not expanded"), (2, "the macro EXPORT stands in a declaration, which is not expanded"), (2, "the macro ALIGNED stands in a declaration, which is not expanded"), (3, "the macro EXPORT stands in a declaration, which is not expanded")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(Enumerable.Repeat(CFamilyReading.UnexpandedMacro, 4), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new CExtractor(), extract, "m.c");
         Assert.Equal(["bar"], Calls(extract, "c:m.c:third"));
     }
 
@@ -583,7 +593,8 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Equal([((1, 8), 5), ((10, 18), 16)], new[] { "c:sort", "c:serve" }.Select(id => (Lines(extract, id), Node(extract, id).BodyStart)));
         Assert.Equal(["run"], Calls(extract, "c:sort"));
         Assert.Empty(Calls(extract, "c:serve"));
-        Assert.Equal([(7, "a call through the function pointer cmp"), (17, "a call through the function pointer handler")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal([(7, "a call through the function pointer cmp", CFamilyReading.PointerCall), (17, "a call through the function pointer handler", CFamilyReading.PointerCall)], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why, dynamic.Kind)));
+        CodeGraphContract.Signed(new CExtractor(), extract, "sort.c");
     }
 
     /// <summary>

@@ -88,7 +88,10 @@ public sealed class ComposerExtractorTests : CodeGraphExtractorContractTests<Com
 
             Assert.Equal("composer.json", Assert.Single(extract.Nodes).Name);
             Assert.Empty(extract.References);
-            Assert.Equal(line, Assert.Single(extract.Dynamic).Line);
+            var mark = Assert.Single(extract.Dynamic);
+
+            Assert.Equal((line, JsonOutline.NotAnObject), (mark.Line, mark.Kind));
+            CodeGraphContract.Signed(new ComposerExtractor(), extract, "composer.json");
         }
     }
 

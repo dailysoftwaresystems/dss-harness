@@ -67,7 +67,9 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             ("unbound-templates", "an Angular template no component names by templateUrl, and one written in a file of another extension: its names are bound to no component, so a call or a read its code makes by itself reaches nothing; a template of another engine that writes no tag but {{ }}: read as Angular's, bound to no component alike"),
             ("defer-triggers", "an Angular @defer's on triggers, which name an event and a template's element, and a structural directive's context keys (index in index as i): no code read"),
             new CodeGraphLimit("template-engine", "a template of another engine in an .html file - Jinja, Django, Liquid, Twig, Handlebars, Mustache - as a tag only such an engine writes tells it: read as a page, its sections, classes and ids a page's - a class one of its tags is written into none - its engine's tags read as no code - each marked dynamic, the names it writes bound to nothing") { Signs = [OtherEngine] },
-            ("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why"),
+            new CodeGraphLimit("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why") { Signs = [MarkupText.HugeFile] },
+            .. JsHelp.Unseen,
+            .. CssExtractor.SheetUnseen,
         ])
     {
         Holds = "AngleSharp's text source, which keeps every character the tokenizer decodes - its HTML tokenizer reads a source of its buffered kind alone (a TextSource over a stream), and the source that lets go of what it read is offered to its parser alone, which builds a document rather than the tokens this reader matches - so reading a file holds its markup's text once, in pieces, never as one string",
@@ -266,7 +268,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         var marks = new List<ExtractDynamic>();
         var next = 0;
 
-        void Mark(int line) => marks.Add(new ExtractDynamic(line, "a tag of a template engine the graph does not read: the names it writes are bound to nothing") { Kind = OtherEngine });
+        void Mark(int line) => marks.Add(new ExtractDynamic(line, "a tag of a template engine the graph does not read: the names it writes are bound to nothing", OtherEngine));
 
         for (var at = 0; at <= elements.Count; at++)
         {

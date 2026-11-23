@@ -4492,10 +4492,19 @@ constant parts each a literal of its own, its holes read as code, a character co
 expression and JSX markup none, a JSX attribute's text one - and seven marks - a prototype, a test, a test by a type
 another file declares (`TestByType`), a type tests are built on (`TestBase`), a part of a declaration other files hold parts
 of too (`Part`), generated code with why, and each line it saw something it cannot bind or stopped reading at (`dynamic`),
-with why - of which the linker reads the first five; a dynamic mark may carry a
-kind (`ExtractDynamic.Kind`), and what an implementation's help says it does not see is a limit that names the signs
-telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, references the linker left candidates, or
-references it counted external - so that an answer says of a file only the limits its marks show. Beside the calls, every
+with why - of which the linker reads the first five; every dynamic mark carries a
+kind (`ExtractDynamic.Kind`), a constant of the reader that makes it, and what an implementation's help says it does not see
+is a limit that names the signs telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, or what the linker
+found of the file's references and imports, each sign one thing it knows and no language named (`CodeGraphLinked.Signs`): a
+reference left candidates (`Candidates`), an import taken as several places and a reference left candidates among them
+(`CandidateImports`), and of a reference counted external why it named nothing - a name or a qualifier's head only imports
+naming no file of the tree bind (`OutsideImport`), a name written alone nothing binds in a file that binds its names within
+it (`Unbound`), a fixture no scope or serving import provides (`UnprovidedFixture`) - so that an answer says in full of a
+file the limits it shows, and of none it does not. Every limit a reader marks names the kind of its mark, and the contract's
+kit holds every mark of every fixture and of every cut of one to a kind a limit of its implementation's help names; an
+implementation whose code another reads - an HTML page's scripts and styles, a Vue component's, a Razor file's C# - says
+that reader's limits among its own (`JsHelp.Unseen`, `TypeScriptExtractor.TypesUnseen`, `CssExtractor.SheetUnseen`,
+`CSharpExtractor.CodeUnseen`). Beside the calls, every
 reader of C#, JavaScript, TypeScript, PHP, Dart, C, C++ and Python gives each member a member reads or writes without calling
 it - a field, a property, a constant, an enum member, any name a `nameof` names, a `case`'s constant (Dart's pattern
 constants among them), the first name of a receiver's chain - a member's or, in JavaScript and TypeScript, an
@@ -4870,8 +4879,12 @@ imports take (`PublishesTaken`), which the linker follows from file to file, eac
 is its importers' too, so a package that star-imports its modules gives their names. A Python file's extract says its names
 are bound within it (`BoundWithin`), so a name a file neither declares nor imports is not looked for through the repository,
 nor is a qualifier the type or scope of its whole qualified name or of its ending: a reference the file binds by no import
-it makes is counted external, which is the sign (`CodeGraphLimit.External`) of the limits that name the roots the tree does
-not show, the names nothing binds and the fixtures no `conftest.py` above the test declares. `self` and `cls` qualify a
+it makes is counted external, and why it bound nothing is the sign of the limit that says so - a name only an import naming
+no file of the tree binds (`CodeGraphLimit.OutsideImport`) of the roots the tree does not show, a name nothing binds (`Unbound`) of the
+names a file neither declares nor imports, and a fixture no scope and no serving import provides (`UnprovidedFixture`) of
+the fixtures no `conftest.py` above the test declares - so a call into the standard library shows the first alone; a bare
+import of two places, and a reference left candidates among them, is the sign (`CandidateImports`) of the limit that says
+which module such an import names. `self` and `cls` qualify a
 `this` reference, `super()` a `base` one; a chain whose head an import binds is qualified by what the import reaches - the
 `prefix` of the module the longest run of its names before the member reaches, else the `type` those names stand for inside
 it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain; a
@@ -5202,9 +5215,9 @@ newest earlier run's manifest
 that reads, its extracts copied as they are reused and a file whose extract that run lacks read again. Its records go
 through `OrchestrationStore`, each strict with its `Problem()` and placed by `OrchestratorLayout`: `graph.json`, the
 manifest with its digest; `symbols.jsonl`, the link result naming the manifest's digest and the linker's revision, made
-again where either does not match - as lines, its head counting what follows and then each node, edge and count on one
-of its own - a node's id written against the id of the node that contains it where that is shorter, an edge and a
-count naming each node by its place - since it grows with the repository and a list read or written whole is held whole while it is
+again where either does not match - as lines, its head counting what follows and then each node, edge, count and node's
+signs of what the graph does not see on one of its own - a node's id written against the id of the node that contains it
+where that is shorter, an edge, a count and signs naming each node by its place - since it grows with the repository and a list read or written whole is held whole while it is
 (`JsonLineWriter`, `JsonLineReader`); `extracts/<ab>/<blob>-<path>.<language>-<version>.json`, written once, before the manifest that names them - each node's names written against its parent's and each node a field names by its place (`StoredName`, `FileExtractJson`), so a file nested any depth is kept in bytes that grow with its depth and reads back to the very ids it was given;
 `views/<agent>.json`, an agent's view (`CodeGraphView`); and `sync.jsonl`, one line for each sync - what it listed,
 hashed, read, reused and removed, the references it found, how many files it could not read (`Unreadable`) and, for one
@@ -5350,8 +5363,8 @@ selector and a key path were searched in; and, where any file the graph lists on
 extractor, its files read by text alone - so a plan's site list is never read as covered where the graph was silent. Where none
 of it holds a place, the answer says only what was searched: no line of the files searched by text, never no line at all. It
 ends besides with every limit of each language whose files the graph read, one rule for every language (`CodebaseGraphTool.Unseen`):
-a limit some of those files show the sign of - the kind of a dynamic mark it holds, a reference the linker left candidates, or
-one it counted external (`CodebaseGraphQueries.SignsOf`) - said in full, with how many show it, and every other limit of the
+a limit some of those files show the sign of - the kind of a dynamic mark it holds, or what the linker found of its references
+and its imports (`CodebaseGraphQueries.SignsOf`) - said in full, with how many show it, and every other limit of the
 language by its short name (`CodeGraphLimit.Name`), on one line for the language that points to `help codebase-graph-languages`,
 which says each in full under its name - so nothing is left unsaid, and an answer about a few small files is not outweighed by
 the limits of the languages it read. The prompts that search for a class's sites - `plan.md`,

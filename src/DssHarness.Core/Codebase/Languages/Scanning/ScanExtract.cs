@@ -128,14 +128,11 @@ internal sealed class ScanExtract
     /// <summary>The reference at <paramref name="at"/>, as added (<see cref="Reference"/>).</summary>
     public ExtractReference ReferenceAt(int at) => _references[at];
 
-    /// <summary>Marks <paramref name="line"/> dynamic, with why.</summary>
-    public void Dynamic(int line, string why) => _dynamic.Add(new ExtractDynamic(line, why));
-
     /// <summary>
-    /// Marks <paramref name="line"/> dynamic, with why, of the <paramref name="kind"/> its implementation's help tells a limit by
-    /// (<see cref="CodeGraphLimit.Signs"/>), so an answer says of the file that limit and no other.
+    /// Marks <paramref name="line"/> dynamic, with why, of the <paramref name="kind"/> its implementation's help tells the limit that
+    /// says it by (<see cref="CodeGraphLimit.Signs"/>), so an answer says of the file that limit in full.
     /// </summary>
-    public void Dynamic(int line, string why, string kind) => _dynamic.Add(new ExtractDynamic(line, why) { Kind = kind });
+    public void Dynamic(int line, string why, string kind) => _dynamic.Add(new ExtractDynamic(line, why, kind));
 
     /// <summary>The extract, every node given its id: those with a body first, in the order they were added, then those without.</summary>
     public FileExtract Build()

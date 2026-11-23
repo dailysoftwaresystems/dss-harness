@@ -1107,8 +1107,8 @@ public sealed class CodebaseGraphTool(
     /// Every limit of each language whose files the answer read from the graph - each file the view holds that an
     /// implementation of a language read (<see cref="CodebaseGraphQueries.ReadByALanguage"/>) and the step may read - for each
     /// language once, in order, one rule for every language (<see cref="CodeGraphLimit"/>): a limit whose sign
-    /// (<see cref="CodeGraphLimit.Signs"/>) some of those files give - the kind of a dynamic mark one holds, a reference the linker
-    /// left candidates, or one it counted external (<see cref="CodebaseGraphQueries.SignsOf"/>) - said in full, as its help says it,
+    /// (<see cref="CodeGraphLimit.Signs"/>) some of those files give - the kind of a dynamic mark one holds, or what the linker found
+    /// of its references and its imports, each sign one thing it knows (<see cref="CodebaseGraphQueries.SignsOf"/>) - said in full, as its help says it,
     /// with how many give it; and every other limit of the language by its short name (<see cref="CodeGraphLimit.Name"/>), on one
     /// line for the language that points to the help topic that says each in full under its name
     /// (<see cref="HelpTopics.CodebaseGraphLanguages"/>) - none left unsaid, and the answer small.

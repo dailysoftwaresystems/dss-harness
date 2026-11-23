@@ -35,6 +35,14 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </remarks>
 internal sealed class DartReading
 {
+    /// <summary>
+    /// The kinds of the marks the reading makes, each the sign of a limit of Dart's help (<see cref="CodeGraphLimit.Signs"/>): a call
+    /// through a function value, and a call on a value declared dynamic.
+    /// </summary>
+    internal const string
+        FunctionValue = "function-value",
+        DynamicValue = "dynamic-value";
+
     /// <summary>Dart's reserved words.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
@@ -1982,7 +1990,7 @@ internal sealed class DartReading
             || (owner is not null && _functionFields.TryGetValue(owner, out var fields) && fields.Contains(word))
             || _functionValues.Contains(word))
         {
-            _extract.Dynamic(line, $"a call through the function value {word}");
+            _extract.Dynamic(line, $"a call through the function value {word}", FunctionValue);
             return at;
         }
 
@@ -2093,7 +2101,7 @@ internal sealed class DartReading
 
         if (word == "call" || (word == "apply" && scan.Is(scan.Previous(target), "Function")))
         {
-            _extract.Dynamic(line, word == "call" ? "a call through a function value's call" : "a call through Function.apply");
+            _extract.Dynamic(line, word == "call" ? "a call through a function value's call" : "a call through Function.apply", FunctionValue);
             return;
         }
 
@@ -2101,12 +2109,12 @@ internal sealed class DartReading
 
         if (dynamic is not null)
         {
-            _extract.Dynamic(line, $"a call on the dynamic value {dynamic}");
+            _extract.Dynamic(line, $"a call on the dynamic value {dynamic}", DynamicValue);
         }
 
         if (receiver.Kind == CodeQualifierKinds.This && IsFunctionField(_extract.Node(key), word))
         {
-            _extract.Dynamic(line, $"a call through the function value {word}");
+            _extract.Dynamic(line, $"a call through the function value {word}", FunctionValue);
             return;
         }
 

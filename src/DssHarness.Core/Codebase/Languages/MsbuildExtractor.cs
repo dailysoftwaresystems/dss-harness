@@ -30,7 +30,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
     public string Language => "msbuild";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 4;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".csproj", ".slnx");
@@ -47,7 +47,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
             ("unkeyed-names", "a $(Name) a comment writes, and a name neither the project nor an XML file declares as a key - a property of the SDK's, one only a C# member or a JSON key is named by: no use"),
             ("wildcard-projects", "a project named by a wildcard, and two projects of one file name, which a reference names both of"),
             ("sln-files", "a solution in the older .sln form"),
-            ("broken-xml", "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason"),
+            new CodeGraphLimit("broken-xml", "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason") { Signs = [DataNodes.Stop] },
         ]);
 
     /// <inheritdoc/>
@@ -210,7 +210,8 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
         {
             // What follows the first fault is not read: the file is graphed as far as it parses, and its extract says where
             // it stopped, so a reference missing after it is never taken for one the project does not make.
-            dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(ex.LineNumber, lines.Count), XmlExtractor.Stopped(ex, lines, refusesDtd: false)));
+            var stopped = XmlExtractor.Stopped(ex, lines, refusesDtd: false);
+            dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(ex.LineNumber, lines.Count), stopped.Why, stopped.Kind));
         }
 
         var node = new ExtractNode(id, CodeNodeKinds.Project, name, input.Path, 1, Math.Max(lines.Count, 1), signature ?? name)

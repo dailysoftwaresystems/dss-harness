@@ -340,8 +340,9 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         var alone = new JavaScriptExtractor().Extract(new CodeFileInput("a.js", "handlers[name](); eval(code);"));
         var page = Read("a.html", "<script>handlers[name](); eval(code);</script>");
 
-        Assert.Equal(2, alone.Dynamic.Count);
+        Assert.Equal([JsReading.FunctionValue, JsReading.ComputedCode], alone.Dynamic.Select(dynamic => dynamic.Kind));
         Assert.Equal(alone.Dynamic, page.Dynamic);
+        CodeGraphContract.Signed(new HtmlExtractor(), page, "a.html");
     }
 
     /// <summary>

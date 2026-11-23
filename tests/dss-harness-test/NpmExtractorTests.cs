@@ -150,7 +150,10 @@ public sealed class NpmExtractorTests : CodeGraphExtractorContractTests<NpmExtra
             Assert.Equal("package.json", Assert.Single(extract.Nodes).Name);
             Assert.Empty(extract.References);
             Assert.Empty(extract.AddressRoots);
-            Assert.Equal(line, Assert.Single(extract.Dynamic).Line);
+            var mark = Assert.Single(extract.Dynamic);
+
+            Assert.Equal((line, JsonOutline.NotAnObject), (mark.Line, mark.Kind));
+            CodeGraphContract.Signed(new NpmExtractor(), extract, "package.json");
         }
 
         var unnamed = Read("tool/package.json", "{ \"description\": \"no name\", \"name\": \"\" }");

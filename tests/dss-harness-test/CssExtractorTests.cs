@@ -367,7 +367,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         Assert.Equal([".a", ".y", "(sheet)"], extract.Nodes.Select(node => node.Name));
         Assert.Equal([("css:a.scss#(sheet)", "$i", 2), ("css:a.scss#.y", "$gutter", 3)], extract.References.Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
-        Assert.Equal([new ExtractDynamic(2, "a selector an interpolation writes, whose rule is no node")], extract.Dynamic);
+        Assert.Equal([new ExtractDynamic(2, "a selector an interpolation writes, whose rule is no node", CssReading.Interpolation)], extract.Dynamic);
     }
 
     /// <summary>
@@ -892,7 +892,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         Assert.Empty(less.Imports.Concat(scss.Imports));
         Assert.Equal([("@themes", 1)], less.References.Select(reference => (reference.Name, reference.Line)));
-        Assert.Equal([new ExtractDynamic(1, "an import whose path an interpolation writes, which is no import")], less.Dynamic);
+        Assert.Equal([new ExtractDynamic(1, "an import whose path an interpolation writes, which is no import", CssReading.Interpolation)], less.Dynamic);
         Assert.Equal([("$t", 1), ("$n", 2), ("$m", 3)], scss.References.Select(reference => (reference.Name, reference.Line)));
         Assert.Equal(
             [(1, "an import whose path an interpolation writes, which is no import"), (2, "a name an interpolation writes, whose node is not read"), (3, "a name an interpolation writes, whose node is not read")],

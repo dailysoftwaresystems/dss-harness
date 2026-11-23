@@ -39,10 +39,17 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// <summary>The references the file makes to nodes of its own: what it repeats by reference, each to the node it repeats.</summary>
     public IReadOnlyList<ExtractReference> References => _references;
 
-    /// <summary>Marks <paramref name="line"/> as a place reading stopped at, with why.</summary>
+    /// <summary>
+    /// The kind of the mark of the place a data file stops reading at - one that does not parse past it, JSON's, XML's, YAML's -
+    /// the sign of the limit of its implementation's help that says what follows it is not read (<see cref="CodeGraphLimit.Signs"/>).
+    /// </summary>
+    internal const string Stop = "stopped";
+
+    /// <summary>Marks <paramref name="line"/> as a place reading stopped at, with why, of the <paramref name="kind"/> the limit that says it names.</summary>
     /// <param name="line">The line, from 1, held within the file's.</param>
     /// <param name="why">Why reading stopped there.</param>
-    public void Stopped(int line, string why) => _dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(line, lineCount), why));
+    /// <param name="kind">The mark's kind: <see cref="Stop"/>, or one of its implementation's own where a limit of its own says why.</param>
+    public void Stopped(int line, string why, string kind = Stop) => _dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(line, lineCount), why, kind));
 
     /// <summary>The key at <paramref name="path"/> on <paramref name="line"/>, its value <paramref name="value"/>, inside <paramref name="parent"/>: its id.</summary>
     public QualifiedName Key(IReadOnlyList<DataPlace> path, int line, string? value, QualifiedName? parent)

@@ -2434,7 +2434,10 @@ public sealed class CodebaseGraphService(
             CodeGraphLinker.Revision,
             [.. linked.Symbols.Select(symbol => new CodeGraphSymbolEntry(symbol.Id, handles[symbol.Id], symbol.Kind, symbol.Paths))],
             linked.Edges,
-            linked.External);
+            linked.External)
+        {
+            Signs = linked.Signs,
+        };
     }
 
     /// <summary>

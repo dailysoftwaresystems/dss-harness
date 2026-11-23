@@ -227,7 +227,8 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             ?? (LayoutRoots is { } layoutRoots && (layoutRoots.Count == 0 || layoutRoots.Any(string.IsNullOrWhiteSpace)) ? "a root of its layout it names is empty, or it names none" : null)
             ?? (Generated is { } generated && string.IsNullOrWhiteSpace(generated) ? "it says it is generated and not why" : null)
             ?? (Dynamic ?? []).Select(dynamic => dynamic is null || string.IsNullOrWhiteSpace(dynamic.Why) ? "it marks a line dynamic and not why"
-                : dynamic.Kind is { } kind && string.IsNullOrWhiteSpace(kind) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic with a kind that is empty"
+                : dynamic.Kind is null ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic and names no kind of what it saw"
+                : string.IsNullOrWhiteSpace(dynamic.Kind) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic with a kind that is empty"
                 : !Within(dynamic.Line, lineCount) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
                 : null).FirstOrDefault(found => found is not null)
             ?? LinkProblem()
@@ -1172,19 +1173,15 @@ public static class CodeQualifierKinds
     public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own, Module, Fixture];
 }
 
-/// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>
+/// <summary>A place an implementation saw something it cannot bind, or stopped reading, and the kind of thing it saw there.</summary>
 /// <param name="Line">The line.</param>
 /// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer, a file that stops parsing there.</param>
-public sealed record ExtractDynamic(int Line, string Why)
-{
-    /// <summary>
-    /// The kind of thing the implementation saw, where its help tells a limit by it (<see cref="CodeGraphLimit.Signs"/>): the same
-    /// word in a limit and in every mark of the kind, so an answer says of a file only the limits its marks show.
-    /// <see langword="null"/> where none is named.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Kind { get; init; }
-}
+/// <param name="Kind">
+/// The kind of thing it saw: the sign of the limit of its implementation's help that says it (<see cref="CodeGraphLimit.Signs"/>),
+/// the same word in that limit and in every mark of the kind, so an answer says in full of a file the limits its marks show. Every
+/// mark has one, a constant of the reader that makes it: a reader marks nothing its help says no limit of.
+/// </param>
+public sealed record ExtractDynamic(int Line, string Why, string Kind);
 
 /// <summary>
 /// One string value a file's literals hold, kept once however many literals of it the file writes, with every place one

@@ -567,7 +567,8 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         Assert.Equal([("./theme.css", 20)], extract.Imports.Select(import => (import.Target, import.Line)));
         Assert.Equal(alone.Dynamic, extract.Dynamic);
-        Assert.Equal(9, Assert.Single(extract.Dynamic).Line);
+        Assert.Equal((9, JsReading.ComputedCode), (Assert.Single(extract.Dynamic).Line, Assert.Single(extract.Dynamic).Kind));
+        CodeGraphContract.Signed(new VueExtractor(), extract, "src/Panel.vue");
     }
 
     /// <summary>
