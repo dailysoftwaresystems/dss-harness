@@ -51,6 +51,15 @@ public static class WorkflowTemplates
     /// <summary>The name of the workflow this tool ships, and that <c>init</c> declares in a config it creates.</summary>
     public const string ShippedWorkflowName = "implementation";
 
+    /// <summary>The name of the agent this tool's own report analyst runs as, shipped beside the reporter it takes after.</summary>
+    public const string AnalystAgent = "report-analyst";
+
+    /// <summary>The name of the prompt the report analyst is asked with.</summary>
+    public const string AnalystPrompt = "analyze";
+
+    /// <summary>The name of the schema the report analyst's answer is held to.</summary>
+    public const string AnalystSchema = "analysis";
+
     /// <summary>
     /// The prefix every embedded file of the implementation workflow carries, exactly as the build embeds
     /// it: the workflow's own directory tree under one root, kept with the separators of the machine
@@ -69,6 +78,7 @@ public static class WorkflowTemplates
     [
         "prioritizer", "triage", "planner", "plan-auditor",
         "scribe", "auditor", "diagnostician", "pre-existing-triage", "advisor", "reporter",
+        "report-analyst",
     ];
 
     /// <summary>The prompt files the implementation workflow names at its own levels.</summary>
@@ -79,6 +89,7 @@ public static class WorkflowTemplates
         "self-audit", "pr-body",
         "diagnose", "rediagnose", "redirect", "remedy-revise", "pre-existing",
         "recommend", "status", "ask",
+        "analyze",
     ];
 
     /// <summary>The schema files the implementation workflow names at its own levels.</summary>
@@ -86,6 +97,7 @@ public static class WorkflowTemplates
     [
         "priority", "triage", "plan", "plan-audit",
         "self-audit", "summary", "diagnosis", "pre-existing",
+        "analysis",
     ];
 
     /// <summary>The agent files the item pipeline names: the workflow its rounds and its recovery both use.</summary>

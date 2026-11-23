@@ -109,6 +109,10 @@ public static partial class HelpTopics
             "ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, "
             + $"the files of its reporter's attempt, the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/) and ask.json; "
             + "the engine never reads it"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AnalysisDirectoryName}/",
+            "ignored; one directory for each call of analyze-orchestrator-report: the files of its analyst's attempt, "
+            + $"the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/), and the analysis it answered with - "
+            + $"analysis.json with the hash of the report it read, and analysis.md - beside the report; the engine never reads it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}",
             "ignored; a run's web search: what each source found once for the run, and each query it answered, which the "
             + "same query again is answered from; written by every client whose step searches"),

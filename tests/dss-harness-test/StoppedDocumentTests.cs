@@ -48,6 +48,7 @@ public sealed class StoppedDocumentTests
         ["ask-orchestrator-status"] = AskDocument,
         ["ask-orchestrator"] = AskDocument,
         ["read-orchestrator-report"] = ["exitCode", "summary", "report"],
+        ["analyze-orchestrator-report"] = ["exitCode", "summary", "analysis", "reportHash", "cost", "record"],
         ["run-side-task"] = SideTaskDocument,
         ["list-side-tasks"] = ["exitCode", "summary", "sideTasks"],
         ["refresh-agent"] = AgentDocument,

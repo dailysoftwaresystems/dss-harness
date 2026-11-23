@@ -115,6 +115,19 @@ public interface IFlowService : IUseCase
     /// <param name="markdown">Whether to answer as Markdown.</param>
     /// <param name="cancellationToken">Stops the command.</param>
     Task<CommandOutcome> ReadReportAsync(string startDirectory, string run, IReadOnlyList<string>? steps = null, string? by = null, int? top = null, bool json = false, bool markdown = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A run's report analysed by one agent, run only where a person calls for it: the deterministic report is given
+    /// to the tool's own analyst and its answer is held to the schema it ships and to the report's own numbers - a
+    /// citation the report does not hold is asked again for, then refused. The analysis is kept beside the report it
+    /// read, with the report's hash; what it costs is the person's, never the run's.
+    /// </summary>
+    /// <param name="startDirectory">The directory the command acts on.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="markdown">Whether to answer as Markdown.</param>
+    /// <param name="cancellationToken">Stops the command.</param>
+    Task<CommandOutcome> AnalyzeReportAsync(string startDirectory, string run, bool json = false, bool markdown = false, CancellationToken cancellationToken = default);
 }
 
 /// <summary>How often the commands of a run look at what another process asked or recorded.</summary>
@@ -199,6 +212,9 @@ public sealed class FlowService(
 
     /// <summary>The command that reads a run's report, built from its records alone.</summary>
     public const string ReadReportCommand = "read-orchestrator-report";
+
+    /// <summary>The command that has a run's report analysed by one agent, where a person asks for it.</summary>
+    public const string AnalyzeReportCommand = "analyze-orchestrator-report";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
@@ -1048,6 +1064,123 @@ public sealed class FlowService(
 
         var text = markdown ? FlowRunReport.Markdown(document) : FlowRunReport.Text(document);
         return CommandOutcome.Ok(text);
+    }
+
+    /// <inheritdoc/>
+    public async Task<CommandOutcome> AnalyzeReportAsync(string startDirectory, string run, bool json = false, bool markdown = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+
+        if (OrchestrationRules.NameProblem(run) is { } shape)
+        {
+            return CommandOutcome.Usage(shape);
+        }
+
+        // The analysis runs only where a person calls for it: no run, no session's end and no view starts one. It
+        // reads the run's records and writes only its own directory under the run's - its cost the person's, never
+        // the run's, exactly as an ask's is.
+        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
+        var layout = OrchestratorLayout.Of(context.Layout, run);
+
+        if (_store.ReadOrchestrator(layout) is null)
+        {
+            return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
+        }
+
+        if (_store.ReadFlow(layout) is not { } flow)
+        {
+            return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to analyse");
+        }
+
+        var thresholds = new FlowReportThresholds(
+            Top: context.Config.Defaults.Report?.Top ?? 5,
+            QueueSharePercent: context.Config.Defaults.Report?.QueueSharePercent ?? 10,
+            CacheSharePercent: context.Config.Defaults.Report?.CacheSharePercent ?? 30,
+            CacheInputTokens: context.Config.Defaults.Report?.CacheInputTokens ?? 50_000);
+        var definition = _store.ReadDefinition(layout);
+
+        if (definition is null)
+        {
+            return CommandOutcome.Refused($"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to analyse");
+        }
+
+        var report = FlowRunReport.Of(new FlowRunReportSource(
+            layout,
+            flow,
+            _store.ReadFlowQuestions(layout),
+            _store.ReadFlowUpdates(layout),
+            FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
+            LedgersOf(layout, flow),
+            definition,
+            thresholds));
+        var said = report.ToJsonString(ReportJson.Options);
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
+
+        var at = _clock.GetUtcNow();
+        var stamp = $"{at.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", System.Globalization.CultureInfo.InvariantCulture)}";
+        var directory = Path.Combine(layout.AnalysisDirectory, stamp);
+        var analysed = await new ReportAnalystRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates)
+            .AnalyzeAsync(new FlowAnalystCall(layout.Name, report, layout.Directory, stamp, new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, flow.StartCommit, definition, flow.Branch)), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (analysed.Analysis is not { } analysis)
+        {
+            return CommandOutcome.Failed(
+                analysed.ExitCode ?? HarnessExit.CommandFailed,
+                $"analyze-orchestrator-report was refused: no model analysed it: {analysed.WhyNot}",
+                [$"analysis: {Path.Combine(directory, OrchestratorLayout.AnalysisFileName)}"]);
+        }
+
+        WriteAnalysis(layout, stamp, analysis, hash, analysed, at);
+
+        var cost = $"This analysis cost {analysed.Dollars.Said()}{(analysed.Tokens is { } used ? $", {used.ToString(System.Globalization.CultureInfo.InvariantCulture)} tokens" : string.Empty)}. It is not counted in the run's budget.";
+        var records = $"analysis: {Path.Combine(directory, OrchestratorLayout.AnalysisFileName)}, {Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName)}";
+
+        if (json)
+        {
+            return CommandOutcome.Ok($"run '{run}' analysed by {analysed.Model}")
+                with
+                {
+                    Data = [FlowReports.AnalysisDocument(analysis, hash, analysed, directory)],
+                    Quiet = true,
+                };
+        }
+
+        var body = markdown ? analysis.Markdown() : analysis.Text();
+        return CommandOutcome.Ok($"{body}\n\n{cost}\n\n{records}");
+    }
+
+    /// <summary>
+    /// Writes one analysis where the run keeps them: the analysis with the hash of the report it read, in JSON, and
+    /// the same said as Markdown - the engine never reads either back.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="stamp">The analysis's own stamp.</param>
+    /// <param name="analysis">The analysis.</param>
+    /// <param name="hash">The hash of the report it read.</param>
+    /// <param name="analysed">What the analyst's run answered and spent.</param>
+    /// <param name="at">When the analysis was made.</param>
+    private void WriteAnalysis(OrchestratorLayout layout, string stamp, FlowAnalysis analysis, string hash, FlowAnalysed analysed, DateTimeOffset at)
+    {
+        var directory = Path.Combine(layout.AnalysisDirectory, stamp);
+
+        JsonStateFile.Write(
+            _fileSystem,
+            Path.Combine(directory, OrchestratorLayout.AnalysisFileName),
+            new JsonObject
+            {
+                ["schema"] = 1,
+                ["run"] = layout.Name,
+                ["at"] = FlowTimeConverter.Written(at),
+                ["reportHash"] = hash,
+                ["model"] = analysed.Model,
+                ["usd"] = analysed.Usd,
+                ["tokens"] = analysed.Tokens,
+                ["uncounted"] = analysed.Uncounted,
+                ["analysis"] = analysis.Document(),
+            });
+        _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName), $"{analysis.Markdown()}\n\nThe report it read holds hash `{hash}`.\n");
     }
 
     /// <summary>

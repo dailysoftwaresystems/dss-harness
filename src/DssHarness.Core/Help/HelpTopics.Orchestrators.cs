@@ -135,6 +135,7 @@ public static partial class HelpTopics
         builder.AppendLine($"  {command} {FlowService.StopCommand} <run> [--now] [--json]");
         builder.AppendLine($"  {command} {FlowService.ReadReportCommand} <run> [--steps <instance>...] [--by step|agent|model|provider|type]");
         builder.AppendLine("      [--top <n>] [--markdown] [--json]");
+        builder.AppendLine($"  {command} {FlowService.AnalyzeReportCommand} <run> [--markdown] [--json]");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -310,6 +311,22 @@ public static partial class HelpTopics
             + "command only reads, and the report the session's end writes (report.md, report.json) is this same report. "
             + "--markdown answers the same as Markdown for a pull request, a ticket or the clipboard, and --json as one "
             + "JSON document.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"Analysing that report. {FlowService.AnalyzeReportCommand} has one agent read it and bring the pain points - "
+            + "where the run's time and money went, and each change to make, ordered by what it cost. It runs only where a "
+            + "person calls it: never by a run, a session's end or a view. The analyst is the tool's own (report-analyst, "
+            + "shipped beside the reporter it takes after): it only reads, narrowed to the run's records, and its answer is "
+            + "held twice - to the schema the tool ships, and to the report it read, every number a pain point cites "
+            + "checked against the report's own (a citation the report does not hold is asked again for, twice at most, "
+            + "then refused): an analysis cannot invent a measurement. Each pain point names its steps, its evidence, its "
+            + "impact in time and dollars, its cause and the exact change it recommends - a configuration key, a workflow "
+            + "key, a prompt's line or a repository fix. The analysis is kept beside the report it read under the run's "
+            + "analysis/ (analysis.json and analysis.md, the report named by its hash), and what it costs is the person's, "
+            + "never the run's. It runs on the tier 'reporting' names in tierConfig, and is refused (12) where the "
+            + "configuration defines none, saying which key to set. --markdown answers as Markdown and --json as one "
+            + "JSON document, the analysis apart from its cost and its record.");
         builder.AppendLine();
         AppendWrapped(
             builder,

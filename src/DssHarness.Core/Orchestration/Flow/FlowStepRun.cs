@@ -769,3 +769,56 @@ public interface IFlowReporterRunner
     /// <param name="cancellationToken">Ends the asking.</param>
     Task<FlowReported> ReportAsync(FlowReporterCall call, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// One analysis of a run's report, asked of the run's analyst: the deterministic report it reads, whole, and where
+/// the run's records are - the only things its prompt reads.
+/// </summary>
+/// <param name="Run">The run's name.</param>
+/// <param name="Report">The report it reads, as the builder answered it.</param>
+/// <param name="Records">Where the run's records are: the analyst's reads are narrowed to it.</param>
+/// <param name="Stamp">The analysis's own stamp, its directory under the run's <c>analysis/</c>.</param>
+/// <param name="Place">The run's place, for loading its repository's context; null where it was made by no workflow.</param>
+public sealed record FlowAnalystCall(
+    string Run,
+    System.Text.Json.Nodes.JsonNode Report,
+    string Records,
+    string Stamp,
+    FlowRunPlace? Place = null);
+
+/// <summary>
+/// What one analysis of a run's report was answered with: the analyst's answer, held to its schema and to the report's
+/// own numbers - or why no model analysed it - and what the analysis cost, which is the person's and not the run's.
+/// </summary>
+/// <param name="Analysis">The analysis, where one was given; null where none was.</param>
+/// <param name="WhyNot">Why no analysis was given; null where one was.</param>
+/// <param name="ExitCode">The code the analysis ends with where none was given.</param>
+/// <param name="Model">The model that served the analyst, where one did.</param>
+/// <param name="Usd">What the analysis cost at the configuration's prices, as far as each turn could be counted (<see cref="AgentRunSpend.Spent"/>); null where no turn was reported.</param>
+/// <param name="Tokens">Every token of every kind the analyst's run used; null where none was reported.</param>
+/// <param name="Uncounted">Why a turn's cost could not be counted, so the analysis's dollars are not known past <paramref name="Usd"/>; null where every turn's was.</param>
+public sealed record FlowAnalysed(
+    FlowAnalysis? Analysis,
+    string? WhyNot = null,
+    int? ExitCode = null,
+    string? Model = null,
+    double? Usd = null,
+    long? Tokens = null,
+    string? Uncounted = null)
+{
+    /// <summary>What the analysis spent in dollars, as the one fold holds them: nothing where no turn was reported.</summary>
+    public FlowDollars Dollars => new(Usd ?? 0, Uncounted);
+}
+
+/// <summary>
+/// The run's analyst: one reason step that only reads, worked wherever the run's records are and nowhere else, run
+/// only when a person calls <c>analyze-orchestrator-report</c> - no run, session end or view starts one - over the
+/// run's deterministic report. It changes nothing of the run, and what it costs is the person's, never the run's.
+/// </summary>
+public interface IFlowAnalystRunner
+{
+    /// <summary>Analyses the report the call holds, or why no model did.</summary>
+    /// <param name="call">The analysis asked: the report, and where the run's records are.</param>
+    /// <param name="cancellationToken">Ends the analysis.</param>
+    Task<FlowAnalysed> AnalyzeAsync(FlowAnalystCall call, CancellationToken cancellationToken);
+}

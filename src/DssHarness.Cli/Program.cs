@@ -36,6 +36,7 @@ root.Subcommands.Add(StopOrchestratorCommand.Create());
 root.Subcommands.Add(AskOrchestratorStatusCommand.Create());
 root.Subcommands.Add(AskOrchestratorCommand.Create());
 root.Subcommands.Add(ReadOrchestratorReportCommand.Create());
+root.Subcommands.Add(AnalyzeOrchestratorReportCommand.Create());
 root.Subcommands.Add(RunSideTaskCommand.Create());
 root.Subcommands.Add(ListSideTasksCommand.Create());
 root.Subcommands.Add(CreateAgentCommand.Create());

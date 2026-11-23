@@ -555,7 +555,7 @@ public sealed class WorkflowTemplatesTests
         var agents = WorkflowTemplates.Files.Where(file =>
             file.StartsWith("agents/", StringComparison.Ordinal) || file.StartsWith("item-pipeline/agents/", StringComparison.Ordinal)).ToList();
 
-        Assert.Equal(19, agents.Count);
+        Assert.Equal(20, agents.Count);
 
         foreach (var agent in agents)
         {

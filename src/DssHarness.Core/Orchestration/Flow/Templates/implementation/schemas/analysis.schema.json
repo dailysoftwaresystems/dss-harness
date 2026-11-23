@@ -1,0 +1,123 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "painPoints",
+    "noted"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Where the run's time and money went, in three sentences at most."
+    },
+    "painPoints": {
+      "type": "array",
+      "description": "Each thing to change, ordered by what it cost - the most first.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "severity",
+          "where",
+          "evidence",
+          "impact",
+          "cause",
+          "recommendation"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One line a person who never saw the run understands: what to change, and where."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "description": "How much it matters: critical, high, medium or low, as a review grades its findings."
+          },
+          "where": {
+            "type": "array",
+            "description": "The steps it names, by their instance ids as the report's rows hold them.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "evidence": {
+            "type": "array",
+            "description": "The report's own numbers it rests on, each a citation: section (theRun, totals, steps, criticalPath, errors, people, convergence or signals), row (a step's instance, a signal's kind, a question's id - left out where the section is one object or the member sits at its top), of (the member the number is), and said (the value exactly as the report holds it - a number copied as the report writes it). A citation the report does not hold is refused and you are asked again.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "section",
+                "row",
+                "of",
+                "said"
+              ],
+              "properties": {
+                "section": {
+                  "type": "string",
+                  "description": "The report's section that holds it."
+                },
+                "row": {
+                  "type": "string",
+                  "description": "The row of the section that holds it; empty where the member sits at the section's top."
+                },
+                "of": {
+                  "type": "string",
+                  "description": "The member of the row that holds it."
+                },
+                "said": {
+                  "type": "string",
+                  "description": "The value exactly as the report holds it: a number copied as the report writes it (the JSON's own form, as 30 or 0.03), a string word for word."
+                }
+              }
+            },
+            "minItems": 1
+          },
+          "impact": {
+            "type": "string",
+            "description": "The time and dollars it cost, from the report's numbers."
+          },
+          "cause": {
+            "type": "string",
+            "description": "What the records show of why: no guessing - where the cause is not in the report or the records, it goes under noted instead."
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key, as the configuration or the yml spells it."
+          }
+        }
+      }
+    },
+    "noted": {
+      "type": "array",
+      "description": "What you saw and could not confirm, each with why; empty where you confirmed everything you said.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what",
+          "why"
+        ],
+        "properties": {
+          "what": {
+            "type": "string",
+            "description": "What you saw."
+          },
+          "why": {
+            "type": "string",
+            "description": "Why you could not confirm it from the report or the run's records."
+          }
+        }
+      }
+    }
+  }
+}

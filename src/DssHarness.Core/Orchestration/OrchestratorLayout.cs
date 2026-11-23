@@ -168,6 +168,18 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// </summary>
     public const string AsksDirectoryName = "asks";
 
+    /// <summary>
+    /// The directory one call of <c>analyze-orchestrator-report</c> is kept in - the files of its analyst's attempt, and
+    /// the analysis it answered with, beside the report it read. The engine never reads it.
+    /// </summary>
+    public const string AnalysisDirectoryName = "analysis";
+
+    /// <summary>The name of the file an analysis is kept in, with the report it read named by its hash.</summary>
+    public const string AnalysisFileName = "analysis.json";
+
+    /// <summary>The name of the file an analysis is said in as Markdown.</summary>
+    public const string AnalysisMarkdownFileName = "analysis.md";
+
     /// <summary>The name of the file a run's live owner is kept in, beside the run's directory.</summary>
     public const string OwnerFileName = ".owner.json";
 
@@ -629,6 +641,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// facts it was given, the files of its reporter's attempt, and <c>ask.json</c>. The engine never reads them.
     /// </summary>
     public string AsksDirectory => Path.Combine(Directory, AsksDirectoryName);
+
+    /// <summary>Where the run's analyses are kept, one directory a call, beside the reports they read. The engine never reads it.</summary>
+    public string AnalysisDirectory => Path.Combine(Directory, AnalysisDirectoryName);
 
     /// <summary>
     /// The run's live owner: its process stamp, beside the run's directory. A live owner refuses a session; a dead one
