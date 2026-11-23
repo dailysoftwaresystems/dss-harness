@@ -380,6 +380,13 @@ public sealed class TestService(
                     cancellationToken)
                 .ConfigureAwait(false);
 
+        // What the invocation named as its structured results, read where they are - evidence beside the verdict, as
+        // the keeps are, but never copied: what a file holds typed already is the digest, and nothing searches a log
+        // for it. A file naming nothing, or no form owning it, is said inside the digest, not refused.
+        var digest = reached.Verdict == LegVerdict.Passed
+            ? null
+            : TestResults.Read(_fileSystem, invocation.Results, paths, request.BuildDirectory, mask: null, cancellationToken);
+
         var entry = new LegEntry
         {
             Leg = request.Leg,
@@ -391,6 +398,7 @@ public sealed class TestService(
             Emulated = request.Emulated,
             TestCount = CountFrom(counter, phase.Output),
             KeptOnFailure = kept,
+            Digest = digest,
 
             // What the count belongs to, decided here with the invocation that made it: the report
             // compares it only with the other legs of the same project and test set.

@@ -818,6 +818,30 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// A test invocation's <c>results</c> names the files that hold the runner's structured results, under the leg's
+    /// build directory as the keep's paths are: what could never name one is refused when the file is read, before a
+    /// run has spent its build on results it could never digest.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": [] } } } ] }""", "test.all.results is given empty")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["../out.trx"] } } } ] }""", "test.all.results entry '../out.trx' must be a relative path inside the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{buildDir}"] } } } ] }""", "test.all.results names '{buildDir}', which is the build directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "windows": { "results": ["{treeDir}/out.trx"] } } } ] }""", "test.windows.results names '{treeDir}', which is not under the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["out/**x"] } } } ] }""", "which holds '**' inside a segment")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{buildDir}/*.trx"] } } } ] }""", null)]
+    public void Load_HoldsResultsToTheKeepsOwnRules(string json, string? refused)
+    {
+        if (refused is null)
+        {
+            Assert.NotNull(LoadValid(json));
+
+            return;
+        }
+
+        Assert.Contains(refused, LoadInvalid(json).Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A test invocation may name a WSL item's distribution, <c>{distribution.&lt;item&gt;}</c>, for an item wslDistros
     /// declares, matched ignoring case as the item is; one it does not declare is refused when the file is read, naming
     /// the declared ones - never left to a leg's build to find nothing there.

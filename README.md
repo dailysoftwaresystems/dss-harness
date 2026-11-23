@@ -286,7 +286,16 @@ by what it holds as it is read, and never past the cap. A directory that cannot 
 passed by and named where an entry could have named what it holds, and a stop names what it
 left. The leg's line names the directory and the counts — files kept, refused over the cap,
 unreadable, left as links, naming nothing, or left uncopied by a stop, and directories that
-could not be read.
+could not be read. An invocation may also name where its runner writes its structured results:
+`results`, paths under the build directory named as `keepOnFailure` names its own, read where
+they are when the verdict is anything but a pass — never copied — and digested into the typed
+diagnostics and test failures the leg's entry carries. A file is known by its shape, never its
+name: a TRX, the JUnit XML family, Dart's `--reporter json` stream and a SARIF log are read
+with their messages, places, stacks and durations, masked as the log is; a path naming nothing
+or a file no form owns is said in the digest, not refused. `init` seeds the arguments the
+shipped runners take for these files (`ctest --output-junit`, `dotnet test --logger trx` with
+`--results-directory`, `dart test --file-reporter`) and names the files under `results` to
+match.
 
 **Refuse early, with the arithmetic.** `create-worktree` will not create a worktree
 whose files or build paths cannot fit inside Windows' path limit, because that failure

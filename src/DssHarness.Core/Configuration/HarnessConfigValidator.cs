@@ -2168,6 +2168,35 @@ public static partial class HarnessConfigValidator
             {
                 problems.Add($"{setting}.keepOnFailureCapBytes must be at least 1 byte, found {invocation.KeepOnFailureCapBytes}");
             }
+
+            // What a run that did not pass reads where the runner wrote its structured results: the same paths the keep
+            // names, held to the same rules, for a file outside the build directory could never be named by an
+            // invocation whose own work writes inside it.
+            RefuseGivenEmpty(invocation.Results, $"{setting}.results", "name the files that hold the runner's structured results", "no results read", problems);
+            RequireRelativePaths(invocation.Results ?? [], $"{setting}.results", problems, inside: "the build directory");
+
+            foreach (var named in invocation.Results ?? [])
+            {
+                if (Escapes(named))
+                {
+                    continue;
+                }
+
+                if (NamesTheBuildDirectory(named))
+                {
+                    problems.Add($"{setting}.results names '{named}', which is the build directory itself; name a path inside it");
+                }
+                else if (BeyondTheBuildDirectory(named) is { } beyond)
+                {
+                    problems.Add($"{setting}.results names '{{{beyond}}}', which is not under the build directory; name a path inside it");
+                }
+                else if (GlobPattern.Problem(named) is { } problem)
+                {
+                    problems.Add($"{setting}.results names '{named}', which {problem}");
+                }
+            }
+
+            CheckPlaceholders(invocation.Results, $"{setting}.results", problems);
         }
 
         // What runs on a platform is its own section merged over 'all', field by field. Every

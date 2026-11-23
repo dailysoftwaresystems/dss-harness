@@ -223,6 +223,88 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
+    /// What a failed invocation's <c>results</c> names is read where it is, never copied, and digested onto the leg's
+    /// entry: the typed failures the file holds, so a red result starts from what a file already says. A pass reads
+    /// nothing, as it keeps nothing.
+    /// </summary>
+    [Fact]
+    public async Task AFailedInvocation_DigestsTheResultsItNames_APassReadsNothing()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        var report = Path.Combine("build", "x86_64-msvc-release", "junit.xml");
+
+        temp.WriteFile(report, """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites tests="2" failures="1">
+              <testsuite name="demo" tests="2" failures="1" errors="0" time="0.01">
+                <testcase classname="demo" name="one" time="0.006"><failure message="the charge was wrong" type="assert"></failure></testcase>
+                <testcase classname="demo" name="two" time="0.004"></testcase>
+              </testsuite>
+            </testsuites>
+            """);
+
+        var runner = new ScriptedRunner(() => Task.CompletedTask, 1, "boom");
+        var failed = await Service(factory, runner).RunAsync(
+            Config(),
+            Request(temp, new TestInvocation { Runner = "tools/run-tests", Args = [], SuccessPattern = "tests passed" }, results: ["{buildDir}/junit.xml"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, failed.Verdict.Verdict);
+
+        // The failure as the file holds it: typed, with its place - and the file still where the runner wrote it, for
+        // nothing of a results file is copied anywhere.
+        var one = Assert.Single(failed.Entry.Digest!.Failures);
+
+        Assert.Equal(("junit", "demo.one", "the charge was wrong", "failed"), (one.Framework, one.Id, one.Message, one.Outcome));
+        Assert.Equal(1, failed.Entry.Digest.Failed);
+        Assert.True(File.Exists(temp.Combine(report)));
+
+        // A pass reads nothing, where even the file the invocation names is there.
+        var passed = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, Child("tests passed"), results: ["{buildDir}/junit.xml"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, passed.Verdict.Verdict);
+        Assert.Null(passed.Entry.Digest);
+    }
+
+    /// <summary>
+    /// A path that names nothing, or a file no form owns, is said in the digest's unparsed lines - never refused, for
+    /// the failure may have come before the file was written, and a file of another shape is a line to fix.
+    /// </summary>
+    [Fact]
+    public async Task AResultsPathThatNamesNothingOrNoForm_IsSaidNotRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        temp.WriteFile(Path.Combine("build", "x86_64-msvc-release", "results.bin"), "not a results file at all");
+
+        var runner = new ScriptedRunner(() => Task.CompletedTask, 1, "boom");
+        var result = await Service(factory, runner).RunAsync(
+            Config(),
+            Request(temp, new TestInvocation { Runner = "tools/run-tests", Args = [], SuccessPattern = "tests passed" }, results: ["{buildDir}/nope.xml", "{buildDir}/results.bin"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+
+        if (result.Entry.Digest is not { } digest)
+        {
+            Assert.Fail("the digest was read");
+            return;
+        }
+
+        Assert.Empty(digest.Failures);
+        Assert.Equal(2, digest.Unparsed!.Count);
+        Assert.Contains("named no file", digest.Unparsed![0], StringComparison.Ordinal);
+        Assert.Contains("results.bin", digest.Unparsed![1], StringComparison.Ordinal);
+        Assert.Contains("no XML and no JSON", digest.Unparsed![1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Files past the cap are not copied and are named, in the order the cap spends itself: file by file, in the
     /// order of their paths, so the same configuration keeps the same files on every machine.
     /// </summary>
@@ -1208,7 +1290,8 @@ public sealed class TestServiceTests
         string? labelArg = null,
         List<string>? remoteExcludes = null,
         List<string>? keepOnFailure = null,
-        long? keepOnFailureCapBytes = null)
+        long? keepOnFailureCapBytes = null,
+        List<string>? results = null)
     {
         var all = new TestInvocation
         {
@@ -1224,6 +1307,7 @@ public sealed class TestServiceTests
             RemoteExcludes = remoteExcludes,
             KeepOnFailure = keepOnFailure,
             KeepOnFailureCapBytes = keepOnFailureCapBytes,
+            Results = results,
         };
 
         return new TestRequest

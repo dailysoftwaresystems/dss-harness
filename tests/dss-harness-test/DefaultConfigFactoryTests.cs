@@ -157,8 +157,12 @@ public sealed class DefaultConfigFactoryTests
         // ctest, so none is written.
         Assert.Equal("-R", project.Test?.All?.FilterArg);
         Assert.Null(project.Test?.All?.FilterJoin);
+
+        // The results the seed asks ctest to write, read as the digest of a red run: beside the failure output the
+        // runner already gives, the JUnit XML the whole suite's verdicts come from.
+        Assert.Equal(["{buildDir}/junit.xml"], project.Test?.All?.Results);
         Assert.Equal(
-            ["--output-on-failure", "--no-tests=error", "-R", "parser|lexer"],
+            ["--output-on-failure", "--no-tests=error", "--output-junit", "{buildDir}/junit.xml", "-R", "parser|lexer"],
             TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(project.Test!, Os), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
         Assert.Equal("-L", project.Test?.All?.LabelArg);
         Assert.Equal("-LE", project.Test?.All?.ExcludeArg);
@@ -208,8 +212,12 @@ public sealed class DefaultConfigFactoryTests
         // A filter expression joins its alternatives by |, so the tests any of several units names run: the join the
         // harness owns for dotnet test, which init does not write.
         Assert.Null(project.Test?.All?.FilterJoin);
+
+        // The results the seed asks dotnet test to write: a TRX per test project, read together as one digest. The
+        // logger changes nothing the summary says, so the witness and the count stand.
+        Assert.Equal(["{buildDir}/*.trx"], project.Test?.All?.Results);
         Assert.Equal(
-            ["test", "--filter", "ReportTests|FrameTests"],
+            ["test", "--logger", "trx", "--results-directory", "{buildDir}", "--filter", "ReportTests|FrameTests"],
             TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(project.Test!, Os), cores: 6, filters: ["ReportTests", "FrameTests"], excludes: null).Arguments);
     }
 
@@ -223,8 +231,12 @@ public sealed class DefaultConfigFactoryTests
         // dart runs only a test every --name matches, so several units reach it as one regular expression, joined by
         // the join the harness owns for dart test, which init does not write.
         Assert.Equal(("--name", (string?)null), (config.Projects[0].Test?.All?.FilterArg, config.Projects[0].Test?.All?.FilterJoin));
+
+        // The results the seed asks dart test to write: the JSON stream beside the reporter the console keeps, its
+        // summary - the witness and the count - unchanged by the file beside it.
+        Assert.Equal(["{buildDir}/dart-test-results.jsonl"], config.Projects[0].Test?.All?.Results);
         Assert.Equal(
-            ["test", "--name", "parser|lexer", "--concurrency=6"],
+            ["test", "--file-reporter", "json:{buildDir}/dart-test-results.jsonl", "--name", "parser|lexer", "--concurrency=6"],
             TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(config.Projects[0].Test!, Os), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
     }
 

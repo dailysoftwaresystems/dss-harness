@@ -335,6 +335,22 @@ public static partial class HelpTopics
             + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
             + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A test invocation may also name where its runner writes its structured results: results, paths under "
+            + "the leg's build directory named as keepOnFailure names its own. Where the invocation does not pass, each "
+            + "file is read where it is - nothing is copied - and digested into the typed diagnostics and test failures "
+            + "the leg's entry carries, so a red result starts from what a file already holds instead of a log searched "
+            + "for it. A file is known by its own shape, never by its name: a TRX (dotnet test --logger trx, xUnit v3 "
+            + "--report-trx), the JUnit XML family (ctest --output-junit, gtest --gtest_output=xml, Catch2, jest-junit, "
+            + "vitest), Dart's --reporter json stream, and a SARIF log (csc -errorlog, gcc -fdiagnostics-format=sarif-file, "
+            + "clang -fdiagnostics-format=sarif) are read with their messages, their places, their stacks and their "
+            + "durations, masked as the log is; a file no form owns, or a path naming nothing, is said in the digest's "
+            + "unparsed lines, not refused - the failure may have been before the file was written. A pass reads "
+            + "nothing, as it keeps nothing. init seeds the arguments the shipped runners take for these files - ctest "
+            + "--output-junit, dotnet test --logger trx with --results-directory, dart test --file-reporter - each "
+            + "writing straight into the build directory, and names the files under results to match.");
+        builder.AppendLine();
         builder.AppendLine("A leg on a host reached through WSL or ssh runs in that host's copy of its tree:");
         builder.AppendLine("the files the sync writes there from this tree, in a git repository of the host's own -");
         builder.AppendLine("one the sync made, or one it took over. Each sync makes its HEAD name the commit this");

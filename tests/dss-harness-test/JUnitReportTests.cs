@@ -124,17 +124,47 @@ public sealed class JUnitReportTests
         Assert.NotNull(report);
         Assert.Equal(
             [
-                new JUnitCase("Fixture.TheChargeMatchesTheStoredCount", true, true),
-                new JUnitCase("Fixture.TheDepthBoundIsPinned", true, false),
-                new JUnitCase("Fixture.SkippedOnThisMachine", true, false),
-                new JUnitCase("Fixture.DISABLED_NotYet", false, false),
-                new JUnitCase("Range/Param.Holds/0", true, false),
+                ("Fixture.TheChargeMatchesTheStoredCount", true, true),
+                ("Fixture.TheDepthBoundIsPinned", true, false),
+                ("Fixture.SkippedOnThisMachine", true, false),
+                ("Fixture.DISABLED_NotYet", false, false),
+                ("Range/Param.Holds/0", true, false),
             ],
-            report.Cases);
+            report.Cases.Select(@case => (@case.Id, @case.Ran, @case.Red)));
         Assert.Equal(4, report.Ran);
         Assert.Equal(["Fixture.TheChargeMatchesTheStoredCount"], report.Reds);
         Assert.DoesNotContain("Fixture.DISABLED_NotYet", report.RanCases);
         Assert.Contains("Range/Param.Holds/0", report.RanCases);
+    }
+
+    /// <summary>
+    /// A failed case is read whole: what its failure said - the runner's own summary where it gave one, as GoogleTest
+    /// does - where it was by the case's own attributes, how long it took, and how it failed; where the runner wrote
+    /// no summary, the body's first line says it (Catch2), and where it placed the failure in the body, that place is
+    /// read (doctest's <c>path(line):</c>). A case that did not fail says none of these.
+    /// </summary>
+    [Fact]
+    public void AFailedCase_IsReadWhole_ItsMessageItsPlaceItsTimeAndItsOutcome()
+    {
+        var google = JUnitReport.Read(GoogleTest)!;
+        var red = google.Cases.Single(@case => @case.Red);
+
+        Assert.Equal(0, red.Time);
+        Assert.Equal("fixture.cpp:12", red.Message?.Split('\n')[0]);
+        Assert.Equal(("fixture.cpp", 10), (red.File, red.Line));
+        Assert.Equal("failed", red.Outcome);
+        Assert.All(google.Cases.Where(@case => !@case.Red), @case => Assert.Null(@case.Outcome));
+
+        var catch2 = JUnitReport.Read(Catch2)!;
+        var thrown = catch2.Cases.Single(@case => @case.Id.EndsWith("throws/the section", StringComparison.Ordinal));
+
+        Assert.Equal("errored", thrown.Outcome);
+
+        var doctest = JUnitReport.Read(Doctest)!;
+        var placed = doctest.Cases.Single(@case => @case.Red);
+
+        Assert.Equal(("fixture.cpp", 12), (placed.File, placed.Line));
+        Assert.Equal("4 == 3", placed.Message);
     }
 
     /// <summary>Catch2's report: a case's class and its name, a section's path in the name, and an exception's error as red as a failure.</summary>

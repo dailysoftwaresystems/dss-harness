@@ -754,6 +754,7 @@ public static class TestInvocationResolver
             platform?.SetUp ?? all?.SetUp ?? [],
             platform?.KeepOnFailure ?? all?.KeepOnFailure ?? [],
             platform?.KeepOnFailureCapBytes ?? all?.KeepOnFailureCapBytes,
+            platform?.Results ?? all?.Results ?? [],
             FilterJoin: platform?.FilterJoin ?? all?.FilterJoin);
 }
 
@@ -776,6 +777,7 @@ public static class TestInvocationResolver
 /// <param name="SetUp">The set-ups a leg running it brings up around its work, where the run is asked to set up.</param>
 /// <param name="KeepOnFailure">What a run keeping evidence copies out of the build directory when it does not pass.</param>
 /// <param name="KeepOnFailureCapBytes">The most to keep in all, in bytes, or null for the default cap.</param>
+/// <param name="Results">The structured results files the runner writes, read where they are where the run does not pass.</param>
 /// <param name="FilterJoin">
 /// What joins several filter units into one value after <paramref name="FilterArg"/>, as the settings declare it: empty to
 /// give each its own, and null where they declare none - the runner's own join then, where the harness knows the runner
@@ -800,6 +802,7 @@ public sealed record ResolvedTestInvocation(
     IReadOnlyList<SetUpUse>? SetUp = null,
     IReadOnlyList<string>? KeepOnFailure = null,
     long? KeepOnFailureCapBytes = null,
+    IReadOnlyList<string>? Results = null,
     string? FilterJoin = null);
 
 /// <summary>A test invocation ready to start.</summary>

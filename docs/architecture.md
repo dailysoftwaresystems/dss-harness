@@ -9675,6 +9675,26 @@ pattern with an end, read as a stack - compiled and its groups checked at load
 expect, the attempt's measure entry keeps it whole (`FlowStepAttempt.Exception`, built from the
 live exception's own stack, each frame marked by whether its file is inside the run's tree).
 
+Before any log line is parsed, what a tool wrote as data is read (`Results\ResultFiles.cs`): a
+test invocation names the files under `test.results`, paths under the leg's build directory held
+to the same rules the keep's are, and where the invocation does not pass each is read where it is
+(`Testing\TestResults.cs`) - never copied - and digested with every other onto the leg's entry
+(`LegEntry.Digest`). A file is known by its own shape, never by its name: a TRX by its `TestRun`
+root (each failed `UnitTestResult` with its `ErrorInfo` message and its stack, parsed by the one
+owner of the .NET frame form), a JUnit XML by the mutation arm's reader (`JUnitReport`, extended to
+read the message, file, line, time and outcome of a failed case - GoogleTest's attributes,
+Catch2's summaries, doctest's `path(line):` places - its DTD guard kept), Dart's JSON reporter
+stream by its `type`-carrying lines (a failing test with its error event as its message and its
+`#n` stack, an error no test owns as a diagnostic), and a SARIF log by its runs (each result a
+diagnostic: the driver's name, the level, the rule, the message, the place and its range). Text
+read from these files is masked through the mask it is given, for a copied file is not masked as a
+log line is. A path naming nothing, or a file no form owns, is said in the digest's unparsed
+lines - never refused, for the failure may have been before the file was written. `init` seeds the
+arguments the shipped runners take for these files where they take them: `ctest --output-junit`,
+`dotnet test --logger trx` with `--results-directory`, `dart test --file-reporter` - each writing
+straight into the build directory, which exists, and each named under `results` to match
+(`Configuration\DefaultConfigFactory.cs`).
+
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.

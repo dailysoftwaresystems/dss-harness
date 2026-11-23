@@ -349,6 +349,29 @@ internal sealed class DotNetStackParser : IResultParser
 
     public string Name => "dotnet-stack";
 
+    /// <summary>
+    /// The .NET frames of a stack printed alone - a TRX record's <c>StackTrace</c>, held as data: every line the frame
+    /// form reads, in the order printed. The one owner of the form: the trace a console printed and the trace a file
+    /// hold are the same lines.
+    /// </summary>
+    /// <param name="lines">The stack's lines.</param>
+    internal static IReadOnlyList<StackFrame> FramesOf(IReadOnlyList<string> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        var frames = new List<StackFrame>();
+
+        foreach (var line in lines)
+        {
+            if (Frame.Match(line) is { Success: true } frame)
+            {
+                frames.Add(new(line, frame.Groups["file"].Success ? frame.Groups["file"].Value : null, frame.Groups["line"].Success ? int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture) : null, Symbol: frame.Groups["symbol"].Value.Trim()));
+            }
+        }
+
+        return frames;
+    }
+
     public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
     {
         var failures = new List<TestFailure>();
@@ -550,9 +573,31 @@ internal sealed class V8StackParser : IResultParser
 internal sealed class DartStackParser : IResultParser
 {
     private static readonly Regex Thrown = new(@"^(?:Unhandled exception:\n)?(?<type>[\w.]+(?:Exception|Error))?:?\s*(?<message>.+)$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^#(?<n>\d+)\s+(?<symbol>[\w.<>]+)\s+\((?<file>[^:()]+):(?<line>\d+):(?<col>\d+)\)", RegexOptions.Compiled);
+    private static readonly Regex Frame = new(@"^#(?<n>\d+)\s+(?<symbol>[\w.<>]+)\s+\((?<file>.+?):(?<line>\d+):(?<col>\d+)\)", RegexOptions.Compiled);
 
     public string Name => "dart-stack";
+
+    /// <summary>
+    /// The Dart frames of a stack printed alone - a JSON reporter event's <c>stackTrace</c>, held as data: every
+    /// <c>#n</c> line, in the order printed. The one owner of the form, as the console's and the file's are the same lines.
+    /// </summary>
+    /// <param name="lines">The stack's lines.</param>
+    internal static IReadOnlyList<StackFrame> FramesOf(IReadOnlyList<string> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        var frames = new List<StackFrame>();
+
+        foreach (var line in lines)
+        {
+            if (Frame.Match(line) is { Success: true } frame)
+            {
+                frames.Add(new(line, frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), int.Parse(frame.Groups["col"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Value));
+            }
+        }
+
+        return frames;
+    }
 
     public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
     {

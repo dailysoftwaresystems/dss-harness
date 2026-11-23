@@ -1,5 +1,6 @@
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 using DssHarness.Core.Testing;
 
 namespace DssHarness.Core.Execution;
@@ -212,6 +213,15 @@ public sealed record LegEntry
     /// never an output, which a later step reads. <see langword="null"/> where it named nothing, or passed.
     /// </summary>
     public KeptOnFailure? KeptOnFailure { get; init; }
+
+    /// <summary>
+    /// What the invocation's structured results digested to, where it did not pass and named any: the typed
+    /// diagnostics and test failures the files it named hold - a TRX, a JUnit XML, Dart's JSON stream, a SARIF log -
+    /// folded, with the counts of each and the first error in the order the tool met it. What the parsers did not
+    /// understand stays in its unparsed lines. <see langword="null"/> where it named nothing, or passed, or nothing
+    /// it named gave anything to say.
+    /// </summary>
+    public ResultDigest? Digest { get; init; }
 
     /// <summary>
     /// The units the leg's build failed to build, where its build's own tool failed it and that failure is its verdict:
