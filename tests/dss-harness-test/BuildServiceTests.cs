@@ -59,6 +59,15 @@ public sealed class BuildServiceTests
         Assert.Equal(("msvc", "error", "C2065", "src/main.cpp", 5), (first.Tool, first.Severity, first.Code, first.File, first.Line));
         Assert.Equal(1, result.Digest.Errors);
         Assert.Equal(result.Digest, result.Line(Leg, false, TimeSpan.Zero).Digest);
+
+        // Its log range names the line the build's log holds, below the header the phase runner wrote above it.
+        var log = Directory.EnumerateFiles(temp.Path, "*.log", SearchOption.AllDirectories)
+            .Single(file => Path.GetFileName(file).EndsWith($"{result.TailPhase}.log", StringComparison.Ordinal));
+        var text = File.ReadAllText(log);
+        var lines = DssHarness.Core.Text.LineEnds.Spans(text, (start, end, _) => text[start..end]);
+
+        Assert.True(first.Log!.Value.From > 1);
+        Assert.Equal(["src/main.cpp(5): error C2065: 'x': undeclared identifier"], lines[(first.Log.Value.From - 1)..first.Log.Value.To]);
     }
 
     /// <summary>

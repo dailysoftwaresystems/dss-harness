@@ -41,7 +41,7 @@ public sealed record CiLog(IReadOnlyList<NumberedLine> Lines, IReadOnlySet<int> 
             var number = at + 1;
 
             // The log's first line carries the byte order mark the forge writes, which no reader of the file sees.
-            var line = Timestamp.Replace(at == 0 ? lines[at].TrimStart('﻿') : lines[at], string.Empty);
+            var line = Timestamp.Replace(at == 0 ? lines[at].TrimStart('\uFEFF') : lines[at], string.Empty);
 
             if (Group.IsMatch(line))
             {
