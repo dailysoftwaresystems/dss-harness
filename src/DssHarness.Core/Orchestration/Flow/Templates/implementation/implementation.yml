@@ -206,9 +206,12 @@ steps:
         items: 'plan.latest.items'
         scope: 'plan.latest.scope'
         onFailure: recover
+      # The audits search a class's sites themselves: the graph's sites, beside their own text
+      # search, with no pack - a pack lights none of a plan's text.
       - name: plan-audit
         type: reason
-        graph: off
+        graph: tools
+        graphPromptTokens: 0
         agent: plan-auditor
         tier: high
         effort: xhigh
@@ -286,7 +289,8 @@ steps:
       # and the self-audit after the build reads what it found.
       - name: item-audit
         type: reason
-        graph: off
+        graph: tools
+        graphPromptTokens: 0
         agent: plan-auditor
         tier: high
         effort: xhigh

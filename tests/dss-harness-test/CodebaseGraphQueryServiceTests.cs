@@ -147,7 +147,11 @@ public sealed class CodebaseGraphQueryServiceTests
         Assert.StartsWith(first, Assert.Single(outcome.Data), StringComparison.Ordinal);
     }
 
-    /// <summary><c>--sites</c> runs the operation by hand: the answer an agent is given, and its document naming the operation.</summary>
+    /// <summary>
+    /// <c>--sites</c> runs the operation by hand: the answer an agent is given, and its document naming the operation; a quoted
+    /// data whose value is white space alone is refused before anything is read, as the tool refuses it, never thrown at the
+    /// lookups.
+    /// </summary>
     [Fact]
     public async Task TheVerbsSites_AnswerWhatAnAgentIsGiven()
     {
@@ -155,10 +159,12 @@ public sealed class CodebaseGraphQueryServiceTests
         var outcome = await Service(tree).QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Sites = "Area" }, json: true, Token);
         var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
         var cli = await CliRunner.RunAsync(["query-codebase-graph", "run", "--sites", "Area", "-C", tree.Tree], Token);
+        var quotedBlank = await Service(tree).QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Sites = "\" \"" }, json: false, Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("sites", document["op"]!.GetValue<string>());
-        Assert.StartsWith("every place that decides 'Area':\ndefines (3):", document["answer"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.StartsWith("every place that decides 'Area':\ncsharp in directory src/ (4):\n", document["answer"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal((HarnessExit.UsageError, $"data is empty: {CodebaseGraphToolTests.DataDescription}"), (quotedBlank.ExitCode, quotedBlank.Message));
         Assert.Equal(HarnessExit.Success, cli.ExitCode);
         Assert.Contains("every place that decides 'Area':", cli.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("coverage: nothing is assumed of a language with no extractor", cli.StandardOutput, StringComparison.Ordinal);

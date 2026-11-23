@@ -1,22 +1,39 @@
 [
   {
     "data": "TimeoutSeconds",
-    "sites": ["config/payments.json:3", "src/PaymentsOptions.cs:10", "src/OptionsReader.cs:7"]
+    "sites": [
+      { "place": "config/payments.json:3", "how": "holds the key" },
+      { "place": "src/PaymentsOptions.cs:10", "how": "defines" },
+      { "place": "src/OptionsReader.cs:7", "how": "holds the literal" }
+    ]
   },
   {
     "data": "Retries",
-    "sites": ["config/payments.json:4", "src/PaymentsOptions.cs:13", "src/OptionsReader.cs:22"]
+    "sites": [
+      { "place": "config/payments.json:4", "how": "holds the key" },
+      { "place": "src/PaymentsOptions.cs:13", "how": "defines" },
+      { "place": "src/OptionsReader.cs:22", "how": "uses" }
+    ]
   },
   {
     "data": "MaxItems",
-    "sites": ["config/rules.xml:3", "src/OptionsReader.cs:31"]
+    "sites": [
+      { "place": "config/rules.xml:3", "how": "a line holds it" },
+      { "place": "src/OptionsReader.cs:31", "how": "holds the literal" }
+    ]
   },
   {
     "data": "freeOverCents",
-    "sites": ["config/shipping.yaml:2", "src/OptionsReader.cs:10", "src/PaymentsOptions.cs:16"]
+    "sites": [
+      { "place": "config/shipping.yaml:2", "how": "holds the key" },
+      { "place": "src/OptionsReader.cs:10", "how": "holds the literal" },
+      { "place": "src/PaymentsOptions.cs:16", "how": "uses" }
+    ]
   },
   {
     "data": "rules",
-    "sites": ["src/OptionsReader.cs:13"]
+    "sites": [
+      { "place": "src/OptionsReader.cs:13", "how": "holds the literal" }
+    ]
   }
 ]

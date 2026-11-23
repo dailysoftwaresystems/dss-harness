@@ -88,7 +88,8 @@ For every defect the plan fixes and every behaviour it changes, write the class 
    graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, implements or
    overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched
    by text alone, for nothing is assumed of a language with no extractor. Its find, node and related beside it for
-   the names and for what reads and calls them; each such search said in notCovered.
+   the names and for what reads and calls them, and text search for what the graph does not see, each such text
+   search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.
 5. Write the universe from the axes the repository declares, and the count of their product.
 6. Where more than one site decides, the action is consolidate: the home decides, every other site reads it, and the

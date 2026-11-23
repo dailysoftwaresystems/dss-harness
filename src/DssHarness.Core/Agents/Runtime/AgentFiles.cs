@@ -108,6 +108,32 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
     /// <param name="mayRead">Whether the agent may read a file, by its absolute path.</param>
     /// <param name="found">Takes each hit, as it is found.</param>
     /// <param name="cancellationToken">Stops the search.</param>
+    public Task<AgentSearch> SearchAsync(
+        string directory,
+        Regex pattern,
+        GlobPattern? glob,
+        StringComparison comparison,
+        int context,
+        Func<string, bool> mayRead,
+        Func<AgentSearchHit, CancellationToken, ValueTask> found,
+        CancellationToken cancellationToken)
+        => SearchAsync(directory, pattern, glob, comparison, context, mayRead, found, read: null, cancellationToken);
+
+    /// <summary>
+    /// The lines under <paramref name="directory"/> that <paramref name="pattern"/> matches, as the search without
+    /// <paramref name="read"/> finds them, each file read to its end handed to <paramref name="read"/> once it is: a file
+    /// passed over, not read, or gone since its listing is never handed on, so a caller counts what was searched from what
+    /// was read and never from what it chose.
+    /// </summary>
+    /// <param name="directory">The directory, absolute.</param>
+    /// <param name="pattern">The pattern, matched against each line.</param>
+    /// <param name="glob">The files searched, by their paths relative to <paramref name="directory"/>; null for every one.</param>
+    /// <param name="comparison">How a path is compared with <paramref name="glob"/>.</param>
+    /// <param name="context">How many lines before and after each hit are given, any number.</param>
+    /// <param name="mayRead">Whether the agent may read a file, by its absolute path.</param>
+    /// <param name="found">Takes each hit, as it is found.</param>
+    /// <param name="read">Takes each file read to its end, by its path relative to <paramref name="directory"/> with forward separators, after its hits; null where none is told.</param>
+    /// <param name="cancellationToken">Stops the search.</param>
     public async Task<AgentSearch> SearchAsync(
         string directory,
         Regex pattern,
@@ -116,6 +142,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
         int context,
         Func<string, bool> mayRead,
         Func<AgentSearchHit, CancellationToken, ValueTask> found,
+        Action<string>? read,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(directory);
@@ -182,6 +209,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
 
                 searched++;
                 given += ofFile;
+                read?.Invoke(path);
             }
             catch (StreamedTextUnreadException ex)
             {

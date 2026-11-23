@@ -98,9 +98,11 @@ public sealed class WorkflowTemplatesTests
     /// keep the tool - the implementer and everything that resumes it, the six reviewers, the self-audit, the
     /// diagnosis, and the pre-existing-issue triage (it measured cheaper) - the reviewers, the self-audit, the
     /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
-    /// the request triage and the plan audit, whose work is text the map does not light, ask none (each measured
-    /// costlier with no quality gained), as the item audit - the plan audit's agent on a later round's items - does,
-    /// searching the data by its own text search; the prioritiser and a review's scope keep the map (the scope's whole overhead
+    /// the request triage, whose work is text the map does not light, asks none (measured costlier with no quality
+    /// gained); the plan audit and the item audit - the plan audit's agent on a later round's items - are given the tool
+    /// and no pack (<c>graphPromptTokens: 0</c>): measured with none before the graph's <c>sites</c> was built, they search a
+    /// class's sites, which <c>sites</c> answers, beside their own text search, and a pack lights none of a plan's text
+    /// (spec 02, "Who may call it"); the prioritiser and a review's scope keep the map (the scope's whole overhead
     /// is a fifth of a cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with
     /// no request); the scribes ask none as before. The planner, which resumes itself and so may say a graph key of its
     /// own, keeps its default, the tool, as it was: the measurement found it costlier with the graph and did not move
@@ -150,8 +152,8 @@ public sealed class WorkflowTemplatesTests
             ("triage", "off", null),
             ("plan", null, null),
             ("plan-update", null, null),
-            ("plan-audit", "off", null),
-            ("item-audit", "off", null),
+            ("plan-audit", "tools", null),
+            ("item-audit", "tools", null),
             ("implement", null, null),
             ("unblock", null, null),
             ("redo", null, null),
@@ -202,6 +204,10 @@ public sealed class WorkflowTemplatesTests
         // once in the flow and once in the recovery.
         Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".correctness", StringComparison.Ordinal)));
         Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".review-scope", StringComparison.Ordinal)));
+
+        // The audits are given the tool and no pack: their sites searches are what it answers, and a pack lights no plan.
+        Assert.Equal(0, StepAt(definition.Steps, "planning", "plan-audit").GraphPromptTokens);
+        Assert.Equal(0, StepAt(definition.Steps, "rounds", "item-audit").GraphPromptTokens);
 
         return;
 
@@ -745,7 +751,9 @@ public sealed class WorkflowTemplatesTests
     /// The prompts that search for a class's sites name the graph's <c>sites</c> operation first and text search after
     /// it - the plan's, the plan audit's and the item audit's, and the plan's searches - so a class's site list is
     /// never searched by text alone where the graph joins the data, and what the graph lists only is said by the
-    /// answer's coverage lines rather than assumed covered.
+    /// answer's coverage lines rather than assumed covered: the planner's text search for what the graph does not see,
+    /// each said in notCovered as the plan's schema says, and each audit's own text search over the whole tree beside the
+    /// graph's, never the plan's searches (spec 01, the plan audit's step 11), so the audit stays the independent check.
     /// </summary>
     [Fact]
     public void ThePromptsThatSearchForAClassSites_NameTheGraphsSitesFirst_AndTextSearchAfterIt()
@@ -756,13 +764,70 @@ public sealed class WorkflowTemplatesTests
                 .Where(file => file.StartsWith("prompts/", StringComparison.Ordinal) && Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("graph's sites first", StringComparison.Ordinal))
                 .Order(StringComparer.Ordinal)]);
         Assert.Contains(
-            "graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, implements or overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched by text alone",
+            "graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, implements or overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched by text alone, for nothing is assumed of a language with no extractor. "
+                + "Its find, node and related beside it for the names and for what reads and calls them, and text search for what the graph does not see, each such text search said in notCovered.",
             Prose.Words(WorkflowTemplates.TextOf("prompts/plan.md")!),
             StringComparison.Ordinal);
         Assert.Contains(
-            "the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone",
+            "the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone - its find, node and related beside it for the names and for what reads and calls them - and text search for what it does not see, each such search said in notCovered.",
             WorkflowTemplates.TextOf("schemas/plan.schema.json")!,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "search the data yourself - the kind, the key, the diagnostic, the verb, the literal - the graph's sites first - it joins every place that decides the data, and its coverage lines say what it searched by text alone - and your own text search beside it over the whole tree, across every tier, format, target and file kind and not only what the graph does not answer, never the plan's searches;",
+            Prose.Words(WorkflowTemplates.TextOf("prompts/plan-audit.md")!),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Search the data yourself - the kind, the key, the diagnostic, the verb, the literal - the graph's sites first - it joins every place that decides the data, and its coverage lines say what it searched by text alone - and your own text search beside it over the whole tree, not only what the graph does not answer, never the plan's searches, and never the file the defect was seen in alone: across every tier, format, target and file kind.",
+            Prose.Words(WorkflowTemplates.TextOf("prompts/item-audit.md")!),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every shipped prompt that sends its agent to the graph - its words name the graph - belongs only to steps offered
+    /// the graph's tool: each step that reads it, its graph resolved as the run resolves it (<see cref="WorkflowStep.GraphOf"/>
+    /// by the step its conversation began with, <see cref="ResumeChain.Root"/>, and that step's agent as its own workflow's
+    /// <c>agents/</c> file reads it, the shipped flow's graphify step upstream of every step that reads a prompt), is
+    /// <c>tools</c>. A prompt that names an operation no tool of its step answers sends the agent to a tool it does not have.
+    /// </summary>
+    [Fact]
+    public void EveryPromptThatNamesTheGraph_BelongsToAStepOfferedTheGraphsTool()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var naming = new List<string>();
+
+        foreach (var (path, step) in NamedFiles.Steps(definition).Where(entry => entry.Step.Type == "reason"))
+        {
+            // A prompt the definition gives by an expression is read where the step starts, from text another step wrote.
+            foreach (var prompt in new[] { step.Prompt, step.ResumePrompt }.OfType<string>().Where(prompt => !prompt.StartsWith('{')))
+            {
+                var file = Below(step.WorkflowOf, prompt);
+
+                if (!System.Text.RegularExpressions.Regex.IsMatch(WorkflowTemplates.TextOf(file)!, @"\bgraph\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    continue;
+                }
+
+                naming.Add(file);
+
+                // The graph a step is given is its conversation's: the step its chain of work began with, by that step's agent.
+                var root = ResumeChain.Root(definition, path, step);
+                var agent = root.Agent is { } named
+                    ? AgentDefinitionParser.Parse(WorkflowTemplates.TextOf(Below(root.WorkflowOf, $"agents/{named}.md"))!, named).Definition
+                    : null;
+                var mode = WorkflowStep.GraphOf(root, agent, graphUpstream: true);
+
+                Assert.True(mode == "tools", $"'{file}' names the graph, and step '{path}' is given the graph '{mode}'");
+            }
+        }
+
+        // The prompts that name the graph today, so a new one is held as it comes.
+        Assert.Equal(
+            ["item-pipeline/prompts/home-audit.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            [.. naming.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
+
+        // A file of a workflow the shipped one uses is named under that workflow's place, as the embedded set holds it.
+        static string Below(string? owner, string named)
+            => NamedFiles.PlaceOf(WorkflowTemplates.ShippedWorkflowName, owner) is { Length: > 0 } place ? $"{place}/{named}" : named;
     }
 
     /// <summary>

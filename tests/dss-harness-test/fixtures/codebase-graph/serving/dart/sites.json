@@ -1,10 +1,18 @@
 [
   {
     "data": "largest",
-    "sites": ["lib/geometry.dart:18", "lib/geometry.dart:60", "test/shape_test.dart:12"]
+    "sites": [
+      { "place": "lib/geometry.dart:18", "how": "defines" },
+      { "place": "lib/geometry.dart:60", "how": "calls" },
+      { "place": "test/shape_test.dart:12", "how": "calls" }
+    ]
   },
   {
     "data": "describe",
-    "sites": ["lib/report.dart:18", "lib/report.dart:21", "test/shape_test.dart:16"]
+    "sites": [
+      { "place": "lib/report.dart:18", "how": "defines" },
+      { "place": "lib/report.dart:21", "how": "calls" },
+      { "place": "test/shape_test.dart:16", "how": "calls" }
+    ]
   }
 ]

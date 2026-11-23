@@ -1,18 +1,31 @@
 [
   {
     "data": "Total",
-    "sites": ["src/CartService.cs:15", "src/Cart.razor:13", "src/Pages/_Total.cshtml:3"]
+    "sites": [
+      { "place": "src/CartService.cs:15", "how": "defines" },
+      { "place": "src/Cart.razor:13", "how": "calls" },
+      { "place": "src/Pages/_Total.cshtml:3", "how": "calls" }
+    ]
   },
   {
     "data": "AddTea",
-    "sites": ["src/Cart.razor:12", "src/Cart.razor:16"]
+    "sites": [
+      { "place": "src/Cart.razor:12", "how": "calls" },
+      { "place": "src/Cart.razor:16", "how": "defines" }
+    ]
   },
   {
     "data": "Add",
-    "sites": ["src/CartService.cs:11", "src/Cart.razor:18"]
+    "sites": [
+      { "place": "src/CartService.cs:11", "how": "defines" },
+      { "place": "src/Cart.razor:18", "how": "calls" }
+    ]
   },
   {
     "data": ".btn-primary",
-    "sites": ["src/site.css:1", "src/Cart.razor:12"]
+    "sites": [
+      { "place": "src/site.css:1", "how": "defines" },
+      { "place": "src/Cart.razor:12", "how": "uses" }
+    ]
   }
 ]

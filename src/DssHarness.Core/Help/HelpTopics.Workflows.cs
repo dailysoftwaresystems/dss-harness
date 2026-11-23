@@ -60,8 +60,10 @@ public static partial class HelpTopics
         builder.AppendLine("code keep the tool - the implementer and the pre-existing-issue triage say nothing and are given it");
         builder.AppendLine("and their task's seeds by default, as the planner is, which the measurement left as it was, and the");
         builder.AppendLine("reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes -");
-        builder.AppendLine("the request triage and the plan audit, whose work is text the map does not light, ask none, as the");
-        builder.AppendLine("item audit does, the plan audit's agent on a later round's items, searching by its own text search, the");
+        builder.AppendLine("the request triage, whose work is text the map does not light, asks none, the plan audit and the");
+        builder.AppendLine("item audit, the plan audit's agent on a later round's items, say graph: tools with graphPromptTokens: 0");
+        builder.AppendLine("- the tool, for a class's sites they search are what its sites answers, beside their own text search,");
+        builder.AppendLine("and no pack, which lights none of a plan's text - the");
         builder.AppendLine("prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the");
         builder.AppendLine("run's records, ask none of it. Where");
         builder.AppendLine($"config.json declares {WorkflowTemplates.ShippedWorkflowName},");

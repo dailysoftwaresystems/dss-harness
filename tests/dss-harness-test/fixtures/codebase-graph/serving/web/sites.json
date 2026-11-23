@@ -1,18 +1,31 @@
 [
   {
     "data": "money",
-    "sites": ["src/format.ts:2", "src/receipt.ts:10"]
+    "sites": [
+      { "place": "src/format.ts:2", "how": "defines" },
+      { "place": "src/receipt.ts:10", "how": "calls" }
+    ]
   },
   {
     "data": "total",
-    "sites": ["src/cart.ts:23", "src/receipt.ts:10"]
+    "sites": [
+      { "place": "src/cart.ts:23", "how": "defines" },
+      { "place": "src/receipt.ts:10", "how": "calls" }
+    ]
   },
   {
     "data": ".btn-primary",
-    "sites": ["site/styles.css:14", "site/index.html:11"]
+    "sites": [
+      { "place": "site/styles.css:14", "how": "defines" },
+      { "place": "site/index.html:11", "how": "uses" },
+      { "place": "src/buttons.ts:3", "how": "holds the literal" },
+      { "place": "src/buttons.ts:8", "how": "holds the literal" }
+    ]
   },
   {
     "data": "\"Your receipt\"",
-    "sites": ["src/format.ts:34"]
+    "sites": [
+      { "place": "src/format.ts:34", "how": "holds the literal" }
+    ]
   }
 ]

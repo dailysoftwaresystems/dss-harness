@@ -1,18 +1,30 @@
 [
   {
     "data": "total",
-    "sites": ["src/cart.component.ts:25", "src/cart.component.html:5"]
+    "sites": [
+      { "place": "src/cart.component.ts:25", "how": "defines" },
+      { "place": "src/cart.component.html:5", "how": "calls" }
+    ]
   },
   {
     "data": "app-line",
-    "sites": ["src/line.component.ts:6", "src/cart.component.html:3"]
+    "sites": [
+      { "place": "src/line.component.ts:6", "how": "defines" },
+      { "place": "src/cart.component.html:3", "how": "instantiates" }
+    ]
   },
   {
     "data": ".btn-primary",
-    "sites": ["src/cart.component.css:5", "src/cart.component.html:4"]
+    "sites": [
+      { "place": "src/cart.component.css:5", "how": "defines" },
+      { "place": "src/cart.component.html:4", "how": "uses" }
+    ]
   },
   {
     "data": "lineText",
-    "sites": ["src/line.component.ts:14", "src/line.component.html:1"]
+    "sites": [
+      { "place": "src/line.component.ts:14", "how": "defines" },
+      { "place": "src/line.component.html:1", "how": "calls" }
+    ]
   }
 ]

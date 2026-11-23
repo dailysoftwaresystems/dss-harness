@@ -1,14 +1,27 @@
 [
   {
     "data": "Largest",
-    "sites": ["src/Geometry.cs:22", "src/Geometry.cs:116", "tests/GeometryTests.cs:19"]
+    "sites": [
+      { "place": "src/Geometry.cs:22", "how": "defines" },
+      { "place": "src/Geometry.cs:116", "how": "calls" },
+      { "place": "tests/GeometryTests.cs:19", "how": "calls" }
+    ]
   },
   {
     "data": "Describe",
-    "sites": ["src/Report.cs:10", "src/Report.cs:22", "src/Report.cs:37", "tests/GeometryTests.cs:26"]
+    "sites": [
+      { "place": "src/Report.cs:10", "how": "defines" },
+      { "place": "src/Report.cs:22", "how": "calls" },
+      { "place": "src/Report.cs:37", "how": "uses" },
+      { "place": "tests/GeometryTests.cs:26", "how": "calls" }
+    ]
   },
   {
     "data": "Items",
-    "sites": ["src/Catalog.cs:9", "src/Catalog.cs:20", "src/Catalog.cs:32"]
+    "sites": [
+      { "place": "src/Catalog.cs:9", "how": "defines" },
+      { "place": "src/Catalog.cs:20", "how": "uses" },
+      { "place": "src/Catalog.cs:32", "how": "uses" }
+    ]
   }
 ]

@@ -472,7 +472,7 @@ public sealed class CodebaseGraphTool(
             [GraphOp.Related] = $"related - the nodes a relation reaches, as many hops as you ask, {RelatedLines} a page",
             [GraphOp.Outline] = $"outline - a file's or a type's declarations, or the repository's, {OutlineLines} a page",
             [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
-            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol, a key path, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each a card saying how it decides, {RelatedLines} a page, the files the graph lists only or is unsure of searched by text and said by the coverage lines that end every answer, with what the implementation of each language searched by text does not see",
+            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path, a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read, a limit some file shows the sign of marked with how many",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
@@ -908,15 +908,19 @@ public sealed class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// <c>sites</c>: every place that decides the data named - what defines it, calls it, uses it, makes it, implements or
-    /// overrides it, every literal that holds it and every key it names, each a card in a section of how it
-    /// decides - joined with a text search of the files the graph answers nothing of but their text, whose hits
-    /// are cards where their file holds a node at the line and raw lines where it does not, and the coverage
-    /// lines that end the answer: the files it lists only, the files it is unsure of, that nothing is assumed
-    /// of a language with no extractor, and what the implementation of each language searched by text does not
-    /// see (<see cref="Unseen"/>). A quoted data asks by its value alone, never the symbols; a hub - a
-    /// definer many call, a name many files use - is listed and never walked through, for only the definers' own
-    /// edges are walked, one hop each: what decides is answered, never what the deciders reach.
+    /// <c>sites</c>: every place that decides the data named - what defines it, holds it as a key, calls it, uses it, makes
+    /// it, implements or overrides it (<see cref="CodebaseGraphQueries.SitesOf"/>, the definers' own edges alone, one hop
+    /// each, so a hub is listed and never walked through), every literal that holds it, and every line that holds it of the
+    /// files the graph does not answer of it (<see cref="CodebaseGraphQueries.TextScopeOf"/>) - each place one card, the node
+    /// at it, saying every way it decides, the cards grouped by file kind and tier (<see cref="CodebaseGraphQueries.KindOf"/>,
+    /// <see cref="CodebaseGraphQueries.TierOf"/>), and a raw line where the graph read no node of its file. A data that names
+    /// a node by itself - its handle, its id, a <c>path:line</c> - asks of that node, its name the word its literals and the
+    /// text are searched for (<see cref="CodebaseGraphQueries.SitesPattern"/>), and a name written with its scopes or a key
+    /// path is searched for by its last part (<see cref="CodebaseGraphQueries.LastPart"/>), as code and data write it; a
+    /// quoted one asks by its value alone, never the symbols. Every place passes the step's reads at one gate
+    /// (<see cref="SiteList"/>), and those they do not reach are
+    /// counted. The coverage lines that end the answer say what the text search read, each file counted once it was read, and
+    /// why; then every limit of each language whose files the graph read (<see cref="Unseen"/>).
     /// </summary>
     private async Task<GraphToolAnswer> SitesAsync(JsonObject input, CancellationToken cancellationToken)
     {
@@ -925,169 +929,100 @@ public sealed class CodebaseGraphTool(
 
         return await PagedAsync(input, view, GraphOp.Sites, new JsonObject { ["data"] = data }, $"sites {ReportText.Printable(data.Trim())}", async (on, token) =>
         {
-            var printed = ReportText.Printable(data.Trim());
-            var quoted = QuotedData(data);
-            var word = quoted ?? data.Trim();
-            var sections = new List<GraphSection>();
-            var notes = new List<string>();
-            var left = 0;
-            var named = new List<string>();
+            var written = data.Trim();
+            var quoted = QuotedValue(data);
+            var sites = new SiteList(this, on);
 
-            // The definers of the data - its declarations, and the keys it names - each read for the section of how
-            // it decides: a key is held, never defined. A quoted data has none, for it asks by its value alone.
-            var keys = new List<GraphCard>();
-            var defines = new List<GraphCard>();
+            // The definers of the data - its declarations, and the keys it names, which are held and never defined. A quoted
+            // data has none, for it asks by its value alone.
+            var definers = quoted is null ? on.DefinersOf(written) : [];
 
-            foreach (var card in quoted is null ? on.DefinersOf(data.Trim()) : [])
+            foreach (var card in definers)
             {
-                if (!Reads(card))
-                {
-                    left++;
-                    continue;
-                }
+                sites.Add(card, string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal) ? GraphSiteHows.HoldsTheKey : GraphSiteHows.Defines);
+            }
 
-                named.Add(card.Id);
+            // What decides of the data beside its definers, off the definers the step may read: one hop each, a part walked
+            // as the node itself, each node with how sure the surest edge that reaches it is.
+            var named = definers.Where(Reads).Select(card => card.Id).ToList();
 
-                if (string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal))
+            foreach (var group in on.SitesOf(named))
+            {
+                foreach (var edge in group.Edges)
                 {
-                    keys.Add(card);
-                }
-                else
-                {
-                    defines.Add(card);
+                    sites.Add(edge.Card, group.How, edge.Confidence);
                 }
             }
 
-            // What decides of the data beside its definers: one hop off each definer's own edges, its parts walked
-            // as the node itself, and no site's own edges walked - a hub is listed, never gone through.
-            var parts = named.SelectMany(on.OneDeclaration).Distinct(StringComparer.Ordinal).ToList();
+            // The word the literals and the text are searched for: the value, the name of the node the data names by itself,
+            // or the last part of the data as it is written - a name written with its scopes, a key path, is written in code
+            // and in data by its last part (shape.Area(), "TimeoutSeconds": 30), and a whole word of that part is held by
+            // every longer name that ends with it - one pattern for both.
+            var word = quoted ?? on.NamedExactly(written)?.Name ?? CodebaseGraphQueries.LastPart(written);
+            var pattern = CodebaseGraphQueries.SitesPattern(word);
 
-            List<GraphCard> ReachedBy(IReadOnlyList<(GraphSide Side, string Kind)> edges)
+            foreach (var place in on.LiteralSites(pattern))
             {
-                var reached = parts.SelectMany(one => on.Steps(one, edges))
-                    .GroupBy(step => step.To, StringComparer.Ordinal)
-                    .Select(alike => on.Card(alike.Key))
-                    .ToList();
-                left += reached.Count(card => !Reads(card));
-
-                return [.. reached.Where(Reads)
-                    .OrderBy(card => card.Path, StringComparer.Ordinal)
-                    .ThenBy(card => card.Start)
-                    .ThenBy(card => card.Id, StringComparer.Ordinal)];
+                sites.AddLiteral(place);
             }
 
-            var groups = new List<(string Caption, IReadOnlyList<GraphCard> Cards)>
-            {
-                ("defines", defines),
-                ("calls", ReachedBy([(GraphSide.In, CodeEdgeKinds.Calls)])),
-                ("uses", ReachedBy([(GraphSide.In, CodeEdgeKinds.Uses)])),
-                ("instantiates", ReachedBy([(GraphSide.In, CodeEdgeKinds.Instantiates)])),
-                ("implements", ReachedBy([(GraphSide.In, CodeEdgeKinds.Implements), (GraphSide.Out, CodeEdgeKinds.Dispatches)])),
-                ("overrides", ReachedBy([(GraphSide.Out, CodeEdgeKinds.Overrides), (GraphSide.In, CodeEdgeKinds.Overrides)])),
-                ("holds the key", keys),
-            };
-
-            sections.AddRange(groups
-                .Where(group => group.Cards.Count > 0)
-                .Select(group => Section($"{group.Caption} ({group.Cards.Count}):", [.. group.Cards.Select(card => new GraphEntry("  " + GraphLines.Of(card)))], RelatedLines)));
-
-            // Every literal that holds the data, wherever the graph keeps its file: the card of the node whose code
-            // holds it where there is one, and the file and line always - masked as every line the answer shows is.
-            var literals = on.LiteralSites(word);
-            var literalEntries = literals.Select(place => place.Node is { } node
-                ? new GraphEntry($"  {GraphLines.Of(node)} | holds '{ReportText.Printable(place.Value)}' at {ReportText.Printable(place.Path)}:{place.Line.ToString(CultureInfo.InvariantCulture)}")
-                : new GraphEntry($"  {ReportText.Printable(place.Path)}:{place.Line.ToString(CultureInfo.InvariantCulture)} holds '{ReportText.Printable(place.Value)}'")).ToList();
-
-            if (literalEntries.Count > 0)
-            {
-                sections.Add(Section($"holds the literal ({literalEntries.Count}):", literalEntries, RelatedLines));
-            }
-
-            // The text search covers what the graph cannot answer: the files it lists only - no extractor reads
-            // their language - and the files it is unsure of. Its hits are cards where their file holds a node at
-            // the line, and raw lines where it does not; every file it did not read is said.
-            var hits = new List<(AgentSearchHit Hit, bool TextOnly)>();
-            var listedFiles = new HashSet<string>(StringComparer.Ordinal);
-            var unsureFiles = new HashSet<string>(StringComparer.Ordinal);
+            // The text search: every file the graph does not answer of the data, each for the first reason it is so, counted
+            // once the search read it; a name's references the linker bound to nothing of its name tell files of it.
+            IReadOnlyList<string> names = quoted is null ? [.. definers.Select(card => card.Name).Append(CodebaseGraphQueries.LastPart(word)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)] : [];
+            var unbound = on.UnboundNaming(names);
+            var scopes = new Dictionary<string, GraphTextScope>(StringComparer.Ordinal);
+            var read = new Dictionary<GraphTextScope, List<string>>();
+            var hits = new Dictionary<GraphTextScope, int>();
             var outOfScope = 0;
-            var search = await _files.SearchAsync(on.Tree, WordPattern(word), null, StringComparison.Ordinal, 0,
-                file =>
+            var search = await TextSearchAsync(
+                on,
+                pattern,
+                relative =>
                 {
-                    if (_paths.Read(file).Full is null || !_mayRead(Relative(file)))
+                    if (scopes.ContainsKey(relative))
                     {
-                        return false;
-                    }
-
-                    var held = on.HeldPath(Relative(file)) ?? Relative(file);
-
-                    if (on.TextOnly(held))
-                    {
-                        listedFiles.Add(held);
                         return true;
                     }
 
-                    if (on.UnsureOfFile(held) is not null)
+                    if (on.TextScopeOf(relative, unbound, quoted is not null) is { } scope)
                     {
-                        unsureFiles.Add(held);
+                        scopes[relative] = scope;
                         return true;
                     }
 
-                    // A file the graph answers of is passed over by the search's own will, not because it may not be
-                    // read: counted, so the notes never say of it what they say of an unreadable file.
+                    // A file the graph answers of is passed over by the search's own will, not because it may not be read:
+                    // counted, so the notes never say of it what they say of a file the reader may not read.
                     outOfScope++;
                     return false;
                 },
-                (hit, _) =>
+                hit =>
                 {
-                    hits.Add((hit, on.TextOnly(on.HeldPath(hit.Path) ?? hit.Path)));
-                    return ValueTask.CompletedTask;
-                }, token).ConfigureAwait(false);
+                    var scope = scopes[hit.Path];
+                    hits[scope] = hits.GetValueOrDefault(scope) + 1;
+                    sites.AddHit(hit, scope);
+                },
+                path => (read.TryGetValue(scopes[path], out var files) ? files : read[scopes[path]] = []).Add(path),
+                token).ConfigureAwait(false);
 
-            var hitEntries = new List<GraphEntry>();
-
-            foreach (var (hit, textOnly) in hits)
-            {
-                var held = on.HeldPath(hit.Path) ?? hit.Path;
-                var node = textOnly ? null : on.AtLine(held, (int)hit.Line);
-                hitEntries.Add(node is { } card && Reads(card)
-                    ? new GraphEntry($"  {GraphLines.Of(card)} | {ReportText.Printable(held)}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {hit.Text.Trim()}", Lines: 1, Hit: true)
-                    : new GraphEntry($"  {ReportText.Printable(held)}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {hit.Text.Trim()}", Lines: 1, Hit: true));
-            }
-
-            if (hitEntries.Count > 0)
-            {
-                sections.Add(new GraphSection($"text: lines that hold '{ReportText.Printable(word)}'", hitEntries, TextHits));
-            }
-
-            // The coverage lines that end every sites answer: what was searched by text alone, and that nothing is
-            // assumed of a language with no extractor.
-            var listedHits = hits.Count(hit => hit.TextOnly);
-
-            notes.Add(listedFiles.Count == 0
-                ? "coverage: no file the graph lists only was searched by text"
-                : $"coverage: {ReportText.Counted(listedFiles.Count, "file")} the graph lists only ({KindsOf(listedFiles)}) searched by text - {ReportText.Counted(listedHits, "hit")}");
-            notes.Add(unsureFiles.Count == 0
-                ? "coverage: no file the graph is unsure of was searched by text"
-                : $"coverage: {ReportText.Counted(unsureFiles.Count, "file")} the graph is unsure of, searched by text too - {ReportText.Counted(hits.Count - listedHits, "hit")}");
-
-            if (listedFiles.Count > 0)
-            {
-                notes.Add("coverage: nothing is assumed of a language with no extractor; those files are read by text alone");
-            }
-
-            // What the implementations of the languages whose files the graph was unsure of do not see where those files show it
-            // (<see cref="CodebaseGraphQueries.SignsOf"/>): a limit by the sign it explains - a dynamic mark's kind in the file,
-            // or references the linker left candidates - each said once a language, read before trusting what the answer says of their files.
-            notes.AddRange(Unseen(unsureFiles.Select(held => (Language: on.FileAt(held)?.Language, Signs: on.SignsOf(held))).OfType<(string Language, IReadOnlyList<string> Signs)>()));
-
+            var notes = new List<string>(Coverage(read, hits, word, names));
+            notes.AddRange(Unseen(on));
             notes.AddRange(search.LeftOut(ReportText.Printable, search.Refused - outOfScope));
-            notes.AddRange(Notes(left));
 
-            var leading = new List<string> { quoted is null ? $"every place that decides '{printed}':" : $"every place that decides the literal '{ReportText.Printable(quoted)}':" };
+            // A place left out may be a node or a literal's line where the graph read no node: places, either way.
+            if (sites.Left > 0)
+            {
+                notes.Add($"{ReportText.Counted(sites.Left, "place")} left out: in files your reads do not reach");
+            }
 
+            var leading = new List<string> { quoted is null ? $"every place that decides '{ReportText.Printable(written)}':" : $"every place that decides the literal '{ReportText.Printable(quoted)}':" };
+            var sections = sites.Sections();
+
+            // Said of what was searched alone: the files the graph answers of were read from the graph, never by text.
             if (sections.Count == 0)
             {
-                leading.Add("the graph holds no declaration of it, no literal holds it and no line does");
+                leading.Add(sites.Left > 0 ? "every place the graph holds of it is in a file your reads do not reach, and no line of the files searched by text holds it"
+                    : quoted is null ? "the graph holds no declaration of it and no literal that holds it, and no line of the files searched by text holds it"
+                    : "the graph holds no literal that holds it, and no line of the files searched by text holds it");
             }
 
             return new GraphAnswer(leading, sections, notes, named, []);
@@ -1095,43 +1030,276 @@ public sealed class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// What the implementations of <paramref name="searched"/> languages do not see where the files searched show it: for each language
-    /// once, in order, every limit (<see cref="CodeGraphLimit"/>) one of its files gives a sign of - the kind of a dynamic mark the
-    /// file holds, or references the linker left candidates - in the order the help says them, and none other. What a <c>sites</c> answer
-    /// ends with where it searched files of theirs by text, since a limit is read before what the answer says of their files is trusted.
-    /// A language no implementation reads says nothing here - the answer says that nothing is assumed of it.
+    /// The coverage lines a <c>sites</c> answer ends with, of the files its text search read - each file once it was read,
+    /// by why it was searched (<paramref name="read"/>), with the hits it gave: the files the graph lists only and the files it
+    /// is unsure of always, said where none was; and, where any was, the files held in another state no implementation of a
+    /// language read them in, by the state, those the graph does not hold, those it outlines, those holding a reference named
+    /// the data it bound to nothing of that name, and those read for a value; the forms a selector was searched in; and,
+    /// where any file the graph lists only was searched, that nothing is assumed of a language with no extractor.
     /// </summary>
-    private IEnumerable<string> Unseen(IEnumerable<(string Language, IReadOnlyList<string> Signs)> searched)
+    private static IEnumerable<string> Coverage(IReadOnlyDictionary<GraphTextScope, List<string>> read, IReadOnlyDictionary<GraphTextScope, int> hits, string word, IReadOnlyList<string> names)
     {
-        foreach (var language in searched.GroupBy(file => file.Language, StringComparer.Ordinal).Select(group => (Language: group.Key, Signs: group.SelectMany(file => file.Signs).ToHashSet(StringComparer.Ordinal))).OrderBy(language => language.Language, StringComparer.Ordinal))
+        string Searched(GraphTextScope scope, string said, bool too = false)
+            => $"coverage: {ReportText.Counted(read[scope].Count, "file")} {said} searched by text{(too ? " too" : string.Empty)} - {ReportText.Counted(hits.GetValueOrDefault(scope), "hit")}";
+
+        string Kinds(GraphTextScope scope) => KindsOf(read[scope]);
+
+        var listed = new GraphTextScope(GraphTextReason.Unread, CodeFileStates.Listed);
+        var unsure = new GraphTextScope(GraphTextReason.Unsure);
+        var unheld = new GraphTextScope(GraphTextReason.Unheld);
+        var outlined = new GraphTextScope(GraphTextReason.Outlined);
+        var unbound = new GraphTextScope(GraphTextReason.Unbound);
+        var value = new GraphTextScope(GraphTextReason.Value);
+
+        yield return read.ContainsKey(listed) ? Searched(listed, $"the graph lists only ({Kinds(listed)})") : "coverage: no file the graph lists only was searched by text";
+
+        foreach (var state in CodeFileStates.All.Where(state => state != CodeFileStates.Listed && read.ContainsKey(new(GraphTextReason.Unread, state))))
         {
-            if (CodeGraphExtractors.OfThisBuild.Find(language.Language) is not { Help: { DoesNotSee: { } limits } } extractor)
+            var scope = new GraphTextScope(GraphTextReason.Unread, state);
+            yield return Searched(scope, $"the graph holds {state}, read by no implementation of a language ({Kinds(scope)}),");
+        }
+
+        if (read.ContainsKey(unheld))
+        {
+            yield return Searched(unheld, $"the graph does not hold, written since its last sync or kept out of it ({Kinds(unheld)}),");
+        }
+
+        yield return read.ContainsKey(unsure) ? Searched(unsure, "the graph is unsure of,", too: true) : "coverage: no file the graph is unsure of was searched by text";
+
+        if (read.ContainsKey(outlined))
+        {
+            yield return Searched(outlined, $"the graph outlines ({Kinds(outlined)}), their values and their text held by no literal of it,", too: true);
+        }
+
+        if (read.ContainsKey(unbound))
+        {
+            yield return Searched(unbound, $"holding a reference named {string.Join(" or ", names.Select(name => $"'{ReportText.Printable(name)}'"))} that the graph bound to nothing of that name,", too: true);
+        }
+
+        if (read.ContainsKey(value))
+        {
+            yield return Searched(value, "the graph read, for it holds a value only where code writes it as a string literal,", too: true);
+        }
+
+        if (CodebaseGraphQueries.SelectorName(word) is { } bare)
+        {
+            yield return $"coverage: '{ReportText.Printable(word)}' searched as a rule writes it and as the name '{ReportText.Printable(bare)}', a whole word of a class list";
+        }
+
+        if (read.ContainsKey(listed))
+        {
+            yield return "coverage: nothing is assumed of a language with no extractor; those files are read by text alone";
+        }
+    }
+
+    /// <summary>
+    /// Every limit of each language whose files the answer read from the graph - each file the view holds that an
+    /// implementation of a language read (<see cref="CodebaseGraphQueries.ReadByALanguage"/>) and the step may read - for each
+    /// language once, in order, every limit as its help says them (<see cref="CodeGraphLimit"/>), one rule for every language:
+    /// a limit whose sign (<see cref="CodeGraphLimit.Signs"/>) some of those files give - the kind of a dynamic mark one holds,
+    /// or a reference the linker left candidates (<see cref="CodebaseGraphQueries.SignsOf"/>) - marked with how many give it.
+    /// What a <c>sites</c> answer ends with, read before what it says of those files is trusted. A file no implementation of
+    /// a language read is said by the coverage lines: nothing is assumed of a language with no extractor.
+    /// </summary>
+    private IEnumerable<string> Unseen(CodebaseGraphQueries view)
+    {
+        var languages = view.Paths
+            .Where(path => _mayRead(path) && view.ReadByALanguage(path))
+            .GroupBy(path => view.FileAt(path)!.Language!, StringComparer.Ordinal)
+            .OrderBy(language => language.Key, StringComparer.Ordinal);
+
+        foreach (var language in languages)
+        {
+            // A language no implementation of this build reads - an earlier build's - has no limit this build can say.
+            if (CodeGraphExtractors.OfThisBuild.Find(language.Key) is not { } extractor)
             {
                 continue;
             }
 
-            // Each limit the signs explain, in the order the help says them, once.
-            foreach (var limit in limits.Where(limit => limit.Signs.Any(language.Signs.Contains)))
+            var signs = language.Select(view.SignsOf).ToList();
+
+            foreach (var limit in extractor.Help.DoesNotSee)
             {
-                yield return $"{extractor.Language} does not see {limit.Says}.";
+                var shown = limit.Signs.Count == 0 ? 0 : signs.Count(file => file.Any(limit.Signs.Contains));
+
+                yield return shown == 0
+                    ? $"{extractor.Language} does not see {limit.Says}."
+                    : $"{extractor.Language} does not see {limit.Says} - shown by {ReportText.Counted(shown, "file")} read.";
             }
         }
     }
 
     /// <summary>
-    /// The value a quoted <paramref name="data"/> asks by - its first and last character one quote mark, single or
-    /// double, with something between - or null where it asks by a name: a quoted literal is asked by its value
-    /// alone, never the symbols, while a name is asked by everything the graph joins.
+    /// The value a quoted <paramref name="data"/> asks by - its first and its last character one quote mark, single or
+    /// double - or null where it asks by a name: a quoted literal is asked by its value alone, never the symbols, while a
+    /// name is asked by everything the graph joins. The one reading of a quoted data, the usage check's (<see cref="Misused"/>,
+    /// which refuses one whose value is empty or white space alone) and the answer's.
     /// </summary>
-    private static string? QuotedData(string data)
+    /// <param name="data">The data, as the call gives it.</param>
+    internal static string? QuotedValue(string data)
     {
+        ArgumentNullException.ThrowIfNull(data);
+
         var trimmed = data.Trim();
-        return trimmed.Length > 2 && trimmed[0] is '"' or '\'' && trimmed[^1] == trimmed[0] ? trimmed[1..^1] : null;
+        return trimmed.Length >= 2 && trimmed[0] is '"' or '\'' && trimmed[^1] == trimmed[0] ? trimmed[1..^1] : null;
     }
 
-    /// <summary>The kinds of <paramref name="files"/> - each path's extension, each once, in order - said in a coverage line.</summary>
+    /// <summary>The kinds of <paramref name="files"/> - each path's by its name (<see cref="CodebaseGraphQueries.FileKind"/>), each once, in order - said in a coverage line.</summary>
     private static string KindsOf(IReadOnlyCollection<string> files)
-        => string.Join(", ", files.Select(file => Path.GetExtension(file) ?? string.Empty).Where(kind => kind.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        => string.Join(", ", files.Select(CodebaseGraphQueries.FileKind).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+
+    /// <summary>
+    /// The places one <c>sites</c> answer gives, each once. Every place passes the step's reads here - a definer, a node an
+    /// edge reaches, a literal's place and a text hit alike - and one in a file they do not reach is left out and counted,
+    /// so no source of places passes them by. Each place is the card of its node, with every way it decides - an edge's with
+    /// how sure the surest edge that reaches it is, as the <c>node</c> operation says an edge - and the lines a literal or a
+    /// text hit stands on beneath it; or a raw line where the graph read no node of the file.
+    /// </summary>
+    private sealed class SiteList(CodebaseGraphTool tool, CodebaseGraphQueries view)
+    {
+        private readonly Dictionary<string, Site> _sites = new(StringComparer.Ordinal);
+        private readonly List<(string Path, long Line, string Said, bool Hit)> _raw = [];
+        private readonly HashSet<string> _left = new(StringComparer.Ordinal);
+
+        /// <summary>How many places were left out, each once: in files the step's reads do not reach.</summary>
+        public int Left => _left.Count;
+
+        /// <summary>The node <paramref name="card"/> as a place that decides as <paramref name="how"/> says, where the step may read it.</summary>
+        public void Add(GraphCard card, string how, string confidence = CodeConfidences.Exact)
+            => Of(card)?.Say(how, confidence);
+
+        /// <summary>The place of a literal that holds the data: under its node's card, where the step may read its file.</summary>
+        public void AddLiteral(GraphLiteralPlace place)
+        {
+            var said = $"{ReportText.Printable(place.Path)}:{place.Line.ToString(CultureInfo.InvariantCulture)} holds the literal '{ReportText.Printable(place.Value)}'";
+
+            if (place.Node is { } node)
+            {
+                Of(node)?.Hold(place.Path, place.Line, said);
+            }
+            else if (tool._mayRead(place.Path))
+            {
+                _raw.Add((place.Path, place.Line, said, false));
+            }
+            else
+            {
+                _left.Add($"{place.Path}:{place.Line.ToString(CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        /// <summary>
+        /// A line the text search found: under the card of the node at it where the graph read its file by a language and holds
+        /// one there, and passed over where a literal there already says the place; a raw line else. The search reads only
+        /// files the step may read.
+        /// </summary>
+        public void AddHit(AgentSearchHit hit, GraphTextScope scope)
+        {
+            var held = view.HeldPath(hit.Path) ?? hit.Path;
+
+            if (scope.Reason is not (GraphTextReason.Unheld or GraphTextReason.Unread) && view.AtLine(held, (int)hit.Line) is { } card)
+            {
+                Of(card)?.Find(held, hit.Line, HitLine(held, hit));
+                return;
+            }
+
+            _raw.Add((held, hit.Line, HitLine(held, hit), true));
+        }
+
+        /// <summary>
+        /// The answer's sections: one for each file kind and tier the places stand in, in order, each of how many places it
+        /// holds - every place's card and its lines, by path, then line, then id, at <see cref="RelatedLines"/> places a page.
+        /// </summary>
+        public IReadOnlyList<GraphSection> Sections()
+        {
+            var placed = _sites.Values
+                .Select(site => (site.Card.Path, Line: (long)site.Card.Start, Id: site.Card.Id, Entries: site.Entries()))
+                .Concat(_raw.Select(raw => (raw.Path, raw.Line, Id: string.Empty, Entries: (IReadOnlyList<GraphEntry>)[new GraphEntry("  " + raw.Said, Lines: 1, Hit: raw.Hit)])));
+
+            return [.. placed
+                .GroupBy(place => (Kind: view.KindOf(place.Path), Tier: view.TierOf(place.Path)))
+                .OrderBy(group => group.Key.Kind, StringComparer.Ordinal)
+                .ThenBy(group => group.Key.Tier, StringComparer.Ordinal)
+                .Select(group => Section(
+                    $"{ReportText.Printable(group.Key.Kind)} in {group.Key.Tier} ({group.Count().ToString(CultureInfo.InvariantCulture)}):",
+                    [.. group
+                        .OrderBy(place => place.Path, StringComparer.Ordinal)
+                        .ThenBy(place => place.Line)
+                        .ThenBy(place => place.Id, StringComparer.Ordinal)
+                        .SelectMany(place => place.Entries)],
+                    RelatedLines))];
+        }
+
+        /// <summary>The place of <paramref name="card"/>'s node, made where it is first named; null where the step's reads do not reach its file, counted once.</summary>
+        private Site? Of(GraphCard card)
+        {
+            if (!tool.Reads(card))
+            {
+                _left.Add(card.Id);
+                return null;
+            }
+
+            if (!_sites.TryGetValue(card.Id, out var site))
+            {
+                _sites[card.Id] = site = new Site(card);
+            }
+
+            return site;
+        }
+
+        /// <summary>One node's place: its card, every way it decides with how sure each is, and the lines a literal or a text hit stands on in it.</summary>
+        private sealed class Site(GraphCard card)
+        {
+            private readonly Dictionary<string, string> _hows = new(StringComparer.Ordinal);
+            private readonly List<(string Path, long Line, string Said, bool Hit)> _lines = [];
+            private readonly HashSet<(string Path, long Line)> _held = [];
+
+            public GraphCard Card { get; } = card;
+
+            /// <summary>One more way it decides, at <paramref name="confidence"/>: the surest of those it was said by.</summary>
+            public void Say(string how, string confidence)
+                => _hows[how] = _hows.TryGetValue(how, out var was) ? CodeConfidences.Surer(was, confidence) : confidence;
+
+            /// <summary>A literal that holds the data, on its line.</summary>
+            public void Hold(string path, long line, string said)
+            {
+                Say(GraphSiteHows.HoldsTheLiteral, CodeConfidences.Exact);
+                _held.Add((path, line));
+                _lines.Add((path, line, said, false));
+            }
+
+            /// <summary>A line of text that holds the data - passed over where a literal there already says the place.</summary>
+            public void Find(string path, long line, string said)
+            {
+                if (_held.Contains((path, line)))
+                {
+                    return;
+                }
+
+                Say(GraphSiteHows.Text, CodeConfidences.Exact);
+                _lines.Add((path, line, said, true));
+            }
+
+            /// <summary>
+            /// Its entries: its card with every way it decides, in the order <see cref="GraphSiteHows.All"/> says them, each
+            /// edge's of other than exact with how sure it is; then its lines, by path and line, each counting no place, a text
+            /// hit's a hit.
+            /// </summary>
+            public IReadOnlyList<GraphEntry> Entries()
+            {
+                var hows = GraphSiteHows.All
+                    .Where(_hows.ContainsKey)
+                    .Select(how => string.Equals(_hows[how], CodeConfidences.Exact, StringComparison.Ordinal) ? how : $"{how} ({_hows[how]})");
+
+                return [
+                    new GraphEntry($"  {GraphLines.Of(Card)} | {string.Join(", ", hows)}"),
+                    .. _lines
+                        .OrderBy(line => line.Path, StringComparer.Ordinal)
+                        .ThenBy(line => line.Line)
+                        .ThenBy(line => line.Hit)
+                        .Select(line => new GraphEntry("      " + line.Said, Lines: 0, Hit: line.Hit))];
+            }
+        }
+    }
 
     /// <summary>
     /// The text searches one answer adds, each word once: their hits as sections of their own, each at the text
@@ -1468,16 +1636,7 @@ public sealed class CodebaseGraphTool(
             => Hits.Count == 0 && word.Trim().Length > 0 ? [$"text: no line holds '{ReportText.Printable(word.Trim())}'"] : [];
     }
 
-    /// <summary>
-    /// A whole word, escaped, at a line's or a value's start or after a character that is no part of a word, and at
-    /// its end or before one - each line and each literal value asked whether it holds a match, so the characters
-    /// beside the word need no lookaround - matched by the one linear engine (<see cref="LinearRegex"/>), so never
-    /// timed. The one whole-word rule, which the text fallback and a <c>sites</c> answer's text search read alike.
-    /// </summary>
-    private static Regex WordPattern(string word)
-        => LinearRegex.Compile($@"(?:^|[^\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?:$|[^\p{{L}}\p{{N}}_])");
-
-    /// <summary>The lines that hold <paramref name="name"/> as a whole word, case-sensitive, as <c>search_files</c> searches - the text a not-sure answer adds, and the notes of what it did not read.</summary>
+    /// <summary>The lines that hold <paramref name="name"/> as a whole word (<see cref="CodebaseGraphQueries.WordPattern"/>), case-sensitive, as <c>search_files</c> searches - the text a not-sure answer adds, and the notes of what it did not read.</summary>
     private async Task<Searched> SearchAsync(string name, CancellationToken cancellationToken)
     {
         var word = name.Trim();
@@ -1487,18 +1646,41 @@ public sealed class CodebaseGraphTool(
             return Searched.None;
         }
 
-        // Each file held to the tree as well as to what the graph may read: the search decides again where each
-        // file it opened stands, and a link put on its way since may lead out of the tree, where no relative path
-        // reads. No bound on the hits, nor on a file's bytes, nor on a hit's line: the answer's pages hold them
-        // all, at the text fallback's size a page, a line wider than a page given in pieces.
+        // No bound on the hits, nor on a file's bytes, nor on a hit's line: the answer's pages hold them all, at the text
+        // fallback's size a page, a line wider than a page given in pieces.
         var hits = new List<AgentSearchHit>();
-        var search = await _files.SearchAsync(_queries.Tree, WordPattern(word), null, StringComparison.Ordinal, 0, file => _paths.Read(file).Full is not null && _mayRead(Relative(file)),
-            (hit, _) => { hits.Add(hit); return ValueTask.CompletedTask; }, cancellationToken).ConfigureAwait(false);
+        var search = await TextSearchAsync(_queries, CodebaseGraphQueries.WordPattern(word), _ => true, hit => hits.Add(hit), read: null, cancellationToken).ConfigureAwait(false);
 
         return new(
-            [.. hits.Select(hit => new GraphEntry($"  {ReportText.Printable(hit.Path)}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {hit.Text.Trim()}", Lines: 1, Hit: true))],
+            [.. hits.Select(hit => new GraphEntry("  " + HitLine(hit.Path, hit), Lines: 1, Hit: true))],
             [.. search.LeftOut(ReportText.Printable)]);
     }
+
+    /// <summary>
+    /// The one text search the tool runs, the text fallback's and a <c>sites</c> answer's alike: every file under
+    /// <paramref name="view"/>'s tree the step may read - held to the tree as well as to what the graph may read, for the
+    /// search decides again where each file it opened stands, and a link put on its way since may lead out of the tree, where
+    /// no relative path reads - that <paramref name="scope"/> takes by its path relative to the tree, each hit handed to
+    /// <paramref name="found"/> and each file read to its end to <paramref name="read"/>.
+    /// </summary>
+    private Task<AgentSearch> TextSearchAsync(CodebaseGraphQueries view, Regex pattern, Func<string, bool> scope, Action<AgentSearchHit> found, Action<string>? read, CancellationToken cancellationToken)
+        => _files.SearchAsync(
+            view.Tree,
+            pattern,
+            null,
+            StringComparison.Ordinal,
+            0,
+            file => _paths.Read(file).Full is not null && _mayRead(Relative(file)) && scope(Relative(file)),
+            (hit, _) =>
+            {
+                found(hit);
+                return ValueTask.CompletedTask;
+            },
+            read,
+            cancellationToken);
+
+    /// <summary>How a text hit is said, the line's place - <paramref name="path"/>, as the view holds it where it does - and the line itself.</summary>
+    private static string HitLine(string path, AgentSearchHit hit) => $"{ReportText.Printable(path)}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {hit.Text.Trim()}";
 
     /// <summary>
     /// The file at <paramref name="path"/> read whole, in its encoding, or why it is not: a place the runtime's own tools
@@ -1793,7 +1975,7 @@ public sealed class CodebaseGraphTool(
         ("depth", "integer", "how many hops, from 1; 1 where it is left out."),
         ("symbols", "array", "the nodes to read, one or more, each a handle, an id or a name."),
         ("full", "boolean", "whether a type's members' bodies are given too."),
-        ("data", "string", "the data whose deciding places are asked: a name, a key path or a diagnostic id as symbol accepts a name, a rule's selector as a rule writes it (.btn, #main), or a quoted literal, asked by its value alone."),
+        ("data", "string", "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone."),
         ("hash", "string", "the node's hash as you last saw it; the edit is refused where its lines moved since."),
         ("text", "string", "the node's new lines."),
         ("reason", "string", "why the whole file is needed."),
@@ -1830,10 +2012,15 @@ public sealed class CodebaseGraphTool(
             return $"op '{Names[op]}' needs {missing}: {Described().First(member => member.Name == missing).Description}";
         }
 
-        // A name that names nothing is no request: said, never thrown at the lookups.
+        // A name that names nothing is no request: said, never thrown at the lookups - nor is a quoted data whose value is none.
         if (new[] { "query", "kind", "symbol", "path", "hash", "reason", "data" }.FirstOrDefault(name => input[name] is not null && string.IsNullOrWhiteSpace(Str(input, name))) is { } blank)
         {
             return $"{blank} is empty: {Described().First(member => member.Name == blank).Description}";
+        }
+
+        if (Str(input, "data") is { } data && QuotedValue(data) is { } value && string.IsNullOrWhiteSpace(value))
+        {
+            return $"data is empty: {Described().First(member => member.Name == "data").Description}";
         }
 
         if (Strings(input, "symbols").Any(string.IsNullOrWhiteSpace))

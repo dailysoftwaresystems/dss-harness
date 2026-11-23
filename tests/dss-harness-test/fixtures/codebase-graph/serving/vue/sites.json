@@ -1,18 +1,30 @@
 [
   {
     "data": "total",
-    "sites": ["src/Cart.vue:19", "src/Cart.vue:51"]
+    "sites": [
+      { "place": "src/Cart.vue:19", "how": "defines" },
+      { "place": "src/Cart.vue:59", "how": "calls" }
+    ]
   },
   {
     "data": "add",
-    "sites": ["src/Cart.vue:12", "src/Cart.vue:50"]
+    "sites": [
+      { "place": "src/Cart.vue:12", "how": "defines" },
+      { "place": "src/Cart.vue:58", "how": "calls" }
+    ]
   },
   {
     "data": ".btn-primary",
-    "sites": ["src/site.css:5", "src/Cart.vue:50"]
+    "sites": [
+      { "place": "src/site.css:5", "how": "defines" },
+      { "place": "src/Cart.vue:58", "how": "uses" }
+    ]
   },
   {
     "data": "lineText",
-    "sites": ["src/LineItem.vue:6", "src/LineItem.vue:13"]
+    "sites": [
+      { "place": "src/LineItem.vue:6", "how": "defines" },
+      { "place": "src/LineItem.vue:14", "how": "uses" }
+    ]
   }
 ]

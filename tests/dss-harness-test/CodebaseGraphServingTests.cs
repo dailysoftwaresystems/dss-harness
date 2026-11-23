@@ -15,10 +15,11 @@ namespace DssHarness.Tests;
 /// task the step's context pack is made from the task's text and the <c>graph</c> tool is driven the way the pack and the tool's
 /// description lead an agent - the cards, the bodies needed - and for each site task the tool's <c>sites</c> is read page by
 /// page to its last; the bytes served, pack included, are compared with the bytes of the whole files that hold those
-/// declarations and places, and every place is checked to be in the answer. The test pins, for each task and site task, the
-/// ratio and that the recall is whole, so a change that makes answers larger, packs less of what a task needs, loses a
-/// declaration from them, or drops a place from a sites answer - a use, a literal's place, a key's join, a selector's reach -
-/// goes red.
+/// declarations and places, and every place is checked to be in the answer as the task says it decides - the card of the node
+/// at its line saying so, or the line of a literal or a text hit. The test pins, for each task and site task, the ratio and
+/// that the recall is whole, so a change that makes answers larger, packs less of what a task needs, loses a declaration from
+/// them, or drops a place from a sites answer - a use, a literal's place, a key's join, a selector's reach, an override - goes
+/// red.
 /// </summary>
 public sealed class CodebaseGraphServingTests
 {
@@ -29,9 +30,16 @@ public sealed class CodebaseGraphServingTests
 
     /// <summary>
     /// One site task of a fixture repository: the data a reference answer decides by, and every place that decides it, each the
-    /// file and the line the decision stands on - a declaration, a call, a read, a literal, a key, a line of markup.
+    /// file and the line the decision stands on - a declaration, a call, a read, a literal, a key, a line of markup - with how it
+    /// decides.
     /// </summary>
-    private sealed record FixtureSite(string Data, string[] Sites);
+    private sealed record FixtureSite(string Data, FixturePlace[] Sites);
+
+    /// <summary>
+    /// One place a site task names: <c>path:line</c>, and how the answer is to say it decides there (<see cref="GraphSiteHows"/>) -
+    /// a way of a node, said by the card of the node at the line; a literal, said by its line; a line of text, said as a hit.
+    /// </summary>
+    private sealed record FixturePlace(string Place, string How);
 
     /// <summary>
     /// For every task of the three fixture repositories: the pack made from the task's text holds every declaration the
@@ -169,12 +177,13 @@ public sealed class CodebaseGraphServingTests
 
     /// <summary>
     /// For every site task of every fixture repository: the <c>sites</c> answer, read page by page to its last, holds every place
-    /// the task says decides its datum - recall of 100%, a declaration, a call, a read, a literal, a key and a line of markup alike,
-    /// across every language the fixture holds - and the bytes it serves are a pinned share of the whole files those places stand in.
-    /// A change that drops a use, a literal's place, a key's join or a selector's reach from the answer turns it red. The share is
-    /// of the whole answer, the line that ends it among them: where a file searched by text shows the sign of a limit of its
-    /// language's implementation, that limit is said - Python's fixtures are unsure by candidates, so the duck-typed receiver's
-    /// limit ends their answers - and no limit a file shows no sign of is.
+    /// the task says decides its datum, as the task says it decides - recall of 100%, a declaration, a call, a read, an
+    /// instantiation, an override, a literal, a key and a line of markup alike, across every language the fixture holds, each
+    /// place held by the card of the node at its line saying that way, or by its literal's or its hit's line, never by a card
+    /// that only spans it - and the bytes it serves are a pinned share of the whole files those places stand in. A change that
+    /// drops a use, a literal's place, a key's join, a selector's reach or an override from the answer turns it red. The share is
+    /// of the whole answer, the lines that end it among them: every limit of each language whose files the answer read, those a
+    /// file shows the sign of marked with how many.
     /// </summary>
     [Fact]
     public async Task EverySiteTask_IsAnsweredWithEveryPlaceThatDecides_AtFullRecall_ForAPinnedShareOfTheWholeFiles()
@@ -184,7 +193,7 @@ public sealed class CodebaseGraphServingTests
         foreach (var language in new[] { "csharp", "c", "dart" }.Concat(MarkupAndData))
         {
             var (queries, tool, _, files, sites) = await RepositoryAsync(language);
-            var whole = sites.SelectMany(site => site.Sites).Select(site => site[..site.LastIndexOf(':')]).Distinct(StringComparer.Ordinal).Sum(path => Bytes(files[path]));
+            var whole = sites.SelectMany(site => site.Sites).Select(site => site.Place[..site.Place.LastIndexOf(':')]).Distinct(StringComparer.Ordinal).Sum(path => Bytes(files[path]));
 
             foreach (var site in sites)
             {
@@ -200,7 +209,8 @@ public sealed class CodebaseGraphServingTests
                     pages = given.Paging!.Pages;
                 }
 
-                var missed = site.Sites.Where(place => !Covers(answer.ToString(), place)).ToList();
+                var lines = answer.ToString().Split('\n');
+                var missed = site.Sites.Where(place => !Covers(lines, queries, place)).Select(place => $"{place.Place} {place.How}").ToList();
 
                 Assert.True(missed.Count == 0, $"{language} '{site.Data}': the sites answer held {site.Sites.Length - missed.Count} of {site.Sites.Length} places ({string.Join(", ", missed)}):\n{answer}");
                 ratios.Add((language, site.Data, Math.Round(Bytes(answer.ToString()) * 100.0 / whole, 1)));
@@ -239,6 +249,7 @@ public sealed class CodebaseGraphServingTests
                 ("config", "rules", 15.6),
                 ("python", "largest", 61.9),
                 ("python", "describe", 35.5),
+                ("python", "Shape.name", 0.0),
             ],
             ratios);
     }
@@ -247,26 +258,40 @@ public sealed class CodebaseGraphServingTests
     private static readonly string[] MarkupAndData = ["web", "vue", "angular", "razor-blazor", "config", "python"];
 
     /// <summary>
-    /// Whether the <paramref name="answer"/> names the line <paramref name="site"/> places a decision on: a card whose range
-    /// holds the line, or a place or a hit the answer writes as the file and the line.
+    /// Whether the answer's <paramref name="lines"/> hold <paramref name="site"/> as it decides: a literal by the line the
+    /// answer writes it on (<c>path:line holds the literal '...'</c>, beneath its node's card or alone); a line of text by its
+    /// hit's line (<c>path:line text</c>); and a way of a node by the card of the node at the line - the innermost, as the
+    /// view reads it (<see cref="CodebaseGraphQueries.AtLine"/>), told by its handle - whose ways, after its last
+    /// <c> | </c>, hold that way, how sure it is said or not. A card that only spans the line - its type's, its file's - is
+    /// never the place.
     /// </summary>
-    private static bool Covers(string answer, string site)
+    private static bool Covers(IReadOnlyList<string> lines, CodebaseGraphQueries queries, FixturePlace site)
     {
-        var colon = site.LastIndexOf(':');
-        var line = int.Parse(site[(colon + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+        var colon = site.Place.LastIndexOf(':');
+        var path = site.Place[..colon];
+        var line = int.Parse(site.Place[(colon + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+        var at = $"{path}:{line.ToString(System.Globalization.CultureInfo.InvariantCulture)} ";
+        var literal = $"{at}holds the literal '";
 
-        foreach (System.Text.RegularExpressions.Match range in System.Text.RegularExpressions.Regex.Matches(answer, System.Text.RegularExpressions.Regex.Escape(site[..colon]) + @":(\d+)(?:-(\d+))?"))
+        if (site.How == GraphSiteHows.HoldsTheLiteral)
         {
-            var start = int.Parse(range.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
-            var end = range.Groups[2].Success ? int.Parse(range.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture) : start;
-
-            if (start <= line && line <= end)
-            {
-                return true;
-            }
+            return lines.Any(text => text.TrimStart().StartsWith(literal, StringComparison.Ordinal));
         }
 
-        return false;
+        if (site.How == GraphSiteHows.Text)
+        {
+            return lines.Any(text => text.TrimStart() is var trimmed && trimmed.StartsWith(at, StringComparison.Ordinal) && !trimmed.StartsWith(literal, StringComparison.Ordinal));
+        }
+
+        Assert.Contains(site.How, GraphSiteHows.All);
+
+        if (queries.AtLine(path, line) is not { } card)
+        {
+            return false;
+        }
+
+        return lines.Any(text => text.StartsWith($"  {card.Handle} ", StringComparison.Ordinal)
+            && text[(text.LastIndexOf(" | ", StringComparison.Ordinal) + 3)..].Split(", ").Any(how => how == site.How || how.StartsWith(site.How + " (", StringComparison.Ordinal)));
     }
 
     /// <summary>

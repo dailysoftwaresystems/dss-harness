@@ -2166,8 +2166,11 @@ in two - a `build` step, which fails red and is taken by the recovery and built 
 beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
 every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11 set
 each type's value, its steps saying the graph keys only where a type is served otherwise than by
-default (`graph: off` on the request triage, the plan audit and the item audit, whose work is text the map
-does not light - the audits searching the data by their own text search - and on the scribe's; `graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
+default (`graph: off` on the request triage, whose work is text the map does not light, and on the scribe's;
+`graph: tools` with `graphPromptTokens: 0` on the plan audit and the item audit - the tool and no pack: the measurement ran
+them with `graph: off` before the graph's `sites` was built, when their work was text the map does not light, and a class's
+sites, which they now search, are what `sites` answers, beside their own text search, while a pack still lights none of it;
+`graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
 on the reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes
 on with another's work starting its own pack where it says; the implementer, the planner and the
 pre-existing-issue triage saying nothing, for the tool and their task's seeds are their default - the
@@ -4606,10 +4609,11 @@ written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fix
 itself is measured (`CodebaseGraphServingTests`) over nine fixture repositories under `fixtures/codebase-graph/serving/` - C#,
 C and Dart, and one each of HTML, CSS and TypeScript, of Vue, of Angular, of Razor and Blazor, of JSON, YAML and XML read by C#, of Python
 - each with its `tasks.json`, the declarations a task's reference answer needs, and its `sites.json`, the data a site task
-decides by and every place that decides it: the bytes the pack and the bodies serve against the whole files', the bytes each
-`sites` answer serves against the files its places stand in - the line that ends it among them: where a file searched by text
-shows the sign of a limit of its language's implementation, that limit, and no other - each pinned, and every place checked to be in its answer, so a
-change that drops a use, a literal's place, a key's join or a selector's reach from an answer goes red.
+decides by and every place that decides it, each with how it decides: the bytes the pack and the bodies serve against the whole
+files', the bytes each `sites` answer serves against the files its places stand in - the lines that end it among them, every
+limit of each language whose files the graph read - each pinned, and every place checked to be in its answer as the card of the
+node at its line saying the way the task says it decides, never any card that spans the line, so a change that drops a use, a
+literal's place, a key's join or a selector's reach from an answer, or leaves a place the graph reads to the text search, goes red.
 
 A language no parser this tool can carry reads goes through the structural scanner (`Codebase\Languages\Scanning\`),
 whose core knows no language: a language's lexer cuts the text into tokens (`ScanToken`), its comments apart and each
@@ -5133,28 +5137,56 @@ holds) and then by id; `related` walks as many hops as asked, from 1, going thro
 nodes it reached and never reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that
 reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
 found its lines moved, and reads a file whole whatever it holds. `sites` answers "every place that decides this" of one datum
-(`data`: a name, a key path or a diagnostic id as `symbol` accepts a name, or a quoted literal, asked by its value alone and
-never by the symbols): every definer of the name across files and languages (`CodebaseGraphQueries.DefinersOf`, by simple
-name, qualified name or the scopes a name is written with), then one hop off the definers' own edges - their callers, their
-users, what makes them, what implements them and what they override, a part of a declaration walked as the node itself - and no
-site's own edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds it as a whole word,
-the one whole-word rule the text fallback reads (`CodebaseGraphTool.WordPattern`), read once an ask over the literals of every
-extract the view holds (`CodebaseGraphQueries.LiteralSites` - no node of the graph is a literal's, so the read is the one
-index of them), each as the card of the node whose code holds it with the file, the line and the value; and every key the
-datum names (`CodeSubKinds.Key`), held and never defined. Each is a card in a section of how it decides - `defines`, `calls`,
-`uses`, `instantiates`, `implements`, `overrides`, `holds the literal`, `holds the key` - at `CodebaseGraphTool.RelatedLines` a page. What
-the graph cannot answer of the datum is searched by text and said: the files it lists only, which no extractor reads
-(`CodebaseGraphQueries.TextOnly`), and the files it is unsure of (`CodebaseGraphQueries.UnsureOfFile`), the search passing
-over every other readable file by its own will and never counting one such as a file the reader may not read
-(`AgentSearch.LeftOut`'s refused count); a hit is the card of the node at its line where its file holds one
-(`CodebaseGraphQueries.AtLine`) and a raw line where it does not. Every `sites` answer ends with its coverage lines: how
-many files the graph lists only were searched by text and with how many hits, the kinds of them named; how many files it is
-unsure of were searched too; and, where any was, that nothing is assumed of a language with no extractor, its files read by
-text alone - so a plan's site list is never read as covered where the graph was silent. Where files of a language the graph is
-unsure of were searched, the answer ends besides with what that language's implementation does not see where they show it
-(`CodebaseGraphTool.Unseen`, by `CodebaseGraphQueries.SignsOf`): each limit a file gives the sign of - the kind of a dynamic
-mark it holds, or references the linker left candidates - a line, and no limit it shows no sign of, which is the help's alone. The prompts that search for a class's
-sites - `plan.md`, `plan-audit.md`, `item-audit.md` and the plan's `searches` - name `sites` first and text search after it.
+(`data`: a symbol as `symbol` takes one - a handle, an id or a `path:line`, which names its one node, or a qualified or simple
+name - a key path, a diagnostic id, a rule's selector as a rule writes it, or a quoted literal, asked by its value alone and
+never by the symbols): every definer of it across files and languages (`CodebaseGraphQueries.DefinersOf`, by the one reading
+of what an agent writes `Resolve` reads too - the node a handle, an id or a `path:line` names alone, else every node any rule
+of a name finds, a qualified name, a simple one, one written with a language's `::` or `\`, or with some of its scopes, where
+`Resolve` takes the first rule that finds one - a selector's own leading dot kept, so `.header` is never the element rule
+`header` or a key of that name), then one hop off the definers' own edges (`CodebaseGraphQueries.SitesOf`, each way a group
+read from the relations' own edges - `GraphRelations.Edges` - and the `node` operation's): their callers, their users, what
+makes them, what implements them or answers an interface's member for a type through its dispatches, what overrides them and
+what they override, a part of a declaration walked as the node itself, each node with how sure the surest edge that reaches it
+is - and no site's own edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds
+it as a whole word (`CodebaseGraphQueries.LiteralSites`, read once an ask over the literals of every extract the view holds -
+no node of the graph is a literal's, so the read is the one index of them) - the datum searched for by the name of the node it
+names by itself, else by its last part (`CodebaseGraphQueries.LastPart`), for a name written with its scopes and a key path are
+written in code and in data by their last part (`shape.Area()`, `"TimeoutSeconds": 30`) - by the one whole-word rule every
+search of the graph reads (`CodebaseGraphQueries.WordPattern`: a boundary beside each edge of the word that is a word character,
+an edge that is none its own boundary, so `.btn-primary` is held by `button.btn-primary`) and, for a selector, the selector with
+no character of a class's name after it, so `.btn` is not held by `.btn-primary`, and its bare name as a whole word of a class
+list too (`CodebaseGraphQueries.SitesPattern`: `class="btn btn-primary"`, `addClass('btn-primary')`); and every key the datum
+names (`CodeSubKinds.Key`), held and never defined. What the graph does not answer of the datum is
+searched by text with the same pattern, by the one search the text fallback runs too, and said
+(`CodebaseGraphQueries.TextScopeOf`, each file for the first of these it is): a file the view does not hold; one it holds in
+a state no implementation of a language read it in - listed by the fallback alone, which no extractor reads the language of,
+unreadable, ambiguous; one it is unsure of (`CodebaseGraphQueries.UnsureOfFile`); one an implementation outlines, whose values
+and text no literal of the graph holds; one a node of which makes a reference of the datum's name the linker bound to nothing of
+that name (`CodebaseGraphQueries.UnboundNaming` - an import it could not follow, a receiver it could not type), the sign the
+graph may be silent of one datum, for counting every external reference toward a file's unsureness would make a file unsure
+for every library call it makes; and, for a quoted value, every other file, for the graph holds a value only where code writes
+it as a string literal - the search passing over every other readable file by its own will and never counting one such as a
+file the reader may not read (`AgentSearch.LeftOut`'s refused count). Each place is one card, the node at it, saying every way
+it decides - an edge's other than exact with how sure it is, as the `node` operation marks a candidates edge - with the lines
+a literal and a text hit stand on beneath it, a hit at a line a literal already names passed over - a hit's node the innermost
+at its line (`CodebaseGraphQueries.AtLine`: the one that begins last, of those the one that ends first, of nodes with the same
+lines the one declared deepest, so a page's landmark is never its body of the same lines by the order of their ids); or a raw
+line where the graph read no node of the file. The cards are grouped by file kind and tier, as part 02 has it (`CodebaseGraphQueries.KindOf`: the
+language that read the file, else its extension or its name; `CodebaseGraphQueries.TierOf`: the project nearest above it as
+the repository's map names its projects, else its top directory as the outline names it), at `CodebaseGraphTool.RelatedLines`
+places a page; and every place passes the step's reads at one gate, a definer, a node an edge reaches, a literal's place and a
+hit alike, those they do not reach counted. Every `sites` answer ends with its coverage lines: how many files of each kind of
+what the graph does not answer were searched - each counted once the search read it to its end, never as it was chosen - with
+their hits, the kinds of them named, the files it lists only and those it is unsure of said where none was; the forms a
+selector was searched in; and, where any file the graph lists only was searched, that nothing is assumed of a language with no
+extractor, its files read by text alone - so a plan's site list is never read as covered where the graph was silent. Where none
+of it holds a place, the answer says only what was searched: no line of the files searched by text, never no line at all. It
+ends besides with every limit of each language whose files the graph read, one rule for every language (`CodebaseGraphTool.Unseen`),
+a limit some of those files show the sign of - the kind of a dynamic mark it holds, or a reference the linker left candidates
+(`CodebaseGraphQueries.SignsOf`) - marked with how many show it. The prompts that search for a class's sites - `plan.md`,
+`plan-audit.md`, `item-audit.md` and the plan's `searches` - name `sites` first; the plan's text search after it for what the
+graph does not see, each said in `notCovered`, and each audit's own text search across every tier, format, target and file
+kind beside it, never the plan's searches.
 No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`, the graph's use of
 `Pages\Paging`, the one owner of an answer's pages and of the one rule a piece is cut by, over the graph's own entry,
 `GraphEntry`: `GraphSection`, `GraphPageSection` and `GraphPageAnswer` are its `PageSection`, `PageOfSection` and
