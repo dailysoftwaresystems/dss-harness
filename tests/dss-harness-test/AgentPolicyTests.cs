@@ -906,7 +906,7 @@ public sealed class AgentPolicyTests
             [
                 "init", "create-worktree", "delete-worktree", "create-orchestrator", "delete-orchestrator", "list-agent-providers",
                 "run-orchestrator", "resume-orchestrator", "answer-orchestrator", "amend-orchestrator-request", "pause-orchestrator",
-                "stop-orchestrator", "ask-orchestrator-status", "ask-orchestrator", "create-agent", "seed-agent", "refresh-agent",
+                "stop-orchestrator", "ask-orchestrator-status", "ask-orchestrator", "analyze-orchestrator-report", "create-agent", "seed-agent", "refresh-agent",
                 "rebase-agent", "fold-agent", "delete-agent", "legs", "install-missing-tools", "update-tool", "sync", "build", "test",
                 "run", "check-mutations", "stop-run", "clean", "host-exec", "up", "down", "host-agent", "sync-serve", "host-hold",
                 "contain-exec", "isolate-exec", "workflow-cache",

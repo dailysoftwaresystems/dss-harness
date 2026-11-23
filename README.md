@@ -1406,7 +1406,7 @@ every agent by name, a side-task's as well as a step's (`AgentPolicy.SlotOrState
 `delete-worktree`, `create-orchestrator`, `delete-orchestrator`, `list-agent-providers`,
 `run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `amend-orchestrator-request`,
 `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`,
-`create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`, `fold-agent`, `delete-agent`, `legs`,
+`analyze-orchestrator-report`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`, `fold-agent`, `delete-agent`, `legs`,
 `install-missing-tools`, `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`,
 `stop-run`, `clean`, `host-exec`, `up`, `down` and `workflow-cache`, and the steps nobody types
 (`host-agent`, `sync-serve`, `host-hold`, `contain-exec`, `isolate-exec`); those that only read, and
