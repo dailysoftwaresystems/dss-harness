@@ -135,8 +135,10 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
             (sound with { Literals = LiteralRow.Table(new LiteralRow("value", 2, "toy:Z")) }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
-            (sound with { Nodes = [Node with { Selectors = [] }] }, "an element selector it declares is empty, or it declares none"),
-            (sound with { Nodes = [Node with { Selectors = ["app-cart", " "] }] }, "an element selector it declares is empty, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = ["app-cart", " "] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, TestByType = true }] }, "it is a test by its type, and a node of kind 'namespace' is neither a type nor a member a type holds"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'namespace' is no type, nor a member that extends one"),
+            (sound with { Nodes = [Node, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'member' is no type, nor a member that extends one"),
             (sound with { Nodes = [Node with { Templates = [] }] }, "a template it names is empty, or it names none"),
             (sound with { Nodes = [Node with { Templates = [""] }] }, "a template it names is empty, or it names none"),
             (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Published = true, Prefix = "m" }] }, "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"),
@@ -169,20 +171,21 @@ public sealed class CodebaseGraphRecordsTests
     }
 
     /// <summary>
-    /// Every field an extract may set is written by the store and read back as it was: a node's element selectors, its templates and
-    /// the type it extends; an import's prefix standing for the name it shows, whether its names are its importers' too, whether it
-    /// takes a file's published names, whether it names a place of a layout, whether it is one of two places, whether it is under a
-    /// root of the layout and the qualifier it serves; a reference that is a probe; the names a file publishes, whether what its
-    /// imports take is among them, whether its names are bound within it, whether its directory is a unit of its layout and the
-    /// roots it declares; and a dynamic mark's kind. Written again, the extract read back is the very text it was read from.
+    /// Every field an extract may set is written by the store and read back as it was: a node's element selectors, its templates, the
+    /// type it extends, whether its members are reached by a receiver alone and whether it is a test by its type; an import's prefix
+    /// standing for the name it shows, whether its names are its importers' too, whether it takes a file's published names, whether it
+    /// names a place of a layout, whether it is one of two places, whether it is under a root of the layout and the qualifier it
+    /// serves; a reference that is a probe, and one made around its node; the names a file publishes, whether what its imports take
+    /// is among them, whether its names are bound within it, whether its directory is a unit of its layout and the roots it declares;
+    /// and a dynamic mark's kind. Written again, the extract read back is the very text it was read from.
     /// </summary>
     [Fact]
     public void EveryFieldOfAnExtract_IsWrittenByTheStore_AndReadBackAsItWas()
     {
         var extract = new FileExtract(
         [
-            Node with { Selectors = ["app-cart", "cart-view"], Templates = ["cart.html"] },
-            Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", Extends = "Shape" },
+            Node with { Selectors = ["app-cart", "cart-view"], Templates = ["cart.html"], MembersByReceiver = true, TestByType = true },
+            Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", Extends = "Shape", MembersByReceiver = true },
         ])
         {
             Imports =
@@ -192,7 +195,11 @@ public sealed class CodebaseGraphRecordsTests
                 new ExtractImport(CodeImportForms.Rooted, "pkg/cart.py", 2) { Fallback = true },
                 new ExtractImport(CodeImportForms.Directory, "tests", 1) { Serves = CodeQualifierKinds.Fixture },
             ],
-            References = [new ExtractReference("toy:A.b", CodeEdgeKinds.Overrides, "b", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Base), Probe = true }],
+            References =
+            [
+                new ExtractReference("toy:A.b", CodeEdgeKinds.Overrides, "b", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Base), Probe = true },
+                new ExtractReference("toy:A.b", CodeEdgeKinds.References, "Shape", 2) { Around = true },
+            ],
             Published = ["A", "b"],
             PublishesTaken = true,
             BoundWithin = true,
@@ -210,6 +217,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal(["app-cart", "cart-view"], back.Nodes[0].Selectors!);
         Assert.Equal(["cart.html"], back.Nodes[0].Templates!);
         Assert.Equal("Shape", back.Nodes[1].Extends);
+        Assert.Equal([(true, true), (true, false)], back.Nodes.Select(node => (node.MembersByReceiver, node.TestByType)));
         Assert.Equal(
             [
                 (CodeImportForms.Relative, "Line", "Line", true, true, false, true, true, false, (string?)null),
@@ -218,15 +226,18 @@ public sealed class CodebaseGraphRecordsTests
                 (CodeImportForms.Directory, null, null, false, false, false, false, false, false, CodeQualifierKinds.Fixture),
             ],
             back.Imports.Select(import => (import.Form, import.Prefix, import.Show is { } show ? string.Join(',', show) : null, import.Binds, import.Reexports, import.Published, import.Layout, import.Either, import.Fallback, import.Serves)));
-        Assert.True(Assert.Single(back.References).Probe);
+        Assert.Equal([(true, false), (false, true)], back.References.Select(reference => (reference.Probe, reference.Around)));
         Assert.Equal(["A", "b"], back.Published!);
         Assert.Equal((true, true, true), (back.PublishesTaken, back.BoundWithin, back.FolderUnit));
         Assert.Equal(["src", "."], back.LayoutRoots!);
         Assert.Equal("computed-exports", Assert.Single(back.Dynamic).Kind);
 
         // A field left at its default is not written, so an extract that sets none of them is written as it was before they were.
-        var plain = Json(new FileExtract([Node]));
+        var plain = Json(new FileExtract([Node]) { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 2)] });
 
+        Assert.DoesNotContain("membersByReceiver", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("testByType", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("around", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("publishesTaken", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("layoutRoots", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("folderUnit", plain, StringComparison.Ordinal);

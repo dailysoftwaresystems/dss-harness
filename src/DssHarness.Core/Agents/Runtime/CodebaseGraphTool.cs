@@ -1097,7 +1097,8 @@ public sealed class CodebaseGraphTool(
     /// implementation of a language read (<see cref="CodebaseGraphQueries.ReadByALanguage"/>) and the step may read - for each
     /// language once, in order, every limit as its help says them (<see cref="CodeGraphLimit"/>), one rule for every language:
     /// a limit whose sign (<see cref="CodeGraphLimit.Signs"/>) some of those files give - the kind of a dynamic mark one holds,
-    /// or a reference the linker left candidates (<see cref="CodebaseGraphQueries.SignsOf"/>) - marked with how many give it.
+    /// a reference the linker left candidates, or one it counted external (<see cref="CodebaseGraphQueries.SignsOf"/>) - marked with how
+    /// many give it.
     /// What a <c>sites</c> answer ends with, read before what it says of those files is trusted. A file no implementation of
     /// a language read is said by the coverage lines: nothing is assumed of a language with no extractor.
     /// </summary>

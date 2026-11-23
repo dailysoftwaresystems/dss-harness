@@ -2707,9 +2707,9 @@ internal sealed class PythonReading
         var after = scan.Next(last);
         var called = scan.Is(after, "(");
 
-        // A module's __all__ changed through a method of its own - __all__.append("x"), .extend, .sort: no list of literals names
-        // what a * import of the module binds. What only reads it, len(__all__), is no change.
-        if (ReferenceEquals(scan, _scan) && word == "__all__" && chain.Count > 1 && called)
+        // A module's __all__ changed through a method of its own - __all__.append("x"), .extend, .sort, in an f-string's field as
+        // anywhere: no list of literals names what a * import of the module binds. What only reads it, len(__all__), is no change.
+        if (word == "__all__" && chain.Count > 1 && called)
         {
             ChangedAll(line);
         }
@@ -2758,6 +2758,13 @@ internal sealed class PythonReading
         // repository's; the types isinstance and issubclass are given are named.
         if (Builtins.Contains(word) && !Shadows(word, bound, key))
         {
+            // type(self)(...): the class the method's receiver is, made again (<see cref="Remade"/>); what the call is given, the code's.
+            if (word == "type" && scan.Is(next, "(") && scan.Next(next) is var given && scan.IsName(given) && scan.Text(given) == "self"
+                && scan.Next(given) == scan.CloseOf(next) && scan.Is(scan.Next(scan.CloseOf(next)), "(") && Remade(key, owner, line))
+            {
+                return scan.CloseOf(next);
+            }
+
             return (word == "isinstance" || word == "issubclass") && scan.Is(next, "(") ? InstanceOf(run, at, runs) : at;
         }
 
@@ -2765,6 +2772,13 @@ internal sealed class PythonReading
 
         // A name the language keeps to itself - __name__, __doc__: no value the code reads.
         if (word.StartsWith("__", StringComparison.Ordinal))
+        {
+            return at;
+        }
+
+        // cls(...) in a method that takes its class: the class the method's receiver is, made again (<see cref="Remade"/>), never a call
+        // through a function value.
+        if (chain.Count == 1 && called && word == "cls" && Remade(key, owner, line))
         {
             return at;
         }
@@ -2835,6 +2849,25 @@ internal sealed class PythonReading
         }
 
         return last;
+    }
+
+    /// <summary>
+    /// Makes, from the node of <paramref name="key"/>, an instantiates of the class the receiver of the method it is is -
+    /// <c>cls(...)</c> in a class method, <c>type(self)(...)</c> in any - where the code is the body of a method of the class
+    /// <paramref name="owner"/> names that takes its receiver: a reference to that class's own node, by its id
+    /// (<see cref="CodeQualifierKinds.Own"/>), as <c>self.f()</c> calls a member of the class through <c>this</c>. A <c>this</c>
+    /// qualifier reaches the members of the type and of its bases, never the type itself, so the class is named by its node. Whether
+    /// it made one.
+    /// </summary>
+    private bool Remade(QualifiedName key, string? owner, int line)
+    {
+        if (owner is null || _extract.Around || !_methods.TryGetValue(key, out var info))
+        {
+            return false;
+        }
+
+        _extract.Reference(key, CodeEdgeKinds.Instantiates, Simple(info.Qualified.Whole()), line, qualifier: new ExtractQualifier(CodeQualifierKinds.Own, info.Key));
+        return true;
     }
 
     /// <summary>

@@ -120,5 +120,32 @@ public sealed class PyprojectExtractorTests : CodeGraphExtractorContractTests<Py
         Assert.Empty(deep.Dynamic);
     }
 
+    /// <summary>
+    /// A string's value is TOML's - a multi-line one's too, its line break right after its opener none of it, a quote before its closer
+    /// its own, a backslash that ends a line's text taking the blanks and the line break after it, and an escape of two hexadecimal
+    /// digits a character - and a one-line string that never closes on its line is read to its line's end, the line marked, the file
+    /// going on past it; a setup.cfg's option is continued by a line indented deeper than the one that set it alone, and a section's
+    /// name is the text from its <c>[</c> to its last <c>]</c>, as configparser reads them.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsTomls_AndASetupCfgsOptions_AreConfigparsers()
+    {
+        var toml = Read("pyproject.toml", "[project]\nname = \"\"\"shop\"\"\"\"\n\n[tool.pytest.ini_options]\npythonpath = [\"\"\"\nsrc\"\"\", '''lib''',\"\"\"te\\\n    sts\"\"\", \"\\x61pp\"]\n");
+
+        Assert.Equal("shop\"", Assert.Single(toml.Nodes).Name);
+        Assert.Equal(["src", "lib", "tests", "app"], toml.LayoutRoots!);
+        Assert.Empty(toml.Dynamic);
+
+        var open = Read("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = \"src\n\n[project]\nname = \"shop\"\n");
+
+        Assert.Null(open.LayoutRoots);
+        Assert.Equal("shop", Assert.Single(open.Nodes).Name);
+        Assert.Equal([(2, "a string that never closes on its line: the rest of the line is read as it")], open.Dynamic.Select(mark => (mark.Line, mark.Why)));
+
+        var cfg = Read("setup.cfg", "[options.packages.find]\n  where = src\n  exclude = tests\n[tool:pytest]  ; pytest's\npythonpath = lib\n");
+
+        Assert.Equal(["src", "lib"], cfg.LayoutRoots!);
+    }
+
     private static FileExtract Read(string path, string text) => new PyprojectExtractor().Extract(new CodeFileInput(path, text));
 }

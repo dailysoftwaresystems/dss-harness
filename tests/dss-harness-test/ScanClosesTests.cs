@@ -19,10 +19,10 @@ public sealed class ScanClosesTests
     private const int Deep = 1_000;
 
     /// <summary>
-    /// A literal nested a thousand deep - each level's interpolation a call of the level below it - in JavaScript, PHP
-    /// and Dart: the text's first scan reads every character once, and the scan of each level's code reads only its own
-    /// three or four characters, passing over the literal it holds at once, so the characters read are the text's and
-    /// those alone. Each scan given the index reads what the same scan reads without it - its tokens, its literals'
+    /// A literal nested a thousand deep - each level's interpolation a call of the level below it - in JavaScript, PHP,
+    /// Dart and Python, an f-string's field holding the next: the text's first scan reads every character once, and the
+    /// scan of each level's code reads only its own three or four characters, passing over the literal it holds at once,
+    /// so the characters read are the text's and those alone. Each scan given the index reads what the same scan reads without it - its tokens, its literals'
     /// parts and values, and the code each holds - so the index changes nothing but what is read again. Red where a scan
     /// reads again the literals the scan before it read, a thousand levels a quarter of a million times over.
     /// </summary>
@@ -63,9 +63,9 @@ public sealed class ScanClosesTests
     });
 
     /// <summary>
-    /// A literal nested ten thousand deep, in JavaScript, PHP and Dart, is read whole and each level's code scanned in its
-    /// turn, in a child given a small stack: neither the lexers nor the scans of their code call into themselves, and the
-    /// characters read are the text's and each level's own.
+    /// A literal nested ten thousand deep, in JavaScript, PHP, Dart and Python, is read whole and each level's code
+    /// scanned in its turn, in a child given a small stack: neither the lexers nor the scans of their code call into
+    /// themselves, and the characters read are the text's and each level's own.
     /// </summary>
     [Fact]
     public async Task ALiteralNestedTenThousandDeep_IsLexedAndScannedOnce()
@@ -94,6 +94,7 @@ public sealed class ScanClosesTests
         yield return ("javascript", $"x = {Nested(deep, "`v`", "`a${f(", ")}b`")};", 3, text => JsLexer.Scan(text, markup: false), (text, first) => (start, end, closes) => JsLexer.Scan(text, start, end, first.Lines, markup: false, closes));
         yield return ("php", $"<?php $x = {Nested(deep, "\"v\"", "\"a{$f(", ")}b\"")};", 4, text => PhpLexer.Scan(text), (text, first) => (start, end, closes) => PhpLexer.Scan(text, start, end, first.Lines, closes));
         yield return ("dart", $"var x = {Nested(deep, "'v'", "'a${f(", ")}b'")};", 3, text => DartLexer.Scan(text), (text, first) => (start, end, closes) => DartLexer.Scan(text, start, end, first.Lines, closes));
+        yield return ("python", $"x = {Nested(deep, "'v'", "f'a{f(", ")}b'")}", 3, text => PythonLexer.Scan(text), (text, first) => (start, end, closes) => PythonLexer.Scan(text, start, end, first.Lines, closes));
     }
 
     /// <summary>The literal <paramref name="innermost"/> wrapped <paramref name="deep"/> times in <paramref name="open"/> and <paramref name="close"/>.</summary>

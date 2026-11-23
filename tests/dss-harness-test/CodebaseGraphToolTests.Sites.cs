@@ -351,9 +351,9 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// Every limit of each language whose files a <c>sites</c> answer read is said where the answer ends, one rule for every
-    /// language, as its help says them: a limit whose sign the files read show - the kind of a dynamic mark one holds, or a
-    /// reference the linker left candidates - marked with how many show it, and every other said plain; read before what the
-    /// answer says of their files is trusted.
+    /// language, as its help says them: a limit whose sign the files read show - the kind of a dynamic mark one holds, a reference
+    /// the linker left candidates, or one it counted external - marked with how many show it, and every other said plain; read
+    /// before what the answer says of their files is trusted.
     /// </summary>
     [Fact]
     public async Task Sites_EndWithEveryLimitOfEachLanguageRead_TheOnesItsFilesShowMarkedWithHowMany()
@@ -393,8 +393,28 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal([PythonReading.ComputedAttribute], Assert.Single(limits, limit => limit.Says.StartsWith("computed attribute access", StringComparison.Ordinal)).Signs);
         Assert.Equal([CodeGraphLimit.Candidates, PythonReading.FunctionValue], Assert.Single(limits, limit => limit.Says.StartsWith("a duck-typed receiver", StringComparison.Ordinal)).Signs);
 
-        // Every limit whose sign the code can give: the two above, and the others the reader marks.
+        // Every limit whose sign the code can give: the two above, and the others the reader marks or the linker counts.
         Assert.Equal(9, limits.Count(limit => limit.Signs.Count > 0));
+
+        // A file whose bracket never closes, a file whose call the linker bound to nothing the tree declares - counted external, the
+        // sign of each limit that names a way the graph does not read - and a page another template engine writes: each shows the
+        // limits its sign names, of its own language.
+        using var signed = await TreeAsync(
+            ("shop/total.py", "def total(cart):\n    return sum(\n"),
+            ("shop/rates.py", "from vendor.rates import convert\n\n\ndef rate():\n    return convert(1)\n"),
+            ("web/page.html", "<main>\n  <p>{% if user %}Hello{% endif %}</p>\n</main>\n"));
+        var shown = Tail((await AskAsync(Tool(signed, await QueriesAsync(signed)), """{"op":"sites","data":"total"}""")).Text.Split('\n'));
+        var engine = Assert.Single(CodeGraphExtractors.OfThisBuild.Find("html")!.Help.DoesNotSee, limit => limit.Signs.Contains(HtmlExtractor.OtherEngine)).Says;
+
+        Assert.Equal(
+            [.. LimitsOf("csharp", [CodeGraphLimit.Candidates]), .. LimitsOf("html", [HtmlExtractor.OtherEngine]), .. LimitsOf("markdown"), .. LimitsOf("python", [PythonReading.Unclosed], [CodeGraphLimit.External])],
+            shown);
+        Assert.Contains($"html does not see {engine} - shown by 1 file(s) read.", shown);
+        Assert.All(
+            new[] { "never closes", "a root of the path", "neither declares nor imports", "no conftest.py" },
+            names => Assert.Contains($"python does not see {Says(names)} - shown by 1 file(s) read.", shown));
+        Assert.Equal([PythonReading.Unclosed], Assert.Single(limits, limit => limit.Says.Contains("never closes", StringComparison.Ordinal)).Signs);
+        Assert.Equal(3, limits.Count(limit => limit.Signs.Contains(CodeGraphLimit.External)));
     }
 
     /// <summary>The words of the one Python limit whose clause holds <paramref name="names"/>, as its help says them.</summary>

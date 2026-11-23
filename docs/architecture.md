@@ -4773,8 +4773,14 @@ at a time, a value over several lines read whole and its arrays and tables neste
 project node named by the project's name, and declares the roots of the layout its words name (`FileExtract.LayoutRoots`),
 each a directory beside the file under which a bare Python import is looked for: setuptools' `package-dir` root and
 `packages.find`'s `where`, Poetry's `packages`' `from`, the directory of each of Hatch's wheel `packages`, PDM's `package-dir`
-and pytest's `pythonpath`. A value no string writes, or one a setup.cfg's interpolation computes, names none; a value whose
-bracket or string never closes is read to the file's end, the line it begins on marked dynamic.
+and pytest's `pythonpath`. A string's value is TOML's: a basic one's escapes decoded, a multi-line one's line break right
+after its opener none of it, one or two quotes before its closer its own and a backslash that ends a line's text taking the
+blanks and line breaks after it. A setup.cfg's options are configparser's: a line indented deeper than the last line that
+continued none continues its option, a comment or a blank line ends none, and a section's name is the text from its `[` to
+its last `]`. A value no string writes, or one a setup.cfg's interpolation computes, names none; a value whose bracket or
+string never closes is read to the file's end - a one-line string to its line's - the line it begins on marked dynamic. The
+file is outlined, as every manifest is: no key of it is a node and no value a literal, so the sites operation searches it by
+its text.
 
 Python's reader (`PythonReading`, over `PythonLexer`) reads by indentation, which is no token: each token says its line, and
 the reader finds its column from where it begins - counted, as Python's tokenizer counts it, from past the last form feed
@@ -4846,7 +4852,8 @@ it - a module path however long and never a value, one rule for a call's, a use'
 head of a chain the file declares or imports - `CONFIG` of `CONFIG.get()` - and each member a chain passes on its way to its
 last - `items` of `self.items.append(x)` - is a `uses` (a `references` where it names a class), the later ones values by no
 name the file types rather than links, since a `self` chain's head writes no name to link to and a function's body sees no
-name of its class; a call of a name written with a capital first letter is an `instantiates`; a type an annotation, a string
+name of its class; a call of a name written with a capital first letter is an `instantiates`, as a method's `cls(...)` and
+`type(self)(...)` are, of the class the method is of (an `own` qualifier); a type an annotation, a string
 annotation, an `isinstance`, an `except` or a `case`'s class pattern names - dotted or not, through the import its head is -
 is a `references`, every one read by the one reader of a type expression, which reads `Literal`'s values and `Annotated`'s
 metadata as code; a `case`'s dotted value is a `uses` and its captures are bound. A decorator is read whole, a framework's
@@ -5286,8 +5293,8 @@ selector was searched in; and, where any file the graph lists only was searched,
 extractor, its files read by text alone - so a plan's site list is never read as covered where the graph was silent. Where none
 of it holds a place, the answer says only what was searched: no line of the files searched by text, never no line at all. It
 ends besides with every limit of each language whose files the graph read, one rule for every language (`CodebaseGraphTool.Unseen`),
-a limit some of those files show the sign of - the kind of a dynamic mark it holds, or a reference the linker left candidates
-(`CodebaseGraphQueries.SignsOf`) - marked with how many show it. The prompts that search for a class's sites - `plan.md`,
+a limit some of those files show the sign of - the kind of a dynamic mark it holds, a reference the linker left candidates, or
+one it counted external (`CodebaseGraphQueries.SignsOf`) - marked with how many show it. The prompts that search for a class's sites - `plan.md`,
 `plan-audit.md`, `item-audit.md` and the plan's `searches` - name `sites` first; the plan's text search after it for what the
 graph does not see, each said in `notCovered`, and each audit's own text search across every tier, format, target and file
 kind beside it, never the plan's searches.

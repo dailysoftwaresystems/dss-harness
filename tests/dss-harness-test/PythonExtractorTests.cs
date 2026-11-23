@@ -1497,7 +1497,8 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
     /// <summary>
     /// An <c>__all__</c> of string literals is a list or a tuple - in parentheses or bare - and nothing else: a string in parentheses is
-    /// a string, and an <c>__all__</c> added to or taken away is one the code changes, marked, the module's public names published for it.
+    /// a string, and an <c>__all__</c> added to or taken away - by an f-string's field's code as by any - is one the code changes, marked,
+    /// the module's public names published for it.
     /// </summary>
     [Fact]
     public void AnAllOfLiterals_IsAListOrATuple_AndOneTheCodeChangesIsMarked()
@@ -1509,7 +1510,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         Assert.Empty(Read("pkg/m.py", "__all__ = ()" + declared).Published!);
         Assert.All(new[] { "__all__ = (\"Cart\",)", "__all__ = \"Cart\", \"Line\"", "__all__ = ()" }, all => Assert.Empty(Read("pkg/m.py", all + declared).Dynamic));
 
-        foreach (var (all, line) in new[] { ("__all__ = (\"Line\")", 1), ("__all__ = [\"Cart\"]\n__all__ += [\"Line\"]", 2), ("__all__ = [\"Cart\"]\ndel __all__", 2) })
+        foreach (var (all, line) in new[] { ("__all__ = (\"Line\")", 1), ("__all__ = [\"Cart\"]\n__all__ += [\"Line\"]", 2), ("__all__ = [\"Cart\"]\ndel __all__", 2), ("__all__ = [\"Cart\"]\n_said = f\"{__all__.append('Line')}\"", 2) })
         {
             var changed = Read("pkg/m.py", all + declared);
 
@@ -1907,6 +1908,28 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         var extract = Read("pkg/late.py", "def run():\n    return helper.go()\n\n\nimport pkg.helper as helper\n");
 
         Assert.Equal([("go", CodeEdgeKinds.Calls, 2, CodeQualifierKinds.Prefix)], References(extract, "python:pkg.late.run"));
+    }
+
+    /// <summary>
+    /// <c>cls(...)</c> in a class method and <c>type(self)(...)</c> in a method make the class the method's receiver is - an
+    /// instantiates of that class's own node, as <c>self.f()</c> is a call through <c>this</c> - and are never a call through a
+    /// function value, as a call of any other parameter is; what <c>type(self)</c> is given to make is the method's code.
+    /// </summary>
+    [Fact]
+    public void ACallOfTheReceiversClass_MakesTheClassItsMethodIsOf()
+    {
+        var extract = Read("pkg/shop.py", "class Cart:\n    @classmethod\n    def empty(cls):\n        return cls()\n\n    def copy(self):\n        return type(self)(self.items)\n\n    def other(self, factory):\n        return factory()\n");
+        var linked = Link(("pkg/shop.py", extract));
+
+        Assert.Equal([("empty", CodeEdgeKinds.Overrides, 3, CodeQualifierKinds.Base), ("Cart", CodeEdgeKinds.Instantiates, 4, CodeQualifierKinds.Own)], References(extract, "python:pkg.shop.Cart.empty"));
+        Assert.Equal(
+            [("copy", CodeEdgeKinds.Overrides, 6, CodeQualifierKinds.Base), ("Cart", CodeEdgeKinds.Instantiates, 7, CodeQualifierKinds.Own), ("items", CodeEdgeKinds.Uses, 7, CodeQualifierKinds.This)],
+            References(extract, "python:pkg.shop.Cart.copy"));
+        Assert.All(extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Instantiates), reference => Assert.Equal("python:pkg.shop.Cart", reference.Qualifier!.Name!.Whole()));
+        Assert.Equal([(10, PythonReading.FunctionValue)], extract.Dynamic.Select(mark => (mark.Line, mark.Kind)));
+        Assert.Equal(
+            [("python:pkg.shop.Cart.empty", 4, CodeConfidences.Exact), ("python:pkg.shop.Cart.copy", 7, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Instantiates && edge.To == "python:pkg.shop.Cart").OrderBy(edge => edge.Line).Select(edge => (edge.From, edge.Line, edge.Confidence)));
     }
 
     /// <summary>

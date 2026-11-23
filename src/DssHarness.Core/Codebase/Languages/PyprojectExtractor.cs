@@ -15,8 +15,10 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <remarks>
 /// TOML, and the INI form a setup.cfg is written in, are read a line at a time: a value over several lines - an array, an inline
 /// table, a multi-line string, a continued option - is read whole, arrays and tables nested however deep held on a stack of the
-/// reading's own. A value whose bracket or string never closes is read to the file's end, and the line it begins on is marked
-/// dynamic.
+/// reading's own; a string's value is TOML's, a multi-line one's among them, and a setup.cfg's options are configparser's. A value
+/// whose bracket or string never closes is read to the file's end - a one-line string to its line's - and the line it begins on is
+/// marked dynamic. The file is outlined: no key of it is a node and no value a literal, so the sites operation searches it by its
+/// text.
 /// </remarks>
 public sealed class PyprojectExtractor : ICodeGraphExtractor
 {
@@ -52,9 +54,9 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Python projects (pyproject.toml and setup.cfg): a project node for each, named by its name, and the roots of the layout it names - setuptools' package-dir root and packages.find's where, Poetry's packages' from, the directory of each of Hatch's wheel packages, PDM's package-dir and pytest's pythonpath - each a directory beside the file under which Python's bare imports are looked for",
         [
-            "dependencies, optional dependencies, the build backend, scripts and entry points, and every tool's configuration but the roots: not read",
+            "dependencies, optional dependencies, the build backend, scripts and entry points, and every tool's configuration but the roots: not read - no key of the file is a node and no value a literal, so the sites operation searches the file by its text",
             "a root a value computes - a setup.cfg's interpolation, a setup.py's code - and a directory package-dir maps one package to: no root",
-            "a value whose bracket or string never closes: the rest of the file is read as that value, the line it begins on marked dynamic",
+            "a value whose bracket or string never closes: the rest of the file is read as that value - a one-line string's, the rest of its line - and the line it begins on is marked dynamic",
         ]);
 
     /// <inheritdoc/>
@@ -321,15 +323,17 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
                 case '"' or '\'':
                     if (at + 2 < text.Length && text[at + 1] == c && text[at + 2] == c)
                     {
-                        // A multi-line string: no root's, read to its close however many lines it takes.
-                        (line, at) = PastMultiline(lines, line, at + 3, c);
+                        // A multi-line string: read to its close however many lines it takes, its value a string as a one-line string's is.
+                        var (closes, past, written) = Multiline(lines, line, at + 3, c);
 
-                        if (line >= lines.Count)
+                        if (written is null)
                         {
                             dynamic.Add(new ExtractDynamic(begins + 1, "a string that never closes: the rest of the file is read as it"));
                             return lines.Count;
                         }
 
+                        entries.Add(new Entry(here, written, line + 1));
+                        (line, at) = (closes, past);
                         done = nests.Count == 0;
                         break;
                     }
@@ -341,6 +345,8 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
                     }
                     else
                     {
+                        // A one-line string that never closes on its line, which TOML refuses: the rest of its line read as it.
+                        dynamic.Add(new ExtractDynamic(line + 1, "a string that never closes on its line: the rest of the line is read as it"));
                         at = text.Length;
                     }
 
@@ -372,29 +378,86 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
         return lines.Count;
     }
 
-    /// <summary>Where the multi-line string whose quote is <paramref name="quote"/> and whose text begins at <paramref name="at"/> on <paramref name="line"/> ends: the line and the place past its three closing quotes; past the last line where it never closes.</summary>
-    private static (int Line, int At) PastMultiline(IReadOnlyList<string> lines, int line, int at, char quote)
+    /// <summary>
+    /// The multi-line string whose quote is <paramref name="quote"/> and whose text begins at <paramref name="at"/> on
+    /// <paramref name="line"/>, as TOML reads it: a line break right after its opener none of its value; one or two quotes anywhere in
+    /// it its own, the closer the last three of a run of them; a basic one's escapes decoded (<see cref="Escape"/>), and a backslash
+    /// that ends a line's text taking every blank and line break after it to the next character; a literal one's text as written.
+    /// Answers the line its closer stands on and the place past it, with its value; past the last line, with none, where it never
+    /// closes.
+    /// </summary>
+    private static (int Line, int At, string? Value) Multiline(IReadOnlyList<string> lines, int line, int at, char quote)
     {
+        var value = new StringBuilder();
+        var first = line;
+
+        // Whether the line break before the line being read is none of the value: the one right after the opener, and those a
+        // backslash that ends a line's text takes.
+        var opened = at >= lines[line].Length;
+        var trimming = false;
+
         for (; line < lines.Count; line++, at = 0)
         {
             var text = lines[line];
 
+            if (line > first)
+            {
+                if (!opened && !trimming)
+                {
+                    value.Append('\n');
+                }
+
+                opened = false;
+            }
+
             for (; at < text.Length; at++)
             {
-                if (quote == '"' && text[at] == '\\')
+                var c = text[at];
+
+                if (trimming && c is ' ' or '\t')
                 {
-                    at++;
                     continue;
                 }
 
-                if (text[at] == quote && at + 2 < text.Length && text[at + 1] == quote && text[at + 2] == quote)
+                trimming = false;
+
+                if (c == quote)
                 {
-                    return (line, at + 3);
+                    var run = 1;
+
+                    while (at + run < text.Length && text[at + run] == quote)
+                    {
+                        run++;
+                    }
+
+                    if (run >= 3)
+                    {
+                        value.Append(quote, run - 3);
+                        return (line, at + run, value.ToString());
+                    }
+
+                    value.Append(quote, run);
+                    at += run - 1;
+                    continue;
                 }
+
+                if (quote == '"' && c == '\\')
+                {
+                    if (Blank(text, at + 1) >= text.Length)
+                    {
+                        trimming = true;
+                        break;
+                    }
+
+                    at = Escape(text, at, value);
+                    continue;
+                }
+
+                value.Append(c);
             }
         }
 
-        return (lines.Count, 0);
+        return (lines.Count, 0, null);
     }
 
     /// <summary>
@@ -419,24 +482,7 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
 
             if (quote == '"' && c == '\\' && index + 1 < text.Length)
             {
-                index++;
-                var escaped = text[index];
-
-                switch (escaped)
-                {
-                    case 'b': value.Append('\b'); break;
-                    case 't': value.Append('\t'); break;
-                    case 'n': value.Append('\n'); break;
-                    case 'f': value.Append('\f'); break;
-                    case 'r': value.Append('\r'); break;
-                    case 'e': value.Append('\u001b'); break;
-                    case 'u' or 'U' when Hex(text, index + 1, escaped == 'u' ? 4 : 8) is { } code:
-                        value.Append(char.ConvertFromUtf32(code));
-                        index += escaped == 'u' ? 4 : 8;
-                        break;
-                    default: value.Append(escaped); break;
-                }
-
+                index = Escape(text, index, value);
                 continue;
             }
 
@@ -444,6 +490,32 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Decodes the escape whose backslash is at <paramref name="at"/> in <paramref name="text"/> onto <paramref name="value"/>, as a basic
+    /// string's is - one of TOML's short escapes, a code point of two, four or eight hexadecimal digits, and any other character as
+    /// itself; answers the place of the last character it took.
+    /// </summary>
+    private static int Escape(string text, int at, StringBuilder value)
+    {
+        if (at + 1 >= text.Length)
+        {
+            value.Append('\\');
+            return at;
+        }
+
+        var escaped = text[++at];
+        var digits = escaped switch { 'x' => 2, 'u' => 4, 'U' => 8, _ => 0 };
+
+        if (digits > 0 && Hex(text, at + 1, digits) is { } code)
+        {
+            value.Append(char.ConvertFromUtf32(code));
+            return at + digits;
+        }
+
+        value.Append(escaped switch { 'b' => '\b', 't' => '\t', 'n' => '\n', 'f' => '\f', 'r' => '\r', 'e' => '\u001b', _ => escaped });
+        return at;
     }
 
     /// <summary>The code point the <paramref name="count"/> hexadecimal digits at <paramref name="at"/> write; none where they are not so many digits, or no code point.</summary>
@@ -467,8 +539,10 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
 
     /// <summary>
     /// Each option a setup.cfg sets, by its section and its name - the name in lower case and its dashes underscores, as setuptools
-    /// reads it - with its value whole, a line indented under it continuing it, and the line it is written on: a line beginning with
-    /// <c>#</c> or <c>;</c> a comment.
+    /// reads it - with its value whole, and the line it is written on, as Python's configparser reads one: a line whose text begins
+    /// with <c>#</c> or <c>;</c> a comment, and a blank one, neither ending a value; a line indented deeper than the one before it that
+    /// continued none continuing its option; a section's header, a line whose text begins with <c>[</c>, its name the text from there
+    /// to its last <c>]</c> as written; an option's name and its value parted by its first <c>=</c> or <c>:</c>.
     /// </summary>
     private static List<Entry> Ini(IReadOnlyList<string> lines)
     {
@@ -477,6 +551,9 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
         string? option = null;
         var value = new StringBuilder();
         var at = 0;
+
+        // How deep the last line that continued no option is indented: a line deeper continues the option it set.
+        var indent = 0;
 
         void Flush()
         {
@@ -499,17 +576,20 @@ public sealed class PyprojectExtractor : ICodeGraphExtractor
                 continue;
             }
 
-            if (option is not null && char.IsWhiteSpace(text[0]))
+            var level = text.Length - text.TrimStart().Length;
+
+            if (option is not null && level > indent)
             {
                 value.Append('\n').Append(trimmed);
                 continue;
             }
 
             Flush();
+            indent = level;
 
-            if (trimmed[0] == '[' && trimmed[^1] == ']')
+            if (trimmed[0] == '[' && trimmed.LastIndexOf(']') is var close and > 1)
             {
-                section = trimmed[1..^1].Trim();
+                section = trimmed[1..close];
                 continue;
             }
 

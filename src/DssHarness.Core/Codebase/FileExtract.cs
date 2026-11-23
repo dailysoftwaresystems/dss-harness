@@ -625,7 +625,8 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     /// as a JavaScript class's are: said by a type of its own members, and by a member a file adds to a type from outside its
     /// body (<see cref="Extends"/>) of the members of the scope it is declared in. A name such members' code writes by itself
     /// is looked for past that scope, its bases passed over too, so a method's call of a function of the module that shares
-    /// its name reaches the function, not the method.
+    /// its name reaches the function, not the method. Only a type and a member that extends one say it, and the extract is
+    /// refused where any other node does.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool MembersByReceiver { get; init; }
@@ -723,6 +724,7 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
             : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
             : TestByType && Kind is not (CodeNodeKinds.Type or CodeNodeKinds.Member) ? $"it is a test by its type, and a node of kind '{Kind}' is neither a type nor a member a type holds"
+            : MembersByReceiver && Kind != CodeNodeKinds.Type && (Kind != CodeNodeKinds.Member || Extends is null) ? $"its members are reached by a receiver alone, and a node of kind '{Kind}' is no type, nor a member that extends one"
             : Selectors is { } selectors && (selectors.Count == 0 || !selectors.All(IsSelector)) ? "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"
             : Templates is { } templates && (templates.Count == 0 || templates.Any(string.IsNullOrWhiteSpace)) ? "a template it names is empty, or it names none"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
@@ -1119,7 +1121,8 @@ public static class CodeQualifierKinds
     /// <summary>
     /// A node of the reference's own file, by its id, which its implementation names where it knows it: the one node it
     /// names, exact, of whatever kind - a YAML alias to the node its anchor names, a mapping to each mapping its merge key
-    /// merges. The file reads what it repeats once, and each reference to it is this.
+    /// merges, a Python method's <c>cls(...)</c> or <c>type(self)(...)</c> to the class its receiver is. The file reads what it
+    /// repeats once, and each reference to it is this.
     /// </summary>
     public const string Own = "own";
 
