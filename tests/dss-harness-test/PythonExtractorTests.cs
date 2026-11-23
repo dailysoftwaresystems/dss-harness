@@ -1773,7 +1773,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
             References(extract, "python:pkg.chains.Order.total").Where(reference => reference.Kind != CodeEdgeKinds.Overrides));
         Assert.Equal(
             ["CONFIG", "CONFIG.prices", "store", "store.session"],
-            extract.References.Where(reference => reference.Name is "prices" or "get" or "session" or "commit").Select(reference => reference.Qualifier!.Name!.Whole()));
+            extract.References.Where(reference => reference.Name is "prices" or "get" or "session" or "commit").Select(reference => extract.Written(reference.Qualifier)));
         Assert.Equal(
             [
                 ("session", CodeEdgeKinds.Uses, 10, CodeQualifierKinds.Prefix), ("commit", CodeEdgeKinds.Calls, 10, CodeQualifierKinds.Type),
@@ -2413,6 +2413,49 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
                 new CodeEdge("python:tools.run", "python:tools.helper.pack", CodeEdgeKinds.Calls, 5, CodeConfidences.Candidates),
             ],
             linked.Edges.Where(edge => edge.From == "python:tools.run" && edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A chain of types through an import - <c>pkg.mod.A.B.C.go()</c>, <c>A.B.C.go()</c> of <c>from pkg.mod import A</c> - writes each
+    /// name once: the member past the module through the import's prefix, each after it a type linked to the use of the member before,
+    /// so the names the extract's qualifiers write are the prefix's alone however long the chain is, where each step written whole would
+    /// grow with its length squared; and the linker walks the links to the type each step names, the call exact on the type that
+    /// declares it. A name the language keeps to itself on the way - <c>np.__version__.split()</c> - is a probe of what the module
+    /// declares, the step after it linked to it, so a library's call is bound where its head is: an import naming no file of the tree.
+    /// </summary>
+    [Fact]
+    public void AChainOfTypesThroughAnImport_WritesEachNameOnce_AndIsLinkedThroughItsLinks()
+    {
+        static int Written(int length)
+            => Read("pkg/use.py", "import pkg.mod\n\n\ndef run():\n    return pkg.mod." + string.Join('.', Enumerable.Range(0, length).Select(at => $"T{at}")) + ".go()\n")
+                .References.Sum(reference => reference.Qualifier?.Name?.Whole().Length ?? 0);
+
+        Assert.Equal((7, 7, 7), (Written(10), Written(100), Written(1_000)));
+
+        var use = Read("pkg/use.py", "import pkg.mod\nfrom pkg.mod import A\n\n\ndef run():\n    pkg.mod.A.B.C.go()\n    A.B.C.go()\n");
+        var chained = use.References.Where(reference => reference.Qualifier is { Kind: CodeQualifierKinds.Prefix or CodeQualifierKinds.Type }).ToList();
+
+        // Each step past the first names its own name alone and links the use of the one before, whose names it writes on.
+        Assert.Equal(
+            [("A", null, "pkg.mod"), ("B", "A", "pkg.mod.A"), ("C", "B", "pkg.mod.A.B"), ("go", "C", "pkg.mod.A.B.C"), ("B", null, "A"), ("C", "B", "A.B"), ("go", "C", "A.B.C")],
+            chained.Select(reference => (reference.Name, reference.Qualifier!.Link is { } link ? use.References[link].Name : null, use.Written(reference.Qualifier))));
+
+        var linked = Link(
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/mod.py", Read("pkg/mod.py", "class A:\n    class B:\n        class C:\n            def go(self):\n                pass\n")),
+            ("pkg/use.py", use));
+
+        Assert.Equal(
+            [("python:pkg.mod.A.B.C.go", 6, CodeConfidences.Exact), ("python:pkg.mod.A.B.C.go", 7, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.From == "python:pkg.use.run" && edge.Kind == CodeEdgeKinds.Calls).Select(edge => (edge.To, edge.Line, edge.Confidence)));
+
+        var version = Read("pkg/ver.py", "import numpy as np\n\n\ndef ver():\n    return np.__version__.split()\n");
+
+        Assert.Equal(
+            [("__version__", CodeQualifierKinds.Prefix, true, (string?)null), ("split", CodeQualifierKinds.Type, false, "__version__")],
+            version.References.Where(reference => reference.Name is "__version__" or "split")
+                .Select(reference => (reference.Name, reference.Qualifier!.Kind, reference.Probe, reference.Qualifier.Link is { } link ? version.References[link].Name : null)));
+        Assert.Equal([CodeGraphLimit.OutsideImport], Link(("pkg/ver.py", version)).Signs["python:pkg.ver.ver"]);
     }
 
     /// <summary>

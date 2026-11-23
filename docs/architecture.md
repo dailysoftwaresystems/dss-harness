@@ -4500,8 +4500,12 @@ reference left candidates (`Candidates`), an import taken as several places and 
 (`CandidateImports`), and of a reference counted external why it named nothing - a name or a qualifier's head only imports
 naming no file of the tree bind (`OutsideImport`), a name written alone nothing binds in a file that binds its names within
 it (`Unbound`), a fixture no scope or serving import provides (`UnprovidedFixture`) - so that an answer says in full of a
-file the limits it shows, and of none it does not. Every limit a reader marks names the kind of its mark, and the contract's
-kit holds every mark of every fixture and of every cut of one to a kind a limit of its implementation's help names; an
+file the limits it shows, and of none it does not. Every limit a reader marks names the kind of its mark, and every limit
+that says a reference is bound by its name alone - a receiver whose type the file does not say, in every language: C's
+`untyped-calls`, C++'s `overloads` and `auto-values`, C#'s `untyped-values` and `generic-extensions`, Dart's
+`inferred-types` and `extension-members`, JavaScript's and PHP's `inferred-types`, TypeScript's `union-types` and
+`any-values`, Python's `duck-typing` - names `Candidates`, what the linker gives such a reference left among several; the
+contract's kit holds every mark of every fixture and of every cut of one to a kind a limit of its implementation's help names; an
 implementation whose code another reads - an HTML page's scripts and styles, a Vue component's, a Razor file's C# - says
 that reader's limits among its own (`JsHelp.Unseen`, `TypeScriptExtractor.TypesUnseen`, `CssExtractor.SheetUnseen`,
 `CSharpExtractor.CodeUnseen`). Beside the calls, every
@@ -4739,9 +4743,10 @@ closed scope of its own as a function's body is (`Wrapping`): its code outside i
 its own, `(wrapper 3:2)` by its function's line and column, and the scope is under that node's name, which the linker
 looks the node's references up from (`CodeGraphLinker.LookedFrom`), its parent the module's scope, the wrapper's around
 it, or in a script a closed scope of the file's path that declares nothing; what the body declares keeps the file's path
-before its name and is kept to that scope (`ExtractNode.SeenIn`), so no other code of the file sees it or finds it by
-its name, and the reader looks a name of the top's - an export's, a prototype's type's - up from the wrapper it is
-written in outward (`TopKeys`). Each parameter an AMD factory is given a dependency for is an import of it by that name,
+before its name and, as what a member's body declares, is seen from the body's own code alone, so no other code of the
+file sees it or finds it by its name, and the reader looks a name of the top's - an export's, a prototype's type's - up
+from the wrapper it is written in outward (`TopKeys`): what the body exports by its own name - `module.exports = { helper }`
+written in it - is its importers' by that name (`ExtractNode.Exports`), its own name still the body's. Each parameter an AMD factory is given a dependency for is an import of it by that name,
 as a `require` declared by it is - but `require`, `exports` and `module`, the loader's own (`AmdOwn`), none - each other a
 value, and an AMD factory's own `return` the module's export, as `module.exports =`'s is. An Angular `@Component`'s, `@Directive`'s or
 `@Pipe`'s object is read (`Angular`) where the decorator is what an import of `@angular/core` binds, never by its name
@@ -4887,7 +4892,11 @@ import of two places, and a reference left candidates among them, is the sign (`
 which module such an import names. `self` and `cls` qualify a
 `this` reference, `super()` a `base` one; a chain whose head an import binds is qualified by what the import reaches - the
 `prefix` of the module the longest run of its names before the member reaches, else the `type` those names stand for inside
-it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain; a
+it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain - and
+where every member of the chain is a use, each `type` past the first member is written as a link to the use of the member
+before it (`ExtractQualifier.Link`), so a chain writes each of its names once and never the names before each again, and a
+name the language keeps to itself on the way - a module's `__version__`, a class's `__init__` - is a probe of what the module
+or the type declares (`ExtractReference.Probe`), the chain read on through it; a
 name read alone and the head of a chain the file declares or imports - `CONFIG` of `CONFIG.get()` - is a `uses` of what it
 names, whatever that is, an imported class or constant alike (a `references` where it names a class the file declares), and
 each member a chain passes on its way to its last - `items` of `self.items.append(x)` - is a `uses`, those after the first
@@ -4944,10 +4953,13 @@ found, and what a base is never hangs on the order the files come in. A declarat
 declarations written in that scope or inside it, as the scopes they are written in climb. A closed scope at a file's top - one no scope holds and that is no type's or namespace's own, as a C
 file's for its `static` names - is one every declaration of the file is written in, looked in after its own scopes, so
 what it declares is found `exact` from anywhere in the file. A closed scope under a member's own qualified name is that
-member's body - a Python function's, whose parent is the function or the module around it and never a class: a reference
-the member makes is looked for from that scope, then its parent, so a body never reaches the names of a class around it
-but through what qualifies them; one made around the member (`ExtractReference.Around`) - its decorators', its
-annotations', its defaults', the fixtures its parameters name - is looked for where the member is declared. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
+member's body - a Python function's, whose parent is the function or the module around it and never a class, and a
+JavaScript wrapper's: a reference the member makes is looked for from that scope, then its parent, so a body never reaches
+the names of a class around it but through what qualifies them; one made around the member (`ExtractReference.Around`) - its
+decorators', its annotations', its defaults', the fixtures its parameters name - is looked for where the member is declared.
+What a member's body declares is seen from that body and the scopes inside it alone (`CodeGraphLinker.Placed`, `Bodies`),
+whatever its extract keeps it to: no other code of its file - a member's body is no closed scope at its file's top - no lookup
+from outside the body, a qualifier's or a type's name among them, and no name the repository's step looks up reaches it. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
 path's ending where the including file's folder lacks it - and is taken only where that one names no file; a
 prototype found beside its body - the same language and qualified name - is that body; and a member defined outside
 its type's body, as C++ writes `T::f`, is in the type its declaration's scope names. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
@@ -4955,7 +4967,12 @@ scope found as a name is - nearest first in the scopes it is written in, then th
 name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
 a value a scope it is written in holds (a base's among them) is nearer; a `scope` one is the scope it names alone, else
 the declarations in no scope - with no name those alone - each of its own language, `exact`, as PHP finds a function in
-its namespace and then the global one. A value - and a `value` qualifier - is
+its namespace and then the global one. A `type` or `named` qualifier written as links is the chain its links write
+(`ExtractQualifier.Link`), found as its names written out are: past an import's prefix it is or begins with - however many
+names the prefix writes, Python's `pkg.mod` - its first name what the import makes visible by it, each next a member of what
+the one before came to, each chain of a file answered once from the chain before its last name (`AliasedBy`), so a chain of
+any length costs a step a link; and a reference whose chain found nothing, or left candidates, is bound - for the sign it
+gives - where the chain's head is (`Head`). A value - and a `value` qualifier - is
 followed through its member's `ValueType`, each name of a chain, from a value or from a type,
 through the one before's
 type, a chain written as links read a link at a time, each link stepped once for each

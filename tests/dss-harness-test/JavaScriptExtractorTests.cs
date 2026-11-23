@@ -1586,9 +1586,11 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
                 new CodeEdge("javascript:lib/b.js.Cart.add", "javascript:lib/b.js.format", CodeEdgeKinds.Calls, 6, CodeConfidences.Exact),
             ],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.From, StringComparer.Ordinal));
+        // What the wrapper declares is in its body's scope, which alone keeps it to the wrapper's code, as a member's body does: no
+        // scope of its own is it kept to.
         Assert.Equal(
-            ("module", (1, 7), (string?)wrapper["javascript:".Length..]),
-            (Node(Read("lib/b.js", Wrapped), wrapper).SubKind, Lines(Read("lib/b.js", Wrapped), wrapper), Node(Read("lib/b.js", Wrapped), "javascript:lib/b.js.format").SeenIn?.Whole()));
+            ("module", (1, 7), (string?)wrapper["javascript:".Length..], (string?)null),
+            (Node(Read("lib/b.js", Wrapped), wrapper).SubKind, Lines(Read("lib/b.js", Wrapped), wrapper), Node(Read("lib/b.js", Wrapped), "javascript:lib/b.js.format").Scope?.Whole(), Node(Read("lib/b.js", Wrapped), "javascript:lib/b.js.format").SeenIn?.Whole()));
 
         // A module's names outside the wrapper: no export of its Cart, and a prototype's member of a Cart the file's top does not declare.
         var module = Read("lib/c.js", """
@@ -1601,6 +1603,32 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             [("javascript:lib/c.js.Cart.add", "javascript:lib/c.js.Cart", (string?)null), ("javascript:lib/c.js.Cart.total", null, "Cart")],
             module.Nodes.Where(node => node.Name is "add" or "total").Select(node => (node.Id.Whole(), node.Parent?.Whole(), node.Extends)));
         Assert.Null(Node(module, "javascript:lib/c.js.Cart").Exports);
+    }
+
+    /// <summary>
+    /// What a wrapper's code exports by its own name - <c>module.exports = { helper }</c> written in its body - is its importers' by
+    /// that name, though the body keeps it to its own code: an importer's call reaches it, unique as a name an import shows is.
+    /// </summary>
+    [Fact]
+    public void WhatAWrapperExportsByItsOwnName_IsItsImportersByThatName()
+    {
+        var linked = Link(
+            ("lib/u.js", """
+                (function () {
+                  function helper() { return 1; }
+                  function kept() { return 2; }
+                  module.exports = { helper };
+                })();
+                """),
+            ("app/use.js", """
+                const { helper, kept } = require('../lib/u');
+                helper();
+                kept();
+                """));
+
+        Assert.Equal(
+            [new CodeEdge("javascript:app/use.js.(module)", "javascript:lib/u.js.helper", CodeEdgeKinds.Calls, 2, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls && edge.From.StartsWith("javascript:app/", StringComparison.Ordinal)));
     }
 
     /// <summary>

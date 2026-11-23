@@ -3214,8 +3214,7 @@ internal sealed class PythonReading
         // The names of a module path an import reaches are no members (<see cref="StepsOf"/>): what the chain passes begins after them.
         var target = chain.Count == 1 && through is { Kind: not BindingKind.Module } ? through.Name : scan.Text(last);
         var passed = chain.Count > 1 && through is not null && !Local(word, bound) ? StepsOf(scan, chain, through).Count : 1;
-        var receivers = chain.Count > 1 ? Receivers(scan, chain, owner, bound, through, passed) : [];
-        var qualifier = chain.Count > 1 ? receivers[^1] : AloneQualifier(through, mine);
+        var receivers = chain.Count > 1 ? Receivers(scan, chain, owner, bound, through, passed, linked: true) : [];
 
         // The head of a chain a member is reached through - CONFIG of CONFIG.get(), Cart of Cart.parse() - is read as a name alone is;
         // a local, a type parameter, a receiver - self, cls - and a module's name are none.
@@ -3226,11 +3225,16 @@ internal sealed class PythonReading
 
         // Each member the chain passes on its way to its last - items of self.items.append(x) - is read, a use of it, qualified as the
         // chain to it is (<see cref="Receivers"/>): the first as its head says, each after it a value by no name the file types; the
-        // first past a module path reached through the module, and each after it through what the names before it stand for there.
+        // first past a module path reached through the module, and each after it through what the names before it stand for there - a
+        // type linked to the use of the member before it (<see cref="Linked"/>).
+        int? used = null;
+
         for (var index = passed; index < chain.Count - 1; index++)
         {
-            Member(scan, scan.Text(chain[index]), scan.Next(chain[index]), scan[chain[index]].Line, key, receivers[index - passed]);
+            used = Member(scan, scan.Text(chain[index]), scan.Next(chain[index]), scan[chain[index]].Line, key, Linked(receivers[index - passed], used));
         }
+
+        var qualifier = chain.Count > 1 ? Linked(receivers[^1], used) : AloneQualifier(through, mine);
 
         // A decorator's name is called with the function it decorates: of one argument where it is written alone. One an import of a
         // package binds asks whether the repository declares it (<see cref="ExtractReference.Probe"/>) - a framework's, a decorator
@@ -3432,7 +3436,10 @@ internal sealed class PythonReading
     /// rule for every name an import binds, a call's, a use's, an annotation's and a base's: the prefix of the import of the module the
     /// longest run of the names before the member reaches - <c>import a.b.c</c>, then <c>a.b.c.f()</c> - where that run is all of them;
     /// else the type or scope that module's names past that run stand for, written with them - <c>a.Cart.parse()</c>, or
-    /// <c>shape.Shape</c> of <c>from pkg import shape</c>. A step of a dotted import the code reaches through, <c>a.b</c> of
+    /// <c>shape.Shape</c> of <c>from pkg import shape</c> - or, where <paramref name="linked"/>, the caller making a use of every member
+    /// from <paramref name="first"/> in order, left to it (<see cref="TypeStep"/>): it links the type to the use of the member before, whose
+    /// qualifier writes the names before that one (<see cref="Linked"/>), so a chain of any length writes each of its names once and never
+    /// the names before each again. A step of a dotted import the code reaches through, <c>a.b</c> of
     /// <c>import a.b.c</c>, is made an import of its own the first time it is reached, so what the extract holds of a dotted import grows
     /// with the chains the code writes and never with the square of the import's names. Else the first member is qualified by its head
     /// - <c>self</c> and <c>cls</c> in a class the type's own, <c>super()</c> its base's, a local of the body - <paramref name="bound"/>'s,
@@ -3440,7 +3447,7 @@ internal sealed class PythonReading
     /// class the file declares named as a type, and any other a value by no name the file types - and each after it is reached through
     /// the member before it, a value by no name the file types.
     /// </summary>
-    private ExtractQualifier[] Receivers(ScannedText scan, List<int> chain, string? owner, HashSet<string>? bound, Binding? through, int first = 1)
+    private ExtractQualifier[] Receivers(ScannedText scan, List<int> chain, string? owner, HashSet<string>? bound, Binding? through, int first = 1, bool linked = false)
     {
         var qualifiers = new ExtractQualifier[chain.Count - first];
         var head = scan.Text(chain[0]);
@@ -3457,6 +3464,12 @@ internal sealed class PythonReading
                 if (member <= steps.Count)
                 {
                     qualifiers[member - first] = new ExtractQualifier(CodeQualifierKinds.Prefix, QualifiedName.Of(Reached(steps[member - 1], through)));
+                    continue;
+                }
+
+                if (linked)
+                {
+                    qualifiers[member - first] = TypeStep;
                     continue;
                 }
 
@@ -3485,27 +3498,45 @@ internal sealed class PythonReading
     }
 
     /// <summary>
-    /// The member <paramref name="name"/> at the end of a chain a value reaches - <c>x.f()</c>, <c>x.f</c> - read or called by its name with how
-    /// many arguments it is given, qualified by <paramref name="qualifier"/>; a name the language keeps to itself none.
+    /// What <see cref="Receivers"/> leaves to a caller that makes a use of every member of a chain in order: the type the names before a
+    /// member stand for past an import's module, which the caller links to the use of the member before (<see cref="Linked"/>). Never a
+    /// qualifier of a reference itself.
     /// </summary>
-    private void Member(ScannedText scan, string name, int next, int line, QualifiedName key, ExtractQualifier qualifier)
+    private static readonly ExtractQualifier TypeStep = new(CodeQualifierKinds.Type);
+
+    /// <summary>
+    /// <paramref name="qualifier"/>, of a member of a chain: where it is the type step <see cref="Receivers"/> leaves to its caller
+    /// (<see cref="TypeStep"/>), the type the use of the member before - at <paramref name="before"/>, which every member a type step
+    /// follows is made (<see cref="Member"/>) - names, linked to it, whose qualifier writes the names before that member in turn
+    /// (<see cref="ExtractQualifier.Link"/>). Any other as it is.
+    /// </summary>
+    private static ExtractQualifier Linked(ExtractQualifier qualifier, int? before)
+        => !ReferenceEquals(qualifier, TypeStep) ? qualifier : new ExtractQualifier(CodeQualifierKinds.Type) { Link = before!.Value };
+
+    /// <summary>
+    /// The member <paramref name="name"/> at the end of a chain a value reaches - <c>x.f()</c>, <c>x.f</c> - read or called by its name with how
+    /// many arguments it is given, qualified by <paramref name="qualifier"/>; a name the language keeps to itself none, or a probe. Answers the
+    /// place of the reference made, <see langword="null"/> where none is.
+    /// </summary>
+    private int? Member(ScannedText scan, string name, int next, int line, QualifiedName key, ExtractQualifier qualifier)
     {
         // A name the language keeps to itself - __init__, __name__ - reached through a value the file does not type: none; through
-        // super(), the base's own, a call of it the one way a constructor reaches its base's.
-        if (name.StartsWith("__", StringComparison.Ordinal) && qualifier.Kind != CodeQualifierKinds.Base)
+        // super(), the base's own, a call of it the one way a constructor reaches its base's; through an import or a type - a module's
+        // __version__, a class's __init__ - what that module or type declares so, a probe (<see cref="ExtractReference.Probe"/>): where it
+        // declares none, which the language's own is, no doubt is counted, and the chain past it is read on through it.
+        var own = name.StartsWith("__", StringComparison.Ordinal);
+
+        if (own && qualifier.Kind is not (CodeQualifierKinds.Base or CodeQualifierKinds.Prefix or CodeQualifierKinds.Type))
         {
-            return;
+            return null;
         }
 
-        if (scan.Is(next, "("))
-        {
-            var makes = Capital(name);
-            _extract.Reference(key, makes ? CodeEdgeKinds.Instantiates : CodeEdgeKinds.Calls, name, line, makes ? null : ScanCalls.CallArity(scan, next, scan.CloseOf(next), PythonMemberCalls), qualifier);
-        }
-        else
-        {
-            _extract.Reference(key, CodeEdgeKinds.Uses, name, line, qualifier: qualifier);
-        }
+        var probe = own && qualifier.Kind is CodeQualifierKinds.Prefix or CodeQualifierKinds.Type;
+        var makes = scan.Is(next, "(") && Capital(name);
+        var place = !scan.Is(next, "(") ? _extract.Reference(key, CodeEdgeKinds.Uses, name, line, qualifier: qualifier, probe: probe)
+            : _extract.Reference(key, makes ? CodeEdgeKinds.Instantiates : CodeEdgeKinds.Calls, name, line, makes ? null : ScanCalls.CallArity(scan, next, scan.CloseOf(next), PythonMemberCalls), qualifier, probe);
+
+        return place >= 0 ? place : null;
     }
 
     /// <summary>

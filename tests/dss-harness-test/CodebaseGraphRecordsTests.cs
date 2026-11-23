@@ -64,6 +64,9 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Null((sound with { Literals = LiteralRow.Table(new LiteralRow("held by a node", 2, "toy:A.b"), new LiteralRow("held by the file", 3)) }).Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Selectors = ["app-cart", "x-1", "|money", "|$x_2"] }] }).Problem("toy", 3));
 
+        // A chain of a type is written as links as a chain of a value or of a name is: the type the names its links write.
+        Assert.Null((sound with { References = [.. sound.References, new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Run", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 } }] }).Problem("toy", 3));
+
         var wrong = new (FileExtract Extract, string Problem)[]
         {
             (sound with { Nodes = [Node, Node] }, "two of its nodes are 'toy:A'"),
@@ -132,6 +135,8 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "") }] }, "its qualifier's name is empty"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, " ") }] }, "its qualifier's name is empty"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.This, " ") }] }, "its qualifier's name is empty"),
+            (sound with { References = [.. sound.References, new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Run", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.This) { Link = 0 } }] }, "a reference to 'Run' links its qualifier of kind 'this', and only a chain of a value, of a name or of a type is written as links"),
+            (sound with { References = [.. sound.References, new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Run", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type, "B") { Link = 0 } }] }, "a reference to 'Run' links its qualifier and names 'B' too: a linked chain's names are its links'"),
             (sound with { Generated = " " }, "it says it is generated and not why"),
             (sound with { Dynamic = [new ExtractDynamic(1, "", "macro")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro", "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),

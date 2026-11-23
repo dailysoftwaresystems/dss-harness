@@ -280,7 +280,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// <summary>
     /// What is wrong with the chains its references write as links (<see cref="ExtractQualifier.Link"/>); none where
     /// nothing is. A link names a reference made before its own, so following links always ends; a linked qualifier is a
-    /// chain's - of a value or a name - and names nothing itself; and the reference it links writes names of its own or
+    /// chain's - of a value, a name or a type - and names nothing itself; and the reference it links writes names of its own or
     /// links on, so the chain's names are read whole.
     /// </summary>
     private string? LinkProblem()
@@ -301,9 +301,9 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 return $"{named} links its qualifier to reference {link.ToString(CultureInfo.InvariantCulture)}, which is not one made before it";
             }
 
-            if (qualifier.Kind is not (CodeQualifierKinds.Value or CodeQualifierKinds.Named))
+            if (qualifier.Kind is not (CodeQualifierKinds.Value or CodeQualifierKinds.Named or CodeQualifierKinds.Type))
             {
-                return $"{named} links its qualifier of kind '{qualifier.Kind}', and only a chain of a value or of a name is written as links";
+                return $"{named} links its qualifier of kind '{qualifier.Kind}', and only a chain of a value, of a name or of a type is written as links";
             }
 
             if (qualifier.Name is not null)
@@ -670,10 +670,11 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
 
     /// <summary>
     /// The names another file imports it by besides its own, where it is exported so - a JavaScript module's
-    /// <c>default</c>, the name an <c>export { a as b }</c> gives it: an import of its file - or of a file that exports
-    /// that file's names - finds it by one of them whatever scope <see cref="SeenIn"/> keeps it to, and nothing else finds
-    /// it by one: no reference written in its own file, and none in the repository by name; <see langword="null"/> where it
-    /// is exported by none.
+    /// <c>default</c>, the name an <c>export { a as b }</c> gives it - and its own among them where what it is declared in keeps
+    /// even that from its importers, as a member's body does what it declares (<see cref="ExtractScope"/>): an import of its
+    /// file - or of a file that exports that file's names - finds it by one of them whatever scope keeps it, and nothing else
+    /// finds it by one: no reference written in its own file, and none in the repository by name; <see langword="null"/> where
+    /// it is exported by none.
     /// </summary>
     public IReadOnlyList<string>? Exports { get; init; }
 
@@ -773,7 +774,9 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
 /// member's body: what the member declares inside it is put in it, and a reference the member makes is looked for from it
 /// first, then from its parent, save one made around the member (<see cref="ExtractReference.Around"/>) - as a Python
 /// function's body is, whose parent is the function or the module around it and never a class, which encloses no
-/// function's body.
+/// function's body. What is declared in a body is seen from it and the scopes inside it alone, whatever
+/// <see cref="ExtractNode.SeenIn"/> says: no other code of its file finds it, by its name or through a qualifier, and an
+/// importer by a name it is exported by alone (<see cref="ExtractNode.Exports"/>).
 /// </remarks>
 public sealed record ExtractScope(QualifiedName Name, bool Open)
 {
@@ -1018,7 +1021,7 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
             : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && (named.Name is not { } namedName || namedName.WhitespaceOnly())
-                && named is not { Kind: CodeQualifierKinds.Named, Name: null, Link: not null } ? "its qualifier names nothing"
+                && named is not { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type, Name: null, Link: not null } ? "its qualifier names nothing"
             : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.This or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && value.WhitespaceOnly() ? "its qualifier's name is empty"
             : null;
 }
@@ -1033,8 +1036,9 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
 public sealed record ExtractQualifier(string Kind, QualifiedName? Name = null)
 {
     /// <summary>
-    /// Where the qualifier is a chain of two names or more - a receiver's <c>a.b.c</c> - of a value or of a name
-    /// (<see cref="CodeQualifierKinds.Value"/>, <see cref="CodeQualifierKinds.Named"/>): the place, among its extract's
+    /// Where the qualifier is a chain of two names or more - a receiver's <c>a.b.c</c> - of a value, of a name or of a type
+    /// (<see cref="CodeQualifierKinds.Value"/>, <see cref="CodeQualifierKinds.Named"/>, <see cref="CodeQualifierKinds.Type"/>,
+    /// as a type a module's names write past an import's prefix, <c>models.Cart.Line</c>): the place, among its extract's
     /// references, of the reference made for the chain's last name - <c>c</c>'s - which is made before this one and whose
     /// own qualifier writes the names before it, by a name or by a link in turn. So a chain of n names is n references of
     /// one name each, never each name written again by every reference after it, and the linker reads each link once

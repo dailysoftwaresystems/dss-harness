@@ -384,7 +384,8 @@ public sealed partial class CodebaseGraphToolTests
         var duck = (await AskAsync(Tool(typed, await QueriesAsync(typed)), """{"op":"sites","data":"total"}""")).Text.Split('\n');
 
         // After the coverage lines, the limits, then the files left out: the notes in their order. Geometry.cs is left candidates
-        // in every tree of these tests, and C#'s limits are said by the one rule too.
+        // in every tree of these tests, and C#'s limits are said by the one rule too: those that say a call is bound by its name
+        // alone in full, as Python's duck-typing is where a file of it is left candidates.
         string[] Tail(string[] answer)
         {
             var last = Array.FindLastIndex(answer, line => line.StartsWith("coverage: ", StringComparison.Ordinal));
@@ -407,7 +408,9 @@ public sealed partial class CodebaseGraphToolTests
         Assert.DoesNotContain(Tail(computed), line => line.Contains(Says("a duck-typed receiver"), StringComparison.Ordinal));
         Assert.Equal(
             [
-                "csharp also does not see ('help codebase-graph-languages' says each): preprocessor-branches, untyped-values, local-functions, dynamic-calls, generic-extensions, untyped-reads, generated-sources, same-named-types, assembly-attributes, deep-nesting, huge-files.",
+                $"csharp does not see {Says("a var given a call's result", "csharp")} - shown by 1 file(s) read.",
+                $"csharp does not see {Says("a generic extension method", "csharp")} - shown by 1 file(s) read.",
+                "csharp also does not see ('help codebase-graph-languages' says each): preprocessor-branches, local-functions, dynamic-calls, untyped-reads, generated-sources, same-named-types, assembly-attributes, deep-nesting, huge-files.",
                 "markdown also does not see ('help codebase-graph-languages' says each): fenced-headings, html-headings.",
                 $"python does not see {Says("computed attribute access")} - shown by 1 file(s) read.",
                 "python also does not see ('help codebase-graph-languages' says each): dynamic-imports, unseen-roots, ambiguous-imports, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unclosed, unreadable-heads, module-getattr, unbound-names, outside-fixtures, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
@@ -479,9 +482,9 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal(["unclosed"], Named(PythonReading.Unclosed));
     }
 
-    /// <summary>The words of the one Python limit whose clause holds <paramref name="names"/>, as its help says them.</summary>
-    private static string Says(string names)
-        => Assert.Single(CodeGraphExtractors.OfThisBuild.Find("python")!.Help.DoesNotSee, limit => limit.Says.Contains(names, StringComparison.Ordinal)).Says;
+    /// <summary>The words of the one limit of <paramref name="language"/> - Python's where none is named - whose clause holds <paramref name="names"/>, as its help says them.</summary>
+    private static string Says(string names, string language = "python")
+        => Assert.Single(CodeGraphExtractors.OfThisBuild.Find(language)!.Help.DoesNotSee, limit => limit.Says.Contains(names, StringComparison.Ordinal)).Says;
 
     /// <summary>
     /// The lines a <c>sites</c> answer ends with for <paramref name="language"/>: each limit of its implementation's help that some

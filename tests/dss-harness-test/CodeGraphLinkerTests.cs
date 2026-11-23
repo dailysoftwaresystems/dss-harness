@@ -333,6 +333,73 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A chain written as links past an import's prefix - of a name or of a type, the prefix one name or several - is found a step a
+    /// link however long: its first name past the prefix what the import makes visible by it, each next a member of what the one
+    /// before came to, the call exact on the type the last names.
+    /// </summary>
+    [Fact]
+    public void AChainOfLinksPastAnImportsPrefix_IsFoundAStepALink()
+    {
+        static IEnumerable<ExtractReference> Chain(string from, string prefix, string kind) =>
+        [
+            Ref(from, CodeEdgeKinds.Uses, "Outer") with { Qualifier = Prefix(prefix) },
+            Ref(from, CodeEdgeKinds.Uses, "Inner") with { Qualifier = new ExtractQualifier(kind) { Link = 0 } },
+            Ref(from, CodeEdgeKinds.Uses, "Deep") with { Qualifier = new ExtractQualifier(kind) { Link = 1 } },
+            Call(from, "Run", 0, new ExtractQualifier(kind) { Link = 2 }),
+        ];
+
+        var linked = Link(
+            File("lib/shapes.t", [Type("Outer"), Type("Outer.Inner"), Type("Outer.Inner.Deep"), Member("Outer.Inner.Deep.Run", 0)]),
+            File("named.t", [Member("Named", 0)], [.. Chain("Named", "ns", CodeQualifierKinds.Named)], imports: [Import(CodeImportForms.Relative, "lib/shapes.t") with { Prefix = "ns" }]),
+            File("typed.t", [Member("Typed", 0)], [.. Chain("Typed", "lib.shapes", CodeQualifierKinds.Type)], imports: [Import(CodeImportForms.Relative, "lib/shapes.t") with { Prefix = "lib.shapes" }]));
+
+        Assert.Equal(
+            [Edge("t:Named", "t:Outer.Inner.Deep.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact), Edge("t:Typed", "t:Outer.Inner.Deep.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.From, StringComparer.Ordinal));
+        Assert.Empty(linked.External);
+    }
+
+    /// <summary>
+    /// What a member's body declares - a closed scope its file declares under the member's qualified name, as a Python function's
+    /// body and a JavaScript wrapper's are - is seen from that body and the bodies inside it alone: found exact from the member's
+    /// own code and from a member declared inside it, by its name and by a type's; and from nowhere else - not by a name the rest
+    /// of its file writes alone nor by the name of a type it ends, and not from another file - nor by the repository's step from
+    /// anywhere, the body's own code's call on a value whose type nothing says among it: each counted external, a name nothing
+    /// that code sees declares.
+    /// </summary>
+    [Fact]
+    public void AMembersBodysDeclarations_AreSeenFromThatBodyAlone()
+    {
+        var linked = Link(
+            File(
+                "a.t",
+                [Member("Outer", 0), Member("Outer.Helper", 0), Type("Outer.Local"), Member("Outer.Local.Make", 0), Member("Outer.Helper.Inner", 0), Member("Sibling", 0)],
+                [
+                    Call("Outer", "Helper", 0),
+                    Call("Outer", "Helper", 0, new ExtractQualifier(CodeQualifierKinds.Value)),
+                    Call("Outer.Helper.Inner", "Helper", 0),
+                    Ref("Outer.Helper.Inner", CodeEdgeKinds.References, "Local"),
+                    Call("Outer.Helper.Inner", "Make", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Local")),
+                    Call("Sibling", "Helper", 0),
+                    Call("Sibling", "Helper", 0, new ExtractQualifier(CodeQualifierKinds.Value)),
+                    Ref("Sibling", CodeEdgeKinds.References, "Local"),
+                    Call("Sibling", "Make", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Local")),
+                ],
+                [new ExtractScope("Outer", Open: false), new ExtractScope("Outer.Helper", Open: false) { Parent = "Outer" }]),
+            File("b.t", [Member("Far", 0)], [Call("Far", "Helper", 0)]));
+
+        Assert.Equal(
+            [
+                Edge("t:Outer", "t:Outer.Helper", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Outer.Helper.Inner", "t:Outer.Helper", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Outer.Helper.Inner", "t:Outer.Local.Make", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Outer.Helper.Inner", "t:Outer.Local", CodeEdgeKinds.References, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.References).OrderBy(edge => edge.From, StringComparer.Ordinal).ThenBy(edge => edge.Kind, StringComparer.Ordinal).ThenBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal([("t:Far", 1), ("t:Outer", 1), ("t:Sibling", 4)], linked.External.OrderBy(count => count.Key, StringComparer.Ordinal).Select(count => (count.Key, count.Value)));
+    }
+
+    /// <summary>
     /// A global import is made by every file of its language: a name it makes visible is found unique through it from a file
     /// that imports nothing, where the repository alone would give candidates.
     /// </summary>
@@ -2105,6 +2172,36 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(
             [Edge("t:Run", "t:far.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates), Edge("t:Run", "t:near.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
             linked.Edges.Where(edge => edge.From == "t:Run").OrderBy(edge => edge.To, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A chain written as links is bound where its head is: a link that found nothing past a head only an import naming no file of
+    /// the tree binds gives outside-import, though its own qualifier writes no name - here past a probe that found nothing, which
+    /// gives none - and one left candidates among the places of an import taken as several gives candidate-imports, as its head does.
+    /// </summary>
+    [Fact]
+    public void AChainWrittenAsLinks_GivesTheSignItsHeadsImportGives()
+    {
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+
+        var linked = Link(
+            Within(File(
+                "outside.t",
+                [Member("Outside", 0)],
+                [Ref("Outside", CodeEdgeKinds.Uses, "version") with { Qualifier = Prefix("np"), Probe = true }, Call("Outside", "split", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 })],
+                imports: [Import(CodeImportForms.Relative, "vendor/numpy.t") with { Prefix = "np" }])),
+            Within(File(
+                "tools/run.t",
+                [Member("Run", 0)],
+                [Ref("Run", CodeEdgeKinds.Uses, "Box") with { Qualifier = Prefix("h") }, Call("Run", "pack", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 })],
+                imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true }])),
+            File("tools/helper.t", [Type("Box") with { Id = "t:near.Box" }, Member("Box.pack", 0) with { Id = "t:near.Box.pack", Parent = "t:near.Box" }]),
+            File("helper.t", [Type("Box") with { Id = "t:far.Box" }, Member("Box.pack", 0) with { Id = "t:far.Box.pack", Parent = "t:far.Box" }]));
+
+        Assert.Equal(["file:tools/run.t: candidate-imports", "t:Outside: outside-import", "t:Run: candidate-imports"], SignsOf(linked));
+        Assert.Equal(
+            [Edge("t:Run", "t:far.Box.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates), Edge("t:Run", "t:near.Box.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge is { From: "t:Run", Kind: CodeEdgeKinds.Calls }).OrderBy(edge => edge.To, StringComparer.Ordinal));
     }
 
     /// <summary>The signs each node of <paramref name="linked"/> gave, a line a node, in the order of their ids.</summary>

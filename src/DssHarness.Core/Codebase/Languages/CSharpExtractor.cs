@@ -110,10 +110,10 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     internal static IReadOnlyList<CodeGraphLimit> CodeUnseen { get; } =
     [
         ("preprocessor-branches", "code under a preprocessor branch the parse does not take: it defines no symbol, so code under #if DEBUG is out"),
-        ("untyped-values", "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone"),
+        new CodeGraphLimit("untyped-values", "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone") { Signs = [CodeGraphLimit.Candidates] },
         ("local-functions", "local functions and lambdas as nodes of their own: what they call, the member they are written in calls"),
         new CodeGraphLimit("dynamic-calls", "a call on a dynamic value, a member named by a string to reflection, Activator.CreateInstance and a delegate's invocation: marked dynamic, and not linked") { Signs = [DynamicCall] },
-        ("generic-extensions", "a generic extension method on a type parameter with no constraint, found by its name alone; a constructor's base(...) in a part of a partial class whose base list is in another file"),
+        new CodeGraphLimit("generic-extensions", "a generic extension method on a type parameter with no constraint, found by its name alone; a constructor's base(...) in a part of a partial class whose base list is in another file") { Signs = [CodeGraphLimit.Candidates] },
         ("untyped-reads", "a read of a member through a value no declaration types, linked by the member's name alone; a read of another file's field or property whose name its type's members also carry, linked to each of them"),
         ("generated-sources", "code a source generator writes while the project builds, which is in no file of the tree"),
         ("same-named-types", "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's"),

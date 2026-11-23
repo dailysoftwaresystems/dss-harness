@@ -963,8 +963,9 @@ internal sealed class JsReading
 
     /// <summary>
     /// The statement that begins at <paramref name="at"/>, read in <paramref name="frame"/>: a declaration, an export, or
-    /// code - what a declaration not exported is seen in being <paramref name="hidden"/>, none where every declaration of
-    /// the frame is seen from everywhere. Answers where the next begins.
+    /// code - what a declaration not exported is seen in being <paramref name="hidden"/>, none where the scope the frame puts
+    /// a declaration in says it alone: an open one, seen from everywhere, or a wrapper's body, seen from its own code alone
+    /// (<see cref="Wrapping"/>). Answers where the next begins.
     /// </summary>
     private int Statement(int at, int end, ScanFrame frame, QualifiedName? hidden)
     {
@@ -1942,9 +1943,9 @@ internal sealed class JsReading
     /// where <paramref name="frame"/> stands, is read in. The body's code outside its declarations is the calls of a node of its
     /// own - as the file's top's is of the module's - named by where its function begins, <c>(wrapper 3:2)</c>, its line and its
     /// column, so no two wrappers of a file, nor of a page's scripts, share one; and the body is a closed scope under that node's
-    /// name, as a function's body is - what it declares kept to it (<see cref="ExtractNode.SeenIn"/>), seen from its own code and
-    /// no other code of the file, nor found there by its name alone - whose parent is the
-    /// scope the wrapper stands in: the module's in a module, the one of the wrapper around it, and in a script, whose top is no
+    /// name, as a function's body is - a member's body (<see cref="ExtractScope"/>), what it declares seen from its own code and
+    /// the scopes inside it alone, and found by its name from no other code of the file - whose parent is the scope the wrapper
+    /// stands in: the module's in a module, the one of the wrapper around it, and in a script, whose top is no
     /// scope, a closed scope of the file's alone, its path, which declares nothing itself. Its declarations keep the file's path
     /// before their names.
     /// </summary>
@@ -2166,7 +2167,7 @@ internal sealed class JsReading
         _walks.Walk(
             body,
             inner,
-            statement => Statement(statement, inner, inside, inside.Scope),
+            statement => Statement(statement, inner, inside, hidden: null),
             begin: () => (outer, _factory, around, _region) = (_factory, factory, _region, inside.Scope),
             end: () => (_factory, _region) = (outer, around));
 
@@ -5676,10 +5677,11 @@ internal sealed class JsReading
     // ---- Exports a list or an assignment names ----
 
     /// <summary>
-    /// What the file exports by a list, an assignment or a default, once it is read: each declaration at its top so named
-    /// exported - by its own name, seen from everywhere; by another, that name its importers' (<see cref="ExtractNode.Exports"/>)
-    /// and its own still the module's - and each name an import binds made visible to the file's importers as an export of
-    /// the file it imports.
+    /// What the file exports by a list, an assignment or a default, once it is read: each declaration at its top - or a
+    /// wrapper's, where the export is written in one (<see cref="TopKeys(string, QualifiedName?)"/>) - so named exported: one at
+    /// the file's top by its own name, seen from everywhere; one by another name, or one a wrapper's body declares by any, that
+    /// name its importers' (<see cref="ExtractNode.Exports"/>) and its own still where it was seen - the module's, the wrapper's
+    /// code alone - and each name an import binds made visible to the file's importers as an export of the file it imports.
     /// </summary>
     private void Exported()
     {
@@ -5689,7 +5691,7 @@ internal sealed class JsReading
             {
                 foreach (var key in keys)
                 {
-                    _extract.Change(key, node => exported == local
+                    _extract.Change(key, node => exported == local && node.Scope == _scope
                         ? node with { SeenIn = null }
                         : node with { Exports = [.. (node.Exports ?? []).Append(exported).Distinct(StringComparer.Ordinal)] });
                 }

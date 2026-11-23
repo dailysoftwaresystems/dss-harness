@@ -33,8 +33,8 @@ public sealed class TypeScriptExtractor : ICodeGraphExtractor
     internal static IReadOnlyList<CodeGraphLimit> TypesUnseen { get; } =
     [
         ("overloads", "an overload chosen by its argument types: a call binds each overload of its name that takes its arguments' count"),
-        ("union-types", "a type TypeScript infers, or one a union, an intersection or a generic's argument says: a call on such a value is bound by its name alone"),
-        new CodeGraphLimit("any-values", "a call on a value typed any - a local or a parameter declared any, a value cast as any, and each member of a chain it begins: marked dynamic, and bound by its name alone") { Signs = [JsReading.AnyValue] },
+        new CodeGraphLimit("union-types", "a type TypeScript infers, or one a union, an intersection or a generic's argument says: a call on such a value is bound by its name alone") { Signs = [CodeGraphLimit.Candidates] },
+        new CodeGraphLimit("any-values", "a call on a value typed any - a local or a parameter declared any, a value cast as any, and each member of a chain it begins: marked dynamic, and bound by its name alone") { Signs = [CodeGraphLimit.Candidates, JsReading.AnyValue] },
         ("augmentations", "a declaration a decorator or a code generator adds, and a module or a global another file augments (declare module, declare global): read where the augmenting file declares it, as its own"),
         ("conditional-type-calls", "a call whose type arguments hold a conditional type (f<T extends U ? A : B>()): not seen as a call"),
     ];
