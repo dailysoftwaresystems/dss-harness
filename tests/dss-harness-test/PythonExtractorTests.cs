@@ -331,7 +331,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
                 new CodeEdge("python:tests.test_cart.empty_cart", "python:pkg.cart.Cart", CodeEdgeKinds.Instantiates, 9, CodeConfidences.Unique),
                 new CodeEdge("python:tests.test_cart.TestAdding.test_add_appends", "python:pkg.lines.make_line", CodeEdgeKinds.Tests, 23, CodeConfidences.Unique),
                 new CodeEdge("python:tests.test_cart.test_total_counts_every_line", "python:tests.test_cart.empty_cart", CodeEdgeKinds.References, 12, CodeConfidences.Exact),
-                new CodeEdge("python:tests.test_cart.test_parse_sample", "python:tests.conftest.sample", CodeEdgeKinds.References, 35, CodeConfidences.Unique),
+                new CodeEdge("python:tests.test_cart.test_parse_sample", "python:tests.conftest.sample", CodeEdgeKinds.References, 35, CodeConfidences.Exact),
             ],
         },
         new("tests/conftest.py", Conftest)
@@ -463,69 +463,85 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
     /// <summary>
     /// Each import binds the names the code reaches things by: <c>import os.path as osp</c> binds <c>osp</c>; <c>from .lines import Line,
-    /// make_line</c> shows both, and what a <c>from</c> binds is the file's importers's too; <c>from ..shared import money as formatted</c>
-    /// binds <c>formatted</c> to <c>money</c> by a path that climbs; each name shown is looked for as a module of its own as well; and
-    /// <c>from m import *</c> takes the names the module publishes alone. A module by a bare name is tried in the file's own directory and
-    /// in each above it to the tree's root, the nearest first, every place one of a layout the linker passes over inside a package; under
-    /// each, a package's <c>__init__.py</c> stands first and the module's <c>.py</c> in for it, each place standing in for the one before it.
+    /// make_line</c> shows both; <c>from ..shared import money as formatted</c> binds <c>formatted</c> to <c>money</c> by a path that
+    /// climbs; each name shown is looked for at each place as a module of its own, and else as the name the module binds, which its
+    /// prefix then stands for; what an import at the module's top binds is the file's importers' too; and <c>from m import *</c> takes
+    /// the names the module publishes alone. A module by a bare name is tried in the file's own directory and in each above it to the
+    /// tree's root, the nearest first, every place one of a layout the linker passes over inside a package, the file's own directory's
+    /// one of two places a name may stand at, and then under the roots of the layout; under each, a package's <c>__init__.py</c> stands
+    /// first and the module's <c>.py</c> in for it, each place standing in for the one before it.
     /// </summary>
     [Fact]
     public void EachImport_BindsItsNames_AndIsLookedForWhereThePackageLayoutHoldsIt()
     {
         var cart = Read("pkg/cart.py", Cart);
 
-        Assert.All(cart.Imports, import => Assert.Equal(CodeImportForms.Relative, import.Form));
+        Assert.Equal([CodeImportForms.Relative, CodeImportForms.Rooted], cart.Imports.Select(import => import.Form).Distinct());
         Assert.Equal(
             [
-                (4, "__future__/__init__.py", "../__future__.py", (string?)null, "annotations", true, false),
-                (4, "__future__/annotations/__init__.py", "../__future__/annotations.py", "annotations", (string?)null, false, false),
-                (4, "os/path/__init__.py", "../os/path.py", "osp", (string?)null, false, false),
-                (4, "dataclasses/__init__.py", "../dataclasses.py", (string?)null, "dataclass,field", true, false),
-                (4, "dataclasses/dataclass/__init__.py", "../dataclasses/dataclass.py", "dataclass", (string?)null, false, false),
-                (4, "dataclasses/field/__init__.py", "../dataclasses/field.py", "field", (string?)null, false, false),
+                (6, "__future__/__init__.py", "__future__.py", (string?)null, "annotations", true, false),
+                (12, "__future__/annotations/__init__.py", "__future__.py", "annotations", (string?)null, true, false),
+                (6, "os/path/__init__.py", "os/path.py", "osp", (string?)null, true, false),
+                (6, "dataclasses/__init__.py", "dataclasses.py", (string?)null, "dataclass,field", true, false),
+                (12, "dataclasses/dataclass/__init__.py", "dataclasses.py", "dataclass", (string?)null, true, false),
+                (12, "dataclasses/field/__init__.py", "dataclasses.py", "field", (string?)null, true, false),
                 (2, "base/__init__.py", "base.py", (string?)null, "BaseCart,Ordered", true, false),
-                (2, "base/BaseCart/__init__.py", "base/BaseCart.py", "BaseCart", (string?)null, false, false),
-                (2, "base/Ordered/__init__.py", "base/Ordered.py", "Ordered", (string?)null, false, false),
+                (4, "base/BaseCart/__init__.py", "base.py", "BaseCart", (string?)null, true, false),
+                (4, "base/Ordered/__init__.py", "base.py", "Ordered", (string?)null, true, false),
                 (2, "lines/__init__.py", "lines.py", (string?)null, "Line,make_line", true, false),
-                (2, "lines/Line/__init__.py", "lines/Line.py", "Line", (string?)null, false, false),
-                (2, "lines/make_line/__init__.py", "lines/make_line.py", "make_line", (string?)null, false, false),
+                (4, "lines/Line/__init__.py", "lines.py", "Line", (string?)null, true, false),
+                (4, "lines/make_line/__init__.py", "lines.py", "make_line", (string?)null, true, false),
                 (2, "../shared/__init__.py", "../shared.py", "formatted", "money", true, false),
-                (2, "../shared/money/__init__.py", "../shared/money.py", "formatted", (string?)null, false, false),
+                (4, "../shared/money/__init__.py", "../shared.py", "formatted", (string?)null, true, false),
             ],
             Runs(cart));
 
-        // The first six runs are of bare names, each place one of a layout; the rest are relative, and none of them is.
-        Assert.All(cart.Imports.Take(24), import => Assert.True(import.Layout));
-        Assert.All(cart.Imports.Skip(24), import => Assert.False(import.Layout));
+        // The first six runs are of bare names: each place in a directory one of a layout, the file's own directory's one of two places a
+        // name may stand at, and the last two of each run under the roots of the layout; the rest are relative, and none of them is.
+        Assert.All(cart.Imports.Take(54), import => Assert.Equal((import.Form == CodeImportForms.Relative, import.Form == CodeImportForms.Relative && !import.Target.StartsWith("../", StringComparison.Ordinal)), (import.Layout, import.Either)));
+        Assert.Equal(CodeImportForms.Rooted, cart.Imports[52].Form);
+        Assert.All(cart.Imports.Skip(54), import => Assert.Equal((CodeImportForms.Relative, false, false), (import.Form, import.Layout, import.Either)));
 
-        // A file at the tree's root has the one directory to look in.
-        Assert.Equal([(2, "pkg/cart/__init__.py", "pkg/cart.py", (string?)null, "Cart", true, false), (2, "pkg/cart/Cart/__init__.py", "pkg/cart/Cart.py", "Cart", (string?)null, false, false)], Runs(Read("app.pyw", Window)));
+        // What from ..shared import money as formatted binds: the module shared.money, else the name money shared binds, by formatted.
+        Assert.Equal(
+            [("../shared/money/__init__.py", false, (string?)null), ("../shared/money.py", false, null), ("../shared/__init__.py", true, "money"), ("../shared.py", true, "money")],
+            cart.Imports.TakeLast(4).Select(import => (import.Target, import.Binds, import.Show is { } show ? string.Join(',', show) : null)));
 
-        // from m import *: the module's published names alone.
+        // A file at the tree's root has the one directory to look in, then the roots of the layout.
+        Assert.Equal(
+            [(4, "pkg/cart/__init__.py", "pkg/cart.py", (string?)null, "Cart", true, false), (8, "pkg/cart/Cart/__init__.py", "pkg/cart.py", "Cart", (string?)null, true, false)],
+            Runs(Read("app.pyw", Window)));
+        Assert.DoesNotContain(Read("app.pyw", Window).Imports, import => import.Either);
+
+        // from m import *: the module's published names alone, at the module's top its importers' too.
         var star = Read("pkg/stars.py", "from .cart import *\n");
-        Assert.Equal([(2, "cart/__init__.py", "cart.py", (string?)null, (string?)null, false, true)], Runs(star));
+        Assert.Equal([(2, "cart/__init__.py", "cart.py", (string?)null, (string?)null, true, true)], Runs(star));
     }
 
     /// <summary>
     /// A bare import is looked for from above the file's package, as Python searches a path: a module of the same name inside the
-    /// package is passed over, and the directory above the package's top is tried first, then each above it; a file in no package
-    /// looks in its own directory first, as a script's path does.
+    /// package is passed over, and the directory above the package's top is tried first, then each above it - a package's
+    /// <c>__init__.py</c> saying its directory is one whatever it holds, nothing or comments alone among it. A file in a directory that
+    /// is no package is its directory's script and a namespace package's module alike: where its own directory holds the module and a
+    /// directory above holds one too, the two are candidates; where its own alone does, that one.
     /// </summary>
     [Fact]
     public void ABareImport_IsLookedForFromAboveThePackagesAroundTheFile()
     {
         var linked = Link(
-            ("pkg/__init__.py", Read("pkg/__init__.py", "\"\"\"A package.\"\"\"\n")),
-            ("pkg/sub/__init__.py", Read("pkg/sub/__init__.py", "\"\"\"A package in it.\"\"\"\n")),
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/sub/__init__.py", Read("pkg/sub/__init__.py", "# The package in it.\n")),
             ("pkg/sub/helper.py", Read("pkg/sub/helper.py", "def pack(): ...\n")),
             ("pkg/sub/mod.py", Read("pkg/sub/mod.py", "import helper\n")),
             ("helper.py", Read("helper.py", "def pack(): ...\n")),
             ("pkg/top.py", Read("pkg/top.py", "from helper import pack\n")),
             ("tools/run.py", Read("tools/run.py", "import helper\n")),
-            ("tools/helper.py", Read("tools/helper.py", "def pack(): ...\n")));
+            ("tools/helper.py", Read("tools/helper.py", "def pack(): ...\n")),
+            ("scripts/go.py", Read("scripts/go.py", "import tool\n")),
+            ("scripts/tool.py", Read("scripts/tool.py", "def run(): ...\n")));
 
-        // Each package's __init__.py says its directory is a unit of the layout.
-        Assert.All(new[] { "pkg/__init__.py", "pkg/sub/__init__.py" }, path => Assert.True(Read(path, "\"\"\"A package.\"\"\"\n").FolderUnit));
+        // Each package's __init__.py says its directory is a unit of the layout - an empty one, and one of comments alone, too.
+        Assert.All(new[] { string.Empty, "# Only a comment.\n", "\"\"\"A package.\"\"\"\n" }, text => Assert.True(Read("pkg/__init__.py", text).FolderUnit));
         Assert.False(Read("pkg/sub/mod.py", "import helper\n").FolderUnit);
 
         // In a package two deep: the package's own directories are passed over, the tree's root is the first tried.
@@ -535,8 +551,13 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         // In the package's top: likewise.
         Assert.Contains(new CodeEdge("file:pkg/top.py", "file:helper.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact), linked.Edges);
 
-        // In no package: the file's own directory is the first tried, as a script's is.
-        Assert.Contains(new CodeEdge("file:tools/run.py", "file:tools/helper.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact), linked.Edges);
+        // In no package: the file's own directory's module and the root's, candidates both; its own directory's alone, that one.
+        Assert.Equal(
+            [new CodeEdge("file:tools/run.py", "file:helper.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates), new CodeEdge("file:tools/run.py", "file:tools/helper.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Imports && edge.From == "file:tools/run.py").OrderBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal(
+            [new CodeEdge("file:scripts/go.py", "file:scripts/tool.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Imports && edge.From == "file:scripts/go.py"));
     }
 
     /// <summary>
@@ -1134,10 +1155,267 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
         Assert.Equal([("helper", CodeEdgeKinds.References, 39, CodeQualifierKinds.Fixture)], References(extract, test).Where(reference => reference.Kind == CodeEdgeKinds.References));
         Assert.DoesNotContain(linked.Edges, edge => edge.From == test && edge.Kind == CodeEdgeKinds.References);
-        Assert.Contains(new CodeEdge("python:tests.test_cart.test_parse_sample", "python:tests.conftest.sample", CodeEdgeKinds.References, 35, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("python:tests.test_cart.test_parse_sample", "python:tests.conftest.sample", CodeEdgeKinds.References, 35, CodeConfidences.Exact), linked.Edges);
+    }
+
+    /// <summary>
+    /// An import and a statement a semicolon parts on one line are each read as written: the import binds its module alone, and the
+    /// statement after it declares what it assigns and holds the code it calls.
+    /// </summary>
+    [Fact]
+    public void AnImportAndAStatementOnOneLine_AreEachReadAsWritten()
+    {
+        var extract = Read("pkg/m.py", "import os; LIMIT = 3\nfrom .lines import Line; Line()\n");
+
+        Assert.Contains(extract.Nodes, node => node.Id == "python:pkg.m.LIMIT");
+        Assert.Equal(["os", "Line"], Runs(extract).Select(run => run.Prefix).OfType<string>());
+        Assert.Contains(("Line", CodeEdgeKinds.Instantiates, 2, (string?)null), References(extract, "python:pkg.m"));
+    }
+
+    /// <summary>
+    /// A chain whose head a <c>from</c> import binds is reached through the import, one rule for every name an import binds: the
+    /// module <c>from . import views</c> binds is its own package's, never another package's module of that name; the module
+    /// <c>from pkg import utils</c> binds is the package's, never a module of the tree's root of that name; and a name bound to a
+    /// module outside the tree - <c>from os import path</c> - reaches nothing of the tree's, though a module of the tree ends with
+    /// its name.
+    /// </summary>
+    [Fact]
+    public void AChainThroughANameAFromImportBinds_IsReachedThroughTheImport()
+    {
+        var linked = Link(
+            ("blog/__init__.py", Read("blog/__init__.py", string.Empty)),
+            ("blog/views.py", Read("blog/views.py", "def index(request): ...\n")),
+            ("shop/__init__.py", Read("shop/__init__.py", string.Empty)),
+            ("shop/views.py", Read("shop/views.py", "def index(request): ...\n")),
+            ("blog/urls.py", Read("blog/urls.py", "from . import views\n\nroutes = [views.index]\nviews.index(None)\n")),
+            ("utils.py", Read("utils.py", "def parse(t): ...\n")),
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/utils.py", Read("pkg/utils.py", "def parse(t): ...\n")),
+            ("pkg/main.py", Read("pkg/main.py", "from pkg import utils\n\n\ndef run(t):\n    return utils.parse(t)\n")),
+            ("config/path.py", Read("config/path.py", "def join(a, b): ...\n")),
+            ("app.py", Read("app.py", "from os import path\n\n\ndef where(a, b):\n    return path.join(a, b)\n")));
+
+        Assert.Contains(new CodeEdge("python:blog.urls.routes", "python:blog.views.index", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("python:blog.urls", "python:blog.views.index", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("python:pkg.main.run", "python:pkg.utils.parse", CodeEdgeKinds.Calls, 5, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.To is "python:shop.views.index" or "python:utils.parse" or "python:config.path.join");
+    }
+
+    /// <summary>
+    /// <c>import a.b</c> binds <c>a</c>, the package, and reaches the module <c>a.b</c> by the names to it: a member of the package is the
+    /// package's - its <c>__init__.py</c>'s, never the module's of the same name - a member reached by the whole path is the module's,
+    /// and a chain through a module outside the tree reaches nothing of the tree's, though a function of its name is declared there. A
+    /// step between the head and the module the import names is made an import of its own the first time the code reaches through
+    /// it, and once.
+    /// </summary>
+    [Fact]
+    public void ADottedImport_BindsItsHead_AndReachesEachModuleByTheNamesToIt()
+    {
+        const string app = """
+            import os
+            import shop.geometry
+
+
+            def run(xs, root, name):
+                os.path.join(root, name)
+                shop.version()
+                return shop.geometry.largest(xs)
+            """;
+        var linked = Link(
+            ("shop/__init__.py", Read("shop/__init__.py", "def version(): ...\n")),
+            ("shop/geometry.py", Read("shop/geometry.py", "def largest(xs): ...\n\n\ndef version(): ...\n")),
+            ("tools/paths.py", Read("tools/paths.py", "def join(base, leaf): ...\n")),
+            ("app.py", Read("app.py", app)));
+
+        Assert.Equal(
+            [
+                (4, "os/__init__.py", "os.py", "os", (string?)null, true, false),
+                (4, "shop/__init__.py", "shop.py", "shop", (string?)null, true, false),
+                (4, "shop/geometry/__init__.py", "shop/geometry.py", "shop.geometry", (string?)null, false, false),
+            ],
+            Runs(Read("app.py", app)));
+        Assert.Equal(
+            [new CodeEdge("python:app.run", "python:shop.version", CodeEdgeKinds.Calls, 7, CodeConfidences.Exact), new CodeEdge("python:app.run", "python:shop.geometry.largest", CodeEdgeKinds.Calls, 8, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.From == "python:app.run" && edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.Line));
+
+        // The step a.b of import a.b.c, reached through, becomes an import of its own once; one the code never reaches is none.
+        Assert.Equal(["a", "a.b.c"], Runs(Read("app.py", "import a.b.c\n")).Select(run => run.Prefix));
+        Assert.Equal(["a", "a.b.c", "a.b"], Runs(Read("app.py", "import a.b.c\n\na.b.f()\na.b.g()\n")).Select(run => run.Prefix));
+    }
+
+    /// <summary>
+    /// A package whose <c>__init__.py</c> star-imports its modules gives their names to its importers, and a star import of a module
+    /// that star-imports another takes that one's names too, however the star imports come round: each file is walked once.
+    /// </summary>
+    [Fact]
+    public void APackageThatStarImportsItsModules_GivesTheirNames_AStarOfAStarAmongThem()
+    {
+        var linked = Link(
+            ("pkg/__init__.py", Read("pkg/__init__.py", "from .models import *\n")),
+            ("pkg/models.py", Read("pkg/models.py", "class Model:\n    pass\n")),
+            ("pkg/a.py", Read("pkg/a.py", "from .b import *\n\nfound = foo()\n")),
+            ("pkg/b.py", Read("pkg/b.py", "from .c import *\n")),
+            ("pkg/c.py", Read("pkg/c.py", "from .a import *\n\n\ndef foo(): ...\n")),
+            ("app.py", Read("app.py", "from pkg import Model\n\nmade = Model()\n")));
+
+        Assert.Contains(new CodeEdge("python:app.made", "python:pkg.models.Model", CodeEdgeKinds.Instantiates, 3, CodeConfidences.Unique), linked.Edges);
+        Assert.Equal(
+            [new CodeEdge("python:pkg.a.found", "python:pkg.c.foo", CodeEdgeKinds.Calls, 3, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.From == "python:pkg.a.found"));
+
+        // What a module with no literal __all__ publishes is its own names and what its own * imports take.
+        var starred = Read("pkg/b.py", "from .c import *\n");
+
+        Assert.True(starred.PublishesTaken);
+        Assert.Empty(starred.Published!);
+        Assert.False(Read("pkg/b.py", "from .c import *\n__all__ = [\"foo\"]\n").PublishesTaken);
+    }
+
+    /// <summary>
+    /// A star import takes a name the module publishes under another name than the declaration's - one it imports renamed - by the name
+    /// it publishes, with no <c>__all__</c> and with one that names it.
+    /// </summary>
+    [Fact]
+    public void AStarImport_TakesANameAModuleImportsUnderAnother_ByTheNameItPublishes()
+    {
+        var linked = Link(
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/lines.py", Read("pkg/lines.py", "class Line:\n    pass\n")),
+            ("pkg/cart.py", Read("pkg/cart.py", "from .lines import Line as CartLine\n")),
+            ("pkg/listed.py", Read("pkg/listed.py", "from .lines import Line as ListedLine\n\n__all__ = [\"ListedLine\"]\n")),
+            ("app.py", Read("app.py", "from pkg.cart import *\nfrom pkg.listed import *\n\nfirst = CartLine()\nsecond = ListedLine()\n")));
+
+        Assert.Contains(new CodeEdge("python:app.first", "python:pkg.lines.Line", CodeEdgeKinds.Instantiates, 4, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("python:app.second", "python:pkg.lines.Line", CodeEdgeKinds.Instantiates, 5, CodeConfidences.Unique), linked.Edges);
+    }
+
+    /// <summary>
+    /// A fixture is found as pytest finds one: the test's own module's, else the nearest <c>conftest.py</c>'s of its directory and of
+    /// each above it that declares it - an override in a deeper one shadowing the one above - and never a sibling directory's; a
+    /// fixture's own parameters name fixtures too.
+    /// </summary>
+    [Fact]
+    public void AFixture_IsTheNearestConftestsOfTheTestsDirectoryOrOneAbove_AndNoSiblings()
+    {
+        const string client = "import pytest\n\n\n@pytest.fixture\ndef client():\n    return 1\n";
+        var linked = Link(
+            ("tests/conftest.py", Read("tests/conftest.py", "import pytest\n\n\n@pytest.fixture\ndef username():\n    return \"outer\"\n")),
+            ("tests/sub/conftest.py", Read("tests/sub/conftest.py", "import pytest\n\n\n@pytest.fixture\ndef username():\n    return \"inner\"\n\n\n@pytest.fixture\ndef user(username):\n    return username\n")),
+            ("tests/sub/test_names.py", Read("tests/sub/test_names.py", "def test_name(username):\n    assert username\n\n\ndef test_user(user):\n    assert user\n")),
+            ("tests/test_top.py", Read("tests/test_top.py", "def test_name(username):\n    assert username\n")),
+            ("tests/api/conftest.py", Read("tests/api/conftest.py", client)),
+            ("tests/web/conftest.py", Read("tests/web/conftest.py", client)),
+            ("tests/api/test_api.py", Read("tests/api/test_api.py", "def test_get(client):\n    assert client\n")));
+
+        IEnumerable<CodeEdge> Fixtures(string from) => linked.Edges.Where(edge => edge.From == from && edge.Kind == CodeEdgeKinds.References);
+
+        Assert.Equal([new CodeEdge("python:tests.sub.test_names.test_name", "python:tests.sub.conftest.username", CodeEdgeKinds.References, 1, CodeConfidences.Exact)], Fixtures("python:tests.sub.test_names.test_name"));
+        Assert.Equal([new CodeEdge("python:tests.sub.test_names.test_user", "python:tests.sub.conftest.user", CodeEdgeKinds.References, 5, CodeConfidences.Exact)], Fixtures("python:tests.sub.test_names.test_user"));
+        Assert.Equal([new CodeEdge("python:tests.sub.conftest.user", "python:tests.sub.conftest.username", CodeEdgeKinds.References, 10, CodeConfidences.Exact)], Fixtures("python:tests.sub.conftest.user"));
+        Assert.Equal([new CodeEdge("python:tests.test_top.test_name", "python:tests.conftest.username", CodeEdgeKinds.References, 1, CodeConfidences.Exact)], Fixtures("python:tests.test_top.test_name"));
+        Assert.Equal([new CodeEdge("python:tests.api.test_api.test_get", "python:tests.api.conftest.client", CodeEdgeKinds.References, 1, CodeConfidences.Exact)], Fixtures("python:tests.api.test_api.test_get"));
+    }
+
+    /// <summary>
+    /// A bare import is looked for under the roots of the layout too, after the directories around the file: the directory an
+    /// outermost package stands in - <c>src/</c> of a project's packages, which no test's directory is above - and each a
+    /// <c>pyproject.toml</c> names, as pytest's <c>pythonpath</c> does; one root that holds the module is it, several are each a
+    /// candidate.
+    /// </summary>
+    [Fact]
+    public void ABareImport_IsLookedForUnderTheRootsOfTheLayout_AnOutermostPackagesAndAProjectFilesAlike()
+    {
+        var project = new PyprojectExtractor().Extract(new CodeFileInput("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = [\"lib\"]\n"));
+        var linked = CodeGraphLinker.Link(
+        [
+            Py("src/shop/__init__.py", string.Empty),
+            Py("src/shop/geometry.py", "def largest(xs): ...\n"),
+            Py("tests/test_geometry.py", "from shop.geometry import largest\n\n\ndef test_largest():\n    assert largest([1])\n"),
+            Py("lib/helpers.py", "def pack(): ...\n"),
+            Py("tests/test_helpers.py", "import helpers\n\n\ndef test_pack():\n    helpers.pack()\n"),
+            Py("src/util/__init__.py", string.Empty),
+            Py("lib/util/__init__.py", string.Empty),
+            Py("tests/test_util.py", "import util\n"),
+            new CodeGraphFile("pyproject.toml", "pyproject", project),
+        ]);
+
+        Assert.Equal(["lib"], project.LayoutRoots!);
+        Assert.Contains(new CodeEdge("file:tests/test_geometry.py", "file:src/shop/geometry.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("python:tests.test_geometry.test_largest", "python:src.shop.geometry.largest", CodeEdgeKinds.Tests, 5, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("file:tests/test_helpers.py", "file:lib/helpers.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("python:tests.test_helpers.test_pack", "python:lib.helpers.pack", CodeEdgeKinds.Tests, 5, CodeConfidences.Exact), linked.Edges);
+        Assert.Equal(
+            [new CodeEdge("file:tests/test_util.py", "file:lib/util/__init__.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates), new CodeEdge("file:tests/test_util.py", "file:src/util/__init__.py", CodeEdgeKinds.Imports, 1, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.From == "file:tests/test_util.py" && edge.Kind == CodeEdgeKinds.Imports).OrderBy(edge => edge.To, StringComparer.Ordinal));
+
+        // What the graph cannot reach that way is counted external, which the limits that name it carry as their sign.
+        Assert.Equal(3, new PythonExtractor().Help.DoesNotSee.Count(limit => limit.Signs.Contains(CodeGraphLimit.External)));
+    }
+
+    /// <summary>
+    /// An <c>__all__</c> of string literals is a list or a tuple - in parentheses or bare - and nothing else: a string in parentheses is
+    /// a string, and an <c>__all__</c> added to or taken away is one the code changes, marked, the module's public names published for it.
+    /// </summary>
+    [Fact]
+    public void AnAllOfLiterals_IsAListOrATuple_AndOneTheCodeChangesIsMarked()
+    {
+        const string declared = "\n\nclass Cart: ...\nclass Line: ...\n";
+
+        Assert.Equal(["Cart"], Read("pkg/m.py", "__all__ = (\"Cart\",)" + declared).Published!);
+        Assert.Equal(["Cart", "Line"], Read("pkg/m.py", "__all__ = \"Cart\", \"Line\"" + declared).Published!);
+        Assert.Empty(Read("pkg/m.py", "__all__ = ()" + declared).Published!);
+        Assert.All(new[] { "__all__ = (\"Cart\",)", "__all__ = \"Cart\", \"Line\"", "__all__ = ()" }, all => Assert.Empty(Read("pkg/m.py", all + declared).Dynamic));
+
+        foreach (var (all, line) in new[] { ("__all__ = (\"Line\")", 1), ("__all__ = [\"Cart\"]\n__all__ += [\"Line\"]", 2), ("__all__ = [\"Cart\"]\ndel __all__", 2) })
+        {
+            var changed = Read("pkg/m.py", all + declared);
+
+            Assert.Equal(["Cart", "Line"], changed.Published!);
+            Assert.Equal([(line, PythonReading.ComputedExports)], changed.Dynamic.Select(mark => (mark.Line, mark.Kind)));
+        }
+    }
+
+    /// <summary>
+    /// An import in a function binds for that function's code alone, and one in a class for the class's own - its body's and its
+    /// fields' values, never a method's: neither is a name of the module, published or reached through it by an importer.
+    /// </summary>
+    [Fact]
+    public void AnImportInAFunctionOrAClass_BindsForItsOwnCodeAlone()
+    {
+        var service = Read("pkg/service.py", "def run():\n    from .heavy import Engine\n    return Engine()\n\n\nclass Garage:\n    from .heavy import Engine\n    kept = Engine()\n\n    def start(self):\n        return Engine()\n");
+        var linked = Link(
+            ("pkg/__init__.py", Read("pkg/__init__.py", string.Empty)),
+            ("pkg/heavy.py", Read("pkg/heavy.py", "class Engine:\n    pass\n")),
+            ("pkg/service.py", service),
+            ("app.py", Read("app.py", "from pkg.service import Engine\nfrom pkg.service import *\n\nmade = Engine()\n")));
+
+        Assert.Equal(["run", "Garage"], service.Published!);
+        Assert.DoesNotContain(service.Imports, import => import.Reexports);
+        Assert.Contains(new CodeEdge("python:pkg.service.run", "python:pkg.heavy.Engine", CodeEdgeKinds.Instantiates, 3, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("python:pkg.service.Garage.kept", "python:pkg.heavy.Engine", CodeEdgeKinds.Instantiates, 8, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From is "python:app.made" or "python:pkg.service.Garage.start" && edge.To == "python:pkg.heavy.Engine");
+    }
+
+    /// <summary>
+    /// A link made again over Python files is the whole link: packages come around a module, whose bare import is then looked for
+    /// from above them.
+    /// </summary>
+    [Fact]
+    public void ALinkMadeAgain_FindsAgainAnImportWhosePackagesCame()
+    {
+        CodeGraphFile[] before = [Py("pkg/sub/mod.py", "import helper\n\nhelper.pack()\n"), Py("pkg/sub/helper.py", "def pack(): ...\n"), Py("helper.py", "def pack(): ...\n")];
+        CodeGraphFile[] after = [.. before, Py("pkg/__init__.py", string.Empty), Py("pkg/sub/__init__.py", string.Empty)];
+        var again = CodeGraphLinker.Relink(CodeGraphLinker.Link(before), after);
+
+        Assert.Equal(CodeGraphLinker.Link(after).Edges, again.Edges);
+        Assert.Equal(
+            [new CodeEdge("python:pkg.sub.mod", "python:helper.pack", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact)],
+            again.Edges.Where(edge => edge.From == "python:pkg.sub.mod" && edge.Kind == CodeEdgeKinds.Calls));
     }
 
     private static FileExtract Read(string path, string text) => new PythonExtractor().Extract(new CodeFileInput(path, text));
+
+    private static CodeGraphFile Py(string path, string text) => new(path, "python", Read(path, text));
 
     private static CodeGraphLinked Link(params (string Path, FileExtract Extract)[] files)
         => CodeGraphLinker.Link([.. files.Select(file => new CodeGraphFile(file.Path, "python", file.Extract))]);

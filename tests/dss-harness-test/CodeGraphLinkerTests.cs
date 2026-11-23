@@ -1891,6 +1891,76 @@ public sealed class CodeGraphLinkerTests
             File("a.t", [Member("lib.X.Run", 0) with { Extends = "X" }]),
             File("a.t", [Member("lib.X.Run", 0) with { Extends = "X", MembersByReceiver = true }]));
 
+        // What a file of a language that binds its names within the file reaches through another file's imports and layout: each
+        // a declaration named Run of an id of its own, so which one a call finds is seen.
+        reader = "t:Go";
+        static ExtractNode RunAt(string id) => Member("Run", 0) with { Id = id };
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+        var throughMid = Within(File("use.t", [go], [Call("Go", "Run", 0)], imports: [Import(CodeImportForms.Relative, "mid.t")]));
+        var runs = new[] { File("a.t", [RunAt("t:a.Run")]), File("b.t", [RunAt("t:b.Run")]) };
+
+        // Whether what another file's import binds is its importers' too: a re-export become one.
+        Case(
+            "whether an import's names are its importers' too",
+            [throughMid, .. runs],
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Show = ["Run"] }]),
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Show = ["Run"], Reexports = true }]));
+
+        // Whether another file's place is one of two a name may stand at: the place above become a candidate beside it.
+        Case(
+            "whether an import is one of two places",
+            [throughMid, .. runs],
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Reexports = true }, Import(CodeImportForms.Relative, "b.t") with { Reexports = true, Fallback = true }]),
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Reexports = true, Either = true }, Import(CodeImportForms.Relative, "b.t") with { Reexports = true, Fallback = true }]));
+
+        // The names a file publishes, which an import taking its published names makes visible alone.
+        var takesPublished = Within(File("use.t", [go], [Call("Go", "Run", 0)], imports: [Import(CodeImportForms.Relative, "lib.t") with { Published = true }]));
+        Case(
+            "the names a file publishes",
+            [takesPublished],
+            new CodeGraphFile("lib.t", "t", Extract([RunAt("t:lib.Run")]) with { Published = ["Stop"] }),
+            new CodeGraphFile("lib.t", "t", Extract([RunAt("t:lib.Run")]) with { Published = ["Run"] }));
+
+        // Whether what a file's own such imports take is among what it publishes: its * import's names become its own.
+        Case(
+            "whether a file publishes what its imports take",
+            [takesPublished, new CodeGraphFile("a.t", "t", Extract([RunAt("t:a.Run")]) with { Published = ["Run"] })],
+            new CodeGraphFile("lib.t", "t", Extract([]) with { Published = [], Imports = [Import(CodeImportForms.Relative, "a.t") with { Published = true, Reexports = true }] }),
+            new CodeGraphFile("lib.t", "t", Extract([]) with { Published = [], PublishesTaken = true, Imports = [Import(CodeImportForms.Relative, "a.t") with { Published = true, Reexports = true }] }));
+
+        // Whether a directory is a unit of its language's layout: a package's file come, so a place of the layout in it is passed
+        // over and the one above taken.
+        var layout = Within(File(
+            "pkg/sub/mod.t",
+            [go],
+            [Call("Go", "Run", 0, Prefix("h"))],
+            imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Layout = true }, Import(CodeImportForms.Relative, "../../helper.t") with { Prefix = "h", Layout = true, Fallback = true }]));
+        Case(
+            "a unit of the layout",
+            [layout, File("pkg/sub/helper.t", [RunAt("t:near.Run")]), File("helper.t", [RunAt("t:far.Run")])],
+            null,
+            new CodeGraphFile("pkg/sub/init.t", "t", Extract([]) with { FolderUnit = true }));
+
+        // The roots of the layout an import under one is found through: a root a project file declares moved, and a unit come
+        // that makes the directory it stands in one.
+        var rooted = Within(File("use.t", [go], [Call("Go", "Run", 0, Prefix("x"))], imports: [Import(CodeImportForms.Rooted, "x/run.t") with { Prefix = "x" }]));
+        var underRoots = new[] { rooted, File("src/x/run.t", [RunAt("t:src.Run")]), File("lib/x/run.t", [RunAt("t:lib.Run")]) };
+        Case(
+            "a root of the layout a file declares",
+            underRoots,
+            new CodeGraphFile("project.t", "t", Extract([]) with { LayoutRoots = ["src"] }),
+            new CodeGraphFile("project.t", "t", Extract([]) with { LayoutRoots = ["lib"] }));
+        Case("a unit that makes a root of the layout", underRoots, null, new CodeGraphFile("src/x/init.t", "t", Extract([]) with { FolderUnit = true }));
+
+        // What a directory's import serves: become the fixture references' alone, which a test's parameter now reaches a fixture through.
+        Case(
+            "what an import serves",
+            [
+                Within(File("tests/t.t", [go], [Ref("Go", CodeEdgeKinds.References, "sample") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Fixture) }])),
+            ],
+            File("tests/conf.t", [Member("conf.sample", 0) with { SubKind = CodeSubKinds.Fixture }], scopes: [Open("conf")], imports: [Import(CodeImportForms.Directory, "conf")]),
+            File("tests/conf.t", [Member("conf.sample", 0) with { SubKind = CodeSubKinds.Fixture }], scopes: [Open("conf")], imports: [Import(CodeImportForms.Directory, "conf") with { Serves = CodeQualifierKinds.Fixture }]));
+
         // The keys' join: a key come that a member's name and a literal name, each now a use of it.
         reader = "t:Reader";
         Case(
@@ -1933,6 +2003,22 @@ public sealed class CodeGraphLinkerTests
 
         Assert.Equal([Edge("t:lib.Cart.render", "t:lib.render", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Cart.render"));
         Assert.Equal([Edge("t:lib.Box.paint", "t:lib.draw", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Box.paint"));
+    }
+
+    /// <summary>
+    /// A fixture qualifier reaches a fixture alone - a member of that kind within a kind - as every qualifier that names the kind it
+    /// reaches does: through the scope import that serves fixtures, exact; a type of that kind, and a member of none, are not reached.
+    /// </summary>
+    [Fact]
+    public void AFixtureQualifier_ReachesAFixtureMemberAlone()
+    {
+        var test = File("tests/t.t", [Member("Go", 0)], [Ref("Go", CodeEdgeKinds.References, "sample") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Fixture) }]);
+        IReadOnlyList<CodeEdge> Reached(ExtractNode sample)
+            => [.. Link(test, File("tests/conf.t", [sample], scopes: [Open("c")], imports: [Import(CodeImportForms.Directory, "c") with { Serves = CodeQualifierKinds.Fixture }])).Edges.Where(edge => edge.From == "t:Go")];
+
+        Assert.Equal([Edge("t:Go", "t:c.sample", CodeEdgeKinds.References, CodeConfidences.Exact)], Reached(Member("c.sample", 0) with { SubKind = CodeSubKinds.Fixture }));
+        Assert.Empty(Reached(Type("c.sample") with { SubKind = CodeSubKinds.Fixture }));
+        Assert.Empty(Reached(Member("c.sample", 0)));
     }
 
     /// <summary>Two files of one path are no tree: the linker refuses them.</summary>
@@ -2038,6 +2124,10 @@ public sealed class CodeGraphLinkerTests
             references.Add(RandomReference(random, Pick(random, nodes).Id.Whole(), made, Pick(random, nodes).Id.Whole()));
         }
 
+        // Now and then a file of a language that binds its names within it, one that says its directory is a unit of its layout or
+        // declares a root of it, and one that publishes names - and what its own imports that take published names take.
+        IReadOnlyList<string>? published = Chance(random, 3) ? [.. RandomNames.Where(_ => Chance(random, 4))] : null;
+
         return new CodeGraphFile(path, Chance(random, 12) ? "u" : "t", new FileExtract(nodes)
         {
             References = references,
@@ -2045,8 +2135,16 @@ public sealed class CodeGraphLinkerTests
             Imports = RandomImports(random),
             AddressRoots = Chance(random, 5) ? [RandomRoot(random)] : [],
             Literals = nodes.Count > 0 && Chance(random, 3) ? LiteralRow.Table(new LiteralRow(Pick(random, RandomData), 1)) : [],
+            BoundWithin = Chance(random, 4),
+            FolderUnit = Chance(random, 4),
+            LayoutRoots = Chance(random, 6) ? [Pick(random, RandomLayoutRoots)] : null,
+            Published = published,
+            PublishesTaken = published is not null && Chance(random, 2),
         });
     }
+
+    /// <summary>The roots of the layout a file made at random declares, each beside it: some a directory of the tree's paths, one the file's own, one out of the tree.</summary>
+    private static readonly string[] RandomLayoutRoots = ["lib", "app", ".", "..", "../../out"];
 
     /// <summary>The names a tree made at random gives its data and its literals: some a member's name is, as a naming policy writes it.</summary>
     private static readonly string[] RandomData = ["run", "stop", "Run", "Make", "next_one", "timeout"];
@@ -2141,12 +2239,14 @@ public sealed class CodeGraphLinkerTests
         => new(from, Pick(random, [CodeEdgeKinds.Calls, CodeEdgeKinds.Calls, CodeEdgeKinds.References, CodeEdgeKinds.Uses]), Pick(random, [.. RandomNames, .. RandomData]), line)
         {
             Arity = random.Next(0, 2),
-            Qualifier = random.Next(16) switch
+            Probe = Chance(random, 10),
+            Qualifier = random.Next(17) switch
             {
                 12 => new ExtractQualifier(CodeQualifierKinds.StyleVariable),
                 13 => new ExtractQualifier(CodeQualifierKinds.StyleMixin),
                 14 => new ExtractQualifier(CodeQualifierKinds.Keyframes),
                 15 => new ExtractQualifier(CodeQualifierKinds.Own, own),
+                16 => new ExtractQualifier(CodeQualifierKinds.Fixture),
                 0 or 1 => null,
                 2 => new ExtractQualifier(CodeQualifierKinds.Named, Dotted(random)),
                 3 => new ExtractQualifier(CodeQualifierKinds.Type, Dotted(random)),
@@ -2175,9 +2275,14 @@ public sealed class CodeGraphLinkerTests
     }
 
     private static ExtractImport RandomImport(Random random)
-        => random.Next(5) switch
+        => random.Next(6) switch
         {
-            3 => Import(CodeImportForms.Directory, Pick(random, [.. RandomScopes, "lib.A", "app.B"])),
+            3 => Import(CodeImportForms.Directory, Pick(random, [.. RandomScopes, "lib.A", "app.B"])) with { Serves = Chance(random, 3) ? CodeQualifierKinds.Fixture : null },
+            5 => Import(CodeImportForms.Rooted, Pick(random, ["x.t", "in/w.t", "m.t", "ui/v.t", "y.t"])) with
+            {
+                Prefix = Chance(random, 2) ? "p" : null,
+                Reexports = Chance(random, 3),
+            } is var rooted && rooted.Prefix is null && Chance(random, 4) ? rooted with { Published = true } : rooted,
             0 or 1 => Import(CodeImportForms.Scope, Pick(random, [.. RandomScopes, "lib.A", "app.B", "far.C"])) with
             {
                 Prefix = Chance(random, 3) ? Pick(random, ["p", "A"]) : null,
@@ -2190,9 +2295,28 @@ public sealed class CodeGraphLinkerTests
                 Prefix = Chance(random, 3) ? "p" : null,
             } is var file && Chance(random, 4) ? file with { Prefix = null, Export = true, Hide = Chance(random, 3) ? [Pick(random, RandomNames)] : null }
                 : file.Prefix is null && Chance(random, 5) ? file with { Shares = true }
-                : file,
+                : RandomFileImport(random, file),
             _ => Import(CodeImportForms.Address, Pick(random, ["pkg:x.t", "pkg:in/w.t", "q:m.t", "q:ui/v.t"])),
         };
+
+    /// <summary>
+    /// <paramref name="file"/>, an import of a file that is no export, now and then made what a language that binds its names within
+    /// the file writes: its names its importers' too, a place of its layout, one of two places a name may stand at, one whose prefix
+    /// stands for the one name it shows, or one that takes the names a file publishes.
+    /// </summary>
+    private static ExtractImport RandomFileImport(Random random, ExtractImport file)
+    {
+        file = file with
+        {
+            Reexports = Chance(random, 3),
+            Layout = file.Form == CodeImportForms.Relative && Chance(random, 3),
+            Either = Chance(random, 6),
+        };
+
+        return file.Prefix is not null && Chance(random, 3) ? file with { Binds = true, Show = [Pick(random, RandomNames)] }
+            : file.Prefix is null && Chance(random, 5) ? file with { Published = true }
+            : file;
+    }
 
     private static ExtractAddressRoot RandomRoot(Random random)
         => (Chance(random, 3)
@@ -2240,7 +2364,7 @@ public sealed class CodeGraphLinkerTests
             }
         }
 
-        switch (random.Next(20))
+        switch (random.Next(21))
         {
             case 0:
                 Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is null && Chance(random, 2), node => node with { ValueType = Chance(random, 4) ? null : Dotted(random) });
@@ -2254,11 +2378,16 @@ public sealed class CodeGraphLinkerTests
 
             case 14 when imports.Count > 0:
                 var changing = random.Next(imports.Count);
-                imports[changing] = random.Next(4) switch
+                imports[changing] = random.Next(9) switch
                 {
-                    0 => imports[changing] with { Prefix = imports[changing].Prefix is null ? Pick(random, ["p", "A"]) : null },
-                    1 => imports[changing] with { Show = imports[changing].Show is null ? [Pick(random, RandomNames)] : null },
-                    2 => imports[changing] with { Hide = imports[changing].Hide is null ? [Pick(random, RandomNames)] : null },
+                    4 => imports[changing] with { Reexports = !imports[changing].Reexports },
+                    5 when imports[changing].Form == CodeImportForms.Relative && !imports[changing].Export => imports[changing] with { Layout = !imports[changing].Layout },
+                    6 when imports[changing].Form is not (CodeImportForms.Scope or CodeImportForms.Directory) && !imports[changing].Export => imports[changing] with { Either = !imports[changing].Either },
+                    7 when imports[changing] is { Form: not (CodeImportForms.Scope or CodeImportForms.Directory), Prefix: null, Show: null, Hide: null, Export: false, Binds: false } => imports[changing] with { Published = !imports[changing].Published },
+                    8 when imports[changing].Form == CodeImportForms.Directory => imports[changing] with { Serves = imports[changing].Serves is null ? CodeQualifierKinds.Fixture : null },
+                    0 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Prefix = imports[changing].Prefix is null ? Pick(random, ["p", "A"]) : null },
+                    1 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Show = imports[changing].Show is null ? [Pick(random, RandomNames)] : null },
+                    2 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Hide = imports[changing].Hide is null ? [Pick(random, RandomNames)] : null },
                     3 when imports[changing] is { Form: not (CodeImportForms.Scope or CodeImportForms.Directory), Prefix: null } => imports[changing] with { Export = !imports[changing].Export, Shares = false },
                     _ => imports[changing] with { Global = !imports[changing].Global },
                 };
@@ -2384,6 +2513,20 @@ public sealed class CodeGraphLinkerTests
                 // Data made another kind under its id - a mixin become a function, a key an element - which what may reach
                 // it reads.
                 Each(node => CodeSubKinds.IsData(node.SubKind) && Chance(random, 2), node => node with { SubKind = Pick(random, RandomDataKinds) });
+                break;
+
+            case 20:
+                // What a file says of itself that another file's finding reads: whether its names are bound within it, whether its
+                // directory is a unit of its layout, the roots it declares, the names it publishes and whether what its imports take
+                // is among them.
+                extract = random.Next(5) switch
+                {
+                    0 => extract with { BoundWithin = !extract.BoundWithin },
+                    1 => extract with { FolderUnit = !extract.FolderUnit },
+                    2 => extract with { LayoutRoots = extract.LayoutRoots is null ? [Pick(random, RandomLayoutRoots)] : null },
+                    3 => extract with { Published = extract.Published is null ? [Pick(random, RandomNames)] : null, PublishesTaken = false },
+                    _ => extract.Published is null ? extract : extract with { PublishesTaken = !extract.PublishesTaken },
+                };
                 break;
 
             default:

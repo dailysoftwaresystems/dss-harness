@@ -202,14 +202,15 @@ public static class CodeSubKinds
     public static bool IsData(string? subKind) => subKind is Key or Element or Rule or Keyframes or StyleMixin or StyleFunction or FontFace or StyleVariable or Sheet;
 
     /// <summary>
-    /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a rule for a
-    /// selector, a key for a key qualifier, and for each qualifier a style sheet writes where its syntax says what a name
-    /// names - a variable, a mixin, a function, an animation's keyframes, a font's face - that kind; <see langword="null"/>
-    /// for every other, which reaches no node of data by its name alone.
+    /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a fixture for a
+    /// fixture qualifier, a rule for a selector, a key for a key qualifier, and for each qualifier a style sheet writes where
+    /// its syntax says what a name names - a variable, a mixin, a function, an animation's keyframes, a font's face - that
+    /// kind; <see langword="null"/> for every other, which reaches no node of data by its name alone.
     /// </summary>
     /// <param name="qualifier">The kind of a reference's qualifier (<see cref="CodeQualifierKinds"/>), or <see langword="null"/>.</param>
     public static string? ReachedBy(string? qualifier) => qualifier switch
     {
+        CodeQualifierKinds.Fixture => Fixture,
         CodeQualifierKinds.Selector => Rule,
         CodeQualifierKinds.Key => Key,
         CodeQualifierKinds.StyleVariable => StyleVariable,

@@ -209,6 +209,7 @@ public sealed partial class HelpTests
             ["php"] = "PHP through it too",
             ["composer"] = "`composer.json`",
             ["python"] = "Python through it too",
+            ["pyproject"] = "each `pyproject.toml` and `setup.cfg`",
             ["css"] = "style sheets through it too",
             ["html"] = "an HTML page's sections",
             ["vue"] = "a Vue component's template, script and styles",

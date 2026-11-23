@@ -106,9 +106,18 @@ public sealed record CodeGraphLimit(string Says)
     public const string Candidates = "candidates";
 
     /// <summary>
-    /// The signs a file gives that the limit applies to it: <see cref="Candidates"/>, or the kind of a dynamic mark its reading
-    /// made (<see cref="ExtractDynamic.Kind"/>) - a sign names one limit as another may name it, where both tell of one thing.
-    /// None where no sign of it is named: the limit is said of every file of its language all the same, and marked of none.
+    /// The sign of a file some of whose references the linker bound to nothing the repository declares, each counted external
+    /// (<see cref="CodeGraphLinked.External"/>): where a language binds its names within the file (<see cref="FileExtract.BoundWithin"/>),
+    /// a callee the tree does declare that the file reaches by a way the graph does not read - a root of a layout it does not
+    /// know, a name bound by nothing the file says - is counted so, and the limit that names that way says why.
+    /// </summary>
+    public const string External = "external";
+
+    /// <summary>
+    /// The signs a file gives that the limit applies to it: <see cref="Candidates"/>, <see cref="External"/>, or the kind of a
+    /// dynamic mark its reading made (<see cref="ExtractDynamic.Kind"/>) - a sign names one limit as another may name it, where
+    /// both tell of one thing. None where no sign of it is named: the limit is said of every file of its language all the same,
+    /// and marked of none.
     /// </summary>
     public IReadOnlyList<string> Signs { get; init; } = [];
 

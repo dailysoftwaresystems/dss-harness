@@ -99,6 +99,12 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool FolderUnit { get; init; }
 
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool PublishesTaken { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public IReadOnlyList<string>? LayoutRoots { get; init; }
+
         /// <summary><paramref name="extract"/> as its record holds it.</summary>
         /// <exception cref="JsonException">A field names a node, or a scope, the extract holds none of: no sound extract does, and none is kept otherwise.</exception>
         public static StoredExtract Of(FileExtract extract)
@@ -185,6 +191,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 Published = extract.Published,
                 BoundWithin = extract.BoundWithin,
                 FolderUnit = extract.FolderUnit,
+                PublishesTaken = extract.PublishesTaken,
+                LayoutRoots = extract.LayoutRoots,
             };
         }
 
@@ -335,6 +343,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 Published = Published,
                 BoundWithin = BoundWithin,
                 FolderUnit = FolderUnit,
+                PublishesTaken = PublishesTaken,
+                LayoutRoots = LayoutRoots,
             };
         }
     }

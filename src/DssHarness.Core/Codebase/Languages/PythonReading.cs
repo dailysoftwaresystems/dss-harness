@@ -8,14 +8,15 @@ namespace DssHarness.Core.Codebase.Languages;
 /// written at - a package's <c>__init__.py</c> its directory's - and one open scope, every name of which an importer may
 /// reach; what stands at its top and in its classes - each <c>class</c> a type, each <c>def</c> and <c>async def</c> a function
 /// or a method, <c>__init__</c> a constructor, each name assigned at the top or in a class a constant or a field, nested
-/// classes and functions kept with the node that holds them - with its lines, signature and summary; its imports, absolute
-/// ones addresses the package layout resolves and relative ones paths beside the file, each name they bind; its base lists,
+/// classes and functions kept with the node that holds them - with its lines, signature and summary; its imports - a bare
+/// module looked for by the package layout and its roots, a relative one beside the file - each name they bind for the code of
+/// the declaration they are written in; its base lists,
 /// the first an <c>inherits</c> and the others <c>mixesIn</c>; each call a body makes by its name and arity, with what its
 /// receiver is where the code says - <c>self</c>, <c>cls</c>, <c>super()</c>, a class, an import's name - each class a call
 /// makes where the code writes a capitalized name, each type an annotation, an <c>isinstance</c> or an <c>except</c> names,
 /// each attribute and name a body reads without calling it, and each string literal the file holds; and a test file's
 /// <c>test*</c> functions, <c>Test*</c> classes and <c>TestCase</c> subclasses as tests, each fixture a parameter of a test
-/// names a reference of it.
+/// or of a fixture names a reference of it.
 /// </summary>
 /// <remarks>
 /// Python's blocks are made by indentation, which is no token: each token says its line, and the reader finds its column
@@ -104,8 +105,11 @@ internal sealed class PythonReading
     /// <summary>Where each token begins that no run of the body it stands in reads: a declaration's own, read by its own reading.</summary>
     private readonly HashSet<long> _kept = [];
 
-    /// <summary>The names the file's imports bind, by the name the code reaches them by.</summary>
+    /// <summary>The names the imports at the module's top bind - in its conditional blocks too - by the name the code reaches them by.</summary>
     private readonly Dictionary<string, Binding> _bindings = new(StringComparer.Ordinal);
+
+    /// <summary>The names the imports of each function and class bind for its own code, by the declaration's key (<see cref="BindingOf"/>).</summary>
+    private readonly Dictionary<QualifiedName, LocalBindings> _local = [];
 
     /// <summary>
     /// The names the module's top binds, in the order the file first binds them - what it declares and what it imports alike: those not
@@ -167,19 +171,30 @@ internal sealed class PythonReading
             });
 
             _extract.Scope(module, open: true, parent: null);
+
+            // A conftest.py's fixtures are given by pytest to every test under its directory, which no test imports: its module's
+            // scope is an import of every file under it that serves the references a fixture qualifier makes alone.
+            if (CodeGraphIds.FileName(_path) == "conftest.py")
+            {
+                _extract.Import(new ExtractImport(CodeImportForms.Directory, dotted, 1) { Serves = CodeQualifierKinds.Fixture });
+            }
+
             Walk(statements, ScanFrame.Top.Inside(module, module, key, null));
 
             // What the top does outside its declarations is the module's own code.
             Calls(_text, 0, _scan.Count, key, Bind(0, _scan.Count), null);
-
-            // A Python name is bound by the module's own names and its imports, or not at all: the repository's declarations are not
-            // looked through for one bound by neither. What a * import of the module binds is said here, once every name is bound.
-            _extract.BoundWithin = true;
-            _extract.Published = Published();
-            _extract.FolderUnit = _package;
-            MarkUnclosed();
         }
 
+        MarkUnclosed();
+
+        // A Python name is bound by the module's own names and its imports, or not at all: the repository's declarations are not
+        // looked through for one bound by neither. What a * import of the module binds is said here, once every name is bound - what
+        // its own * imports bind among it where no literal __all__ names it - and a package's __init__.py says its directory is a
+        // unit of the layout whatever it holds, the commonest one, empty or of comments alone, among them.
+        _extract.BoundWithin = true;
+        _extract.Published = Published();
+        _extract.PublishesTaken = !_allLiteral;
+        _extract.FolderUnit = _package;
         _extract.Generated = ScanComments.Generated(_scan);
         return _extract.Build();
     }
@@ -442,10 +457,6 @@ internal sealed class PythonReading
         {
             Class(at, to, frame, decorators);
         }
-        else if (Is(at, "import") || Is(at, "from"))
-        {
-            Import(at, to);
-        }
         else if (Compound.Contains(Text(at)) && HeaderColon(at, to) is var colon && colon >= 0)
         {
             Header(at, colon, to, frame);
@@ -500,12 +511,15 @@ internal sealed class PythonReading
         Walk(Suite(colon, to, Column(at)).Statements, frame);
     }
 
-    /// <summary>A simple statement from <paramref name="at"/> to <paramref name="to"/>: an import, a declaration the graph keeps, or code the body's run reads.</summary>
+    /// <summary>
+    /// A simple statement from <paramref name="at"/> to <paramref name="to"/>, the semicolons between them already parted: an import, a
+    /// declaration the graph keeps, or code the body's run reads.
+    /// </summary>
     private void SimpleStatement(int at, int to, ScanFrame frame)
     {
         if (Is(at, "import") || Is(at, "from"))
         {
-            Import(at, to);
+            Import(at, to, frame);
             return;
         }
 
@@ -690,31 +704,38 @@ internal sealed class PythonReading
     }
 
     /// <summary>
-    /// Whether the tokens from <paramref name="from"/> to <paramref name="to"/> are a list of string literals alone: a bracket, string
-    /// literals one after another with a comma between them and a trailing comma allowed, its bracket - nothing else, no name, no
-    /// call, no concatenation - the whole of the range.
+    /// Whether the tokens from <paramref name="from"/> to <paramref name="to"/> are a list or a tuple of string literals alone: string
+    /// literals one after another with a comma between them and a trailing comma allowed - nothing else, no name, no call, no
+    /// concatenation - in a bracket or in parentheses that are the whole of the range, or bare with a comma among them, as Python
+    /// writes a tuple; one string in parentheses or alone is a string and no tuple.
     /// </summary>
     private bool IsLiteralList(int from, int to)
     {
-        var close = _scan.Is(from, "[") ? _scan.Match(from) : -1;
+        var end = Math.Min(to, _scan.Count);
+        var grouped = _scan.Is(from, "[") || _scan.Is(from, "(");
+        var close = grouped ? _scan.Match(from) : end;
 
-        if (close < 0 || _scan.Next(close) != Math.Min(to, _scan.Count))
+        if (grouped && (close < 0 || _scan.Next(close) != end))
         {
             return false;
         }
 
-        for (var at = _scan.Next(from); at < close;)
+        var strings = 0;
+        var commas = 0;
+
+        for (var at = grouped ? _scan.Next(from) : from; at < close;)
         {
             if (_scan[at].Kind != ScanTokenKind.Text)
             {
                 return false;
             }
 
+            strings++;
             at = _scan.Next(at);
 
             if (at >= close)
             {
-                return true;
+                break;
             }
 
             if (!_scan.Is(at, ","))
@@ -722,10 +743,11 @@ internal sealed class PythonReading
                 return false;
             }
 
+            commas++;
             at = _scan.Next(at);
         }
 
-        return true;
+        return _scan.Is(from, "[") || commas > 0 || (grouped && strings == 0);
     }
 
     /// <summary>Whether the name at <paramref name="at"/> is the word <paramref name="word"/>.</summary>
@@ -820,10 +842,11 @@ internal sealed class PythonReading
             Decorator(decorator, key, frame.Owner);
         }
 
-        if (test)
+        if (test || fixture)
         {
-            // Each parameter a test requires names the fixture that provides it, by its name alone: the test's own file's, or a
-            // conftest.py's above it, which no test imports.
+            // Each parameter a test or a fixture requires names the fixture that provides it, by its name alone: as pytest finds it,
+            // the test's own class's or module's, else a conftest.py's of its directory or of one above it, the nearest first, which
+            // no test imports.
             foreach (var (needed, line) in parameters.Required.Where(required => required.Name != "self" && required.Name != "cls"))
             {
                 _extract.Reference(key, CodeEdgeKinds.References, needed, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Fixture));
@@ -957,7 +980,7 @@ internal sealed class PythonReading
         {
             foreach (var (from, endOf) in ScanCalls.Split(_scan, _scan.Next(_scan.Next(nameAt)), close, null))
             {
-                if (BaseName(from, endOf) is { } named)
+                if (BaseName(from, endOf, frame.Parent!) is { } named)
                 {
                     var (written, qualifier) = named;
                     var target = Simple(written);
@@ -1001,11 +1024,12 @@ internal sealed class PythonReading
     }
 
     /// <summary>
-    /// The base the tokens from <paramref name="from"/> to <paramref name="to"/> name, where they are a name or a dotted one alone: written out
-    /// in dots, and the import's name a dotted one is reached through where its head is one, a class the file declares named as a type;
-    /// <see langword="null"/> where they are anything else.
+    /// The base the tokens from <paramref name="from"/> to <paramref name="to"/> name, where they are a name or a dotted one alone, read in
+    /// the code of the node of <paramref name="key"/>: written out in dots, a name an import binds read as what it reaches and a dotted one
+    /// through the import its head is (<see cref="ThroughImport"/>), a class the file declares named as a type; <see langword="null"/>
+    /// where they are anything else.
     /// </summary>
-    private (string Written, ExtractQualifier? Qualifier)? BaseName(int from, int to)
+    private (string Written, ExtractQualifier? Qualifier)? BaseName(int from, int to, QualifiedName key)
     {
         var chain = Chain(_scan, from);
 
@@ -1015,16 +1039,17 @@ internal sealed class PythonReading
         }
 
         var written = string.Join('.', chain.Select(Text));
+        var through = BindingOf(Text(from), key);
 
-        if (chain.Count == 1 && _bindings.TryGetValue(Text(from), out var alone))
+        if (chain.Count == 1 && through is not null)
         {
             // A base an import binds: from m import A as B; class C(B) is built on A, through B.
-            return alone.Kind == BindingKind.Module ? null : (alone.Name, alone.Kind == BindingKind.Renamed ? new ExtractQualifier(CodeQualifierKinds.Prefix, alone.Local) : null);
+            return through.Kind == BindingKind.Module ? null : (through.Name, Itself(through));
         }
 
-        if (chain.Count > 1 && _bindings.TryGetValue(Text(chain[0]), out var through))
+        if (chain.Count > 1 && through is not null)
         {
-            return (written, new ExtractQualifier(CodeQualifierKinds.Prefix, through.Local));
+            return (written, ThroughImport(_scan, chain, through));
         }
 
         return (written, chain.Count > 1 && _classes.Contains(Text(chain[0])) ? new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(Text(chain[0]))) : null);
@@ -1033,33 +1058,60 @@ internal sealed class PythonReading
     // ---- Imports ----
 
     /// <summary>
-    /// The file's imports: <c>import a.b.c</c>, <c>import a.b.c as m</c> - a module the package layout holds, reached by the name the code
-    /// gives it; <c>from a.b import c, d as e</c> - the module, showing each name it binds, which are the file's importers's too, and each
-    /// name a module of its own where one stands so, bound by the name the code gives it; <c>from a.b import *</c> - the names the module
-    /// publishes. A module by a bare name is looked for under each directory from the tree's root down to the file's own, the root first,
-    /// as a path Python searches (<see cref="Reaching"/>); one by a relative path, beside the file.
+    /// The file's imports, each the import of the frame it is written in: <c>import a.b.c</c> - the package <c>a</c> by the name the code
+    /// gives it, and the module <c>a.b.c</c> reached by the dotted names to it, as Python binds <c>a</c> and reaches each module through
+    /// it, a step between them - <c>a.b</c> - a module of its own where the code reaches it (<see cref="ThroughImport"/>);
+    /// <c>import a.b.c as m</c> - the module, reached by <c>m</c>; <c>from a.b import c, d as e</c> - the module, showing each name it
+    /// binds, and each name where it is a module of its own, else the name the module binds by it (<see cref="ExtractImport.Binds"/>),
+    /// reached by the name the code gives it, so <c>c.f()</c> finds <c>f</c> in either; <c>from a.b import *</c> - the names the module
+    /// publishes. One at the module's top - in its conditional blocks too - binds names of the module, its importers' too
+    /// (<see cref="ExtractImport.Reexports"/>), and what a <c>*</c> import of the module binds; one in a function or a class binds for
+    /// the code of that declaration alone, and is reached by a prefix no other code of the file writes. A module by a bare name is looked
+    /// for from the file's own directory up to the tree's root, the nearest first, then under the roots of the layout
+    /// (<see cref="Places"/>); one by a relative path, beside the file.
     /// </summary>
-    private void Import(int at, int to)
+    private void Import(int at, int to, ScanFrame frame)
     {
         Keep(at, to);
         var line = _scan[at].Line;
+        var top = frame.Depth == 1;
+        var holder = frame.Parent!;
+
+        // What a declaration imports is reached by a prefix of its own: its id, a colon after it, which no name of the language writes.
+        var own = top ? string.Empty : $"{holder.Whole()}:";
 
         if (Is(at, "import"))
         {
             foreach (var (from, _) in ScanCalls.Split(_scan, _scan.Next(at), to, null))
             {
                 var chain = Chain(_scan, from);
-                var address = string.Join('.', chain.Select(Text));
                 var alias = _scan.Is(_scan.Next(chain[^1]), "as") && _scan.IsName(_scan.Next(_scan.Next(chain[^1]))) ? Text(_scan.Next(_scan.Next(chain[^1]))) : null;
-                var local = alias ?? Text(from);
 
-                foreach (var imported in Reaching(0, string.Join('/', chain.Select(Text)), line))
+                // import a.b.c as m: m is the module a.b.c.
+                if (alias is not null)
                 {
-                    _extract.Import(imported with { Prefix = local });
+                    var path = string.Join('/', chain.Select(Text));
+                    Imports(Reaching(0, path, line), own + alias, top);
+                    Bind(holder, new Binding(BindingKind.Module, alias, path, own + alias, null, path), frame);
+                    continue;
                 }
 
-                _bindings[local] = new Binding(BindingKind.Module, local, address);
-                Top(local);
+                // import a.b.c: a is the package a, and the module a.b.c is reached by a.b.c.
+                var head = Text(from);
+                var binding = Bind(holder, new Binding(BindingKind.Module, head, head, own + head, null, head), frame);
+                Imports(Reaching(0, head, line), own + head, top);
+
+                if (chain.Count > 1)
+                {
+                    var step = binding.Head;
+
+                    foreach (var name in chain.Skip(1))
+                    {
+                        step = step.Next.TryGetValue(Text(name), out var next) ? next : step.Next[Text(name)] = new ImportStep(step, Text(name), line);
+                    }
+
+                    Reached(step, binding);
+                }
             }
 
             return;
@@ -1095,14 +1147,14 @@ internal sealed class PythonReading
             names = _scan.Next(names);
         }
 
-        var written = string.Join('.', module);
+        var modulePath = string.Join('/', module);
 
-        // from m import *: the names the module publishes, alone.
+        // from m import *: the names the module publishes, alone - at the module's top names of the module's too.
         if (_scan.Is(names, "*"))
         {
-            foreach (var imported in Reaching(dots, string.Join('/', module), line))
+            foreach (var imported in Reaching(dots, modulePath, line))
             {
-                _extract.Import(imported with { Published = true });
+                _extract.Import(imported with { Published = true, Reexports = top });
             }
 
             return;
@@ -1122,88 +1174,260 @@ internal sealed class PythonReading
 
         if (plain.Count > 0)
         {
-            foreach (var imported in Reaching(dots, string.Join('/', module), line))
-            {
-                _extract.Import(imported with { Show = plain, Reexports = true });
-            }
+            Imports(Reaching(dots, modulePath, line), top ? null : own, top, plain);
         }
 
         foreach (var (name, alias) in importedNames)
         {
+            var local = alias ?? name;
+            var prefix = own + local;
+
             // A renamed name is shown by the module under the name the code gives it.
             if (alias is not null)
             {
-                foreach (var imported in Reaching(dots, string.Join('/', module), line))
-                {
-                    _extract.Import(imported with { Prefix = alias, Show = [name], Reexports = true });
-                }
-
-                _bindings[alias] = new Binding(BindingKind.Renamed, alias, name);
-                Top(alias);
-            }
-            else
-            {
-                _bindings[name] = new Binding(BindingKind.Shown, name, name);
-                Top(name);
+                Imports(Reaching(dots, modulePath, line), prefix, top, [name]);
             }
 
-            // The name where it is a module of its own: reached through the name the code gives it, so x.f() finds f in it.
-            foreach (var imported in Reaching(dots, string.Join('/', module.Concat([name])), line))
+            // The name where it is a module of its own, else the name the module binds by it: reached through the name the code gives
+            // it, so x.f() finds f in either - the module's f, or the member f of the class the module binds as x.
+            foreach (var imported in ReachingName(dots, modulePath, name, line))
             {
-                _extract.Import(imported with { Prefix = alias ?? name });
+                _extract.Import(imported with { Prefix = prefix, Reexports = top });
             }
+
+            Bind(holder, new Binding(alias is null ? BindingKind.Shown : BindingKind.Renamed, local, name, prefix, alias is null ? (top ? null : own) : prefix, modulePath), frame);
+        }
+    }
+
+    /// <summary>Makes each of <paramref name="places"/> an import of the file: reached by <paramref name="prefix"/>, showing <paramref name="show"/>, and - where <paramref name="reexports"/> - the file's importers' too.</summary>
+    private void Imports(IEnumerable<ExtractImport> places, string? prefix, bool reexports, IReadOnlyList<string>? show = null)
+    {
+        foreach (var place in places)
+        {
+            _extract.Import(place with { Prefix = prefix, Show = show, Reexports = reexports });
         }
     }
 
     /// <summary>
+    /// Says the import that binds <paramref name="binding"/> binds it for the code of the node of <paramref name="holder"/> - the
+    /// module's for one at its top, which is a name of the module too (<see cref="Top"/>), and a class's for its own code alone where
+    /// <paramref name="frame"/> is a class's body - and answers the binding the code reaches it by: <c>import a.b</c> and
+    /// <c>import a.c</c> bind <c>a</c> once, the steps of both reached through it.
+    /// </summary>
+    private Binding Bind(QualifiedName holder, Binding binding, ScanFrame frame)
+    {
+        var top = frame.Depth == 1;
+        var bindings = top ? _bindings : _local.TryGetValue(holder, out var held) ? held.Names : (_local[holder] = new LocalBindings(frame.Owner is not null)).Names;
+
+        if (top)
+        {
+            Top(binding.Local);
+        }
+
+        if (binding.Kind == BindingKind.Module && bindings.TryGetValue(binding.Local, out var was) && was.Kind == BindingKind.Module && was.Prefix == binding.Prefix && was.Path == binding.Path)
+        {
+            return was;
+        }
+
+        return bindings[binding.Local] = binding;
+    }
+
+    /// <summary>
+    /// The binding an import makes of <paramref name="name"/> for the code of the node of <paramref name="key"/>: the nearest declaration's
+    /// it is written in that imports it - itself, then each function that holds it, as Python looks a name up through the functions
+    /// around it, a class's for the class's own code alone - its body's and its fields' values - as no class's names are a method's
+    /// or a nested class's - else the module's top's; none where no import binds it.
+    /// </summary>
+    private Binding? BindingOf(string name, QualifiedName key)
+    {
+        QualifiedName? below = null;
+
+        for (var holder = _local.Count > 0 ? key : null; holder is not null; below = holder, holder = holder.BeforeLastDot())
+        {
+            if (_local.TryGetValue(holder, out var held) && held.Names.TryGetValue(name, out var local) && (!held.Class || holder == key || (below == key && OfClassBody(key))))
+            {
+                return local;
+            }
+        }
+
+        return _bindings.TryGetValue(name, out var atTop) ? atTop : null;
+    }
+
+    /// <summary>Whether the node of <paramref name="key"/> is a name a class's body assigns - a field or a constant - whose value is the class's own code.</summary>
+    private bool OfClassBody(QualifiedName key) => _extract.Node(key) is { Kind: CodeNodeKinds.Member, SubKind: "field" or "constant" };
+
+    /// <summary>The binding an import makes of <paramref name="name"/> for the code of <paramref name="key"/>, read in <paramref name="scan"/> (<see cref="BindingOf"/>).</summary>
+    private Binding? ImportBound(ScannedText scan, string name, QualifiedName key) => ReferenceEquals(scan, _scan) ? BindingOf(name, key) : null;
+
+    /// <summary>
+    /// What a reference to the name an import binds is qualified by: the prefix of the import that shows it, where one has a prefix -
+    /// a renamed one, one a declaration makes - and none where an import shows it by the name itself.
+    /// </summary>
+    private static ExtractQualifier? Itself(Binding binding) => binding.Shows is { } shows ? new ExtractQualifier(CodeQualifierKinds.Prefix, QualifiedName.Of(shows)) : null;
+
+    /// <summary>
+    /// What a member reached through <paramref name="chain"/> of <paramref name="scan"/>, whose head <paramref name="binding"/> binds, is
+    /// qualified by - one rule for every name an import binds, a call's, a use's, an annotation's and a base's: the prefix of the import of
+    /// the module the longest run of the chain's names before the member reaches - <c>import a.b.c</c>, then <c>a.b.c.f()</c> - where that
+    /// run is all of them; else the type or scope that module's names past that run stand for, written with them -
+    /// <c>a.Cart.parse()</c>, or <c>shape.Shape</c> of <c>from pkg import shape</c>. A step of a dotted import the code reaches through,
+    /// <c>a.b</c> of <c>import a.b.c</c>, is made an import of its own the first time it is reached, so what the extract holds of a
+    /// dotted import grows with the chains the code writes and never with the square of the import's names.
+    /// </summary>
+    private ExtractQualifier ThroughImport(ScannedText scan, List<int> chain, Binding binding)
+    {
+        var step = binding.Head;
+        var covered = 1;
+
+        while (covered < chain.Count - 1 && step.Next.TryGetValue(scan.Text(chain[covered]), out var next))
+        {
+            step = next;
+            covered++;
+        }
+
+        var prefix = Reached(step, binding);
+
+        return covered == chain.Count - 1
+            ? new ExtractQualifier(CodeQualifierKinds.Prefix, QualifiedName.Of(prefix))
+            : new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(string.Join('.', [prefix, .. chain.Skip(covered).Take(chain.Count - 1 - covered).Select(index => scan.Text(index))])));
+    }
+
+    /// <summary>
+    /// The prefix the module of <paramref name="step"/>, a step of <paramref name="binding"/>'s dotted import, is reached by: the binding's,
+    /// with each name from its head to the step - an import of the module made where none is yet, the import of the binding's head being
+    /// made with the binding.
+    /// </summary>
+    private string Reached(ImportStep step, Binding binding)
+    {
+        var names = new List<string>();
+
+        for (var at = step; at.Before is not null; at = at.Before)
+        {
+            names.Add(at.Name);
+        }
+
+        if (names.Count == 0)
+        {
+            return binding.Prefix;
+        }
+
+        names.Reverse();
+        var prefix = $"{binding.Prefix}.{string.Join('.', names)}";
+
+        if (!step.Imported)
+        {
+            step.Imported = true;
+            Imports(Reaching(0, $"{binding.Path}/{string.Join('/', names)}", step.Line), prefix, reexports: false);
+        }
+
+        return prefix;
+    }
+
+    /// <summary>
     /// The imports that reach the module whose path in the tree's layout is <paramref name="path"/> - its dotted name with a slash for
-    /// each dot - for the file this one is. Where <paramref name="dots"/> is none, the module is looked for in the file's own directory and
-    /// in each one above it to the tree's root, the nearest first: each place is one of a layout (<see cref="ExtractImport.Layout"/>),
-    /// which the linker passes over where its directory is a unit of the layout around the file (<see cref="FileExtract.FolderUnit"/>), so
-    /// the first directory above the file's package is tried first, as a Python import is searched from above its package. Where the
-    /// import is relative, beside the file, its directory once for each dot past the first. Under each, a package's <c>__init__.py</c>
-    /// stands first and the module's <c>.py</c> in for it, and each place after the first stands in for the one before it
-    /// (<see cref="ExtractImport.Fallback"/>), so the linker takes the first that names a file of the tree - whichever it is, one import.
+    /// each dot - at each place it is looked for (<see cref="Places"/>): a package's <c>__init__.py</c> and else the module's <c>.py</c>,
+    /// each place standing in for the one before it (<see cref="ExtractImport.Fallback"/>), so the linker takes the first that names a
+    /// file of the tree - whichever it is, one import.
     /// </summary>
     private IEnumerable<ExtractImport> Reaching(int dots, string path, int line)
-    {
-        // An import that names no module - text cut short, or no module of the language - reaches nothing.
-        if (dots == 0 && path.Length == 0)
-        {
-            yield break;
-        }
+        => dots == 0 && path.Length == 0 ? [] : Run(Places(dots).SelectMany(place => Module(place, path, line)));
 
+    /// <summary>
+    /// The imports that reach what <c>from m import name</c> binds by <paramref name="name"/>, <paramref name="path"/> being <c>m</c>'s: at
+    /// each place, the module <c>m.name</c> where it is one, else the name <c>m</c> binds by it (<see cref="ExtractImport.Binds"/>) - so the
+    /// name is taken from the module Python finds at the nearest place.
+    /// </summary>
+    private IEnumerable<ExtractImport> ReachingName(int dots, string path, string name, int line)
+        => dots == 0 && path.Length == 0 ? [] : Run(Places(dots).SelectMany(place => Module(place, path.Length == 0 ? name : $"{path}/{name}", line)
+            .Concat(Module(place, path, line).Select(import => import with { Show = [name], Binds = true }))));
+
+    /// <summary><paramref name="places"/>, each after the first standing in for the one before it: one run, one import.</summary>
+    private static IEnumerable<ExtractImport> Run(IEnumerable<ExtractImport> places)
+        => places.Select((place, at) => at == 0 ? place : place with { Fallback = true });
+
+    /// <summary>The module <paramref name="path"/> at <paramref name="place"/>: its package's <c>__init__.py</c>, then its <c>.py</c>; a relative import's own package where it names none.</summary>
+    private static IEnumerable<ExtractImport> Module(Place place, string path, int line)
+        => path.Length == 0
+            ? [new ExtractImport(place.Form, $"{place.Beside}__init__.py", line) { Layout = place.Layout, Either = place.Either }]
+            : [
+                new ExtractImport(place.Form, $"{place.Beside}{path}/__init__.py", line) { Layout = place.Layout, Either = place.Either },
+                new ExtractImport(place.Form, $"{place.Beside}{path}.py", line) { Layout = place.Layout, Either = place.Either },
+            ];
+
+    /// <summary>
+    /// The places a module is looked for from this file, in order. Where <paramref name="dots"/> is none - a bare name - the file's own
+    /// directory and each one above it to the tree's root, the nearest first: each a place of the layout (<see cref="ExtractImport.Layout"/>),
+    /// which the linker passes over where its directory is a unit of the layout around the file (<see cref="FileExtract.FolderUnit"/>), so
+    /// the first directory above the file's package is tried first, as a Python import is searched from above its package - the file's
+    /// own directory, where it is no package and not the tree's root, one of two places the name may stand at
+    /// (<see cref="ExtractImport.Either"/>), the module the file's own directory holds when it is run as a script and the one above when
+    /// it is imported as a module of a namespace package; then under the roots of the layout (<see cref="CodeImportForms.Rooted"/>), the
+    /// directory a package's top stands in, as <c>src/</c> of a project's packages is. Where the import is relative, beside the file, its
+    /// directory once for each dot past the first.
+    /// </summary>
+    private IEnumerable<Place> Places(int dots)
+    {
         if (dots > 0)
         {
-            var beside = string.Concat(Enumerable.Repeat("../", dots - 1));
-
-            yield return new ExtractImport(CodeImportForms.Relative, path.Length == 0 ? $"{beside}__init__.py" : $"{beside}{path}/__init__.py", line);
-
-            if (path.Length > 0)
-            {
-                yield return new ExtractImport(CodeImportForms.Relative, $"{beside}{path}.py", line) { Fallback = true };
-            }
-
+            yield return new Place(CodeImportForms.Relative, string.Concat(Enumerable.Repeat("../", dots - 1)), Layout: false, Either: false);
             yield break;
         }
 
-        var first = true;
+        var depth = _path.Count(character => character == '/');
 
-        for (var level = 0; level <= _path.Count(character => character == '/'); level++)
+        for (var level = 0; level <= depth; level++)
         {
-            var climb = string.Concat(Enumerable.Repeat("../", level));
-
-            yield return new ExtractImport(CodeImportForms.Relative, $"{climb}{path}/__init__.py", line) { Fallback = !first, Layout = true };
-            yield return new ExtractImport(CodeImportForms.Relative, $"{climb}{path}.py", line) { Fallback = true, Layout = true };
-            first = false;
+            yield return new Place(CodeImportForms.Relative, string.Concat(Enumerable.Repeat("../", level)), Layout: true, Either: level == 0 && depth > 0);
         }
+
+        yield return new Place(CodeImportForms.Rooted, string.Empty, Layout: false, Either: false);
     }
+
+    /// <summary>One place a module is looked for: the form of its import, what its path is written after, whether it is a place of the layout, and whether it is one of two places the name may stand at.</summary>
+    private sealed record Place(string Form, string Beside, bool Layout, bool Either);
 
     /// <summary>What a name an import binds reaches: a name the module shows, a name renamed, or a module.</summary>
     private enum BindingKind { Shown, Renamed, Module }
 
-    /// <summary>A name an import binds: what it reaches and the name the code gives it.</summary>
-    private sealed record Binding(BindingKind Kind, string Local, string Name);
+    /// <summary>
+    /// A name an import binds: what it reaches, the name the code gives it, the name the module binds - or the module's path, for a
+    /// module - the prefix the code reaches through it by, the prefix of the import that shows the name itself where one has a prefix,
+    /// and the path of the module it is reached in.
+    /// </summary>
+    private sealed record Binding(BindingKind Kind, string Local, string Name, string Prefix, string? Shows, string Path)
+    {
+        /// <summary>The head of the names reached through it, its own: the steps of a dotted import past it, each a module.</summary>
+        public ImportStep Head { get; } = new(null, Local, 0) { Imported = true };
+    }
+
+    /// <summary>The names the imports of one function or class bind for its code: whether it is a class, whose names are its own code's alone.</summary>
+    private sealed class LocalBindings(bool @class)
+    {
+        /// <summary>Whether the declaration is a class.</summary>
+        public bool Class { get; } = @class;
+
+        /// <summary>The names, by the name the code reaches them by.</summary>
+        public Dictionary<string, Binding> Names { get; } = new(StringComparer.Ordinal);
+    }
+
+    /// <summary>One name of a dotted import past its head - <c>b</c> and <c>c</c> of <c>import a.b.c</c> - a module reached through the names to it.</summary>
+    private sealed class ImportStep(ImportStep? before, string name, int line)
+    {
+        /// <summary>The step it is a name past; none for a binding's head.</summary>
+        public ImportStep? Before { get; } = before;
+
+        /// <summary>Its name.</summary>
+        public string Name { get; } = name;
+
+        /// <summary>The line of the import that names it.</summary>
+        public int Line { get; } = line;
+
+        /// <summary>The steps past it, by name.</summary>
+        public Dictionary<string, ImportStep> Next { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Whether the file's extract holds an import of its module.</summary>
+        public bool Imported { get; set; }
+    }
 
     // ---- What a body binds and calls ----
 
@@ -1460,7 +1684,7 @@ internal sealed class PythonReading
             return at;
         }
 
-        var through = ReferenceEquals(scan, _scan) && _bindings.TryGetValue(word, out var found) ? found : null;
+        var through = ImportBound(scan, word, key);
 
         // A name the language keeps to itself - __name__, __doc__: no value the code reads.
         if (word.StartsWith("__", StringComparison.Ordinal))
@@ -1485,16 +1709,16 @@ internal sealed class PythonReading
             return at;
         }
 
-        // A name an import binds is read as what it reaches, never as itself.
-        var target = chain.Count == 1 && through is { Kind: not BindingKind.Module } ? through.Name : scan.Text(last);
-        var qualifier = chain.Count > 1 ? Receiver(scan, chain, owner) : through is { Kind: BindingKind.Renamed } ? new ExtractQualifier(CodeQualifierKinds.Prefix, through.Local) : null;
-
         // importlib.import_module("x"): a module the code names by a string, no import the graph can bind, and no call of the repository's.
         if (chain.Count == 2 && word == "importlib" && scan.Text(last) == "import_module" && called)
         {
             _extract.Dynamic(line, "a dynamic import: a module the code names by a computed name", DynamicImport);
             return last;
         }
+
+        // A name an import binds is read as what it reaches, never as itself.
+        var target = chain.Count == 1 && through is { Kind: not BindingKind.Module } ? through.Name : scan.Text(last);
+        var qualifier = chain.Count > 1 ? Receiver(scan, chain, owner, through) : through is not null ? Itself(through) : null;
 
         if (called)
         {
@@ -1530,16 +1754,22 @@ internal sealed class PythonReading
     }
 
     /// <summary>
-    /// What a member reached through the chain <paramref name="chain"/> of <paramref name="scan"/> is qualified by: <c>self</c> and <c>cls</c> in a
-    /// class the type's own, <c>super()</c> its base's, a name an import binds the import's name or the type it shows, a class the file
-    /// declares named as a type, any other a value by no name the file types.
+    /// What a member reached through the chain <paramref name="chain"/> of <paramref name="scan"/> is qualified by: one whose head
+    /// <paramref name="through"/> - a name an import binds - is, what the import reaches (<see cref="ThroughImport"/>), a module path
+    /// however long; else <c>self</c> and <c>cls</c> in a class the type's own, <c>super()</c> its base's, a class the file declares named
+    /// as a type, any other a value by no name the file types.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, List<int> chain, string? owner)
+    private ExtractQualifier Receiver(ScannedText scan, List<int> chain, string? owner, Binding? through)
     {
         var head = scan.Text(chain[0]);
 
+        if (through is not null)
+        {
+            return ThroughImport(scan, chain, through);
+        }
+
         // self.lines.append(): what the member is reached through is the member before it, a value by no name the file types; the
-        // type's own, an import's and a base's are reached by one name alone.
+        // type's own and a base's are reached by one name alone.
         if (chain.Count > 2)
         {
             return new ExtractQualifier(CodeQualifierKinds.Value);
@@ -1553,12 +1783,6 @@ internal sealed class PythonReading
         if (head == "super")
         {
             return new ExtractQualifier(CodeQualifierKinds.Base);
-        }
-
-        if (ReferenceEquals(scan, _scan) && _bindings.TryGetValue(head, out var binding))
-        {
-            // A module's names are reached through its name; a class's or a function's, shown or renamed, through its type.
-            return binding.Kind == BindingKind.Module ? new ExtractQualifier(CodeQualifierKinds.Prefix, binding.Local) : new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(binding.Name));
         }
 
         if (ReferenceEquals(scan, _scan) && _classes.Contains(head))
@@ -1641,9 +1865,16 @@ internal sealed class PythonReading
     private void Mention(ScannedText scan, List<int> chain, QualifiedName key, string kind)
     {
         var target = scan.Text(chain[^1]);
-        var through = ReferenceEquals(scan, _scan) && _bindings.TryGetValue(scan.Text(chain[0]), out var bound) ? bound : null;
-        var written = chain.Count == 1 && through is { Kind: not BindingKind.Module } ? through.Name : target;
-        var qualifier = chain.Count > 1 ? Receiver(scan, chain, null) : through is { Kind: BindingKind.Renamed } ? new ExtractQualifier(CodeQualifierKinds.Prefix, through.Local) : null;
+        var through = ImportBound(scan, scan.Text(chain[0]), key);
+
+        // A module's name alone names no declaration, as a call's reading says (<see cref="CallAt"/>).
+        if (chain.Count == 1 && through is { Kind: BindingKind.Module })
+        {
+            return;
+        }
+
+        var written = chain.Count == 1 && through is not null ? through.Name : target;
+        var qualifier = chain.Count > 1 ? Receiver(scan, chain, null, through) : through is not null ? Itself(through) : null;
         _extract.Reference(key, kind, written, scan[chain[^1]].Line, qualifier: qualifier);
     }
 

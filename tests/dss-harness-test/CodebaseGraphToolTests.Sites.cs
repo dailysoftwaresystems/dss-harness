@@ -394,7 +394,7 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal([CodeGraphLimit.Candidates, PythonReading.FunctionValue], Assert.Single(limits, limit => limit.Says.StartsWith("a duck-typed receiver", StringComparison.Ordinal)).Signs);
 
         // Every limit whose sign the code can give: the two above, and the others the reader marks.
-        Assert.Equal(6, limits.Count(limit => limit.Signs.Count > 0));
+        Assert.Equal(9, limits.Count(limit => limit.Signs.Count > 0));
     }
 
     /// <summary>The words of the one Python limit whose clause holds <paramref name="names"/>, as its help says them.</summary>

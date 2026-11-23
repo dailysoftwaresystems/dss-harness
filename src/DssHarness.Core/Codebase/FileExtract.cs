@@ -13,8 +13,9 @@ namespace DssHarness.Core.Codebase;
 /// </summary>
 /// <remarks>
 /// The linker resolves every reference by the same steps for every language - the qualifier's scope, the enclosing
-/// scopes from the inside out, the imports in order, the repository by name and arity (<see cref="CodeGraphLinker"/>) -
-/// so a language says in its extract what its scopes and imports are, and never adds a rule to the linker.
+/// scopes from the inside out, the imports in order, the repository by name and arity where the file's names are not bound
+/// within it (<see cref="BoundWithin"/>) (<see cref="CodeGraphLinker"/>) - so a language says in its extract what its scopes
+/// and imports are, and never adds a rule to the linker.
 /// <para>
 /// Its record (<see cref="FileExtractJson"/>) writes each node's names against its parent's and every node a field names
 /// by its place, so what is kept of a file nested any depth grows with the file, never with the square of its depth; read
@@ -75,24 +76,45 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>
     /// The names an import of the file that takes what it publishes alone makes visible (<see cref="ExtractImport.Published"/>):
-    /// what the file publishes to such an import - a Python module's <c>__all__</c> where it is a list of string literals, else
-    /// every name bound at its top that is not written with a leading underscore, as the implementation says. <see langword="null"/>
-    /// where nothing of the file's language imports it so.
+    /// what the file publishes to such an import - a Python module's <c>__all__</c> where it is a list or a tuple of string
+    /// literals, else every name bound at its top that is not written with a leading underscore, as the implementation says - and,
+    /// where <see cref="PublishesTaken"/>, what its own such imports take besides. <see langword="null"/> where nothing of the
+    /// file's language imports it so.
     /// </summary>
     public IReadOnlyList<string>? Published { get; init; }
 
     /// <summary>
+    /// Whether what the file publishes holds, besides <see cref="Published"/>, every name each of its own imports that takes a
+    /// file's published names takes (<see cref="ExtractImport.Published"/>), those files' own taken in turn: a Python module with
+    /// no literal <c>__all__</c>, whose <c>from m import *</c> binds names that are its own, so a <c>*</c> import of it binds them
+    /// too. The linker walks such imports with every file visited once, so imports that come round end.
+    /// </summary>
+    public bool PublishesTaken { get; init; }
+
+    /// <summary>
+    /// The directories a project file says its language's layout looks a bare name up in, each relative to the file's own
+    /// directory with forward separators - a Python project's <c>package-dir</c> or <c>where</c> - besides the ones the tree
+    /// itself shows, the directory each outermost unit of the layout stands in (<see cref="FolderUnit"/>,
+    /// <see cref="CodeImportForms.Rooted"/>). <see langword="null"/> where it names none.
+    /// </summary>
+    public IReadOnlyList<string>? LayoutRoots { get; init; }
+
+    /// <summary>
     /// Whether a name the file's code reads that none of its scopes declares and none of its imports makes visible is bound by
     /// nothing: the linker then does not look for it among the repository's declarations, as a Python module's name is bound by
-    /// its module's own names and its imports or not at all. False where a name bound by neither may still be one any file declares.
+    /// its module's own names and its imports or not at all - nor, where a qualifier names a type or a scope, for the type or
+    /// scope whose whole qualified name it is or whose name ends with it. False where a name bound by neither may still be one
+    /// any file declares.
     /// </summary>
     public bool BoundWithin { get; init; }
 
     /// <summary>
     /// Whether the file is the one that says its directory is one unit of its language's layout - a Python package's
-    /// <c>__init__.py</c>. An import marked <see cref="ExtractImport.Layout"/> is passed over where it names a place in a unit
-    /// around its file, so a bare name is looked for from the first directory above the units the file is in, as a Python import
-    /// is from above the file's package.
+    /// <c>__init__.py</c>, whatever it holds, an empty one among them. An import marked <see cref="ExtractImport.Layout"/> is passed
+    /// over where it names a place in a unit around its file, so a bare name is looked for from the first directory above the units
+    /// the file is in, as a Python import is from above the file's package; and the directory an outermost unit stands in - one
+    /// whose own directory is no unit - is a root of the layout (<see cref="CodeImportForms.Rooted"/>), as <c>src/</c> is of the
+    /// packages in it.
     /// </summary>
     public bool FolderUnit { get; init; }
 
@@ -194,8 +216,12 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 : reference.Qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } && !ids.ContainsKey(own) ? $"a reference to '{reference.Name}' names the node '{own}' of its own file, which it holds no node of"
                 : null).FirstOrDefault(found => found is not null)
             ?? (FolderScope is { Length: > 0 } folder && folder.Split('.').Any(string.IsNullOrWhiteSpace) ? $"the scope its directory gives it, '{folder}', holds a name that is empty" : null)
+            ?? (Published is { } published && published.Any(string.IsNullOrWhiteSpace) ? "a name it publishes is empty" : null)
+            ?? (PublishesTaken && Published is null ? "it publishes what its imports take, and publishes nothing of its own: only a file it publishes names of does" : null)
+            ?? (LayoutRoots is { } layoutRoots && (layoutRoots.Count == 0 || layoutRoots.Any(string.IsNullOrWhiteSpace)) ? "a root of its layout it names is empty, or it names none" : null)
             ?? (Generated is { } generated && string.IsNullOrWhiteSpace(generated) ? "it says it is generated and not why" : null)
             ?? (Dynamic ?? []).Select(dynamic => dynamic is null || string.IsNullOrWhiteSpace(dynamic.Why) ? "it marks a line dynamic and not why"
+                : dynamic.Kind is { } kind && string.IsNullOrWhiteSpace(kind) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic with a kind that is empty"
                 : !Within(dynamic.Line, lineCount) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
                 : null).FirstOrDefault(found => found is not null)
             ?? LinkProblem()
@@ -504,10 +530,12 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     private IEnumerable<string> Texts()
         => (Nodes ?? []).SelectMany(node => (string?[])[node.Id.ToString(), node.Kind, node.Name, node.Qualified.ToString(), node.Signature, node.SubKind, node.Scope?.ToString(), node.Parent?.ToString(), node.Summary, node.ValueType, node.Extends, node.SeenIn?.ToString(), .. node.Modifiers ?? [], .. node.Exports ?? [], .. (node.SuffixOf ?? []).Select(id => id.ToString()), .. node.Selectors ?? [], .. node.Templates ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name.ToString(), scope.Parent?.ToString()]))
-            .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
+            .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, import.Serves, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
+            .Concat(Published ?? [])
+            .Concat(LayoutRoots ?? [])
             .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From.ToString(), reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name?.ToString()]))
-            .Concat((Dynamic ?? []).Select(dynamic => dynamic.Why))
+            .Concat((Dynamic ?? []).SelectMany(dynamic => (string?[])[dynamic.Why, dynamic.Kind]))
             .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, .. (literal.Places ?? []).Select(place => place?.Node?.ToString())]))
             .Append(FolderScope)
             .Append(Generated)
@@ -754,7 +782,10 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     /// <summary>
     /// Whether the names it binds in the file that makes it are that file's importers's too, and not only its own: a module's
     /// own imported names are names of the module, so an importer of the module reaches them through it - <c>from pkg import
-    /// a</c> reaches what a package's <c>__init__.py</c> binds by <c>from .x import a</c>, by the name it binds it under.
+    /// a</c> reaches what a package's <c>__init__.py</c> binds by <c>from .x import a</c>, by the name it binds it under, and what it
+    /// binds by <c>from .x import *</c> where <c>x</c> publishes it. One by a prefix that shows nothing is reached by its prefix as the
+    /// file it names, whose own open scopes are what the name stands for: <c>from . import views</c> in a package's
+    /// <c>__init__.py</c> makes the module <c>views</c> a name of the package.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Reexports { get; init; }
@@ -773,6 +804,32 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Layout { get; init; }
+
+    /// <summary>
+    /// Whether its prefix stands for the one name it shows, rather than for the file it names: what the code reaches through the
+    /// prefix is a member of what the file makes visible by that name - a Python <c>from m import a</c> where <c>a</c> is no module
+    /// of <c>m</c>'s but a class <c>m</c> binds, so <c>a.f()</c> reaches the class's <c>f</c>. Its <see cref="Show"/> is that one name.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Binds { get; init; }
+
+    /// <summary>
+    /// Whether it is one of two places its run's name may stand at that its file cannot tell apart: where it names a file of the
+    /// tree, the next place of its run that names one is taken beside it, and what each makes visible is a candidate - a Python
+    /// file in a directory that is no package, whose bare import is its own directory's module when the file is run as a script
+    /// and the one above when it is imported as a module of a namespace package.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Either { get; init; }
+
+    /// <summary>
+    /// The kind of qualifier whose references alone it serves (<see cref="CodeQualifierKinds"/>), and no other reference of the
+    /// files it is made for: a <c>conftest.py</c>'s fixtures, which pytest gives every test under its directory by a parameter's
+    /// name (<see cref="CodeQualifierKinds.Fixture"/>) and no other name of a test file reaches. <see langword="null"/> where it
+    /// serves every reference.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Serves { get; init; }
 
     /// <summary>
     /// Whether the file it names shares its imports with this one: what that file imports - each import's filters and
@@ -805,10 +862,15 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : Fallback && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and stands in for another import: only an import of a file does"
             : Export && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and is an export: only an import of a file is exported"
             : Export && Prefix is not null ? "it is an export with a prefix: an export makes names visible by themselves"
-            : Published && (Prefix is not null || Show is not null || Export || Reexports) ? "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"
+            : Published && (Prefix is not null || Show is not null || Hide is not null || Export || Binds) ? "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"
             : Published && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and takes the names a file publishes: only an import of a file does"
             : Layout && Form != CodeImportForms.Relative ? "it names a place of a layout, which only a path relative to the file does"
             : Layout && Export ? "it names a place a name is looked for, which is no export: an export names a file"
+            : Binds && (Prefix is null || Show is not [_] || Hide is not null) ? "its prefix stands for the one name it shows, and so it has a prefix and shows one name, hiding none"
+            : Binds && (Export || Form is CodeImportForms.Scope or CodeImportForms.Directory) ? "its prefix stands for a name a file shows, which only an import of a file that is no export does"
+            : Either && (Export || Form is CodeImportForms.Scope or CodeImportForms.Directory) ? "it is one of two places a name may stand at, which only an import of a file that is no export is"
+            : Serves is { } serves && !CodeQualifierKinds.All.Contains(serves, StringComparer.Ordinal) ? $"it serves the references of the qualifier '{serves}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
+            : Serves is not null && Export ? "it serves one qualifier's references, and is an export: an export makes names visible to every importer"
             : Shares && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and shares its imports: only a file's are shared"
             : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
             : Namespace && (Form != CodeImportForms.Directory || Prefix is not null || Show is not null || Hide is not null) ? "it is the scope a directory's files are declared in, and is no import of a directory's whole scope"
@@ -837,8 +899,16 @@ public static class CodeImportForms
     /// </summary>
     public const string Directory = "directory";
 
+    /// <summary>
+    /// A file, by its path under a root of the layout the importing file's language looks a bare name up by: the directory each
+    /// outermost unit of the layout stands in - a unit whose own directory is no unit (<see cref="FileExtract.FolderUnit"/>), as
+    /// <c>src/</c> holds a Python package's top - and each directory a project file declares one (<see cref="FileExtract.LayoutRoots"/>).
+    /// Every root that holds it: one a <c>unique</c> place, several each a candidate.
+    /// </summary>
+    public const string Rooted = "rooted";
+
     /// <summary>Every form.</summary>
-    public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending, Directory];
+    public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending, Directory, Rooted];
 }
 
 /// <summary>
@@ -1032,9 +1102,11 @@ public static class CodeQualifierKinds
 
     /// <summary>
     /// A fixture a test is given a parameter by, as pytest names one - by the parameter's name alone, never by an import: the
-    /// name is looked for among the fixtures (<see cref="ExtractNode.SubKind"/> <c>fixture</c>) the test's own scopes declare,
-    /// exact, else among those the repository declares wherever - a conftest.py provides them to every test under it and no
-    /// test imports it - and in nothing else.
+    /// name is looked for among the fixtures (<see cref="ExtractNode.SubKind"/> <c>fixture</c>) the test's own scopes declare -
+    /// its class, its module - then among those of each import made for the test's file that serves fixtures alone
+    /// (<see cref="ExtractImport.Serves"/>), the nearest directory's first - a conftest.py's, which pytest gives every test under its
+    /// directory and no test imports - the first that holds one deciding, exact; and nowhere else, so a fixture a plugin provides
+    /// names nothing the repository declares.
     /// </summary>
     public const string Fixture = "fixture";
 

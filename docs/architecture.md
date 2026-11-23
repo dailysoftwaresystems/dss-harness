@@ -4466,10 +4466,14 @@ tree lists is a node, every declaration an implementation reads is one, and the 
 sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language. Everything that reads a file's contents
 is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
 `Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
-language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`) and
-the scope whose declarations alone see it (`SeenIn`) among what they say - the scopes they are put in (open to
-other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending or directory (a scope every file under a directory imports), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
-address roots, references by name with their qualifiers, the string literals the file holds - every
+language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`), the
+scope whose declarations alone see it (`SeenIn`), the element selectors a component is named by (`Selectors`) and the
+files that are its templates (`Templates`) among what they say - the scopes they are put in (open to
+other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending, directory (a scope every file under a directory imports) or a path under a root of the layout (`Rooted`), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`), an import of a file whose imports this one shares (`Shares`), one whose names are the file's importers' too (`Reexports`), one that takes the names a file publishes alone (`Published`), one that names a place a bare name is looked for (`Layout`), one whose prefix stands for the one name it shows (`Binds`), one of two places a name may stand at that the file cannot tell apart (`Either`) and one that serves one qualifier's references alone (`Serves`),
+address roots, the names the file publishes (`Published`, with `PublishesTaken` where what its own such imports take is
+among them), whether its names are bound within it (`BoundWithin`), whether its directory is a unit of its language's
+layout (`FolderUnit`) and the roots of the layout it declares (`LayoutRoots`), references by name with their qualifiers -
+one that asks whether a declaration is there, and is no external callee where none is (`Probe`), among them - the string literals the file holds - every
 one that holds a character, however short and however many, each value once in the file's own
 table (`ExtractLiteral`) with every place it is written, its line and the node whose code holds it
 (none where the file's own
@@ -4483,8 +4487,8 @@ expression and JSX markup none, a JSX attribute's text one - and five marks - a 
 declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it cannot
 bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three; a dynamic mark may carry a
 kind (`ExtractDynamic.Kind`), and what an implementation's help says it does not see is a limit that names the signs
-telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, or references the linker left candidates - so
-that an answer says of a file only the limits its marks show. Beside the calls, every
+telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, references the linker left candidates, or
+references it counted external - so that an answer says of a file only the limits its marks show. Beside the calls, every
 reader of C#, JavaScript, TypeScript, PHP, Dart, C, C++ and Python gives each member a member reads or writes without calling
 it - a field, a property, a constant, an enum member, any name a `nameof` names, a `case`'s constant (Dart's pattern
 constants among them), the first name of a receiver's chain - a member's or, in JavaScript and TypeScript, an
@@ -4762,6 +4766,14 @@ package by its name and refers to each package its `require` and `require-dev` n
 platform's: `php`, `ext-*`, `lib-*`, `composer-plugin-api` - none; it declares no address root, since a class is found by
 its namespace.
 
+`pyproject` reads a Python project's `pyproject.toml` and `setup.cfg` - TOML and the INI form a setup.cfg is written in, a line
+at a time, a value over several lines read whole and its arrays and tables nested on a stack of the reading's own - into a
+project node named by the project's name, and declares the roots of the layout its words name (`FileExtract.LayoutRoots`),
+each a directory beside the file under which a bare Python import is looked for: setuptools' `package-dir` root and
+`packages.find`'s `where`, Poetry's `packages`' `from`, the directory of each of Hatch's wheel `packages`, PDM's `package-dir`
+and pytest's `pythonpath`. A value no string writes, or one a setup.cfg's interpolation computes, names none; a value whose
+bracket or string never closes is read to the file's end, the line it begins on marked dynamic.
+
 Python's reader (`PythonReading`, over `PythonLexer`) reads by indentation, which is no token: each token says its line, and
 the reader finds its column from where it begins - counted, as Python's tokenizer counts it, from past the last form feed among
 the blanks its line begins with. A statement ends where the next logical line begins - the first token on a later line outside
@@ -4774,32 +4786,55 @@ declared in the scope the function itself is, its class or the module, and held 
 keeps a string whole with its prefix - raw, bytes, formatted (an f-string or a t-string), combined, in any case - a
 triple-quoted one over lines, a backslash escaping the character after it for where the string ends, a raw one's too, as
 Python's tokenizer reads one; and it says where an f-string's fields hold code (`LiteralStack`, as Dart's, JavaScript's and
-PHP's lexers do): a field's code ends at the `=` of a debugging field, the `!` of a conversion or the `:` of a format, and what
-follows to the brace that closes the field is the field's tail (`LiteralStack.InTail`), none of it the value's, each field a
-format holds code of its own; a debugging field's text, to its `=` and the blanks after it, is the value's as written, going
-on from the part before the field as Python's value holds it (`f"a{x=}"` holds `ax=`; `ScanLiteralPart.Written`). Its
-escapes are Python's - one Python does not know kept with its backslash, a character's name (`\N{...}`) kept as written, a
-bytes string's the escapes of bytes, a formatted one's doubled braces a brace. A bracket or a string that never closes, which
-Python refuses, marks its line `dynamic` (`unclosed`, a limit's sign), since what follows it is read as held in it. Each
-`import a.b` and `from a.b import c, d as e` is looked for by the package layout, which the extract says and the linker reads without knowing the language: the module is tried in the file's own directory and
-in each one above it to the tree's root, the nearest first, as the package's `__init__.py` and else the module's `.py`, every
-place an import marked `Layout` that stands in for the one before it (`Fallback`); a package's `__init__.py` is the one file
-that knows its directory is a package, and its extract says so (`FolderUnit`), so the linker passes a layout's place over where
-its directory is a unit around the file - the first directory above the file's package is tried first, as a Python import is
-searched from above its package. A relative import is a path beside the file. What a `from` import binds is the file's
-importers' too (`ExtractImport.Reexports`): `from pkg import Cart` reaches what the package's `__init__.py` imports, under the
-name it gives it. `from m import *` is an import marked `Published`, which makes visible the names the module publishes alone
-(`FileExtract.Published`): its `__all__` where it is a list of string literals the code changes nowhere, else every name bound
-at its top that is not written with a leading underscore - one the code computes or changes marked `dynamic`. A Python file's
-extract says its names are bound within it (`BoundWithin`), so a name a file neither declares nor imports is not looked for
-through the repository. `self` and `cls` qualify a `this` reference, `super()` a `base` one, an import's module a `prefix`
-one; a call of a name written with a capital first letter is an `instantiates`; a type an annotation, an `isinstance` or an
-`except` names is a `references`. A parameter a test requires is a reference with a `fixture` qualifier
-(`CodeQualifierKinds.Fixture`), reached by the fixtures - nodes of sub-kind `fixture`, functions `pytest.fixture` decorates -
-the test's scopes declare, else the repository's: a `conftest.py` provides them to every test under it and imports none. A
-test file's `test*` functions, its `Test*` classes and `TestCase` subclasses with their `test*` methods are tests. A method is
-bound by its name alone, so each carries an `overrides` reference of its own name with a `base` qualifier, an edge where a
-base of its type declares it along the chain; no word of the language says a method overrides, so the reference is a probe
+PHP's lexers do): a field's code ends at the `=` of a debugging field, the `!` of a conversion or the `:` of a format, and
+what follows to the brace that closes the field is the field's tail (`LiteralStack.InTail`), none of it the value's, each
+field a format holds code of its own; a debugging field's text, to its `=` and the blanks after it, is the value's as
+written, going on from the part before the field as Python's value holds it (`f"a{x=}"` holds `ax=`;
+`ScanLiteralPart.Written`). Its escapes are Python's - one Python does not know kept with its backslash, a character's name
+(`\N{...}`) kept as written, a bytes string's the escapes of bytes, a formatted one's doubled braces a brace. A bracket or a
+string that never closes, which Python refuses, marks its line `dynamic` (`unclosed`, a limit's sign), since what follows it
+is read as held in it. Each import is looked for by the package layout, which the extract says and the linker reads without
+knowing the language. `import a.b.c` binds `a`, the package `a`, and reaches the module `a.b.c` by the dotted names to it; a
+step between them, `a.b`, is an import of its own the first time the code reaches through it, so what the extract holds of a
+dotted import grows with the chains the code writes and never with the square of its names. A bare module is tried in the
+file's own directory and in each one above it to the tree's root, the nearest first, as the package's `__init__.py` and else
+the module's `.py`, every place an import marked `Layout` that stands in for the one before it (`Fallback`); a package's
+`__init__.py` is the one file that knows its directory is a package - whatever it holds, nothing or comments alone among
+it - and its extract says so (`FolderUnit`), so the linker passes a layout's place over where its directory is a unit around
+the file - the first directory above the file's package is tried first, as a Python import is searched from above its
+package. A file in a directory that is no package marks its own directory's places `Either`: where one names a file and a
+place above names one too, the two are candidates, since the file is its directory's script and a namespace package's module
+alike. Last, a module is tried under the roots of the layout (`CodeImportForms.Rooted`): the directory each outermost unit
+stands in - `src/` of a project whose packages it holds - and each directory a project file declares
+(`FileExtract.LayoutRoots`); one root that holds it is the module, `unique`, and several are each a candidate. A relative
+import is a path beside the file. What `from m import c` binds is tried at each place as the module `m.c` and else as the
+name `m` binds (`ExtractImport.Binds`), whose prefix then stands for that name, so `c.f()` reaches `f` in the module or in
+the class `m` binds. An import at the module's top - in its conditional blocks too - binds names of the module, its
+importers' too (`ExtractImport.Reexports`): `from pkg import Cart` reaches what the package's `__init__.py` imports, under
+the name it gives it, and `from . import views` there makes the module a name of the package; one in a function or a class
+binds for that declaration's own code alone - a class's for the class's own code, as no class's names are a method's - by a
+prefix no other code of the file writes, and is no name of the module. `from m import *` is an import marked `Published`,
+which makes visible the names the module publishes alone (`FileExtract.Published`): its `__all__` where it is a list or a
+tuple of string literals the code changes nowhere, else every name bound at its top that is not written with a leading
+underscore - one the code computes or changes marked `dynamic` - and, where it names no literal `__all__`, what its own `*`
+imports take (`PublishesTaken`), which the linker follows from file to file, each once; at the module's top such an import
+is its importers' too, so a package that star-imports its modules gives their names. A Python file's extract says its names
+are bound within it (`BoundWithin`), so a name a file neither declares nor imports is not looked for through the repository,
+nor is a qualifier the type or scope of its whole qualified name or of its ending: a reference the file binds by no import
+it makes is counted external, which is the sign (`CodeGraphLimit.External`) of the limits that name the roots the tree does
+not show, the names nothing binds and the fixtures no `conftest.py` above the test declares. `self` and `cls` qualify a
+`this` reference, `super()` a `base` one; a chain whose head an import binds is qualified by what the import reaches - the
+`prefix` of the module the longest run of its names before the member reaches, else the `type` those names stand for inside
+it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain; a
+call of a name written with a capital first letter is an `instantiates`; a type an annotation, an `isinstance` or an
+`except` names is a `references`. A parameter a test or a fixture requires is a reference with a `fixture` qualifier
+(`CodeQualifierKinds.Fixture`), reached by the fixtures alone - nodes of sub-kind `fixture`, functions `pytest.fixture`
+decorates - as pytest finds one: what the test's scopes declare, its class's and its module's, else what the nearest
+`conftest.py` that declares it holds of its directory and each above it - a `conftest.py`'s module is a `directory` import
+that serves the fixture references of every file under its directory alone (`ExtractImport.Serves`) - and nowhere else. A
+test file's `test*` functions, its `Test*` classes and `TestCase` subclasses with their `test*` methods are tests. A method
+is bound by its name alone, so each carries an `overrides` reference of its own name with a `base` qualifier, an edge where
+a base of its type declares it along the chain; no word of the language says a method overrides, so the reference is a probe
 (`ExtractReference.Probe`) - it asks whether a declaration is there, and where none is it is no external callee.
 
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
@@ -4808,7 +4843,8 @@ for what that import stands for; the file's imports in order, filters applied - 
 declares at its top, what it declares exported by another name by that name, the open scopes it declares and what each
 file it exports does, each export's filter applied and
 each file once, an export making nothing visible to the file that makes it, and a file that shares another's imports
-(`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity - a
+(`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity, but
+for a file whose names are bound within it (`FileExtract.BoundWithin`), whose name no import binds is bound by nothing - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
 that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
 prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`,
@@ -4868,7 +4904,7 @@ the least sure edge on its way up, each of several bases that answer alike is on
 an edge found more than one way is listed once, as sure as its surest finding. Every declaration a reference may be is
 an edge of its own - two or more of `candidates`, none picked and none dropped, however many - through the name index,
 so no reference is counted as naming too many, and a link result counts only what references named outside the
-repository.
+repository - never a probe that found nothing, since nothing it depends on is missing.
 A linker that answers otherwise raises `CodeGraphLinker.Revision`,
 which every link result names: a graph linked by another revision is linked again, though no file changed and none is
 read again.

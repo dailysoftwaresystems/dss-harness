@@ -35,6 +35,9 @@ internal sealed class ScanExtract
     /// <summary>Whether the file is the one that says its directory is one unit of its language's layout (<see cref="FileExtract.FolderUnit"/>).</summary>
     public bool FolderUnit { get; set; }
 
+    /// <summary>Whether what the file publishes holds what its own imports that take a file's published names take (<see cref="FileExtract.PublishesTaken"/>).</summary>
+    public bool PublishesTaken { get; set; }
+
     /// <summary>
     /// One string literal of the file, decoded, on <paramref name="line"/>, written in the code of the node of the key
     /// <paramref name="from"/> - none where it is written at the file's top, outside every declaration, whose node it is
@@ -154,6 +157,7 @@ internal sealed class ScanExtract
             Published = Published,
             BoundWithin = BoundWithin,
             FolderUnit = FolderUnit,
+            PublishesTaken = PublishesTaken,
         }.Renamed(key => given[key]);
     }
 
