@@ -1,0 +1,47 @@
+[==========] Running 48 tests from 4 test suites.
+[----------] 12 tests from Known
+[ RUN      ] Known.ReadsItsForm
+[       OK ] Known.ReadsItsForm (3 ms)
+[ RUN      ] Known.WritesItsRecord
+[       OK ] Known.WritesItsRecord (5 ms)
+[ RUN      ] Known.KeepsItsBounds
+[       OK ] Known.KeepsItsBounds (2 ms)
+[ RUN      ] Known.FoldsDuplicates
+[       OK ] Known.FoldsDuplicates (4 ms)
+[ RUN      ] Known.SaysItsFirst
+[       OK ] Known.SaysItsFirst (6 ms)
+[ RUN      ] Known.RendersStacks
+[       OK ] Known.RendersStacks (5 ms)
+[ RUN      ] Known.MarksFrames
+[       OK ] Known.MarksFrames (4 ms)
+[ RUN      ] Known.CountsCodes
+[       OK ] Known.CountsCodes (3 ms)
+[----------] 12 tests from Known (41 ms total)
+
+[----------] 8 tests from Parser
+[ RUN      ] Parser.FoldsDuplicates
+/home/tests/parser_test.cc:45: Failure
+Expected equality of these values:
+  1
+  2
+[  FAILED  ] Parser.FoldsDuplicates (7 ms)
+[ RUN      ] Parser.HoldsToItsBound
+/home/tests/parser_test.cc:80: Failure
+Expected: (digest->count) <= (50), actual: 51 vs 50
+[  FAILED  ] Parser.HoldsToItsBound (4 ms)
+[ RUN      ] Parser.ReadsItsForm
+[       OK ] Parser.ReadsItsForm (3 ms)
+[----------] 8 tests from Parser (21 ms total)
+
+[----------] 4 tests from Store
+[ RUN      ] Store.KeepsItsRecords
+[       OK ] Store.KeepsItsRecords (9 ms)
+[----------] 4 tests from Store (9 ms total)
+
+[==========] 48 tests from 4 test suites ran. (128 ms total)
+[  PASSED  ] 46 tests.
+[  FAILED  ] 2 tests, listed below:
+[  FAILED  ] Parser.FoldsDuplicates
+[  FAILED  ] Parser.HoldsToItsBound
+
+ 2 FAILED TESTS

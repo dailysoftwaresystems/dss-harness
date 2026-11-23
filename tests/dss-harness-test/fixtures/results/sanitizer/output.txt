@@ -1,0 +1,22 @@
+==4242==WARNING: AddressSanitizer: requested allocation size exceeds maximum supported size
+==4242==WARNING: Sanitizer is ignoring the coverage data
+    #0 0x55d100 in load src/loader.c:12
+
+==4242==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000054
+READ of size 4 at 0x602000000054 thread T0
+    #0 0x55d1a2 in parse src/parser.c:88
+    #1 0x55d3c4 in run_all src/runner.c:30
+    #2 0x55d4e6 in main src/main.c:20
+    #3 0x7f2a8b1c2d0 in __libc_start_call_main
+    #4 0x7f2a8b1c2e8 in __libc_start_main_alias_2
+    #5 0x55d0a9 in _start
+
+0x602000000054 is located 4 bytes inside of 8-byte region [0x602000000050,0x602000000058)
+allocated by thread T0 here:
+    #0 0x7f2a9d3a4f1 in malloc
+    #1 0x55d190 in make src/parser.c:60
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow src/parser.c:88 in parse
+Shadow bytes around the buggy address:
+  0x0c047fff7fc0: 00 00 00 00 00 00 00 00
+==4242==ABORTING

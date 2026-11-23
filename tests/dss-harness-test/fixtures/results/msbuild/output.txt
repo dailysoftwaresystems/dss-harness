@@ -1,0 +1,6 @@
+Restore complete (1.2s) - MyApp on .NET 10.0.
+  MyApp -> D:\a\src\MyApp\bin\Release\net10.0\MyApp.dll
+D:\a\src\MyApp\Program.cs(12,35): error CS0103: The name 'response' does not exist in the current context [D:\a\src\MyApp\MyApp.csproj]
+D:\a\src\MyApp\Program.cs(12,35): error CS0103: The name 'response' does not exist in the current context [D:\a\src\MyApp\MyApp.iOS.csproj]
+D:\a\src\MyApp\Service.cs(40,13): warning CS0219: The variable 'count' is assigned but its value is never used [D:\a\src\MyApp\MyApp.csproj]
+Build FAILED.

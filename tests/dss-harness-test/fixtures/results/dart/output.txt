@@ -1,0 +1,5 @@
+Analyzing lib/...
+info - Unused import: 'dart:math' - lib/main.dart:3:8 - unused_import
+warning - The value of the local variable 'x' isn't used - lib/main.dart:7:9 - unused_local_variable
+error - The method 'read' isn't defined for the type 'Store' - lib/store.dart:42:7 - undefined_method
+3 issues found.

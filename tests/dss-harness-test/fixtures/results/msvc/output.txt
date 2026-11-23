@@ -1,0 +1,20 @@
+Automated MFC support for C++11
+Building file: C:\src\main.cpp...
+Initializing compile...
+Parsing C:\src\main.cpp
+Compiling...
+main.cpp
+C:\Program Files\Microsoft Visual Studio\2026\Enterprise\VC\Tools\MSVC\14.50\include\vector(1234): error C2065: 'T': undeclared identifier [C:\src\App.vcxproj]
+C:\Program Files\Microsoft Visual Studio\2026\Enterprise\VC\Tools\MSVC\14.50\include\vector(1301): note: see declaration of 'T' [C:\src\App.vcxproj]
+C:\src\main.cpp(88): fatal error C1075: no matching brace found [C:\src\App.vcxproj]
+Generating Code...
+Build FAILED.
+"C:\src\App.vcxproj" (default target) (1) ->
+(ClCompile target) ->
+  C:\Program Files\Microsoft Visual Studio\2026\Enterprise\VC\Tools\MSVC\14.50\include\vector(1234): error C2065: 'T': undeclared identifier [C:\src\App.vcxproj]
+  C:\src\main.cpp(88): fatal error C1075: no matching brace found [C:\src\App.vcxproj]
+
+    2 Warning(s)
+    2 Error(s)
+
+Time Elapsed 00:00:02.14

@@ -1,0 +1,62 @@
+2026-11-23T00:39:50.1000000Z ##[group]Run dotnet build
+2026-11-23T00:39:50.2000000Z Determining projects to restore...
+2026-11-23T00:39:51.0000000Z Restored /src/App.csproj (in 812 ms).
+2026-11-23T00:39:52.0000000Z   App -> /src/bin/Release/net10.0/App.dll
+2026-11-23T00:39:52.1000000Z ##[endgroup]
+2026-11-23T00:39:52.2000000Z ##[group]Build the tests
+2026-11-23T00:39:52.3000000Z   Tests -> /src/bin/Release/net10.0/Tests.dll
+2026-11-23T00:39:53.0000000Z ##[endgroup]
+2026-11-23T00:39:53.1000000Z ##[group]Run the tests (1 of 4)
+2026-11-23T00:39:53.2000000Z   Passed DssHarness.Tests.KnownTests.ReadsItsForm [3 ms]
+2026-11-23T00:39:53.3000000Z   Passed DssHarness.Tests.KnownTests.WritesItsRecord [5 ms]
+2026-11-23T00:39:53.4000000Z   Passed DssHarness.Tests.KnownTests.KeepsItsBounds [2 ms]
+2026-11-23T00:39:53.5000000Z   Passed DssHarness.Tests.KnownTests.FoldsItsDuplicates [4 ms]
+2026-11-23T00:39:53.6000000Z   Passed DssHarness.Tests.KnownTests.HoldsToItsBound [3 ms]
+2026-11-23T00:39:53.7000000Z   Passed DssHarness.Tests.KnownTests.SaysItsFirst [6 ms]
+2026-11-23T00:39:53.8000000Z   Passed DssHarness.Tests.KnownTests.RendersItsStack [5 ms]
+2026-11-23T00:39:53.9000000Z   Passed DssHarness.Tests.KnownTests.MarksItsFrames [4 ms]
+2026-11-23T00:39:54.0000000Z   Passed DssHarness.Tests.KnownTests.CountsItsCodes [3 ms]
+2026-11-23T00:39:54.1000000Z   Passed DssHarness.Tests.KnownTests.FindsItsCauses [7 ms]
+2026-11-23T00:39:54.2000000Z   Passed DssHarness.Tests.KnownTests.StripsItsPrefixes [2 ms]
+2026-11-23T00:39:54.3000000Z   Passed DssHarness.Tests.KnownTests.ReadsItsFiles [5 ms]
+2026-11-23T00:39:54.4000000Z   Passed DssHarness.Tests.KnownTests.KeepsItsEvidence [3 ms]
+2026-11-23T00:39:54.5000000Z   Passed DssHarness.Tests.KnownTests.SaysItsCosts [4 ms]
+2026-11-23T00:39:54.6000000Z   Passed DssHarness.Tests.KnownTests.HoldsItsBytes [6 ms]
+2026-11-23T00:39:54.7000000Z   Passed DssHarness.Tests.KnownTests.PinsItsTotals [5 ms]
+2026-11-23T00:39:54.8000000Z   Passed DssHarness.Tests.KnownTests.WalksItsFixtures [3 ms]
+2026-11-23T00:39:54.9000000Z   Passed DssHarness.Tests.KnownTests.DigestsItsLogs [4 ms]
+2026-11-23T00:39:55.0000000Z   Passed DssHarness.Tests.KnownTests.ChoosesItsParsers [2 ms]
+2026-11-23T00:39:55.1000000Z   Passed DssHarness.Tests.KnownTests.FoldsItsChains [5 ms]
+2026-11-23T00:39:55.2000000Z   Passed DssHarness.Tests.KnownTests.MarksItsTrees [3 ms]
+2026-11-23T00:39:55.3000000Z   Passed DssHarness.Tests.KnownTests.RendersItsModels [4 ms]
+2026-11-23T00:39:55.4000000Z   Passed DssHarness.Tests.KnownTests.KeepsItsShapes [6 ms]
+2026-11-23T00:39:55.5000000Z   Passed DssHarness.Tests.KnownTests.HoldsItsSchemas [2 ms]
+2026-11-23T00:39:55.6000000Z   Passed DssHarness.Tests.KnownTests.WritesItsDocuments [5 ms]
+2026-11-23T00:39:55.7000000Z   Passed DssHarness.Tests.KnownTests.ReadsItsStacks [3 ms]
+2026-11-23T00:39:55.8000000Z   Passed DssHarness.Tests.KnownTests.FindsItsUnparsed [4 ms]
+2026-11-23T00:39:55.9000000Z   Passed DssHarness.Tests.KnownTests.SaysItsWarnings [6 ms]
+2026-11-23T00:39:56.0000000Z   Passed DssHarness.Tests.KnownTests.NotesItsNotes [2 ms]
+2026-11-23T00:39:56.1000000Z   Passed DssHarness.Tests.KnownTests.HoldsItsBounds [5 ms]
+2026-11-23T00:39:56.2000000Z   Passed DssHarness.Tests.KnownTests.TrimsItsTails [3 ms]
+2026-11-23T00:39:56.3000000Z   Passed DssHarness.Tests.KnownTests.KeepsItsFirst [4 ms]
+2026-11-23T00:39:56.4000000Z   Passed DssHarness.Tests.KnownTests.OrdersItsPain [6 ms]
+2026-11-23T00:39:56.5000000Z   Passed DssHarness.Tests.KnownTests.CitesItsEvidence [2 ms]
+2026-11-23T00:39:56.6000000Z   Passed DssHarness.Tests.KnownTests.HoldsItsHashes [5 ms]
+2026-11-23T00:39:56.7000000Z   Passed DssHarness.Tests.KnownTests.KeepsItsStamps [3 ms]
+2026-11-23T00:39:56.8000000Z   Passed DssHarness.Tests.KnownTests.SaysItsVerdicts [4 ms]
+2026-11-23T00:39:56.9000000Z   Passed DssHarness.Tests.KnownTests.MarksItsPartials [6 ms]
+2026-11-23T00:39:57.0000000Z   Passed DssHarness.Tests.KnownTests.HoldsItsSignals [2 ms]
+2026-11-23T00:39:57.1000000Z   Passed DssHarness.Tests.KnownTests.BuildsItsPaths [5 ms]
+2026-11-23T00:39:57.2000000Z   Passed DssHarness.Tests.KnownTests.KeepsItsRecords [3 ms]
+2026-11-23T00:39:57.3000000Z   Passed DssHarness.Tests.KnownTests.FoldsItsPages [4 ms]
+2026-11-23T00:39:57.4000000Z   Passed DssHarness.Tests.KnownTests.LaysItsTables [6 ms]
+2026-11-23T00:39:57.5000000Z   Passed DssHarness.Tests.KnownTests.MarksItsMarks [2 ms]
+2026-11-23T00:39:57.6000000Z   Passed DssHarness.Tests.KnownTests.SaysItsSums [5 ms]
+2026-11-23T00:39:57.7000000Z ##[endgroup]
+2026-11-23T00:39:57.8000000Z ##[group]Build the app (2 of 4)
+2026-11-23T00:40:01.1000000Z /src/Program.cs(12,35): error CS0103: The name 'response' does not exist in the current context [/src/App.csproj]
+2026-11-23T00:40:01.2000000Z /src/Service.cs(40,13): warning CS0219: The variable 'count' is assigned but its value is never used [/src/App.csproj]
+2026-11-23T00:40:02.0000000Z ##[error] file=src/Program.cs,line=12::The build failed. See the error above.
+2026-11-23T00:40:02.1000000Z ##[endgroup]
+2026-11-23T00:40:03.0000000Z Post job cleanup.
+2026-11-23T00:40:04.0000000Z ##[error]Process completed with exit code 1.

@@ -1,0 +1,40 @@
+running 32 tests
+test known::reads ... ok
+test known::writes ... ok
+test known::bounds ... ok
+test known::folds ... ok
+test known::first ... ok
+test known::renders ... ok
+test known::marks ... ok
+test known::counts ... ok
+test known::causes ... ok
+test known::prefixes ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+running 6 tests
+test store::keeps ... ok
+test store::walks ... ok
+test store::loads ... ok
+
+failures:
+
+---- store::reads stdout ----
+
+thread 'main' panicked at src/store.rs:42:30:
+index out of bounds: the len is 3 but the index is 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+stack backtrace:
+   0: core::panicking::panic_bounds_check
+             at /rustc/library/core/src/panicking.rs:89:5
+   1: store::Store::read
+             at ./src/store.rs:42:30
+   2: app::main
+             at ./src/main.rs:8:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    store::reads
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.42s

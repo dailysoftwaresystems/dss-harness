@@ -1,0 +1,34 @@
+  Passed DssHarness.Tests.KnownTests.ReadsItsForm [11 ms]
+  Passed DssHarness.Tests.KnownTests.WritesItsRecord [14 ms]
+  Passed DssHarness.Tests.KnownTests.KeepsItsBounds [9 ms]
+  Passed DssHarness.Tests.KnownTests.FoldsDuplicates [16 ms]
+  Passed DssHarness.Tests.KnownTests.SaysItsFirst [12 ms]
+  Passed DssHarness.Tests.KnownTests.RendersStacks [21 ms]
+  Passed DssHarness.Tests.KnownTests.MarksFrames [13 ms]
+  Passed DssHarness.Tests.KnownTests.CountsCodes [10 ms]
+  Passed DssHarness.Tests.KnownTests.FindsCauses [18 ms]
+  Passed DssHarness.Tests.KnownTests.StripsPrefixes [8 ms]
+  Passed DssHarness.Tests.KnownTests.ReadsFiles [15 ms]
+  Passed DssHarness.Tests.KnownTests.KeepsEvidence [11 ms]
+  Passed DssHarness.Tests.KnownTests.SaysCosts [9 ms]
+  Passed DssHarness.Tests.KnownTests.HoldsBytes [17 ms]
+  Passed DssHarness.Tests.KnownTests.PinsTotals [12 ms]
+  Passed DssHarness.Tests.KnownTests.WalksFixtures [10 ms]
+  Failed DssHarness.Tests.ParserTests.FoldsDuplicates [24 ms]
+  Error Message:
+   Assert.Equal() Failure: Collections differ at index 0
+  Stack Trace:
+     at DssHarness.Tests.ParserTests.FoldsDuplicates() in D:/tests/ParserTests.cs:line 45
+     at DssHarness.Tests.ParserTests.RunAll() in D:/tests/ParserTests.cs:line 12
+  Failed DssHarness.Tests.ParserTests.HoldsToItsBound [8 ms]
+  Error Message:
+   Assert.True() Failure: Expected the digest to hold 50 diagnostics
+  Stack Trace:
+     at DssHarness.Tests.ParserTests.HoldsToItsBound() in D:/tests/ParserTests.cs:line 80
+
+Test run summary: Failed!
+  total: 18
+  failed: 2
+  succeeded: 16
+  skipped: 0
+  duration: 3.2s

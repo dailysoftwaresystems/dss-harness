@@ -1,0 +1,13 @@
+[ 88%] Linking CXX executable app
+ld.lld: error: undefined symbol: parser::read(std::__1::basic_string_view<char>)
+>>> referenced by main.cc:30
+>>>               main.cc.o:(main)
+>>> referenced by runner.cc:12
+>>>               runner.cc.o:(runner::Runner::run())
+ld.lld: error: undefined symbol: store::Store::load()
+>>> referenced by store.cc:8
+>>>               store.cc.o:(store::loadAll())
+collect2: error: ld returned 1 exit status
+gmake[2]: *** [CMakeFiles/app.dir/build.make:156: app] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:83: CMakeFiles/app.dir/all] Error 2
+gmake: *** [Makefile:91: all] Error 2

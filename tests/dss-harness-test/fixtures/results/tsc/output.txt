@@ -1,0 +1,22 @@
+> app@1.0.0 build
+> tsc -p .
+
+src/known.ts:12:9 - error TS2304: Cannot find name 'known'.
+12         const known = read();
+              ~~~~~
+
+src/known.ts:30:1 - error TS7005: Variable 'count' implicitly has an 'any' type.
+30 count = read();
+
+src/app.ts:12:9 - error TS2304: Cannot find name 'response'.
+12         const value = response.data;
+              ~~~~~~~~~
+
+src/app.ts:30:1 - error TS7005: Variable 'total' implicitly has an 'any' type.
+30 total = sum();
+
+src/app.ts:88:5 - error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+88     write(record.id);
+        ~~~~~~~~~~~~
+
+Found 5 errors in 2 files.

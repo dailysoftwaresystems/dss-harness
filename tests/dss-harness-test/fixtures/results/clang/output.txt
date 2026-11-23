@@ -1,0 +1,18 @@
+In file included from C:/src/app.cc:2:
+In file included from C:/src/include/app.h:9:
+In file included from C:/src/include/template.h:3:
+C:/src/template.h:42:37: note: in instantiation of 'T max(const T&, const T&) [with T = int]' requested from here
+C:/src/template.h:30:22: note: in expansion of macro 'MAX'
+C:/src/template.h:30:22: error: no matching function for call to 'max(int, int)'
+   30 |   return MAX(a, b);
+      |          ^~~
+C:/src/template.h:22:5: note: candidate template ignored: deduced conflicting types for parameter 'T' ('int' vs 'double')
+   22 | T max(const T& left, const T& right);
+      |     ^
+1 error generated.
+[2/6] Building CXX object CMakeFiles/app.dir/src/main.cc.o
+[3/6] Building CXX object CMakeFiles/app.dir/src/store.cc.o
+[4/6] Building CXX object CMakeFiles/app.dir/src/runner.cc.o
+[5/6] Building CXX object CMakeFiles/app.dir/src/known.cc.o
+[6/6] Building CXX object CMakeFiles/app.dir/src/charges.cc.o
+ninja: build stopped: subcommand failed.

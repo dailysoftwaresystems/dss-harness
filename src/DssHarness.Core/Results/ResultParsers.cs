@@ -120,10 +120,7 @@ internal sealed class MsvcParser : IResultParser
 /// <summary>Reads gcc's form: <c>path:line:col: error: message [-Wflag]</c>, with the include and macro chain as the error's stack.</summary>
 internal sealed class GccParser : IResultParser
 {
-    private const string Chain = @"^(?:In file included from|from)\s+(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:?,?\s*$";
-
-    private static readonly Regex Form = new(@"^(?<file>[^:\s][^:]*?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$", RegexOptions.Compiled);
-    private static readonly Regex Included = new(Chain, RegexOptions.Compiled);
+    private static readonly Regex Form = new(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$", RegexOptions.Compiled);
 
     public string Name => "gcc";
 
@@ -135,15 +132,6 @@ internal sealed class GccParser : IResultParser
         {
             if (Form.Match(line) is { Success: true } found)
             {
-                // The include chain an error closes: the `In file included from` lines before it, innermost first.
-                var stack = new List<StackFrame>();
-
-                for (var back = at - 1; back >= 0 && stack.Count < StackTrace.FrameBound && Included.IsMatch(lines[back]); back--)
-                {
-                    var frame = Included.Match(lines[back]);
-                    stack.Add(new StackFrame(lines[back], frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), frame.Groups["col"].Success ? int.Parse(frame.Groups["col"].Value, CultureInfo.InvariantCulture) : null, Kind: "include"));
-                }
-
                 diagnostics.Add(new(
                     "gcc",
                     found.Groups["severity"].Value,
@@ -152,7 +140,7 @@ internal sealed class GccParser : IResultParser
                     found.Groups["file"].Value,
                     int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
                     int.Parse(found.Groups["col"].Value, CultureInfo.InvariantCulture),
-                    Stack: stack,
+                    Stack: CompilerChains.Before(lines, at),
                     Log: (at + 1, at + 1)));
             }
         }
@@ -164,10 +152,7 @@ internal sealed class GccParser : IResultParser
 /// <summary>Reads clang's form: gcc's, with the instantiation and macro chain as the error's stack.</summary>
 internal sealed class ClangParser : IResultParser
 {
-    private static readonly Regex Form = GccForm();
-
-    private static Regex GccForm()
-        => new(@"^(?<file>[^:\s][^:]*?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$", RegexOptions.Compiled);
+    private static readonly Regex Form = new(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$", RegexOptions.Compiled);
 
     public string Name => "clang";
 
@@ -187,11 +172,51 @@ internal sealed class ClangParser : IResultParser
                     found.Groups["file"].Value,
                     int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
                     int.Parse(found.Groups["col"].Value, CultureInfo.InvariantCulture),
+                    Stack: CompilerChains.Before(lines, at),
                     Log: (at + 1, at + 1)));
             }
         }
 
         return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
+    }
+}
+
+/// <summary>
+/// The chain that led a compiler's error to where it printed: the include lines above it (<c>In file included from</c>),
+/// and the template instantiation and macro expansion lines (<c>... requested from here</c>, <c>required from here</c>,
+/// <c>in expansion of macro</c>) - one owner of the reading, gcc's and clang's alike.
+/// </summary>
+internal static class CompilerChains
+{
+    private static readonly Regex Included = new(@"^(?:In file included from|from)\s+(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:?,?\s*$", RegexOptions.Compiled);
+    private static readonly Regex Instantiated = new(@"^(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:\s+(?:note:\s+)?(?:in instantiation of |in expansion of macro )?.*?(?:requested from here|required from here|in expansion of macro)", RegexOptions.Compiled);
+
+    /// <summary>The chain before the error at <paramref name="at"/>, innermost first, each frame marked by its kind.</summary>
+    /// <param name="lines">The compiler's output lines.</param>
+    /// <param name="at">The error line's index.</param>
+    public static IReadOnlyList<StackFrame> Before(IReadOnlyList<string> lines, int at)
+    {
+        var chain = new List<StackFrame>();
+
+        for (var back = at - 1; back >= 0 && chain.Count < StackTrace.FrameBound; back--)
+        {
+            if (Included.Match(lines[back]) is { Success: true } included)
+            {
+                chain.Add(new StackFrame(lines[back], included.Groups["file"].Value, int.Parse(included.Groups["line"].Value, CultureInfo.InvariantCulture), included.Groups["col"].Success ? int.Parse(included.Groups["col"].Value, CultureInfo.InvariantCulture) : null, Kind: "include"));
+                continue;
+            }
+
+            if (Instantiated.Match(lines[back]) is { Success: true } instantiated)
+            {
+                var kind = lines[back].Contains("macro", StringComparison.Ordinal) ? "macro" : "instantiation";
+                chain.Add(new StackFrame(lines[back], instantiated.Groups["file"].Value, int.Parse(instantiated.Groups["line"].Value, CultureInfo.InvariantCulture), instantiated.Groups["col"].Success ? int.Parse(instantiated.Groups["col"].Value, CultureInfo.InvariantCulture) : null, Kind: kind));
+                continue;
+            }
+
+            break;
+        }
+
+        return chain;
     }
 }
 
@@ -503,21 +528,33 @@ internal sealed class PythonStackParser : IResultParser
             }
 
             var stack = new List<StackFrame>();
+            int inner;
 
-            for (var inner = at + 1; inner < lines.Count && Frame.IsMatch(lines[inner]); inner++)
+            for (inner = at + 1; inner < lines.Count; inner++)
             {
-                var frame = Frame.Match(lines[inner]);
-                stack.Add(new(lines[inner], frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Value));
+                if (Frame.Match(lines[inner]) is { Success: true } frame)
+                {
+                    stack.Add(new(lines[inner], frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Value));
+                    continue;
+                }
+
+                // A frame's source line, printed under it: indented as the traceback indents it, and not the error.
+                if (lines[inner].Length > 0 && lines[inner][0] is ' ' or '\t')
+                {
+                    continue;
+                }
+
+                break;
             }
 
-            var thrown = stack.Count > 0 && at + 1 + stack.Count < lines.Count && Thrown.Match(lines[at + 1 + stack.Count]) is { Success: true } error
+            var thrown = stack.Count > 0 && inner < lines.Count && Thrown.Match(lines[inner]) is { Success: true } error
                 ? new ExceptionRecord(error.Groups["type"].Value, error.Groups["message"].Value, [.. stack.Reverse<StackFrame>()], [])
                 : null;
 
             if (thrown is { } record)
             {
-                failures.Add(new("python", $"{record.Type}: {record.Message}", Exception: record, Outcome: "errored"));
-                at += stack.Count;
+                failures.Add(new("python", $"{record.Type}: {record.Message}", File: record.Stack.FirstOrDefault()?.File, Exception: record, Outcome: "errored"));
+                at = inner;
             }
         }
 

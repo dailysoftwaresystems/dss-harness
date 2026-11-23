@@ -1,0 +1,24 @@
+Test #1: known_tests_reads ...........   Passed   0.01 sec
+Test #2: known_tests_writes ..........   Passed   0.02 sec
+Test #3: demo_test ...................***Failed    0.01 sec
+Test #4: store_test ..................   Passed   0.03 sec
+Test #5: charge_test .................   Passed   0.01 sec
+Test #6: fold_duplicates .............   Passed   0.02 sec
+Test #7: holds_bounds ................   Passed   0.01 sec
+Test #8: says_first ..................   Passed   0.01 sec
+Test #9: renders_stacks ..............   Passed   0.02 sec
+Test #10: marks_frames ...............   Passed   0.01 sec
+Test #11: counts_codes ...............   Passed   0.02 sec
+Test #12: finds_causes ...............   Passed   0.01 sec
+Test #13: strips_prefixes ............   Passed   0.00 sec
+Test #14: reads_files ................   Passed   0.01 sec
+Test #15: keeps_evidence .............   Passed   0.02 sec
+Test #16: says_costs .................   Passed   0.01 sec
+Test #17: store_keeps_records ........   Passed   0.03 sec
+Test #18: store_walks_its_trees ......   Passed   0.01 sec
+Test #19: store_times_out ............***Timeout  60.00 sec
+
+The following tests FAILED:
+	  3 - demo_test (Failed)
+	 19 - store_times_out (Timeout)
+Errors while running CTest

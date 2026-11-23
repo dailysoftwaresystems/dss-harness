@@ -1,0 +1,9 @@
+Unhandled exception. System.InvalidOperationException: The collection was empty.
+   at System.Linq.ThrowHelper.ThrowMoreThanOneElementException()
+   at System.Linq.Enumerable.Single[TSource](IEnumerable1 source)
+   at DssHarness.Core.Engine.Select() in D:/src/Engine.cs:line 88
+   at DssHarness.Cli.Program.Main(String[] args) in D:/src/Program.cs:line 15
+--- End of inner exception stack trace ---
+System.ArgumentException: An item with the same key has already been added.
+   at System.Collections.Generic.Dictionary2.Insert(TKey key, TValue value)
+   at DssHarness.Core.Engine.Load() in D:/src/Engine.cs:line 42

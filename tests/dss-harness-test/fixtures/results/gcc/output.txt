@@ -1,0 +1,18 @@
+In file included from C:/src/main.c:2:
+In file included from C:/src/include/util.h:9,
+                 from C:/src/include/stdint_compat.h:4:
+C:/src/include/util.h:14:3: error: unknown type name 'uint32_t'; did you mean 'uint64_t'? [-Werror=implicit]
+   14 |   uint32_t count;
+      |   ^~~~~~~~
+      |   uint64_t
+C:/src/include/util.h:15:1: note: 'uint64_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
+   12 | #include <stddef.h>
+  +++ |+#include <cstdint>
+compilation terminated due to -Wfatal-errors.
+[2/7] Building C object CMakeFiles/app.dir/src/store.c.o
+[3/7] Building C object CMakeFiles/app.dir/src/runner.c.o
+[4/7] Building C object CMakeFiles/app.dir/src/known.c.o
+[5/7] Building C object CMakeFiles/app.dir/src/charges.c.o
+[6/7] Building C object CMakeFiles/app.dir/src/records.c.o
+[7/7] Building C object CMakeFiles/app.dir/src/lists.c.o
+ninja: build stopped: subcommand failed.

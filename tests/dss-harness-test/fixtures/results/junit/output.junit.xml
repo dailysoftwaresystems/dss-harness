@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="4" failures="2" errors="0" time="0.021" timestamp="2026-11-23T00:40:00">
+  <testsuite name="Parser" tests="3" failures="2" errors="0" time="0.015" timestamp="2026-11-23T00:40:00">
+    <testcase name="FoldsDuplicates" classname="Parser" file="/home/tests/parser_test.cc" line="45" status="run" time="0.007">
+      <failure message="/home/tests/parser_test.cc:45&#x0A;Expected equality of these values:&#x0A;  1&#x0A;  2" type=""><![CDATA[/home/tests/parser_test.cc:45
+Expected equality of these values:
+  1
+  2]]></failure>
+    </testcase>
+    <testcase name="HoldsToItsBound" classname="Parser" file="/home/tests/parser_test.cc" line="80" status="run" time="0.004">
+      <failure message="the digest held 51 diagnostics" type="assert"></failure>
+    </testcase>
+    <testcase name="ReadsItsForm" classname="Parser" file="/home/tests/parser_test.cc" line="12" status="run" time="0.004"></testcase>
+  </testsuite>
+  <testsuite name="Store" tests="1" failures="0" errors="0" time="0.006" timestamp="2026-11-23T00:40:00">
+    <testcase name="KeepsItsRecords" classname="Store" status="run" time="0.006"></testcase>
+  </testsuite>
+</testsuites>

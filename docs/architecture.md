@@ -9721,7 +9721,15 @@ reading of what failed; then every form a CI log holds, its phases being unknown
 (`PhaseParsers.ForCi`). A run check's failure is read for the error it threw (`RunnerRunService.ExceptionIn`, by
 `PhaseParsers.ForStacks`): the thrown error's whole record - type, message, stack, causes - is what an expected
 exception is matched against, so an excusal declared against a cause holds though the exception that reached the log
+wraps it, the exception that reached the log
 wraps it (`RunFailure.Exception`, `ExpectedExceptionMatcher`).
+
+Measured (`fixtures\results\`, `ResultFixturesTests`): real output from every tool the parsers read, each fixture with
+the digest it must produce stored beside it - the whole document, frames with their kinds and in-tree marks, causes
+and log ranges - and the bytes a model is handed held two ways: for every fixture, the digest said for a model costs
+no more than what the model was handed before - the fifty tail lines plus the log read the old instruction sent it on
+- and their total is pinned, so a change that grows them fails. Fixtures regenerate once with
+`DSSHARNESS_REGENERATE_RESULTS=1`; a stored digest is reviewed as any fixture is.
 
 ## Reporting
 

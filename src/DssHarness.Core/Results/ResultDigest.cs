@@ -359,7 +359,7 @@ public sealed record ResultDigest(
                 ["symbol"] = diagnostic.Symbol,
                 ["project"] = diagnostic.Project,
                 ["count"] = diagnostic.Count,
-                ["stack"] = Rendered(diagnostic.Stack),
+                ["stack"] = Frames(diagnostic.Stack),
                 ["log"] = LogOf(diagnostic),
             })]),
             ["failures"] = new JsonArray([.. Failures.Select(failure => (JsonNode)new JsonObject
@@ -376,24 +376,40 @@ public sealed record ResultDigest(
                 ["line"] = failure.Line,
                 ["outcome"] = failure.Outcome,
                 ["duration"] = failure.Duration,
-                ["stack"] = Rendered(failure.Exception?.Stack ?? failure.Stack),
+                ["stack"] = Frames(failure.Exception?.Stack ?? failure.Stack),
                 ["exception"] = failure.Exception is { } thrown
                     ? new JsonObject
                     {
                         ["type"] = thrown.Type,
                         ["message"] = thrown.Message,
-                        ["stack"] = Rendered(thrown.Stack),
+                        ["stack"] = Frames(thrown.Stack),
                         ["causedBy"] = new JsonArray([.. thrown.CausedBy.Select(cause => (JsonNode)new JsonObject
                         {
                             ["type"] = cause.Type,
                             ["message"] = cause.Message,
-                            ["stack"] = Rendered(cause.Stack),
+                            ["stack"] = Frames(cause.Stack),
                         })]),
                     }
                     : null,
             })]),
             ["unparsed"] = new JsonArray([.. (Unparsed ?? []).Select(line => (JsonNode?)line)]),
         };
+
+    /// <summary>A stack as one JSON document holds it: every frame whole - its text, its place, its symbol, its module, its kind and whether its file is in the tree.</summary>
+    private static JsonArray? Frames(IReadOnlyList<StackFrame>? stack)
+        => stack is null || stack.Count == 0
+            ? null
+            : new JsonArray([.. stack.Select(frame => (JsonNode)new JsonObject
+            {
+                ["text"] = frame.Text,
+                ["file"] = frame.File,
+                ["line"] = frame.Line,
+                ["column"] = frame.Column,
+                ["module"] = frame.Module,
+                ["symbol"] = frame.Symbol,
+                ["kind"] = frame.Kind,
+                ["inTree"] = frame.InTree,
+            })]);
 
     /// <summary>A diagnostic said as one line: its tool, its code, its place and its message's first line.</summary>
     private static string Said(Diagnostic diagnostic)
