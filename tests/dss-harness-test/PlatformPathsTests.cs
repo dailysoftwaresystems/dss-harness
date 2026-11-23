@@ -103,9 +103,10 @@ public sealed class PlatformPathsTests
 
     /// <summary>
     /// A path inside a tree is named below its root by '/' on every machine, whichever form and separators it was written
-    /// in; a relative path is read from the directory the tool that wrote it ran in - a compiler in the build directory
-    /// writing <c>../../src/a.c</c> names the tree's <c>src/a.c</c> - and from the root where none is given; a path not
-    /// strictly inside is named nothing.
+    /// in, '.' and '..' resolved by the text, a file URI as the path it names; a relative path is read from the directory
+    /// the tool that wrote it ran in - a compiler in the build directory writing <c>../../src/a.c</c> names the tree's
+    /// <c>src/a.c</c> - and from the root where none is given; where no rooted place is known to be the tree's, only a
+    /// relative path is inside it; a path not strictly inside is named nothing.
     /// </summary>
     [Theory]
     [InlineData(@"C:\work\tree", @"C:\work\tree\src\a.cs", null, "src/a.cs")]
@@ -113,11 +114,36 @@ public sealed class PlatformPathsTests
     [InlineData(@"C:\work\tree", @"..\..\src\a.cs", @"C:\work\tree\build\debug", "src/a.cs")]
     [InlineData(@"C:\work\tree", @"..\..\..\a.cs", @"C:\work\tree\build\debug", null)]
     [InlineData(@"C:\work\tree", @"src\a.cs", null, "src/a.cs")]
+    [InlineData("/home/u/tree", @"src\a.cs", null, "src/a.cs")]
     [InlineData("/home/u/tree", "../../src/a.c", "/home/u/tree/build/debug", "src/a.c")]
     [InlineData("/home/u/tree", "a.c", "/home/u/elsewhere", null)]
     [InlineData("/home/u/tree", "/home/u/tree/src/./a.c", "/home/u/tree/build", "src/a.c")]
+    [InlineData("/home/u/tree", "/home/u/tree/./src/../lib/a.c", null, "lib/a.c")]
     [InlineData("/home/u/tree", "file:///home/u/tree/test/a%20b.dart", null, "test/a b.dart")]
+    [InlineData("/home/u/tree", "/home/u/other/a.c", null, null)]
     [InlineData("/home/u/tree", "/home/u/tree", null, null)]
-    public void APathInsideATree_IsNamedBelowItsRootBySlashes_ARelativeOneFromWhereItsToolRan(string root, string path, string? from, string? named)
+    [InlineData(null, "/home/u/tree/a.c", null, null)]
+    [InlineData(null, "src/a.c", null, "src/a.c")]
+    [InlineData(null, "../a.c", null, null)]
+    public void APathInsideATree_IsNamedBelowItsRootBySlashes_ARelativeOneFromWhereItsToolRan(string? root, string path, string? from, string? named)
         => Assert.Equal(named, PlatformPaths.RelativeAsWritten(root, path, from));
+
+    /// <summary>
+    /// The directory a rooted path lies under whose last names are given is found in the path's own form, spelt as the
+    /// path spells it - a CI runner's workspace, <c>&lt;work&gt;/&lt;repository&gt;/&lt;repository&gt;</c>, in a path a
+    /// tool there wrote: the first along the path with anything below it, its names compared as the path's form compares
+    /// them; none in a relative path, a path the text cannot place, or one where nothing lies below it.
+    /// </summary>
+    [Theory]
+    [InlineData(@"D:\a\app\app\tests\A.cs", @"D:\a\app\app")]
+    [InlineData(@"D:\a\App\APP\src\x.cs", @"D:\a\App\APP")]
+    [InlineData("/home/runner/work/app/app/src/a.c", "/home/runner/work/app/app")]
+    [InlineData("/w/app/app/app/a.c", "/w/app/app")]
+    [InlineData("file:///home/runner/work/app/app/a.dart", "/home/runner/work/app/app")]
+    [InlineData("/home/runner/work/App/app/src/a.c", null)]
+    [InlineData("/home/runner/work/app/app", null)]
+    [InlineData("src/app/app/a.c", null)]
+    [InlineData(@"\app\app\a.c", null)]
+    public void TheDirectoryAPathLiesUnder_IsFoundByItsLastNames_InThePathsOwnForm(string path, string? directory)
+        => Assert.Equal(directory, PlatformPaths.DirectoryEndingAsWritten(path, ["app", "app"]));
 }

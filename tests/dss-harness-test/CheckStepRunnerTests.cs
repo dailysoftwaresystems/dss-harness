@@ -328,40 +328,91 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A red job's kept log is digested: the forge's timestamps and group markers stripped, the annotations the workflow
-    /// itself wrote first - the forge's own reading of what failed - and whatever forms a CI log holds beside them, so
-    /// the job's entry starts from what failed and not from a page of its log.
+    /// A red job is digested from its annotations, read from the forge as data, and its kept log in the forms GitHub
+    /// writes it: the byte order mark, the timestamps and the group markers taken off, every line numbered as the kept
+    /// file numbers it. A problem matcher's line - under the forge's marker in the log, an annotation with its place on the
+    /// forge - is one finding, first, named by its path in the repository; a workflow command's annotation takes its
+    /// line of the log; and a line the forge marked that no form read - the runner's own sentence that the step failed -
+    /// is said among the lines no parser held, never as the first error. The raw page goes, the typed errors standing.
     /// </summary>
     [Fact]
-    public async Task ARedJobsKeptLog_IsDigested_AnnotationsFirst_TheForgesMarksStripped()
+    public async Task ARedJob_IsDigestedFromItsAnnotationsAndItsLog_EachFindingOnce_NumberedAsTheKeptLog()
     {
         var (harness, repository) = await RepositoryAsync();
-        var log = string.Join(
+        var layout = OrchestratorLayout.Of((await harness.ContextLoader.LoadAsync(repository.Path, Token)).Layout, "r1");
+        var log = "\uFEFF" + string.Join(
             "\n",
-            "2026-11-23T00:39:53.9245022Z ##[group]Build the project",
+            "2026-11-23T00:39:53.9245022Z ##[group]Run dotnet build",
+            "2026-11-23T00:39:53.9300000Z \u001b[36;1mdotnet build\u001b[0m",
             "2026-11-23T00:39:54.1000000Z ##[endgroup]",
-            "2026-11-23T00:40:01.0000000Z src/Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [src/App.csproj]",
-            "2026-11-23T00:40:02.0000000Z ##[error] file=src/Program.cs,line=12::The build failed") + "\n";
-        var job = new CiCheck("build", CiCheckState.Red, "failure", "https://ci/build", 7, 70, null);
+            "2026-11-23T00:40:00.0000000Z   Determining projects to restore...",
+            "2026-11-23T00:40:01.0000000Z ##[error]/home/runner/work/app/app/src/Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [/home/runner/work/app/app/src/App.csproj]",
+            "2026-11-23T00:40:01.5000000Z ##[error]Missing semicolon",
+            "2026-11-23T00:40:02.0000000Z ##[error]Process completed with exit code 1.") + "\n";
+        var job = new CiCheck("build", CiCheckState.Red, "failure", "https://ci/build", 7, 70, null) { CheckRunId = 70, Annotations = 3, Repository = "app" };
+        CiAnnotation[] annotations =
+        [
+            new("src/Program.cs", 12, 12, 35, 35, "failure", null, "The name 'x' does not exist in the current context", null),
+            new("src/app.ts", 4, 4, null, null, "failure", "Lint", "Missing semicolon", null),
+            new(null, null, null, null, null, "failure", null, "Process completed with exit code 1.", null),
+        ];
         var checks = Substitute.For<ICiChecksService>();
         checks.WaitAsync(Arg.Any<string>(), Arg.Any<CiChecksRequest>(), Arg.Any<CancellationToken>()).Returns(
-            new CiChecksReading("c1", CiChecksFound.Red, [job], [new CiRedCheck(job, "build", "Pipeline", "Build", null, false, log, null)]));
+            new CiChecksReading("c1", CiChecksFound.Red, [job], [new CiRedCheck(job, "build", "Pipeline", "Build", null, false, log, null) { Annotations = annotations }]));
+
+        var result = await Runner(harness, checks).RunAsync(Run(new WorkflowStep { Name = "wait", Type = "ci-wait", Commit = "c1" }, repository.Path), Token);
+
+        var red = Assert.Single(result.Output!["red"]!.AsArray())!;
+        var digest = red["digest"]!.AsObject();
+        var kept = File.ReadAllLines(Path.Combine(layout.InstanceDirectory("wait", null), OrchestratorLayout.StepLogsDirectoryName, "build.70.log"));
+
+        // Two errors, each once: the matcher's line read by its own form and by the forge is one finding, and so is the
+        // workflow command's; the runner's sentence is no error of a tool's.
+        Assert.Equal((2, 0), (digest["errors"]!.GetValue<int>(), digest["warnings"]!.GetValue<int>()));
+
+        var first = digest["first"]!.AsObject();
+
+        Assert.Equal(
+            ("msbuild", "CS0103", "src/Program.cs", 12, 35, "The name 'x' does not exist in the current context"),
+            (first["tool"]!.GetValue<string>(), first["code"]!.GetValue<string>(), first["file"]!.GetValue<string>(), first["line"]!.GetValue<int>(), first["column"]!.GetValue<int>(), first["message"]!.GetValue<string>()));
+        Assert.Equal([5, 5], first["log"]!.AsArray().Select(line => line!.GetValue<int>()));
+        Assert.StartsWith("2026-11-23T00:40:01.0000000Z ##[error]/home/runner/work/app/app/src/Program.cs(12,35): error CS0103", kept[4], StringComparison.Ordinal);
+
+        var next = Assert.Single(digest["diagnostics"]!.AsArray())!;
+
+        Assert.Equal("github-actions src/app.ts(4): Lint: Missing semicolon", next["said"]!.GetValue<string>());
+        Assert.Equal([6, 6], next["log"]!.AsArray().Select(line => line!.GetValue<int>()));
+        Assert.Equal(["Process completed with exit code 1."], digest["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        // The typed errors stand, and beside them only the line no parser held - never the raw page as well.
+        Assert.Equal(["Process completed with exit code 1."], red["failing"]!.AsArray().Select(line => line!.GetValue<string>()));
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
+    }
+
+    /// <summary>
+    /// A red check no workflow run made has no log, and is its annotations alone: one with a place a diagnostic, one with
+    /// none a sentence said among the lines no parser held.
+    /// </summary>
+    [Fact]
+    public async Task ARedCheckWithNoLog_IsDigestedFromItsAnnotationsAlone()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var app = new CiCheck("coverage", CiCheckState.Red, "failure", "https://checks/coverage", null, null, null) { CheckRunId = 90, Annotations = 2 };
+        var checks = Substitute.For<ICiChecksService>();
+        checks.WaitAsync(Arg.Any<string>(), Arg.Any<CiChecksRequest>(), Arg.Any<CancellationToken>()).Returns(
+            new CiChecksReading("c1", CiChecksFound.Red, [app], [new CiRedCheck(app, null, null, null, null, false, null, null)
+            {
+                Annotations = [new("src/Rates.cs", 30, 41, null, null, "warning", null, "These lines are not covered", "11 lines"), new(null, null, null, null, null, "failure", null, "Coverage fell below 80%", null)],
+            }]));
 
         var result = await Runner(harness, checks).RunAsync(Run(new WorkflowStep { Name = "wait", Type = "ci-wait", Commit = "c1" }, repository.Path), Token);
 
         var digest = Assert.Single(result.Output!["red"]!.AsArray())!["digest"]!.AsObject();
 
-        Assert.Equal(2, digest["errors"]!.GetValue<int>());
-
-        // The annotation first, the compiler's error second: what the workflow marked is the forge's own reading.
-        var first = digest["first"]!.AsObject();
-
-        Assert.Equal(("github-actions", "src/Program.cs", 12, "The build failed"), (first["tool"]!.GetValue<string>(), first["file"]!.GetValue<string>(), first["line"]!.GetValue<int>(), first["message"]!.GetValue<string>()));
-
-        var more = digest["diagnostics"]!.AsArray().Single()!.AsObject();
-
-        Assert.Contains("CS0103", more["said"]!.GetValue<string>(), StringComparison.Ordinal);
-        Assert.Empty(digest["unparsed"]!.AsArray());
+        Assert.Equal((0, 1), (digest["errors"]!.GetValue<int>(), digest["warnings"]!.GetValue<int>()));
+        Assert.Null(digest["first"]);
+        Assert.Equal([("src/Rates.cs", 1)], digest["byFile"]!.AsArray().Select(entry => (entry!["of"]!.GetValue<string>(), entry["count"]!.GetValue<int>())));
+        Assert.Equal(["Coverage fell below 80%"], digest["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
     }
 

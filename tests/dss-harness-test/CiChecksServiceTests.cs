@@ -294,6 +294,54 @@ public sealed class CiChecksServiceTests : IDisposable
     }
 
     /// <summary>
+    /// A red check run's annotations are read from the forge, held to the count it gave, beside the job's log - a check of
+    /// no job by them alone; a check run that holds none is not asked, and annotations that cannot be read are said why,
+    /// after what else was not read, the check red all the same.
+    /// </summary>
+    [Fact]
+    public async Task ARedChecksAnnotations_AreRead_AndOnesThatCannotBeAreSaidWhy()
+    {
+        CiAnnotation[] linux = [new("src/a.cs", 3, 3, null, null, "failure", null, "no x", null)];
+        var source = new StubCiJobSource([])
+        {
+            Readings =
+            [
+                (
+                    [
+                        Check("test (linux)", conclusion: "failure", runId: 7, jobId: 70) with { Id = 700, Annotations = 1, Repository = "app" },
+                        Check("test (macos)", conclusion: "failure", runId: 7, jobId: 71) with { Id = 710, Annotations = 2 },
+                        Check("coverage", conclusion: "failure") with { Id = 900, Annotations = 1 },
+                        Check("lint", conclusion: "failure") with { Id = 910 },
+                    ],
+                    []
+                ),
+            ],
+            Logs = new Dictionary<long, string> { [70] = "linux log\n" },
+            FailedLogs = new Dictionary<long, Exception> { [71] = new HarnessException(HarnessExit.CommandFailed, "log 71 gone") },
+            Annotations = new Dictionary<long, IReadOnlyList<CiAnnotation>> { [700] = linux, [900] = [new(null, null, null, null, null, "warning", null, "Coverage fell", null)] },
+            FailedAnnotations = new Dictionary<long, Exception> { [710] = new HarnessException(HarnessExit.CommandFailed, "annotations 710 gone") },
+        };
+        var legs = Substitute.For<ICiLegsService>();
+        legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<CiRunReport>(new HarnessException(HarnessExit.CommandFailed, "run 7 not read")));
+        var (service, _) = await ServiceAsync(source, legs);
+
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
+
+        Assert.Equal(CiChecksFound.Red, reading.Found);
+        Assert.Equal(
+            [
+                ("test (linux)", 1, "app", "linux log\n", "Its run could not be read or classified: run 7 not read"),
+                ("test (macos)", 0, null, null, "Its run could not be read or classified: run 7 not read Its annotations could not be read: annotations 710 gone log 71 gone"),
+                ("coverage", 1, null, null, null),
+                ("lint", 0, null, null, null),
+            ],
+            reading.Red.Select(red => (red.Check.Name, red.Annotations.Count, red.Check.Repository, red.Log, red.Unread)));
+        Assert.Same(linux, reading.Red[0].Annotations);
+        Assert.Equal([(700L, 1), (710L, 2), (900L, 1)], source.AnnotationsRead);
+    }
+
+    /// <summary>
     /// A red check's job is the one of its run with the id it points at - never another of its name - and one the forge
     /// lists without its id is found by its name; each with its failed step said.
     /// </summary>

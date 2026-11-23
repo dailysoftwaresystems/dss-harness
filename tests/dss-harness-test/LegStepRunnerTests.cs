@@ -252,12 +252,21 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal("a test failed\nboom\n", File.ReadAllText(Path.Combine(kept, "native.test.log")));
         Assert.True(File.Exists(Path.Combine(layout.InstanceDirectory("checks", "a1"), OrchestratorLayout.StepLedgerFileName)));
 
+        // Each red entry names the log its digest's ranges number, one read away: the copy the step kept, and none for a
+        // leg a host ran, whose log stays there.
+        Assert.Equal(
+            [Path.Combine(kept, "native.test.log"), null],
+            result.Output!["red"]!.AsArray().Select(red => red!["log"]?.GetValue<string>()));
+
         var onMain = await runner.RunAsync(Run(step with { Name = "main-checks", In = null }, repository.Path), Token);
 
         Assert.Equal(repository.Path, legs.Asked[^1].Directory);
         Assert.Equal(HarnessExit.CommandFailed, onMain.Exit);
         Assert.True(File.Exists(Path.Combine(layout.InstanceDirectory("main-checks", null), OrchestratorLayout.StepLedgerFileName)));
         Assert.False(Directory.Exists(Path.Combine(layout.InstanceDirectory("main-checks", null), OrchestratorLayout.StepLogsDirectoryName)));
+
+        // On the main tree, where no copy is kept, the log its run's records hold.
+        Assert.Equal(Path.Combine(logs, "native.test"), onMain.Output!["red"]![0]!["log"]!.GetValue<string>());
     }
 
     /// <summary>
@@ -700,15 +709,15 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = LegStepRunner.Output(Result(entries[..3], HarnessExit.CommandFailed, "a leg failed"), arms: false);
 
         Assert.Equal(
-            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"failedUnits":{"tool":"ninja","count":1,"units":[{"source":"src/a.c","step":"CMakeFiles/app.dir/a.c.o"}],"keptGoing":true,"stopsAtFirst":true,"stepsRun":2,"stepsPlanned":3,"said":"1 unit(s) failed to build; ninja went on past them and ran 2 of the 3 steps it had to run: the one it did not run needs one that failed"}}],"runDirectory":"/runs/r"}""",
+            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"log":null,"failedUnits":{"tool":"ninja","count":1,"units":[{"source":"src/a.c","step":"CMakeFiles/app.dir/a.c.o"}],"keptGoing":true,"stopsAtFirst":true,"stepsRun":2,"stepsPlanned":3,"said":"1 unit(s) failed to build; ninja went on past them and ran 2 of the 3 steps it had to run: the one it did not run needs one that failed"}}],"runDirectory":"/runs/r"}""",
             legs.ToJsonString());
 
         var sweep = LegStepRunner.Output(Result([entries[0], entries[3], entries[4]], LegExit.Survived, "an arm survived") with { RunDirectory = null }, arms: true);
 
         // A sweep's leg red by an arm says the arm alone; one that also failed outside every arm says both.
         Assert.Equal(
-            """[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"arm":null},{"leg":"swept","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"arm":"A-ONE"},"""
-                + """{"leg":"both","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"arm":"A-THREE"},{"leg":"both","verdict":"failed","phase":"build","detail":"the clean build failed","tail":[],"digest":null,"arm":null}]""",
+            """[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"log":null,"arm":null},{"leg":"swept","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"log":null,"arm":"A-ONE"},"""
+                + """{"leg":"both","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"log":null,"arm":"A-THREE"},{"leg":"both","verdict":"failed","phase":"build","detail":"the clean build failed","tail":[],"digest":null,"log":null,"arm":null}]""",
             sweep["red"]!.ToJsonString());
         Assert.Null(sweep["runDirectory"]);
 

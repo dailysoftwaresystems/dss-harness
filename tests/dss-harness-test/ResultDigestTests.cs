@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
@@ -373,6 +374,86 @@ public sealed class ResultDigestTests
         Assert.Equal([10, 11], document["diagnostics"]![0]!["log"]!.AsArray().Select(line => line!.GetValue<int>()));
         Assert.Equal(["a stray line"], document["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
     }
+
+    /// <summary>
+    /// A digest's document reads back as the digest it was written from - every diagnostic, failure, frame, cause and
+    /// count, each stack's and each cause chain's cut, the counts by code and by file and what the bounds left out, its
+    /// first error the first of its errors - so another machine's ledger, which carries a leg's digest as that machine's
+    /// --json wrote it, is read by the names it was written under; every text it holds read through what each line
+    /// another machine printed becomes on this one.
+    /// </summary>
+    [Fact]
+    public void ADigestsDocument_ReadsBackAsTheDigest_EachTextAsThisMachineSaysIt()
+    {
+        IReadOnlyList<StackFrame> deep = [.. Enumerable.Range(1, StackTrace.FrameBound + 6).Select(at => new StackFrame($"in src/Program.cs:{at.ToString(CultureInfo.InvariantCulture)}", "src/Program.cs", at, Kind: "include", InTree: true))];
+        var chain = new ExceptionRecord("System.IO.IOException", "inner at 192.0.2.10", [], []);
+
+        for (var depth = 0; depth < ExceptionRecord.CauseBound + 2; depth++)
+        {
+            chain = new ExceptionRecord("System.InvalidOperationException", depth == ExceptionRecord.CauseBound + 1 ? "outer" : "wrapping at 192.0.2.10", [new StackFrame("at A()", "tests/A.cs", 45, InTree: true)], [chain]);
+        }
+
+        var digest = ResultDigest.Of(
+            [
+                new Diagnostic("gcc", "warning", "-Wunused", "unused at 192.0.2.10", "src/a.c", 3, 9, 3, 12, "main", "app", Log: (4, 4)),
+                new Diagnostic("msbuild", "error", "CS0103", "no x at 192.0.2.10", "src/Program.cs", 12, 35, Count: 2, Stack: deep, Log: (10, 11)),
+            ],
+            [
+                new TestFailure(
+                    "xunit",
+                    "App.Tests.Holds",
+                    "Holds",
+                    "App.Tests",
+                    "Holds",
+                    "expected 1",
+                    "1",
+                    "2",
+                    "tests/A.cs",
+                    45,
+                    chain,
+                    null,
+                    0.25,
+                    "errored",
+                    (2, 3)),
+            ],
+            [.. Enumerable.Range(1, ResultDigest.Bound + 3).Select(at => $"a stray line {at.ToString(CultureInfo.InvariantCulture)} from 192.0.2.10")]);
+
+        var read = ResultDigest.Read(digest.Document());
+
+        Assert.Equal(digest.Document().ToJsonString(), read!.Document().ToJsonString());
+        Assert.Same(read.Diagnostics[1], read.First);
+        var cut = read.Failures[0].Exception!;
+
+        for (var depth = 1; depth < ExceptionRecord.CauseBound; depth++)
+        {
+            cut = cut.CausedBy[0];
+        }
+
+        // The cuts the bounds made are read back as they were said: six frames of seventy, the three records below the
+        // eighth, and the three unparsed lines past the fifty held.
+        Assert.Equal((6, 3, ResultDigest.Bound + 3), (read.Diagnostics[1].StackCut, cut.CausesCut, read.UnparsedCount));
+        Assert.Null(ResultDigest.Read(null));
+
+        var said = ResultDigest.Read(digest.Document(), text => text.Replace("192.0.2.10", "mac", StringComparison.Ordinal))!;
+
+        Assert.Equal(
+            ["unused at mac", "no x at mac", "wrapping at mac", "a stray line 1 from mac"],
+            [said.Diagnostics[0].Message, said.Diagnostics[1].Message, said.Failures[0].Exception!.CausedBy[0].Message, said.Unparsed[0]]);
+    }
+
+    /// <summary>A document of no digest's shape, or holding what no digest does, is refused, naming what is wrong - never read as less than it holds.</summary>
+    [Theory]
+    [InlineData("""{"diagnostics":{}}""", "'diagnostics' is no list")]
+    [InlineData("""{"diagnostics":[{"tool":"gcc","severity":"error"}]}""", "'message' is missing")]
+    [InlineData("""{"diagnostics":[{"tool":"gcc","severity":"error","message":"m","log":[1]}]}""", "'log' is no range of two lines")]
+    [InlineData("""{"diagnostics":[{"tool":"gcc","severity":"fatal","message":"m"}]}""", "'fatal' is not a severity a diagnostic has")]
+    [InlineData("""{"failures":[{"framework":"xunit","id":"t","outcome":"failed","duration":"long"}]}""", "'duration' is no number")]
+    [InlineData("""{"failures":[{"framework":"xunit","id":"t","outcome":"failed","stack":[{"text":"at A()","inTree":"yes"}]}]}""", "'inTree' is no flag")]
+    [InlineData("""[]""", "a digest is no object")]
+    [InlineData("""{"errors":1,"leftOut":{"diagnostics":2}}""", "it says it left out other than its counts and what it holds make")]
+    [InlineData("""{"failures":[{"framework":"xunit","id":"t","outcome":"failed","exception":{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m"}]}]}]}]}]}]}]}]}}],"failed":1}""", "a cause chain is deeper than its bound of 8")]
+    public void ADocumentOfNoDigestsShape_IsRefused_NamingWhatIsWrong(string document, string problem)
+        => Assert.Equal(problem, Assert.Throws<System.Text.Json.JsonException>(() => ResultDigest.Read(System.Text.Json.Nodes.JsonNode.Parse(document))).Message);
 
     private static IReadOnlyList<string> Lines(params string[] lines) => lines;
 

@@ -14,15 +14,16 @@ namespace DssHarness.Core.Configuration;
 /// </remarks>
 public sealed class ExpectedException
 {
-    /// <summary>The exception's class name, matched exactly.</summary>
-    [Description("the exception's class name, matched exactly")]
+    /// <summary>The exception's class name, matched exactly: the one that reached the log, or a cause under it.</summary>
+    [Description("the exception's class name, or a cause's under it, matched exactly")]
     public required string ExceptionType { get; init; }
 
     /// <summary>
     /// Messages this entry recognises, each plain text or a regular expression. Any one matching
-    /// is a match, because one confound reaches a reader through several wordings.
+    /// is a match, because one confound reaches a reader through several wordings: of the exception that reached the
+    /// log, its message, or its output where the log printed no stack; of a cause, that cause's own message.
     /// </summary>
-    [Description("its message or output, as text or a regular expression")]
+    [Description("its message, or its output where the log printed no stack, as text or a regular expression; a cause's own message")]
     public required List<string> Messages { get; init; }
 
     /// <summary>Whether a run producing this failure is reported as a success.</summary>

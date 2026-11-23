@@ -52,7 +52,8 @@ Where a line says that a step left no output, that thing was not read or did not
 ## What to do
 
 1. Start from the digest's `first` - the first thing that went wrong, in the order the tool met it - and read the
-   output and logs an entry names where the cause needs more than the digest says.
+   output and logs an entry names where the cause needs more than the digest says: the lines a digest's `log` names
+   are those of the entry's own `log` file, numbered as that file numbers them.
 2. Find the cause in the code and the configuration, and reproduce it where the repository's tools let you; say in
    the evidence whether you did.
 3. Decide the course by the cause:

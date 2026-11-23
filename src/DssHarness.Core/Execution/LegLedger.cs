@@ -217,11 +217,12 @@ public sealed record LegEntry
     /// <summary>
     /// What the leg's failing phase digested to, where its failure is the leg's verdict (<see cref="Results.PhaseDigest"/>):
     /// a test's structured results files first - a TRX, a JUnit XML, Dart's JSON stream, a SARIF log - and the phase's
-    /// own log, a build's or a test's, read by the parsers chosen for it wherever the files gave no finding. The typed
-    /// diagnostics and test failures, folded and held to the digest's bounds, with the counts of each over the whole
-    /// output and the first error in the order the tool met it; what the parsers did not understand, and what a results
-    /// path could not give, stays in its unparsed lines. <see langword="null"/> where the leg passed, where something
-    /// else decided its verdict, and where nothing was read and nothing said.
+    /// own log, a build's or a test's, read by the parsers chosen for it wherever the files gave no finding; of a leg a
+    /// host ran, the host's own, as its ledger carried it. The typed diagnostics and test failures, folded and held to the
+    /// digest's bounds, with the counts of each over the whole output and the first error in the order the tool met it;
+    /// each diagnostic's log range numbers the lines of that phase's log as the file numbers them. What the parsers did
+    /// not understand, and what a results path could not give, stays in its unparsed lines. <see langword="null"/> where
+    /// the leg passed, where something else decided its verdict, and where nothing was read and nothing said.
     /// </summary>
     public ResultDigest? Digest { get; init; }
 

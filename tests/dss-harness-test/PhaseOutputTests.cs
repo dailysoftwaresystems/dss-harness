@@ -40,6 +40,38 @@ public sealed class PhaseOutputTests
     }
 
     /// <summary>
+    /// Each line a phase's child printed is numbered as its log numbers it, by the one rule of where lines end that every
+    /// reader of the file counts by: below the header the harness wrote above it, and a carriage return the child printed
+    /// alone counted as the line end a reader of the file sees - so the log range a digest names is the line the log
+    /// holds, one read away.
+    /// </summary>
+    [Fact]
+    public async Task EachLineAPhasePrinted_IsNumberedAsItsLogNumbersIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var log = temp.Combine("build.log");
+        var printed = temp.Combine("printed.txt");
+        const string Error = "src/main.cpp(5): error C2065: 'x': undeclared identifier";
+        File.WriteAllText(printed, $"warming up\n50%\r100%\n{Error}\ndone\n");
+
+        var result = await new PhaseRunner(factory.ProcessRunner, factory.FileSystem, factory.Output).RunAsync(Child("print-file", log, printed), TestContext.Current.CancellationToken);
+
+        var text = await File.ReadAllTextAsync(log, TestContext.Current.CancellationToken);
+        var file = DssHarness.Core.Text.LineEnds.Spans(text, (start, end, _) => text[start..end]);
+        var numbered = result.Output.NumberedLines().ToList();
+
+        // Every line is the file's lines from its number to its last, joined by what parted them there.
+        Assert.All(numbered, line => Assert.Equal(line.Text, string.Join('\r', file[(line.Number - 1)..line.Last])));
+        Assert.Equal(file.IndexOf(Error) + 1, numbered.Single(line => line.Text == Error).Number);
+        Assert.True(numbered.Single(line => line.Text == Error).Number > 4, "the header holds lines of its own, and the carriage return ends one");
+
+        var digest = DssHarness.Core.Results.PhaseParsers.DigestOf(numbered, [DssHarness.Core.Results.ResultParsers.Of("msvc")!]);
+
+        Assert.Equal((file.IndexOf(Error) + 1, file.IndexOf(Error) + 1), digest!.First!.Log);
+    }
+
+    /// <summary>
     /// A range is read as the bytes it spans, whatever falls where one read of the file ends and the next begins - a
     /// character written in several bytes among them - and a line ends only as the log ends lines.
     /// </summary>

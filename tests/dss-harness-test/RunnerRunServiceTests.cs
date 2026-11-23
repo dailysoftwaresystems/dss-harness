@@ -1055,32 +1055,46 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
-    /// A failing step whose log printed a whole stack is excused by the cause under what was thrown: the record read
-    /// from the stack - its type, its message, its causes - is what the entry is matched against, so an excusal
-    /// declared against the cause holds though the exception that reached the log wraps it.
+    /// A failing step whose log printed a whole stack, as .NET prints a wrapped exception, is excused by the cause under
+    /// what was thrown: the record read from the stack - its type, its message, its causes - is what the entry is matched
+    /// against, so an excusal declared against the cause holds though the exception that reached the log wraps it; and
+    /// the cause's type with the message of the exception that wraps it is no match - both halves are of one exception.
     /// </summary>
     [Fact]
     public async Task AFailingStepsStack_IsReadForItsCauses_ForWhatAnExpectedExceptionRecognises()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
-        var printed = temp.WriteFile(
-            "printed.txt",
-            "Unhandled: System.InvalidOperationException: The operation is invalid.\n"
-            + "   at App.Program.Run() in /src/Program.cs:line 12\n"
-            + "--- End of inner exception stack trace ---\n"
-            + "System.ArgumentException: the argument was wrong\n"
-            + "   at App.Program.Check() in /src/Program.cs:line 30\n");
 
-        var runner = new RunnerConfig
+        // .NET's own words for an exception that wraps another: its ToString, the cause after ' ---> ' and the end of its
+        // stack marked, as a step's program prints what it caught.
+        string thrown;
+
+        try
         {
-            Phases = [Phase("measure", "print-file", [printed], successPattern: "all cases passed")],
+            try
+            {
+                throw new ArgumentException("the argument was wrong");
+            }
+            catch (ArgumentException inner)
+            {
+                throw new InvalidOperationException("The operation is invalid.", inner);
+            }
+        }
+        catch (InvalidOperationException wrapped)
+        {
+            thrown = wrapped.ToString();
+        }
+
+        RunnerConfig Runner(TempDirectory directory, string message) => new()
+        {
+            Phases = [Phase("measure", "print-file", [directory.WriteFile("printed.txt", thrown + "\n")], successPattern: "all cases passed")],
             ExpectedExceptions =
             [
                 new ExpectedException
                 {
                     ExceptionType = "ArgumentException",
-                    Messages = ["the argument was wrong"],
+                    Messages = [message],
                     Success = true,
                     Warning = true,
                     ResultCode = 0,
@@ -1093,11 +1107,16 @@ public sealed class RunnerRunServiceTests
             ],
         };
 
-        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+        // Each run in a tree of its own, as two runs are.
+        using var other = new TempDirectory();
+        var excused = await Service(factory).RunAsync(Config(), Request(temp, Runner(temp, "the argument was wrong")), TestContext.Current.CancellationToken);
+        var genuine = await Service(new HarnessFactory()).RunAsync(Config(), Request(other, Runner(other, "The operation is invalid.")), TestContext.Current.CancellationToken);
 
-        Assert.NotNull(result.ExpectedException);
-        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
-        Assert.Equal("a known confound", result.Outcome.Message);
+        Assert.Contains(" ---> System.ArgumentException: the argument was wrong", thrown, StringComparison.Ordinal);
+        Assert.NotNull(excused.ExpectedException);
+        Assert.Equal((LegVerdict.Passed, "a known confound"), (excused.Verdict.Verdict, excused.Outcome.Message));
+        Assert.Null(genuine.ExpectedException);
+        Assert.NotEqual(LegVerdict.Passed, genuine.Verdict.Verdict);
     }
 
     [Fact]

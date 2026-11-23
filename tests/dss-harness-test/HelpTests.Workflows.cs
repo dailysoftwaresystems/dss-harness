@@ -89,7 +89,8 @@ public sealed partial class HelpTests
     /// model - the first error whole with its stack rendered to its frames in the tree, the next distinct to four as
     /// one line each, the rest counted by code and by file - and the tail then holding only the lines no parser held,
     /// for a model sees either the typed errors or the raw lines, never both repeated; the ledger's --json keeps the
-    /// whole digest typed, and a red leg's first error is said on {run.red}'s line and under its verdict in the table.
+    /// whole digest typed, a red leg's first error is said on {run.red}'s line and in a block below the text ledger's table,
+    /// and the entry names the log its digest's ranges number.
     /// </summary>
     [Fact]
     public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsErrors()
@@ -101,9 +102,12 @@ public sealed partial class HelpTests
                 + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four as "
                 + "one line each, every test failure of the four with its stack, and the rest counted by code and by file, and where the "
                 + "digest holds typed errors the entry's tail holds only the lines no parser held, for a model reads either the typed "
-                + "errors or the raw lines, never both repeated. The ledger's --json keeps the digest typed for a reader that asks, "
-                + "its bounds said - the first 50 diagnostics of each severity and the first 50 failures, the rest counted, a stack "
-                + "held to its first 48 and last 16 frames with the cut counted - each red leg's first error is said under its verdict in the table, and {run.red} says it on its line",
+                + "errors or the raw lines, never both repeated; and in log, the log that phase wrote, whose lines the digest's ranges "
+                + "number as the file numbers them - the copy kept in the step's directory in an agent's worktree, else the run's own - "
+                + "null for a leg a host ran, whose log stays there and whose digest, made there, travels on its line. The ledger's "
+                + "--json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics of each severity "
+                + "and the first 50 failures, the rest counted, a stack held to its first 48 and last 16 frames with the cut counted - "
+                + "the text ledger says each red leg's first error in a block below its table, and {run.red} says it on its line",
             prose,
             StringComparison.Ordinal);
     }
@@ -550,7 +554,13 @@ public sealed partial class HelpTests
                 + $"({OrchestratorLayout.StepLogsDirectoryName}/<job>.<id>{PhaseLogs.Extension}, the job's id telling two of one name apart) "
                 + "given by reference in log, with how many lines it holds in lines and, in failing, the page of it where the job "
                 + "failed - the one holding its last line GitHub marks an error (##[error]), else its last page - each line by its number, "
-                + "both masked by the repository's runner secrets, and in unread why any of that could not be "
+                + "both masked by the repository's runner secrets; in digest, what the check digested to, said for a model as a leg's "
+                + "is: its annotations, read from the forge's check-runs API, each naming a file in its place, and its job's log, every "
+                + "line numbered as the kept log numbers it and read by every form a CI log holds - each finding said once, a problem "
+                + "matcher's line and its annotation one, a line the forge marked that no form read said among the lines no parser held - "
+                + "every file a tool on the runner named placed against the job's workspace there, <work>/<repository>/<repository>, "
+                + "read as the runner wrote it and named relative to it; where it holds typed errors, failing holds only the lines no "
+                + "parser held; and in unread why any of that could not be "
                 + "read; every check ended green - success, neutral or skipped - on two reads running that found the same checks, at its "
                 + "wait's end on the last alone, passes it; and no check within "
                 + $"appearSeconds ({CiChecksRequest.DefaultAppearSeconds}) - or waitMinutes where that is shorter - checks still running at waitMinutes ({CiChecksRequest.DefaultWaitMinutes}) "
@@ -586,9 +596,13 @@ public sealed partial class HelpTests
                 + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four "
                 + "as one line each, every test failure of the four with its stack, and the rest counted by code and by file, and where "
                 + "the digest holds typed errors the entry's tail holds only the lines no parser held, for a model reads either the "
-                + "typed errors or the raw lines, never both repeated. The ledger's --json keeps the digest typed for a reader "
-                + "that asks, its bounds said - the first 50 diagnostics of each severity and the first 50 failures, the rest "
-                + "counted, a stack held to its first 48 and last 16 frames with the cut counted - each red leg's first error is said under its verdict in the table, and {run.red} says it on its line. What "
+                + "typed errors or the raw lines, never both repeated; and in log, the log that phase wrote, whose lines the digest's "
+                + "ranges number as the file numbers them - the copy kept in the step's directory in an agent's worktree, else the "
+                + "run's own - null for a leg a host ran, whose log stays there and whose digest, made there, travels on its line. The "
+                + "ledger's --json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics of each "
+                + "severity and the first 50 failures, the rest counted, a stack held to its first 48 and last 16 frames with the cut "
+                + "counted - the text ledger says each red leg's first error in a block below its table, and {run.red} says it on its "
+                + "line. What "
                 + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
                 + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "
                 + "agent-clients'); where this machine has none, agentPolicy.isolation required fails the step "

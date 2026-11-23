@@ -107,7 +107,7 @@ public sealed class ResultFixturesTests
 
         if (tool == "ci-wait")
         {
-            return PhaseParsers.DigestOf(PhaseParsers.StrippedCi(text), PhaseParsers.ForCi([]));
+            return DssHarness.Core.Ci.CiDigest.Of(text, [], "app", said => said, []);
         }
 
         return PhaseParsers.DigestOf([.. File.ReadLines(output)], [ResultParsers.Of(tool)!]);

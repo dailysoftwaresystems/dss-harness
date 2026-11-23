@@ -61,4 +61,42 @@ public static class LineEnds
 
         return lines;
     }
+
+    /// <summary>How many lines <paramref name="text"/> holds by this rule - as many as <see cref="Spans"/> makes - counted without making them.</summary>
+    /// <param name="text">The text.</param>
+    public static int Count(ReadOnlySpan<char> text)
+    {
+        var lines = 0;
+        var open = false;
+
+        for (var at = 0; at < text.Length; at++)
+        {
+            if (Ends(text[at]))
+            {
+                if (at + 1 < text.Length && Joined(text[at], text[at + 1]))
+                {
+                    at++;
+                }
+
+                lines++;
+                open = false;
+            }
+            else
+            {
+                open = true;
+            }
+        }
+
+        return open || lines == 0 ? lines + 1 : lines;
+    }
 }
+
+/// <summary>
+/// A line as the file that holds it numbers it, by the one rule of where lines end (<see cref="LineEnds"/>): the number a
+/// reader opening the file finds it at, and the last, where what was read as one line holds an ending of the rule's
+/// inside it - a carriage return a program printed alone - and a reader's view counts it as more.
+/// </summary>
+/// <param name="Number">The number of the line's first line in its file.</param>
+/// <param name="Last">The number of its last; <paramref name="Number"/> where it is one line of the file.</param>
+/// <param name="Text">The line.</param>
+public readonly record struct NumberedLine(int Number, int Last, string Text);

@@ -150,7 +150,12 @@ public static class PlatformPaths
     /// </remarks>
     /// <param name="root">The directory, as the machine that holds it writes it.</param>
     /// <param name="path">The path, as whatever wrote it wrote it.</param>
-    public static bool IsInsideAsWritten(string root, string path) => RelativeAsWritten(root, path) is not null;
+    public static bool IsInsideAsWritten(string root, string path)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+
+        return RelativeAsWritten(root, path) is not null;
+    }
 
     /// <summary>
     /// Where <paramref name="path"/> is inside <paramref name="root"/>, read as <see cref="IsInsideAsWritten"/> reads the
@@ -160,12 +165,11 @@ public static class PlatformPaths
     /// <c>../../src/a.c</c> a compiler wrote in the build directory is the tree's <c>src/a.c</c> - and against the root
     /// where none is.
     /// </summary>
-    /// <param name="root">The directory, as the machine that holds it writes it.</param>
+    /// <param name="root">The directory, as the machine that holds it writes it; null where no rooted place is known to be the tree's, so only a relative path read against the root is inside it.</param>
     /// <param name="path">The path, as whatever wrote it wrote it.</param>
     /// <param name="from">The directory a relative path is read from, as the machine that holds it writes it; <see langword="null"/> for the root.</param>
-    public static string? RelativeAsWritten(string root, string path, string? from = null)
+    public static string? RelativeAsWritten(string? root, string path, string? from = null)
     {
-        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(path);
 
         if (AsAPath(path) is not { } named || named.Length == 0)
@@ -192,7 +196,7 @@ public static class PlatformPaths
 
         var form = FormOf(named);
 
-        if (form is null || form != FormOf(root))
+        if (root is null || form is null || form != FormOf(root))
         {
             return null;
         }
@@ -209,6 +213,56 @@ public static class PlatformPaths
         return rootParts.Select((part, at) => string.Equals(part, below[at], comparison)).All(same => same)
             ? string.Join('/', below.Skip(rootParts.Count))
             : null;
+    }
+
+    /// <summary>
+    /// The directory a rooted <paramref name="path"/> lies under whose last parts are <paramref name="tail"/>, read in the
+    /// form the path's own text is written in and its names compared as that form compares them - the first such along the
+    /// path, written as the path writes it; null where the path is relative, is of no form its text tells, or holds no such
+    /// directory with anything below it. How a place a machine names by a convention of its own - a CI runner's workspace,
+    /// <c>&lt;work&gt;/&lt;repository&gt;/&lt;repository&gt;</c> - is found in a path it wrote.
+    /// </summary>
+    /// <param name="path">The path, as whatever wrote it wrote it.</param>
+    /// <param name="tail">The names the directory's path ends with, in order.</param>
+    public static string? DirectoryEndingAsWritten(string path, IReadOnlyList<string> tail)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(tail);
+
+        if (tail.Count == 0 || AsAPath(path) is not { } named || !IsRootedOnAnyPlatform(named) || FormOf(named) is not { } form)
+        {
+            return null;
+        }
+
+        var windows = form == PathForm.Windows;
+        var comparison = windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        // Each part with where it ends in the text, so the directory is given back as the path spells it.
+        var parts = new List<(string Name, int End)>();
+        var begins = 0;
+
+        for (var at = 0; at <= named.Length; at++)
+        {
+            if (at == named.Length || named[at] == '/' || windows && named[at] == '\\')
+            {
+                if (at > begins)
+                {
+                    parts.Add((named[begins..at], at));
+                }
+
+                begins = at + 1;
+            }
+        }
+
+        for (var first = 0; first + tail.Count < parts.Count; first++)
+        {
+            if (tail.Select((name, at) => string.Equals(name, parts[first + at].Name, comparison)).All(same => same))
+            {
+                return named[..parts[first + tail.Count - 1].End];
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The two forms a rooted path is written in.</summary>

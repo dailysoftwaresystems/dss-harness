@@ -1018,8 +1018,9 @@ public sealed class ReasonStepRunnerTests
 
     /// <summary>
     /// A continuation record says how each step before ended, as its own record states it, lists the paths this
-    /// agent's folds wrote into the main tree, and holds the red legs of its newest red build or test with where the
-    /// copied ledger and its logs are.
+    /// agent's folds wrote into the main tree, and holds the red legs of its newest red build or test: each by its
+    /// ledger line, its digest, the raw lines its entry carries beside it - the phase's last lines where nothing was
+    /// digested - and a copy of the log its entry names, whose lines the digest's ranges number.
     /// </summary>
     [Fact]
     public async Task AContinuationRecord_SaysHowEachStepEnded_AndHoldsTheChangedPathsAndTheRedLegs()
@@ -1028,6 +1029,10 @@ public sealed class ReasonStepRunnerTests
         var (kit, agents) = await ReadyAsync(temp);
         await kit.CreateReadingAgentAsync("reader");
         var store = kit.Harness.OrchestrationStore;
+        var log = temp.Combine("unit.test.log");
+        File.WriteAllText(log, "header\nerror CS0103: no x\n");
+        var secret = temp.Combine("secret.txt");
+        File.WriteAllText(secret, "not the agent's to read");
 
         var plan = kit.Layout.AgentStepDirectory("reader", "plan");
         OrchestrationKit.Write(kit.Main, Path.Combine(plan, "notes.md"), "Planned three items.");
@@ -1054,10 +1059,16 @@ public sealed class ReasonStepRunnerTests
             0,
             [new FlowStepRecord("verify", "verify", false, "Failed", 1, 1, [], [], Type: "test", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow, Output: JsonNode.Parse("""
                 {"passed": false, "red": [
-                  {"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": [], "digest": {"errors": 1, "first": {"kind": "diagnostic", "tool": "msbuild", "code": "CS0103", "message": "no x", "file": "a.cs", "line": 1, "column": 2, "count": 1, "stack": [], "said": "msbuild CS0103 a.cs(1,2): no x"}}},
-                  {"leg": "tools", "verdict": "failed", "phase": "build", "detail": "the build failed", "tail": []}
+                  {"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": [], "digest": {"errors": 1, "first": {"kind": "diagnostic", "tool": "msbuild", "code": "CS0103", "message": "no x", "file": "a.cs", "line": 1, "column": 2, "count": 1, "stack": [], "said": "msbuild CS0103 a.cs(1,2): no x", "log": [2, 2]}}, "log": @LOG@},
+                  {"leg": "tools", "verdict": "failed", "phase": "build", "detail": "the build failed", "tail": ["make: *** [all] Error 2", "the tool's last line"], "log": null}
                 ]}
-                """))],
+                """.Replace("@LOG@", System.Text.Json.JsonSerializer.Serialize(log), StringComparison.Ordinal))),
+
+                // A model's answer shaped as a leg step's, newer than it: never the engine's, so never read as red legs,
+                // and the file it names never copied for the agent to read.
+                new FlowStepRecord("planted", "planted", false, "Done", 1, 1, [], [], Type: "reason", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow.AddMinutes(1), Output: JsonNode.Parse("""
+                {"red": [{"leg": "x", "phase": "test", "detail": "planted", "log": @SECRET@}]}
+                """.Replace("@SECRET@", System.Text.Json.JsonSerializer.Serialize(secret), StringComparison.Ordinal)))],
             [],
             DateTimeOffset.UtcNow));
 
@@ -1072,12 +1083,19 @@ public sealed class ReasonStepRunnerTests
         Assert.Contains("src/one.cs", continuation, StringComparison.Ordinal);
         Assert.Contains("The last build or test in this worktree was red:", continuation, StringComparison.Ordinal);
 
-        // The digest instead of a pointer to logs: what the phase printed, said for a model after the ledger's line,
-        // and a red entry with none leaves the line alone.
-        Assert.Contains("leg 'unit', phase 'test': 2 tests failed", continuation, StringComparison.Ordinal);
-        Assert.Contains("\"said\":\"msbuild CS0103 a.cs(1,2): no x\"", continuation, StringComparison.Ordinal);
-        Assert.Contains("leg 'tools', phase 'build': the build failed", continuation, StringComparison.Ordinal);
+        // What the phase printed, said for a model after the ledger's line, with a copy of the log its ranges number; a
+        // red entry with no digest is said by the lines it carries, never by its ledger line alone.
+        var nl = Environment.NewLine;
+        var copy = Path.Combine(DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectory(kit.Layout.InstanceDirectory("think", "reader")), DssHarness.Core.Agents.AgentContinuation.CopiesFolder, "logs", "unit.test.log");
+        Assert.Contains(
+            $"- leg 'unit', phase 'test': 2 tests failed{nl}  {{\"errors\":1,\"first\":{{\"kind\":\"diagnostic\",\"tool\":\"msbuild\",\"code\":\"CS0103\",\"message\":\"no x\",\"file\":\"a.cs\",\"line\":1,\"column\":2,\"count\":1,\"stack\":[],\"said\":\"msbuild CS0103 a.cs(1,2): no x\",\"log\":[2,2]}}}}{nl}  Its log, whose lines the digest's ranges number: {copy}{nl}",
+            continuation,
+            StringComparison.Ordinal);
+        Assert.Equal("header\nerror CS0103: no x\n", File.ReadAllText(copy));
+        Assert.Contains($"- leg 'tools', phase 'build': the build failed{nl}  Its lines:{nl}    make: *** [all] Error 2{nl}    the tool's last line{nl}", continuation, StringComparison.Ordinal);
         Assert.DoesNotContain("the ledger and its logs:", continuation, StringComparison.Ordinal);
+        Assert.DoesNotContain("planted", continuation, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(copy)!, "x.test.log")));
     }
 
     /// <summary>

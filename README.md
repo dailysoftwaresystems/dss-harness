@@ -192,6 +192,14 @@ a ninja told to go on that never said it ended its build - a failed step, ninja'
 such word - was stopped from outside. `dssharness help
 legs` lists each generator's way.
 
+What a red leg's phase that did not pass printed is digested, typed: a build's log by the parsers its
+toolchain chose, a test's structured results where its invocation names any and its log by its
+runner's parsers where they gave nothing, with `results.matchers` everywhere. The text ledger says each
+red leg's first error in a block below its table; `--json` carries the whole digest as `digest` - every
+diagnostic and failure with its place, stack, causes and counts, each file inside the tree named
+relative to it, each log range numbering the lines of that phase's log as the file numbers them - and
+a leg a host ran carries the host's own digest, every text in it naming the host as configured.
+
 ## Running legs at once
 
 Every leg-running command dispatches its legs in parallel and waits for all of them, reporting each
@@ -2265,7 +2273,11 @@ declared), the verdict spelt as the ledger spells it, with the run's directory a
 the step's stored stream whose id a closure record's `measuredBy` cites. The leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
-that failed with the phase that did not pass and its last lines, and for `build`, `test` and `run` the units its build
+that failed with the phase that did not pass, what it printed digested and said for a model (`digest`: the first
+error whole with its stack and its log range, the next ones a line each, the rest counted), the raw lines beside it
+(`tail`: the lines no parser held where the digest holds typed errors, the phase's last lines where it holds none),
+the log whose lines the digest's ranges number (`log`: the copy kept in the step's directory in an agent's worktree,
+else the run's own, null for a leg a host ran), and for `build`, `test` and `run` the units its build
 failed as `failedUnits` (null where its own tool failed no build of it), a sweep's arm with its arm - a leg in a copy letting the
 tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
 directory, the work of each leg this machine runs held inside the isolation of the agents' work and answered as
@@ -2277,7 +2289,10 @@ each class was reopened in the item's ledger, which the class-closure check read
 the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
 last pushed where it names none - ends at the first red one with its job's failing step and whole
 log, given by reference with the page of it where the job failed (`failing`) and its lines counted
-(`lines`), and asks where
+(`lines`), and what the check digested to (`digest`): its annotations, read from the forge's check-runs API, and
+its job's log, read by every form a CI log holds, each finding said once and every file placed against the job's
+workspace on its runner, `failing` holding only the lines no parser held where the digest holds typed errors; and
+asks where
 none appeared, some are still running, or one ended neither green nor red; and the fold family - `fold`, `delete-agent`,
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
 consent, a path outside a fold's `within`, conflicting merges - with what it is about, a fold and a deletion applying
@@ -2297,7 +2312,7 @@ message, the commit held to that set over the commit the branch named before it 
 or stand on anything but that commit alone, fails it, 20, left for a person) - answers the
 paths git ignores, which it never commits, and with nothing owed is done and runs no git - its commit and the
 repository's commit hooks run inside the isolation of the agents' work, answered as `isolation` (none here and `required`
-fails it, 14, nothing staged); any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}`), and a commit's message what
+fails it, 14, nothing staged); any template reads what the run checked (`{run.ran}`, `{run.notRun}`, `{run.red}` - each red result with its first error), and a commit's message what
 checked what it carries (`{carried.ran}`, `{carried.notRun}`, `{carried.red}`); `push`, which pushes the commit the
 run's commit steps recorded last, else the one the run started on - never what the branch names by then, which a hook
 or a build working in the main checkout could have moved - to the main checkout's branch on the remote the run's branch

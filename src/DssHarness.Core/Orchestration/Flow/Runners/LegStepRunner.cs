@@ -104,8 +104,9 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         // process scope, and the ledger kept in the step's directory, with each red leg's failing log in an agent's worktree.
         var watch = new StepWatch(run.Events);
         var directory = layout.InstanceDirectory(run.Instance, run.WorksIn);
+        var request = new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, directory, directory, RedLogs: run.WorksIn is not null, $"'{run.Instance}'") { WritesBeside = WritesBeside };
         var ran = await _legs.RunAsync(
-            new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, directory, directory, RedLogs: run.WorksIn is not null, $"'{run.Instance}'") { WritesBeside = WritesBeside },
+            request,
             legIsolation => RunLegsAsync(run, context, tree, watch, legIsolation, cancellationToken),
             cancellationToken).ConfigureAwait(false);
 
@@ -114,7 +115,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             return FlowStepResult.Ended(passed: false, HarnessExit.ToolMissing, ran.Refusal!);
         }
 
-        var output = Output(result, arms: Type == "check-mutations");
+        var output = Output(result, arms: Type == "check-mutations", line => _legs.LogOf(line, request));
         output["isolation"] = ran.Isolation;
         var lines = result.Report.Lines;
 
@@ -190,12 +191,14 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
     /// <summary>
     /// What a leg step answers: whether every leg passed, the command's own code, each leg's verdict, the red legs alone -
-    /// each with the phase that did not pass, the ledger's line for it and the last lines it printed, or of a sweep each
-    /// arm that is not as its registry says - and where the run's records are.
+    /// each with the phase that did not pass, the ledger's line for it, the digest of what it printed with the raw lines
+    /// beside it the digest does not hold, and the log that phase wrote, whose lines the digest's ranges number; or of a
+    /// sweep each arm that is not as its registry says - and where the run's records are.
     /// </summary>
     /// <param name="result">What the legs reached.</param>
     /// <param name="arms">Whether the step is a sweep, whose red entries each name their arm.</param>
-    internal static JsonObject Output(LegRunResult result, bool arms)
+    /// <param name="logOf">Where a red leg's failing log is on this machine; null where it is on none. None where not given.</param>
+    internal static JsonObject Output(LegRunResult result, bool arms, Func<LedgerLine, string?>? logOf = null)
     {
         ArgumentNullException.ThrowIfNull(result);
 
@@ -208,14 +211,14 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
             foreach (var arm in redArms)
             {
-                red.Add(Red(line.Leg, arm.Verdict, phase: null, arm.Detail, [], arm.Arm, failedUnits: null, digest: null));
+                red.Add(Red(line.Leg, arm.Verdict, phase: null, arm.Detail, [], arm.Arm, failedUnits: null, digest: null, log: null));
             }
 
             // The leg's own entry, where its verdict is its own - it failed outside every arm - and not one of its arms':
             // a sweep's leg is red by the worst of its own verdicts and its arms', and neither hides the other.
             if (!redArms.Any(arm => arm.Verdict == line.Verdict))
             {
-                red.Add(Red(line.Leg, line.Verdict, line.TailPhase, line.Detail, line.LogTail, arm: null, line.FailedUnits, line.Digest));
+                red.Add(Red(line.Leg, line.Verdict, line.TailPhase, line.Detail, line.LogTail, arm: null, line.FailedUnits, line.Digest, logOf?.Invoke(line)));
             }
         }
 
@@ -228,7 +231,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             ["runDirectory"] = result.RunDirectory,
         };
 
-        JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm, FailedUnits? failedUnits, ResultDigest? digest)
+        JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm, FailedUnits? failedUnits, ResultDigest? digest, string? log)
         {
             var entry = new JsonObject
             {
@@ -238,6 +241,9 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
                 ["detail"] = detail,
                 ["tail"] = new JsonArray([.. (digest?.TailBeside(tail) ?? tail).Select(line => (JsonNode?)line)]),
                 ["digest"] = digest?.ForAModel(),
+
+                // The log the phase wrote, whose lines the digest's ranges number: one read away from the entry.
+                ["log"] = log,
             };
 
             // A sweep's entry names its arm, or none where the leg failed outside every arm; no other step's has the key.

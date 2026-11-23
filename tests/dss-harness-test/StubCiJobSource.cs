@@ -43,6 +43,15 @@ internal sealed class StubCiJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
     /// <summary>The logs that cannot be read, by the job's id, with what each read throws.</summary>
     public IReadOnlyDictionary<long, Exception> FailedLogs { get; init; } = new Dictionary<long, Exception>();
 
+    /// <summary>Each check run's annotations, by the check run's id.</summary>
+    public IReadOnlyDictionary<long, IReadOnlyList<CiAnnotation>> Annotations { get; init; } = new Dictionary<long, IReadOnlyList<CiAnnotation>>();
+
+    /// <summary>The check runs whose annotations cannot be read, by the check run's id, with what each read throws.</summary>
+    public IReadOnlyDictionary<long, Exception> FailedAnnotations { get; init; } = new Dictionary<long, Exception>();
+
+    /// <summary>Each check run whose annotations were read, by its id, with the count it was read for, in order.</summary>
+    public List<(long CheckRun, int Count)> AnnotationsRead { get; } = [];
+
     /// <summary>Told each reading of a commit's checks as it starts, by its place in turn from 0.</summary>
     public Action<int>? Reading { get; init; }
 
@@ -73,6 +82,22 @@ internal sealed class StubCiJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
     public Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default) => ListStatuses(null);
 
     public Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default) => ReadJobLog(null, jobId);
+
+    public Task<IReadOnlyList<CiAnnotation>> ReadAnnotationsAsync(string repositoryRoot, long checkRunId, int count, CancellationToken cancellationToken = default)
+        => ReadAnnotations(null, checkRunId, count);
+
+    private Task<IReadOnlyList<CiAnnotation>> ReadAnnotations(TimeSpan? within, long checkRunId, int count)
+    {
+        lock (_gate)
+        {
+            Limits.Add(within);
+            AnnotationsRead.Add((checkRunId, count));
+        }
+
+        return FailedAnnotations.TryGetValue(checkRunId, out var failure)
+            ? Task.FromException<IReadOnlyList<CiAnnotation>>(failure)
+            : Task.FromResult(Annotations.TryGetValue(checkRunId, out var annotations) ? annotations : []);
+    }
 
     private Task<IReadOnlyList<long>> ListRuns(TimeSpan? within, string branch)
     {
@@ -149,5 +174,8 @@ internal sealed class StubCiJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
         public Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default) => stub.ListStatuses(limit);
 
         public Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default) => stub.ReadJobLog(limit, jobId);
+
+        public Task<IReadOnlyList<CiAnnotation>> ReadAnnotationsAsync(string repositoryRoot, long checkRunId, int count, CancellationToken cancellationToken = default)
+            => stub.ReadAnnotations(limit, checkRunId, count);
     }
 }

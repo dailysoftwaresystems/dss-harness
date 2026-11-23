@@ -19,7 +19,7 @@ namespace DssHarness.Core.Results;
 /// invents. Each is read as a stream - an XML form a test result at a time, the Dart stream a line at a time - so no file
 /// is held whole for its size, and each is read to its end: a file a crash cut short gives every finding before the
 /// break, and the break is said, never thrown. Its places are kept as the tool wrote them, a <c>file:</c> URI among them,
-/// for a digest's places are read against the tree in one place (<see cref="ResultDigest.WithInTree"/>); its texts are
+/// for a digest's places are read against the tree in one place (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>); its texts are
 /// masked where the digest is (<see cref="ResultDigest.MaskedBy"/>).
 /// </summary>
 public static class ResultFiles

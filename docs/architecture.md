@@ -9790,36 +9790,63 @@ rendered to the frames inside the tree (the crossing frame on each side, a line 
 held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the rest
 counted by code and by file, the lines no parser held - and where the digest holds an error or a failure the entry's
 tail holds only those lines, for a model reads either the typed errors or the raw lines, never both repeated; a digest
-of warnings alone leaves the tail as it is (`ResultDigest.TailBeside`). The four is a rule of rendering, never of the
-record: the ledger's `--json` carries the digest typed (`ResultDigest.Document`) with its bounds said - the first
-problem, each stack's and each cause chain's cut, how many diagnostics, failures and unparsed lines the bound left out,
-and the counts by code and by file over the whole output - the text ledger says each red leg's first error under its
-verdict, before the units and the tails, and `{run.red}` says it on each red line. A phase is digested in one place
-(`Results\PhaseDigest.cs`) wherever its failure is the leg's verdict - a moving tree's or a shared directory's says
-nothing of the code - a build's failing phase by the parsers its toolchain chose and a test's by its runner's, with the
-configured matchers everywhere (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results
-files first, and its log only where they gave no finding, what they could not give said beside it. Every place is then
-read against the tree once (`ResultDigest.WithInTree`): a path - relative ones read from the directory the tool ran in
-- is the tree's where the tree holds that file, named relative to its root with `/`, read by its own text in the form
-it is written in (`PlatformPaths.RelativeAsWritten`) and never by the reading machine's rules - a Windows path a tool
-wrote is in no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a bare name the tree has no file of
-(`Thread.java`) in none, a `file:` URI the path it names - and a failure's place is the top frame of its stack the tree
-holds, where one is.
+of warnings alone leaves the tail as it is (`ResultDigest.TailBeside`, the one owner of what accompanies a digest, a
+red job's failing page as well); and in `log` the log that phase wrote (`FlowStepLegs.LogOf`: the copy the step kept in
+an agent's worktree, else the run's own, none for a leg a host ran). Each diagnostic's log range names the lines as the
+file a reader opens numbers them, by the one rule of where lines end (`PhaseOutput.NumberedLines` over
+`Text\LineEnds.cs`): counted below the header the harness wrote above the child's lines, a carriage return the child
+printed alone ending a line as it does for the reader, so the range is one read of the named log away
+(`PhaseParsers.FindingsOf` maps each parser's place among the lines it read to the file's numbers). The four is a rule
+of rendering, never of the record: the ledger's `--json` carries the digest typed (`ResultDigest.Document`) with its
+bounds said - the first problem, each stack's and each cause chain's cut, how many diagnostics, failures and unparsed
+lines the bound left out, and the counts by code and by file over the whole output - the text ledger says each red
+leg's first error in a block below its table, and `{run.red}` says it on each red line. A leg a host ran is digested
+there, against the host's copy of the tree, and its digest travels on its line: read back from the host's `--json` by
+the names it was written under (`ResultDigest.Read`, the one owner of the shape writing it and reading it), every text
+naming the host as the configuration declares it, never by an address its name resolved to, and a digest of no shape
+this build writes refused as a ledger it cannot read is. A phase is digested in one place (`Results\PhaseDigest.cs`)
+wherever its failure is the leg's verdict - a moving tree's or a shared directory's says nothing of the code - a
+build's failing phase by the parsers its toolchain chose and a test's by its runner's, with the configured matchers
+everywhere (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first, and its
+log only where they gave no finding, what they could not give said beside it. Every place is then read against the
+tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed): a path - relative ones read from the
+directory the tool ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by
+its own text in the form it is written in (`PlatformPaths.RelativeAsWritten`) and never by the reading machine's rules
+- a Windows path a tool wrote is in no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a bare name the
+tree has no file of (`Thread.java`) in none, a `file:` URI the path it names - and a failure's place is the top frame
+of its stack the tree holds, where one is.
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names
 are one read away" in place of "read the output and find the first thing that went wrong" - `diagnose.md` and
-`rediagnose.md` say the same, and the continuation record carries each red leg's digest instead of a pointer to logs
-(`ReasonStepRunner.RedLegsOf`), so a step that goes on starts from the first error and not from a directory to search.
+`rediagnose.md` say the same, and the continuation record carries each red leg's ledger line, its digest, the raw lines
+its entry carries beside it - the phase's last lines where nothing was digested, so a leg no parser read is never said
+by its line alone - and a copy of the log its entry names, put with the record's other copies
+(`ReasonStepRunner.RedLegsOf`, `AgentContinuation`), so a step that goes on starts from the first error with its log
+one read away. Red legs are read only from a step whose output the engine wrote of the legs it ran
+(`WorkflowStepTypes.StepType.AnswersLegs`), never from a model's answer: a path a model wrote there would have the
+record copy a file the agent's policy never let it read.
 
-CI is digested the same way (`CheckStepRunners`): each red job's kept log is read with the forge's own decoration
-stripped - the timestamp prefixed to every line, the group markers a workflow folded - and the annotations the
-workflow itself wrote (`##[error] file=...,line=...::`) come first, for what a workflow marked is the forge's own
-reading of what failed; then every form a CI log holds, its phases being unknown from the outside
-(`PhaseParsers.ForCi`). A run check's failure is read for the error it threw (`RunnerRunService.ExceptionIn`, by
-`PhaseParsers.ForStacks`): the thrown error's whole record - type, message, stack, causes - is what an expected
-exception is matched against, so an excusal declared against a cause holds though the exception that reached the log
-wraps it, the exception that reached the log
-wraps it (`RunFailure.Exception`, `ExpectedExceptionMatcher`).
+CI is digested the same way (`Ci\CiDigest.cs`, the one owner of a CI digest), of the two things the forge keeps of a
+red check: its annotations, read from the check-runs API through `gh api` (`GhCiJobSource.ReadAnnotationsAsync`, page
+by page and held to the count the check run gives), and its job's kept log, every line numbered as the kept file
+numbers it, the forge's own decoration taken off each (`CiLog`: the byte order mark, the timestamp, a group marker's
+line left blank so no line after it moves, the marker the forge writes ahead of an annotation's line) and read by every
+form a CI log holds, its phases being unknown from the outside (`PhaseParsers.ForCi`). An annotation that names a file
+comes first, one finding with the log's line it was made of - a problem matcher's line the tool's form reads too, a
+workflow command's message the line under its marker. An annotation that names no file (the runner's `Process
+completed with exit code 1.`, a workflow's `::error::` with none) is a sentence with no place: read from the API it
+would become the first error ahead of the tool's own, so where a log is read it is not taken from the API - the log
+holds every one under its marker, and a marked line no form read is said among the lines no parser held, once; a
+check with no log is said by its annotations alone. Every path is placed against the job's workspace on its runner,
+`<work>/<repository>/<repository>` on every runner GitHub hosts or not, the repository named by the job's own address
+(`PlatformPaths.DirectoryEndingAsWritten`), never against this machine's checkout. A run check's failure is read for the
+error it threw (`RunnerRunService.ExceptionIn`, by `PhaseParsers.ForStacks`): the thrown error's whole record - type,
+message, stack, causes - is what an expected exception is matched against, both halves of a match of one exception:
+the one that reached the log with the run's message or its own - a line the unit printed only where no stack was read,
+for a line under a stack may be a cause's - or a cause under it, however deep, with that cause's own message - never a
+type from one exception of the chain and a message from another
+(`RunFailure.Exception`, `ExpectedExceptionMatcher`), so an excusal declared against a cause holds though the
+exception that reached the log wraps it, and excuses nothing else.
 
 Measured (`fixtures\results\`, `ResultFixturesTests`): real output from every tool the parsers read, each fixture with
 the digest it must produce stored beside it - the whole document, frames with their kinds and in-tree marks, causes

@@ -20,20 +20,22 @@ public sealed class WorkflowTemplatesTests
 
     /// <summary>
     /// The repair prompts start from the digest: mend's first instruction names the digest's first - the first error
-    /// in the order the tool met it, its log one read away - and says what a red entry holds of it, and diagnose and
-    /// rediagnose say the same, so no model is told to search a log for what a file already holds.
+    /// in the order the tool met it, the lines its log range names one read away in the log file the entry names, as
+    /// that file numbers them - and says what a red entry holds of it, and diagnose and rediagnose say the same, so no
+    /// model is told to search a log for what a file already holds, nor a directory for the file.
     /// </summary>
     [Fact]
     public void TheRepairPrompts_StartFromTheDigestsFirst_NeverALogToSearch()
     {
-        var mend = WorkflowTemplates.TextOf("item-pipeline/prompts/mend.md")!;
-        var diagnose = WorkflowTemplates.TextOf("prompts/diagnose.md")!;
-        var rediagnose = WorkflowTemplates.TextOf("prompts/rediagnose.md")!;
+        var mend = Prose.Words(WorkflowTemplates.TextOf("item-pipeline/prompts/mend.md")!);
+        var diagnose = Prose.Words(WorkflowTemplates.TextOf("prompts/diagnose.md")!);
+        var rediagnose = Prose.Words(WorkflowTemplates.TextOf("prompts/rediagnose.md")!);
 
-        Assert.Contains("1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The log", mend, StringComparison.Ordinal);
-        Assert.Contains("the `tail` then holds only the lines no parser held.", mend, StringComparison.Ordinal);
+        Assert.Contains("1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The lines its `log` names are one read away in the entry's `log` file", mend, StringComparison.Ordinal);
+        Assert.Contains("the `tail` then holds only the lines no parser held. The entry's `log` is the file that phase wrote, null for a leg another machine ran.", mend, StringComparison.Ordinal);
         Assert.Contains("1. Start from the digest's `first` - the first thing that went wrong, in the order the tool met it - and read the", diagnose, StringComparison.Ordinal);
-        Assert.Contains("each red entry's digest, its", rediagnose, StringComparison.Ordinal);
+        Assert.Contains("the lines a digest's `log` names are those of the entry's own `log` file, numbered as that file numbers them.", diagnose, StringComparison.Ordinal);
+        Assert.Contains("each red entry's digest, its `first` the first thing that went wrong in the order the tool met it, the lines its `log` names those of the entry's own `log` file.", rediagnose, StringComparison.Ordinal);
         Assert.DoesNotContain("Read the output and find the first thing that went wrong", mend + diagnose, StringComparison.Ordinal);
     }
 

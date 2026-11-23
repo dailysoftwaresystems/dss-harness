@@ -670,6 +670,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 ? failed with { Units = [.. failed.Units ?? []], Unread = failed.Unread is { } unread ? HostProbes.AsConfigured(unread, connection) : null }
                 : null,
 
+            // What the phase that failed there printed, digested there - each frame marked against the host's copy of the
+            // tree and every file inside it named relative to it, which is the same path in this machine's tree - read by
+            // the names the host's --json wrote it under, each text named by the host this machine knows, as its tail is.
+            Digest = DigestOf(entry.Digest, leg, commandName, connection),
+
             // Each arm the host's sweep was asked about, as it judged it there: its records stay on that host, named as
             // the host names them, and its detail named by the host this machine knows, as the leg's is.
             Arms = [.. (entry.Arms ?? []).Select(arm => new ArmEntry
@@ -707,6 +712,25 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                         [.. ctest.Tests ?? []])
                     : null))],
         };
+    }
+
+    /// <summary>
+    /// The digest a host's ledger carries for a leg, read as its <c>--json</c> wrote it (<see cref="ResultDigest.Read"/>);
+    /// null where it carries none.
+    /// </summary>
+    /// <exception cref="HarnessException">The host wrote a digest this build cannot read, as a ledger it cannot read is said.</exception>
+    private static ResultDigest? DigestOf(System.Text.Json.Nodes.JsonObject? document, PlacedLeg leg, string commandName, HostConnection connection)
+    {
+        try
+        {
+            return ResultDigest.Read(document, said => HostProbes.AsConfigured(said, connection));
+        }
+        catch (JsonException ex)
+        {
+            throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{leg.Host.Host} answered '{commandName}' with a ledger this build cannot read: its digest of leg '{leg.Name}': {ex.Message}");
+        }
     }
 
     /// <summary>A host's refusal of the whole run, as this run's: the code it ended with, and what it said.</summary>
@@ -812,7 +836,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<SetUps.SetUpFact>? SetUps = null,
         string? TailPhase = null,
         Build.FailedUnits? FailedUnits = null,
-        IReadOnlyList<string>? Named = null);
+        IReadOnlyList<string>? Named = null,
+        System.Text.Json.Nodes.JsonObject? Digest = null);
 
     /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
     private sealed record RemoteLedgerControl(

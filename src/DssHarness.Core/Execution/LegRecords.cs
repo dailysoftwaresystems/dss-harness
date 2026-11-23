@@ -34,6 +34,16 @@ public static class PhaseLogs
     /// <param name="phase">The phase, as its log is named for it.</param>
     public static string In(string directory, string phase) => Path.Combine(directory, phase + Extension);
 
+    /// <summary>
+    /// The copy of <paramref name="leg"/>'s log of <paramref name="phase"/> in <paramref name="directory"/>, where logs of
+    /// several legs are kept side by side - a step's red legs' logs, a continuation record's copies of them: named for
+    /// its leg and its phase, the phase as its log is named for it.
+    /// </summary>
+    /// <param name="directory">The directory the copies are kept in.</param>
+    /// <param name="leg">The leg.</param>
+    /// <param name="phase">The phase, as the ledger shows it.</param>
+    public static string OfLeg(string directory, string leg, string phase) => Path.Combine(directory, $"{leg}.{NameFor(phase)}{Extension}");
+
     /// <summary>The phase <paramref name="file"/> is the log of, or <see langword="null"/> where it is no phase's log.</summary>
     /// <param name="file">A file's name or its path.</param>
     public static string? PhaseOf(string file)

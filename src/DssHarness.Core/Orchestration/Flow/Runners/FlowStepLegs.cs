@@ -129,24 +129,55 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
 
         fileSystem.DeleteDirectory(logs);
 
-        foreach (var line in result.Report.Lines.Where(line => line.HostRunId is null && FlowLegVerdicts.ClassOf(line.Verdict) == FlowLegClass.Red))
+        foreach (var line in result.Report.Lines.Where(line => FlowLegVerdicts.ClassOf(line.Verdict) == FlowLegClass.Red))
         {
-            if (line.TailPhase is not { } phase)
-            {
-                continue;
-            }
-
-            // Found as every log is named for its phase - a runner's step 'build (2/2)' is kept as 'build (2-2)'.
-            var named = PhaseLogs.NameFor(phase);
-
-            if (line.Logs.FirstOrDefault(log => log.Phase == named) is not { } log || !fileSystem.FileExists(log.File))
+            if (FailingLogOf(line) is not { } log || !fileSystem.FileExists(log))
             {
                 continue;
             }
 
             fileSystem.CreateDirectory(logs);
-            fileSystem.CopyFile(log.File, Path.Combine(logs, $"{line.Leg}.{named}{PhaseLogs.Extension}"), overwrite: true);
+            fileSystem.CopyFile(log, PhaseLogs.OfLeg(logs, line.Leg, line.TailPhase!), overwrite: true);
         }
+    }
+
+    /// <summary>
+    /// The log of the phase a red leg did not pass, where this machine ran the leg: the one its run's records hold,
+    /// found as every log is named for its phase - a runner's step <c>build (2/2)</c> is kept as <c>build (2-2)</c>; null
+    /// for a leg a host ran, whose log stays on that host, and for a leg with no failing phase or no log of it.
+    /// </summary>
+    /// <param name="line">The red leg's line.</param>
+    public static string? FailingLogOf(LedgerLine line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        return line.HostRunId is null && line.TailPhase is { } phase
+            ? line.Logs.FirstOrDefault(log => log.Phase == PhaseLogs.NameFor(phase))?.File
+            : null;
+    }
+
+    /// <summary>
+    /// Where a red leg's failing log is for a reader of the step, as <paramref name="request"/> kept the step's records:
+    /// the copy kept beside the step's ledger where the step keeps one - each attempt's own, which outlives the agent's
+    /// worktree - else the log its run's records hold; null where neither is on this machine (<see cref="FailingLogOf"/>).
+    /// </summary>
+    /// <param name="line">The red leg's line.</param>
+    /// <param name="request">Where the step keeps its records, and whether it keeps the red legs' logs beside them.</param>
+    public string? LogOf(LedgerLine line, FlowStepLegsRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (FailingLogOf(line) is not { } log)
+        {
+            return null;
+        }
+
+        var kept = PhaseLogs.OfLeg(Path.Combine(request.Records, OrchestratorLayout.StepLogsDirectoryName), line.Leg, line.TailPhase!);
+
+        return request.RedLogs && fileSystem.FileExists(kept) ? kept
+            : fileSystem.FileExists(log) ? log
+            : null;
     }
 
     /// <summary>The isolation of the work of one leg of the step, from the leg's own ground (<see cref="ExecutionGrounds.OfLeg"/>).</summary>

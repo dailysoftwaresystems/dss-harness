@@ -47,99 +47,98 @@ public static class PhaseParsers
     }
 
     /// <summary>
-    /// The digest of a phase's log lines by the parsers chosen for it: every chosen parser reads the same lines, their
-    /// findings fold into one, and the unparsed lines are what the parsers themselves left - each parser's own rule of
-    /// a line that looks like an error and matched nothing, with a line another parser's diagnostic already covers
-    /// taken out, for one finding is said once. Null where no parser was chosen, for a log no rule names is a log left
-    /// as it stands.
+    /// The digest of lines no file holds - output made up rather than run, each line numbered by its place among them.
     /// </summary>
-    /// <param name="lines">The phase's output lines, in the order printed.</param>
-    /// <param name="parsers">The parsers chosen for the phase.</param>
+    /// <param name="lines">The output lines, in the order printed.</param>
+    /// <param name="parsers">The parsers chosen for them.</param>
     public static ResultDigest? DigestOf(IReadOnlyList<string> lines, IReadOnlyList<IResultParser> parsers)
     {
         ArgumentNullException.ThrowIfNull(lines);
+
+        return DigestOf([.. lines.Select((line, at) => new NumberedLine(at + 1, at + 1, line))], parsers);
+    }
+
+    /// <summary>
+    /// The digest of a log's lines by the parsers chosen for it (<see cref="FindingsOf"/>), folded and bounded as a digest
+    /// is (<see cref="ResultDigest.Of"/>); null where no parser was chosen or nothing was found.
+    /// </summary>
+    /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it (<see cref="Execution.PhaseOutput.NumberedLines"/>).</param>
+    /// <param name="parsers">The parsers chosen for the log.</param>
+    public static ResultDigest? DigestOf(IReadOnlyList<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
+        => FindingsOf(lines, parsers) is { } found && (found.Diagnostics.Count > 0 || found.Failures.Count > 0 || found.Unparsed.Count > 0)
+            ? ResultDigest.Of(found.Diagnostics, found.Failures, found.Unparsed)
+            : null;
+
+    /// <summary>
+    /// What the parsers chosen for a log found in its lines, before any fold or bound: every chosen parser reads the same
+    /// lines, and the unparsed lines are what the parsers themselves left - each parser's own rule of a line that looks
+    /// like an error and matched nothing, with a line another parser's diagnostic already covers taken out, for one
+    /// finding is said once. Each diagnostic's log range names its lines by the numbers the file a reader opens gives
+    /// them - never by their place among the lines read, which a header above them or a line the reader counts as two
+    /// would move. Null where no parser was chosen, for a log no rule names is a log left as it stands.
+    /// </summary>
+    /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it.</param>
+    /// <param name="parsers">The parsers chosen for the log.</param>
+    public static PhaseFindings? FindingsOf(IReadOnlyList<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(parsers);
 
         if (parsers.Count == 0)
         {
             return null;
         }
 
+        IReadOnlyList<string> texts = [.. lines.Select(line => line.Text)];
         var diagnostics = new List<Diagnostic>();
         var failures = new List<TestFailure>();
         var left = new List<string>();
+        var covered = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var parser in parsers)
         {
-            var (read, failed, held) = parser.Read(lines);
+            var (read, failed, held) = parser.Read(texts);
 
-            diagnostics.AddRange(read);
+            // A parser names a line by its place among those it was handed, from 1; the file names it by its own number.
+            diagnostics.AddRange(read.Select(diagnostic => diagnostic.Log is { } log && log.From >= 1 && log.To <= lines.Count
+                ? diagnostic with { Log = (lines[log.From - 1].Number, lines[log.To - 1].Last) }
+                : diagnostic));
             failures.AddRange(failed);
             left.AddRange(held);
-        }
 
-        // The lines a diagnostic's log range covers are said already - one finding, said once, whatever else a
-        // parser's own rule made of the same line.
-        var covered = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var diagnostic in diagnostics)
-        {
-            if (diagnostic.Log is { } log)
+            // The lines a diagnostic's log range covers are said already - one finding, said once, whatever else a
+            // parser's own rule made of the same line.
+            foreach (var diagnostic in read)
             {
-                for (var at = log.From; at <= log.To && at <= lines.Count; at++)
+                if (diagnostic.Log is { } log)
                 {
-                    covered.Add(lines[at - 1]);
+                    for (var at = log.From; at <= log.To && at <= texts.Count; at++)
+                    {
+                        covered.Add(texts[at - 1]);
+                    }
                 }
             }
         }
 
-        var unparsed = left.Distinct(StringComparer.Ordinal).Where(line => !covered.Contains(line)).ToList();
-
-        return diagnostics.Count == 0 && failures.Count == 0 && unparsed.Count == 0 ? null : ResultDigest.Of(diagnostics, failures, unparsed);
+        return new PhaseFindings(diagnostics, failures, [.. left.Distinct(StringComparer.Ordinal).Where(line => !covered.Contains(line))]);
     }
 
     /// <summary>
     /// The parsers a CI job's log is read by: its phases are not known from the outside - a job holds whatever steps
     /// the workflow wrote - so every form a CI log holds is chosen, the compilers and their drivers, the linkers, the
-    /// TypeScript checker, the test consoles and .NET's stack traces, and the annotations the workflow itself wrote
-    /// (<c>##[error] file=...,line=...::</c>), which come first, for what a workflow marked is the forge's own reading
-    /// of what failed. The configured matchers, as everywhere.
+    /// TypeScript checker, the test consoles and .NET's stack traces. The configured matchers, as everywhere. The forge's
+    /// own annotations are no form of the log's: they are read from the forge (<see cref="Ci.CiDigest"/>).
     /// </summary>
     /// <param name="matchers">The configured matchers, which apply to every phase.</param>
     public static IReadOnlyList<IResultParser> ForCi(IReadOnlyList<ProblemMatcher> matchers)
         => With(
             [
-                ResultParsers.Of("ci-annotations")!,
                 ResultParsers.Of("msbuild")!, ResultParsers.Of("msvc")!, ResultParsers.Of("gcc")!, ResultParsers.Of("clang")!,
                 ResultParsers.Of("cmake")!, ResultParsers.Of("ninja")!, ResultParsers.Of("link")!, ResultParsers.Of("tsc")!,
                 ResultParsers.Of("xunit-console")!, ResultParsers.Of("gtest-console")!, ResultParsers.Of("ctest-console")!,
                 ResultParsers.Of("dotnet-stack")!,
             ],
             matchers);
-
-    /// <summary>
-    /// A CI job's log with the forge's own decoration taken off, as the digest reads it: the timestamp every line is
-    /// prefixed with gone, the group markers a workflow folded gone, and every other word left as the job printed it -
-    /// the error markers among them, which are the annotations.
-    /// </summary>
-    /// <param name="log">The job's log, whole, masked as it was kept.</param>
-    public static IReadOnlyList<string> StrippedCi(string log)
-    {
-        ArgumentNullException.ThrowIfNull(log);
-
-        return
-        [
-            .. log.Split('\n')
-                .Select(line => line.TrimEnd('\r'))
-                .Select(line => Timestamp.Replace(line, string.Empty))
-                .Where(line => line.Length > 0 && !Group.IsMatch(line)),
-        ];
-    }
-
-    /// <summary>The timestamp a forge prefixes each line of a job's log with.</summary>
-    private static readonly Regex Timestamp = LinearRegex.Compile(@"^\d{4}-\d{2}-\d{2}T[\d:.]+Z ?");
-
-    /// <summary>A group marker a workflow folds its log with.</summary>
-    private static readonly Regex Group = LinearRegex.Compile(@"^##\[(?:group|endgroup)\]$");
 
     /// <summary>
     /// The stack parsers of every runtime, for output whose program is not known from the outside - a runner's step,
@@ -158,6 +157,16 @@ public static class PhaseParsers
     private static IReadOnlyList<IResultParser> With(IReadOnlyList<IResultParser> chosen, IReadOnlyList<ProblemMatcher> matchers)
         => [.. chosen, .. matchers.Where(matcher => matcher.Compiled is not null).Select(matcher => new MatcherParser(matcher))];
 }
+
+/// <summary>
+/// What the parsers chosen for a log found in it (<see cref="PhaseParsers.FindingsOf"/>), before a digest folds and
+/// bounds them: what a producer that reads more than the log - a forge's annotations beside a job's log - merges with
+/// before the one digest is made of them all.
+/// </summary>
+/// <param name="Diagnostics">The diagnostics, each with its log range as the file numbers its lines.</param>
+/// <param name="Failures">The test failures.</param>
+/// <param name="Unparsed">The lines that look like errors and no parser held, each once.</param>
+public sealed record PhaseFindings(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed);
 
 /// <summary>
 /// One configured problem matcher as a parser reads: every line its pattern matches is a diagnostic - its severity a

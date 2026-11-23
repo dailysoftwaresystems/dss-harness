@@ -806,6 +806,58 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// What a host's failing phase printed, digested there, travels on its leg's line, read from the very document the
+    /// host writes - every diagnostic, failure, frame and count, each file named as the host named it relative to its
+    /// copy of the tree - each text naming the host as declared, never by an address its name resolved to, as its tail
+    /// does; so this machine's ledger, its --json, a red entry and a continuation record say the host's first error.
+    /// A digest this build cannot read is refused as a ledger it cannot read is, never read as none.
+    /// </summary>
+    [Fact]
+    public async Task WhatAHostsFailingPhaseDigestedTo_IsCarriedOnItsLine_NamingTheHostAsDeclared()
+    {
+        var digest = ResultDigest.Of(
+            [new Diagnostic("msbuild", "error", "CS0103", "no route to 192.0.2.10", "src/Program.cs", 12, 35, Stack: [new StackFrame("at Main() in src/Program.cs:line 12", "src/Program.cs", 12, InTree: true)], Log: (14, 14))],
+            [new TestFailure("xunit", "App.Tests.Holds", Message: "refused by 192.0.2.10", File: "tests/A.cs", Line: 4)],
+            ["connect 192.0.2.10: refused"]);
+        var written = LedgerReport
+            .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.Failed, Detail = "build exited 1", Digest = digest }], durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), NSubstitute.Substitute.For<IHostAddressResolver>()),
+        };
+        var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
+
+        var carried = (await Runner(new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        })).RunAsync("build", leg, [], cancellationToken: TestContext.Current.CancellationToken)).Digest;
+
+        Assert.Equal(digest.Document().ToJsonString().Replace("192.0.2.10", "mac.invalid", StringComparison.Ordinal), carried!.Document().ToJsonString());
+
+        // A digest of no shape this build writes is no digest read: the host's answer is refused, saying which leg's.
+        var unreadable = System.Text.Json.Nodes.JsonNode.Parse(written)!;
+        unreadable["legs"]![0]!["digest"] = System.Text.Json.Nodes.JsonNode.Parse("""{"diagnostics":[{"tool":"msbuild","severity":"error"}]}""");
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => Runner(new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, unreadable.ToJsonString());
+
+            return HostResults.Finished(command, 0);
+        })).RunAsync("build", leg, [], cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            (HarnessExit.HostUnavailable, "ssh mac answered 'build' with a ledger this build cannot read: its digest of leg 'wsl-debug': 'message' is missing"),
+            (refused.ExitCode, refused.Message));
+    }
+
+    /// <summary>
     /// The project and test set a host's count belongs to travel with the count, read from the very
     /// document the host writes: the host ran what it had, and this machine compares the count with
     /// its siblings as it was counted there, never as its own configuration would name it now.

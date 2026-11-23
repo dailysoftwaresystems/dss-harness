@@ -64,13 +64,15 @@ public sealed record RunnerScope(
 /// </summary>
 /// <remarks>
 /// <para>
-/// A match has two halves. The type must be the entry's exact class name, case included: two
-/// exceptions whose names differ only by case are two different exceptions, and an entry that
-/// matched both would excuse one of them for a reason measured on the other. The message must be
-/// recognised by at least one of the entry's <c>messages</c>, each of which is tried as a regular
-/// expression when it compiles as one and as ordinary text when it does not — a match by either
-/// counts, because an author writing plain text should not have to know which characters this
-/// engine treats as syntax.
+/// A match has two halves, and both are of one exception. The type must be the entry's exact class name, case
+/// included: two exceptions whose names differ only by case are two different exceptions, and an entry that matched
+/// both would excuse one of them for a reason measured on the other. The message must be recognised by at least one of
+/// the entry's <c>messages</c>, each of which is tried as a regular expression when it compiles as one and as ordinary
+/// text when it does not — a match by either counts, because an author writing plain text should not have to know which
+/// characters this engine treats as syntax. The exception is the one that reached the log, its message the run's or its
+/// own - or, where the log printed no stack to read it from, any line the unit printed; or a cause the log printed under
+/// it, however deep, its message that cause's own - never a type from one exception of the chain and a message from
+/// another, nor from a line that may be another's.
 /// </para>
 /// <para>
 /// Every doubtful case answers no. A pattern the linear matcher refuses, an entry naming no messages, a leg
@@ -129,15 +131,37 @@ public sealed class ExpectedExceptionMatcher(IHarnessOutput output)
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(failure);
 
-        // Each text against every message, rather than each message against every text: the texts are the failing
-        // unit's output, read from its log, and read once. The type matches the reported one or any cause the record
-        // holds, for what was expected is often the cause under what was thrown.
-        return (MatchesType(entry.ExceptionType, failure.ExceptionType)
-                || (failure.Exception is { } thrown && AnyCause(thrown, entry.ExceptionType)))
-            && failure.Texts.Any(text => entry.Messages.Any(message => MatchesMessage(message, text)));
+        // The exception that reached the log: its type, and its message - the run's or its own, or, where no stack was
+        // read, any line the unit printed (RunFailure.Texts). Each text against every message, rather than each message
+        // against every text: the texts are the failing unit's output, read from its log, and read once.
+        if (MatchesType(entry.ExceptionType, failure.ExceptionType)
+            && failure.Texts.Any(text => entry.Messages.Any(message => MatchesMessage(message, text))))
+        {
+            return true;
+        }
 
-        static bool AnyCause(DssHarness.Core.Results.ExceptionRecord record, string declared)
-            => record.CausedBy.Any(cause => MatchesType(declared, cause.Type) || AnyCause(cause, declared));
+        // A cause under it, for what was expected is often the cause under what was thrown: both halves of one exception
+        // of the chain - its type and its own message - never a type from one and a message from another, or from a line
+        // the log printed of any of them.
+        return failure.Exception is { } thrown
+            && CausesOf(thrown).Any(cause => MatchesType(entry.ExceptionType, cause.Type)
+                && entry.Messages.Any(message => MatchesMessage(message, cause.Message)));
+    }
+
+    /// <summary>Every cause under <paramref name="thrown"/>, however deep, each before its own causes.</summary>
+    private static IEnumerable<DssHarness.Core.Results.ExceptionRecord> CausesOf(DssHarness.Core.Results.ExceptionRecord thrown)
+    {
+        var next = new Stack<DssHarness.Core.Results.ExceptionRecord>(thrown.CausedBy.Reverse());
+
+        while (next.TryPop(out var cause))
+        {
+            yield return cause;
+
+            foreach (var deeper in cause.CausedBy.Reverse())
+            {
+                next.Push(deeper);
+            }
+        }
     }
 
     /// <summary>

@@ -58,6 +58,17 @@ public interface ICiJobSource
     Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Every annotation of one check run, in the order the forge lists them, held to the count it gave for them: what a
+    /// workflow wrote, what a problem matcher made of a line, and what the runner said of a step that failed.
+    /// </summary>
+    /// <param name="repositoryRoot">The repository to ask about.</param>
+    /// <param name="checkRunId">The check run.</param>
+    /// <param name="count">How many annotations the forge says it holds (<see cref="CiCheckRun.Annotations"/>).</param>
+    /// <param name="cancellationToken">Stops the child processes.</param>
+    /// <exception cref="HarnessException">The annotations could not be read, or fewer came back than the forge counts.</exception>
+    Task<IReadOnlyList<CiAnnotation>> ReadAnnotationsAsync(string repositoryRoot, long checkRunId, int count, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// This source with each of its reads given <paramref name="limit"/> - a step's <c>timeoutMinutes</c>, which its
     /// reads take where it says one - or, where null, the forge tool's own.
     /// </summary>
@@ -81,8 +92,8 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
     /// <summary>How many entries one request asks for, which is the most the API will return at once.</summary>
     private const int PageSize = 100;
 
-    /// <summary>Where a check that is a job of a workflow run points: the run's id, then the job's.</summary>
-    private static readonly Regex JobAddress = LinearRegex.Compile(@"/actions/runs/(?<run>\d+)/job/(?<job>\d+)");
+    /// <summary>Where a check that is a job of a workflow run points: the repository's name, the run's id, then the job's.</summary>
+    private static readonly Regex JobAddress = LinearRegex.Compile(@"/(?<repository>[^/]+)/actions/runs/(?<run>\d+)/job/(?<job>\d+)");
 
     private readonly GhProcess _gh = gh;
     private readonly TimeSpan? _limit = limit;
@@ -189,16 +200,35 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
             _limit,
             cancellationToken);
 
+    public Task<IReadOnlyList<CiAnnotation>> ReadAnnotationsAsync(
+        string repositoryRoot,
+        long checkRunId,
+        int count,
+        CancellationToken cancellationToken = default)
+        => ReadAllAsync(
+            repositoryRoot,
+            $"repos/:owner/:repo/check-runs/{checkRunId.ToString(CultureInfo.InvariantCulture)}/annotations",
+            member: null,
+            $"the annotations of check run {checkRunId.ToString(CultureInfo.InvariantCulture)}",
+            "annotation",
+            ReadAnnotation,
+            cancellationToken,
+            count);
+
     /// <summary>
     /// Every entry of a listing, following the pages until the count the listing itself reports is reached.
     /// </summary>
     /// <param name="repositoryRoot">The repository to ask from.</param>
     /// <param name="address">The listing, without its page.</param>
-    /// <param name="member">The member of each page that holds its entries.</param>
+    /// <param name="member">The member of each page that holds its entries; null where each page is the list itself.</param>
     /// <param name="subject">What is read, as a refusal names it.</param>
     /// <param name="entry">What one entry is, as a refusal counts them.</param>
     /// <param name="read">Reads one entry.</param>
     /// <param name="cancellationToken">Stops the requests.</param>
+    /// <param name="counted">
+    /// How many entries the listing holds, where the forge says it elsewhere than on its pages - a check run's count of
+    /// its annotations; null where each page says it.
+    /// </param>
     /// <exception cref="HarnessException">
     /// Fewer entries came back than the listing says it has, or a page holds no list of them. A page that was never
     /// fetched is a leg, or a check, that cannot be red: a listing wider than one page would quietly lose the entries past
@@ -208,14 +238,15 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
     private async Task<IReadOnlyList<T>> ReadAllAsync<T>(
         string repositoryRoot,
         string address,
-        string member,
+        string? member,
         string subject,
         string entry,
         Func<JsonElement, T> read,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? counted = null)
     {
         var collected = new List<T>();
-        var total = 0;
+        var total = counted ?? 0;
 
         for (var page = 1; ; page++)
         {
@@ -228,13 +259,29 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
 
             using var listed = Parse(output, subject);
 
-            total = Count(listed.RootElement) ?? total;
+            JsonElement array;
 
-            if (!listed.RootElement.TryGetProperty(member, out var array) || array.ValueKind != JsonValueKind.Array)
+            if (member is null)
+            {
+                array = listed.RootElement;
+            }
+            else
+            {
+                total = Count(listed.RootElement) ?? total;
+
+                if (listed.RootElement.ValueKind != JsonValueKind.Object || !listed.RootElement.TryGetProperty(member, out array))
+                {
+                    array = default;
+                }
+            }
+
+            if (array.ValueKind != JsonValueKind.Array)
             {
                 throw new HarnessException(
                     HarnessExit.CommandFailed,
-                    $"{GhProcess.Executable} answered no '{member}' list for {subject}, {NotRead}.");
+                    member is null
+                        ? $"{GhProcess.Executable} answered no list for {subject}, {NotRead}."
+                        : $"{GhProcess.Executable} answered no '{member}' list for {subject}, {NotRead}.");
             }
 
             var entries = array.EnumerateArray().Select(read).ToList();
@@ -262,7 +309,7 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
 
     /// <summary>How many entries a page says the listing has in total.</summary>
     private static int? Count(JsonElement root)
-        => root.TryGetProperty("total_count", out var count) && count.TryGetInt32(out var value) ? value : null;
+        => root.ValueKind == JsonValueKind.Object && root.TryGetProperty("total_count", out var count) && count.ValueKind == JsonValueKind.Number && count.TryGetInt32(out var value) ? value : null;
 
     private static CiJob ReadJob(JsonElement job)
         => new(Text(job, "name") ?? string.Empty, Text(job, "conclusion"), ReadSteps(job))
@@ -299,7 +346,40 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
             Text(check, "conclusion"),
             url,
             job.Success ? long.Parse(job.Groups["run"].Value, CultureInfo.InvariantCulture) : null,
-            job.Success ? long.Parse(job.Groups["job"].Value, CultureInfo.InvariantCulture) : null);
+            job.Success ? long.Parse(job.Groups["job"].Value, CultureInfo.InvariantCulture) : null)
+        {
+            Id = check.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number && id.TryGetInt64(out var number) ? number : null,
+            Annotations = check.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Object
+                && output.TryGetProperty("annotations_count", out var count) && count.ValueKind == JsonValueKind.Number && count.TryGetInt32(out var annotations)
+                    ? annotations
+                    : 0,
+            Repository = job.Success ? job.Groups["repository"].Value : null,
+        };
+    }
+
+    /// <summary>
+    /// One annotation as the forge keeps it: its place where it names a file - the forge writes <c>.github</c> for one
+    /// that names none, its line then the line of the step's own log it was said on, no line of any file - its level,
+    /// title, message and details.
+    /// </summary>
+    private static CiAnnotation ReadAnnotation(JsonElement annotation)
+    {
+        var path = Text(annotation, "path") is { Length: > 0 } named && named != CiAnnotation.NoFile ? named : null;
+
+        return new CiAnnotation(
+            path,
+            path is null ? null : Whole(annotation, "start_line"),
+            path is null ? null : Whole(annotation, "end_line"),
+            path is null ? null : Whole(annotation, "start_column"),
+            path is null ? null : Whole(annotation, "end_column"),
+            Text(annotation, "annotation_level") ?? string.Empty,
+            Text(annotation, "title") is { Length: > 0 } title ? title : null,
+            Text(annotation, "message") ?? string.Empty,
+            Text(annotation, "raw_details") is { Length: > 0 } details ? details : null);
+
+        // The forge writes null for a column it does not know: a number below one names no place either.
+        static int? Whole(JsonElement element, string name)
+            => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number) && number > 0 ? number : null;
     }
 
     private static CiCommitStatus ReadStatus(JsonElement status)

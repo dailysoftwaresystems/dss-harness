@@ -93,6 +93,13 @@ public static class WorkflowStepTypes
         /// such a step has none.
         /// </summary>
         public int? DefaultTimeoutMinutes { get; init; }
+
+        /// <summary>
+        /// Whether a step of the type answers the legs it ran - each leg's verdict and its red entries, as the engine writes
+        /// them (<see cref="LegStepRunner"/>) and no model does: what a red entry names, its log among it, is
+        /// the engine's own.
+        /// </summary>
+        public bool AnswersLegs => Output is { } output && (output == LegsOutput(arms: false) || output == LegsOutput(arms: true));
     }
 
     /// <summary>The keys every step takes, group or typed step alike.</summary>
@@ -589,13 +596,14 @@ public static class WorkflowStepTypes
     /// What a step that runs legs answers - <c>build</c>, <c>test</c>, <c>run</c> and, naming each red entry's
     /// <paramref name="arms"/>, <c>check-mutations</c>: whether it passed, the command's exit code, each leg's verdict,
     /// the red legs alone with the digest of the phase that did not pass - where one was read - and, where it holds
-    /// typed errors, only the lines no parser held as the tail, and where the run's records are.
+    /// typed errors, only the lines no parser held as the tail, and the log the phase wrote where this machine holds it,
+    /// whose lines the digest's ranges number, and where the run's records are.
     /// </summary>
     private static string LegsOutput(bool arms) => ObjectOf(
         ("passed", Flag),
         ("exitCode", WholeNumber),
         ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), ("digest", DigestOutput), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
+        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), ("digest", DigestOutput), ("log", TextOrNull), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
         ("runDirectory", TextOrNull),
         ("isolation", IsolationOutput));
 

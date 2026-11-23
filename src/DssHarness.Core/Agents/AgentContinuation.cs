@@ -20,9 +20,17 @@ public sealed record AgentContinuedStep(string Instance, string Ended, string Di
 /// <param name="Digest">
 /// What the phase that did not pass printed, digested and said for a model - the first error whole with its stack
 /// rendered to the frames inside the tree, the next distinct errors to four, the rest counted - as the red entry
-/// holds it; null where the entry carries none, the ledger's line alone then.
+/// holds it; null where the entry carries none.
 /// </param>
-public sealed record AgentRedLeg(string Leg, string Phase, string LedgerLine, string? Digest);
+/// <param name="Tail">
+/// The raw lines the red entry carries beside its digest: the lines no parser held where it has one, the phase's last
+/// lines where it has none - so a leg whose output no parser read is never said by its ledger line alone.
+/// </param>
+/// <param name="Log">
+/// The log the phase wrote, whose lines the digest's ranges number, where this machine holds it: the record copies it
+/// and names the copy; null where it holds none - a leg a host ran keeps its log there.
+/// </param>
+public sealed record AgentRedLeg(string Leg, string Phase, string LedgerLine, string? Digest, IReadOnlyList<string>? Tail = null, string? Log = null);
 
 /// <summary>
 /// The work a continuation record is the record of, as the engine resolved it: which step goes on, the chain of steps
@@ -80,8 +88,9 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
     /// the file <c>read_result</c> reads by <see cref="KeptResults.ContinuationId"/> in <paramref name="stepDirectory"/> -
     /// and what the step's first message holds of it: the record whole where it is one page; else what it is, its pages and
     /// what each holds, how <c>read_result</c> gives each, and its first page. The copies of what it reads are put in
-    /// <paramref name="handed"/>'s <c>continuation/</c> - each step's notes and output, the stream of the newest attempt,
-    /// and the results the iterations name - each written relative to <paramref name="handed"/>, held, never through a link.
+    /// <paramref name="handed"/>'s <c>continuation/</c> - each step's notes and output, each red leg's failing log, the
+    /// stream of the newest attempt, and the results the iterations name - each written relative to
+    /// <paramref name="handed"/>, held, never through a link.
     /// </summary>
     /// <param name="work">The work, as the engine resolved it.</param>
     /// <param name="handed">Where the step's agent is handed what it reads, its copies put under it.</param>
@@ -132,12 +141,16 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 
         if (work.RedLegs.Count > 0)
         {
+            // Each red leg by its ledger line, what its phase printed digested, the raw lines beside the digest - the last
+            // lines where nothing was digested - and its log's copy, whose lines the digest's ranges number.
             record.Part(
                 "the last red build or test",
                 "The last build or test in this worktree was red:" + NL + NL
-                    + string.Join(NL, work.RedLegs.Select(leg => leg.Digest is { Length: > 0 } digested
-                        ? $"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine}" + NL + "  " + digested
-                        : $"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine}")));
+                    + string.Join(NL, work.RedLegs.Select(leg =>
+                        $"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine}"
+                        + (leg.Digest is { Length: > 0 } digested ? NL + "  " + digested : string.Empty)
+                        + (leg.Tail is { Count: > 0 } tail ? NL + "  Its lines:" + string.Concat(tail.Select(line => NL + "    " + line)) : string.Empty)
+                        + (leg.Log is { } log && _fileSystem.FileExists(log) && LogCopyOf(copies, leg) is { } copy ? NL + $"  Its log, whose lines the digest's ranges number: {copy}" : string.Empty))));
         }
 
         // The steps so far, the newest first, each with its notes and its output whole.
@@ -191,13 +204,21 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             + first;
     }
 
-    /// <summary>Puts the copies the record names into <paramref name="copies"/>, under <paramref name="handed"/>: each step's notes and output, the stream of the newest attempt, and the results the stream names - replaced by the next record, never pointing into the run's records.</summary>
+    /// <summary>Puts the copies the record names into <paramref name="copies"/>, under <paramref name="handed"/>: each step's notes and output, each red leg's failing log, the stream of the newest attempt, and the results the stream names - replaced by the next record, never pointing into the run's records.</summary>
     private void Copy(AgentContinuationWork work, string handed, string copies)
     {
         foreach (var step in work.Steps)
         {
             Copied(handed, Path.Combine(step.Directory, OrchestratorLayout.StepNotesFileName), Copy(copies, step, "notes.md"));
             Copied(handed, Path.Combine(step.Directory, "output.json"), Copy(copies, step, "output.json"));
+        }
+
+        foreach (var leg in work.RedLegs)
+        {
+            if (leg.Log is { } log && LogCopyOf(copies, leg) is { } copy)
+            {
+                Copied(handed, log, copy);
+            }
         }
 
         if (work.StepDirectory.Length == 0)
@@ -230,6 +251,10 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             UnfollowedFiles.Write(_fileSystem, handed, to, write => read.CopyTo(write));
         }
     }
+
+    /// <summary>Where a red leg's failing log is copied in <c>continuation/</c>, named for its leg and its phase; null where it names no log.</summary>
+    private static string? LogCopyOf(string copies, AgentRedLeg leg)
+        => leg.Log is null ? null : Execution.PhaseLogs.OfLeg(Path.Combine(copies, OrchestratorLayout.StepLogsDirectoryName), leg.Leg, leg.Phase);
 
     /// <summary>A text read whole, or null where its file is not there.</summary>
     private string? Read(string file)

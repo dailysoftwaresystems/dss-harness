@@ -100,7 +100,17 @@ public enum CiChecksFound
 /// <param name="RunId">The workflow run it is a job of, or null.</param>
 /// <param name="JobId">The job it is, or null.</param>
 /// <param name="Description">The text the forge shows for a status, or null.</param>
-public sealed record CiCheck(string Name, CiCheckState State, string? Conclusion, string Url, long? RunId, long? JobId, string? Description);
+public sealed record CiCheck(string Name, CiCheckState State, string? Conclusion, string Url, long? RunId, long? JobId, string? Description)
+{
+    /// <summary>The check run it is, by the forge's id, which its annotations are read by; null for a status.</summary>
+    public long? CheckRunId { get; init; }
+
+    /// <summary>How many annotations the forge says it holds; none for a status.</summary>
+    public int Annotations { get; init; }
+
+    /// <summary>The repository its workflow run is of, by its name alone (<see cref="CiCheckRun.Repository"/>); null otherwise.</summary>
+    public string? Repository { get; init; }
+}
 
 /// <summary>A red check, with what the forge says of where it failed.</summary>
 /// <param name="Check">The check.</param>
@@ -114,7 +124,14 @@ public sealed record CiCheck(string Name, CiCheckState State, string? Conclusion
 /// Why some of where it failed is not there - what a read of its run or of its log answered that failed - or null where
 /// every read answered. The check is red all the same: its verdict never hangs on what is read of it afterwards.
 /// </param>
-public sealed record CiRedCheck(CiCheck Check, string? Job, string? Workflow, string? Step, string? Leg, bool Overran, string? Log, string? Unread);
+public sealed record CiRedCheck(CiCheck Check, string? Job, string? Workflow, string? Step, string? Leg, bool Overran, string? Log, string? Unread)
+{
+    /// <summary>
+    /// The check run's annotations, as the forge keeps them, in its order - each with its place where it names one; none
+    /// where it holds none, or they could not be read, which <see cref="Unread"/> then says.
+    /// </summary>
+    public IReadOnlyList<CiAnnotation> Annotations { get; init; } = [];
+}
 
 /// <summary>What a wait for the checks of a commit found.</summary>
 /// <param name="Commit">The commit.</param>
@@ -313,7 +330,12 @@ public sealed class CiChecksService(
 
         IEnumerable<CiCheck> read =
         [
-            .. runs.Select(run => new CiCheck(run.Name, run.State, run.Conclusion, run.Url, run.RunId, run.JobId, null)),
+            .. runs.Select(run => new CiCheck(run.Name, run.State, run.Conclusion, run.Url, run.RunId, run.JobId, null)
+            {
+                CheckRunId = run.Id,
+                Annotations = run.Annotations,
+                Repository = run.Repository,
+            }),
             .. statuses.Select(status => new CiCheck(
                 status.Context,
                 status.Reading,
@@ -329,9 +351,10 @@ public sealed class CiChecksService(
     }
 
     /// <summary>
-    /// Each red check, with where it failed: of a job of a workflow run, the run read and its legs classified as
-    /// <c>check-ci-legs</c> classifies them - each run once - the job's step that failed, its leg and the job's whole log.
-    /// A read of these that fails leaves out what it would have said, and says why: the check is red all the same.
+    /// Each red check, with where it failed: of a check run, its annotations - each with its place where it names one;
+    /// of a job of a workflow run, the run read and its legs classified as <c>check-ci-legs</c> classifies them - each run
+    /// once - the job's step that failed, its leg and the job's whole log. A read of these that fails leaves out what it
+    /// would have said, and says why: the check is red all the same.
     /// </summary>
     private async Task<IReadOnlyList<CiRedCheck>> RedAsync(
         string startDirectory,
@@ -345,9 +368,25 @@ public sealed class CiChecksService(
 
         foreach (var check in checks.Where(check => check.State == CiCheckState.Red))
         {
+            IReadOnlyList<CiAnnotation> annotations = [];
+            string? annotationsUnread = null;
+
+            // Read only where the forge counts any: a check run that holds none is not asked.
+            if (check.CheckRunId is { } checkRunId && check.Annotations > 0)
+            {
+                try
+                {
+                    annotations = await jobSource.Within(readTimeLimit).ReadAnnotationsAsync(root, checkRunId, check.Annotations, cancellationToken).ConfigureAwait(false);
+                }
+                catch (HarnessException ex)
+                {
+                    annotationsUnread = $"Its annotations could not be read: {ex.Message}";
+                }
+            }
+
             if (check.RunId is not { } runId || check.JobId is not { } jobId)
             {
-                red.Add(new CiRedCheck(check, null, null, null, null, false, null, null));
+                red.Add(new CiRedCheck(check, null, null, null, null, false, null, annotationsUnread) { Annotations = annotations });
                 continue;
             }
 
@@ -366,6 +405,7 @@ public sealed class CiChecksService(
             }
 
             var (report, unread) = classified;
+            unread = annotationsUnread is null ? unread : unread is null ? annotationsUnread : $"{unread} {annotationsUnread}";
             var job = report?.Run.Jobs.FirstOrDefault(job => job.Id == jobId)
                 ?? report?.Run.Jobs.FirstOrDefault(job => string.Equals(job.Name, check.Name, StringComparison.Ordinal));
             var leg = job is null ? null : report!.Legs.FirstOrDefault(leg => string.Equals(leg.Job, job.Name, StringComparison.Ordinal));
@@ -388,7 +428,10 @@ public sealed class CiChecksService(
                 leg?.Leg,
                 leg?.Overran ?? false,
                 log,
-                unread));
+                unread)
+            {
+                Annotations = annotations,
+            });
         }
 
         return red;

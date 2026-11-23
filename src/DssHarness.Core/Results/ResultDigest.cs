@@ -16,7 +16,7 @@ namespace DssHarness.Core.Results;
 /// <param name="Severity">How bad it is: <c>error</c>, <c>warning</c> or <c>note</c>.</param>
 /// <param name="Code">The tool's code for it (<c>CS0103</c>, <c>C2065</c>, <c>-Wunused-variable</c>, <c>TS2304</c>, <c>LNK2019</c>); null where the tool gives none.</param>
 /// <param name="Message">The message, one line, masked; never empty.</param>
-/// <param name="File">The file it names, relative to the tree where the tree holds it (<see cref="ResultDigest.WithInTree"/>); null where the tool names none.</param>
+/// <param name="File">The file it names, relative to the tree where the tree holds it (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>); null where the tool names none.</param>
 /// <param name="Line">The line it names; null where it names none.</param>
 /// <param name="Column">The column it names; null where it names none.</param>
 /// <param name="EndLine">The last line it names, where the tool gives a range; null where it does not.</param>
@@ -90,7 +90,7 @@ public sealed record Diagnostic(
 /// <param name="Actual">What there was, where the framework says it apart; null where it does not.</param>
 /// <param name="File">
 /// Where it failed, relative to the tree where the tree holds it: the top frame of its stack the tree holds, where one
-/// is (<see cref="ResultDigest.WithInTree"/>), else the assertion's place the runner named apart; null where neither names one.
+/// is (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>), else the assertion's place the runner named apart; null where neither names one.
 /// </param>
 /// <param name="Line">The line <paramref name="File"/> names; null where none was named.</param>
 /// <param name="Exception">Where the failure is a thrown error: its record, which holds the failure's stack; null for a plain assertion.</param>
@@ -311,20 +311,40 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// This digest with every place it names read against <paramref name="tree"/> - the one place a frame is marked and
-    /// a path made the tree's: a file the tree holds is in the tree, named relative to its root with <c>/</c>; any other
-    /// is not, and stays as the tool wrote it. A path is read in the form the tool wrote it, never by this machine's own
-    /// rules (<see cref="PlatformPaths.RelativeAsWritten"/>) - a relative one from the directory the tool ran in, a
+    /// This digest with every place it names read against <paramref name="tree"/>, a tree this machine ran the phase in:
+    /// a file the tree holds is in the tree, named relative to its root with <c>/</c>; any other is not, and stays as the
+    /// tool wrote it. A path is read in the form the tool wrote it, never by this machine's own rules
+    /// (<see cref="PlatformPaths.RelativeAsWritten"/>) - a relative one from the directory the tool ran in, a
     /// <c>file:</c> URI as the path it names - and is in the tree only where the tree holds that file: a frame that names
     /// no file, a runtime's own module (<c>dart:</c>, <c>node:</c>), a bare name the tree has no file of
-    /// (<c>Thread.java</c>), a path outside the root, are in none. A failure's place is then the top frame of its stack the
-    /// tree holds, where one is - the assertion's line, not the framework's - else the place its runner named apart.
+    /// (<c>Thread.java</c>), a path outside the root, are in none. Placed by the one owner of placing a digest's paths
+    /// (<see cref="WithInTree(Func{string, string?})"/>).
     /// </summary>
     /// <param name="tree">The tree the phase ran in, and where its tool ran.</param>
     public ResultDigest WithInTree(DigestTree tree)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentException.ThrowIfNullOrWhiteSpace(tree.Root);
+
+        return WithInTree(file => PlatformPaths.RelativeAsWritten(tree.Root, file, tree.WorkingDirectory) is { } below
+            && tree.FileSystem.FileExists(Path.Combine(tree.Root, below))
+                ? below
+                : null);
+    }
+
+    /// <summary>
+    /// This digest with every place it names placed by <paramref name="inTree"/> - the one place a frame is marked and a
+    /// path made the tree's, for a tree this machine ran the phase in (<see cref="WithInTree(DigestTree)"/>) as for one
+    /// another machine ran a job in, which only that machine's convention places: each frame of every stack, every cause's
+    /// among them, marked by whether its file is in the tree, and every file in it - a frame's, a diagnostic's, a
+    /// failure's, a count's by file - named as the tree names it; a file outside it named as the tool wrote it, and a frame
+    /// that names no file in no tree. A failure's place is then the top frame of its stack in the tree, where one is - the
+    /// assertion's line, not the framework's - else the place its runner named apart.
+    /// </summary>
+    /// <param name="inTree">A file as the tool wrote it, named as the tree names it; null where it is not in the tree.</param>
+    public ResultDigest WithInTree(Func<string, string?> inTree)
+    {
+        ArgumentNullException.ThrowIfNull(inTree);
 
         // Each path asked once, however many frames name it.
         var asked = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -372,10 +392,7 @@ public sealed record ResultDigest
 
             if (!asked.TryGetValue(file, out var relative))
             {
-                relative = PlatformPaths.RelativeAsWritten(tree.Root, file, tree.WorkingDirectory) is { } below
-                    && tree.FileSystem.FileExists(Path.Combine(tree.Root, below))
-                        ? below
-                        : null;
+                relative = inTree(file);
                 asked[file] = relative;
             }
 
@@ -418,12 +435,13 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// The raw lines a red entry carries beside this digest, the one rule of every red entry that carries one: where the
-    /// digest holds an error or a failure to start from, only the lines no parser held - a model reads the typed problems
-    /// or the raw lines, never both repeated - and where it holds none, warnings and notes alone among them,
-    /// <paramref name="tail"/> whole, for the line that says why the phase failed is in no diagnostic.
+    /// The raw lines that go beside this digest, the one rule of every red entry that carries one - a red leg's tail and a
+    /// red job's failing page alike: where the digest holds an error or a failure to start from, only the lines no parser
+    /// held - a model reads the typed problems or the raw lines, never both repeated - and where it holds none, warnings
+    /// and notes alone among them, <paramref name="tail"/> whole, for the line that says why the phase failed is in no
+    /// diagnostic.
     /// </summary>
-    /// <param name="tail">The phase's last lines.</param>
+    /// <param name="tail">The raw lines that would go without a digest: the phase's last lines, the job's failing page.</param>
     public IReadOnlyList<string> TailBeside(IReadOnlyList<string> tail)
     {
         ArgumentNullException.ThrowIfNull(tail);
@@ -617,6 +635,182 @@ public sealed record ResultDigest
             ["kind"] = frame.Kind,
             ["inTree"] = frame.InTree,
         })]);
+
+    /// <summary>
+    /// The digest <paramref name="document"/> holds, read back as <see cref="Document"/> writes it - the one owner of the
+    /// shape writing it and reading it, so another machine's ledger, which carries a leg's digest as that machine's
+    /// <c>--json</c> wrote it, is read by the names it was written under: every diagnostic and failure with its stack and
+    /// its cut, each cause chain with its cut, the counts over the whole output, the counts by code and by file, the
+    /// unparsed lines and what the bounds left out; its first error the first of its errors, as every digest keeps it.
+    /// Every text it holds is read through <paramref name="said"/>, as each line another machine's programs printed is read
+    /// on this one. A member this build does not write is not read.
+    /// </summary>
+    /// <param name="document">A digest's document; null, or JSON's null, where the ledger carries none.</param>
+    /// <param name="said">What each text read becomes on this machine; as it stands where none is given.</param>
+    /// <returns>The digest; null where the document carries none.</returns>
+    /// <exception cref="System.Text.Json.JsonException">
+    /// The document is no digest's shape - a member of the wrong kind, or a diagnostic, failure, frame or exception
+    /// without what each must hold - or holds what no digest does (<see cref="Problem"/>), or says it left out other than
+    /// its counts and what it holds make.
+    /// </exception>
+    public static ResultDigest? Read(JsonNode? document, Func<string, string>? said = null)
+    {
+        if (document is null)
+        {
+            return null;
+        }
+
+        var text = said ?? (value => value);
+        var read = Object(document, "a digest");
+        var unparsed = Items(read, "unparsed").Select(line => text(Text(line, "an unparsed line"))).ToList();
+        var leftOut = read["leftOut"] is null ? null : Object(read["leftOut"], "'leftOut'");
+
+        var digest = new ResultDigest
+        {
+            Diagnostics = [.. Items(read, "diagnostics").Select(item => Object(item, "a diagnostic")).Select(diagnostic => new Diagnostic(
+                Required(diagnostic, "tool"),
+                Required(diagnostic, "severity"),
+                Optional(diagnostic, "code"),
+                text(Required(diagnostic, "message")),
+                Optional(diagnostic, "file") is { } file ? text(file) : null,
+                Number(diagnostic, "line"),
+                Number(diagnostic, "column"),
+                Number(diagnostic, "endLine"),
+                Number(diagnostic, "endColumn"),
+                Optional(diagnostic, "symbol"),
+                Optional(diagnostic, "project") is { } project ? text(project) : null,
+                Number(diagnostic, "count") ?? 1,
+                StackOf(diagnostic),
+                LogRange(diagnostic))
+            {
+                StackCut = Number(diagnostic, "stackCut") ?? 0,
+            })],
+            Failures = [.. Items(read, "failures").Select(item => Object(item, "a failure")).Select(failure => new TestFailure(
+                Required(failure, "framework"),
+                Required(failure, "id"),
+                Optional(failure, "name"),
+                Optional(failure, "class"),
+                Optional(failure, "method"),
+                Optional(failure, "message") is { } message ? text(message) : null,
+                Optional(failure, "expected") is { } expected ? text(expected) : null,
+                Optional(failure, "actual") is { } actual ? text(actual) : null,
+                Optional(failure, "file") is { } file ? text(file) : null,
+                Number(failure, "line"),
+                failure["exception"] is { } thrown ? ExceptionOf(thrown, 1) : null,
+                StackOf(failure),
+                failure["duration"] is null ? null : failure["duration"] is JsonValue duration && duration.TryGetValue<double>(out var seconds) ? seconds : throw new System.Text.Json.JsonException("'duration' is no number"),
+                Required(failure, "outcome"),
+                ShardOf(failure),
+                LogRange(failure))
+            {
+                StackCut = Number(failure, "stackCut") ?? 0,
+            })],
+            Errors = Number(read, "errors") ?? 0,
+            Warnings = Number(read, "warnings") ?? 0,
+            Notes = Number(read, "notes") ?? 0,
+            Failed = Number(read, "failed") ?? 0,
+            Errored = Number(read, "errored") ?? 0,
+            TimedOut = Number(read, "timedOut") ?? 0,
+            Crashed = Number(read, "crashed") ?? 0,
+            ByCode = CountsOf(read, "byCode", of => of),
+            ByFile = CountsOf(read, "byFile", text),
+            Unparsed = unparsed,
+            UnparsedCount = unparsed.Count + (leftOut is null ? 0 : Number(leftOut, "unparsed") ?? 0),
+        };
+
+        // Held to what every digest holds to, as one this machine made is: a severity, an outcome, a place or a bound no
+        // digest has is no digest read, and neither is one whose left-out counts are not what its counts and its held make.
+        return digest.Problem() is { } wrong ? throw new System.Text.Json.JsonException(wrong)
+            : leftOut is not null && (Number(leftOut, "diagnostics") is { } diagnostics && diagnostics != digest.DiagnosticsLeftOut
+                || Number(leftOut, "failures") is { } failures && failures != digest.FailuresLeftOut)
+                ? throw new System.Text.Json.JsonException("it says it left out other than its counts and what it holds make")
+            : digest;
+
+        ExceptionRecord ExceptionOf(JsonNode node, int depth)
+        {
+            // Each cause is read where its holder is, its own causes after it: a chain a digest holds is never deeper than
+            // its bound, and one that is was written by nothing this build reads.
+            if (depth > ExceptionRecord.CauseBound)
+            {
+                throw new System.Text.Json.JsonException($"a cause chain is deeper than its bound of {ExceptionRecord.CauseBound.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            var thrown = Object(node, "an exception");
+
+            return new ExceptionRecord(
+                Required(thrown, "type"),
+                text(Required(thrown, "message")),
+                StackOf(thrown),
+                [.. Items(thrown, "causedBy").Select(cause => ExceptionOf(cause!, depth + 1))])
+            {
+                StackCut = Number(thrown, "stackCut") ?? 0,
+                CausesCut = Number(thrown, "causesCut") ?? 0,
+            };
+        }
+
+        IReadOnlyList<StackFrame> StackOf(JsonObject holder)
+            => [.. Items(holder, "stack").Select(item => Object(item, "a frame")).Select(frame => new StackFrame(
+                text(Required(frame, "text")),
+                Optional(frame, "file") is { } file ? text(file) : null,
+                Number(frame, "line"),
+                Number(frame, "column"),
+                Optional(frame, "module"),
+                Optional(frame, "symbol"),
+                Optional(frame, "kind") ?? "call",
+                frame["inTree"] is null ? false : frame["inTree"] is JsonValue inTree && inTree.TryGetValue<bool>(out var inside) ? inside : throw new System.Text.Json.JsonException("'inTree' is no flag")))];
+
+        static IReadOnlyList<Counted> CountsOf(JsonObject holder, string name, Func<string, string> of)
+            => [.. Items(holder, name).Select(item => Object(item, $"a count of '{name}'")).Select(counted => new Counted(
+                of(Required(counted, "of")),
+                Number(counted, "count") ?? throw new System.Text.Json.JsonException("'count' is missing")))];
+
+        static (int Index, int Count)? ShardOf(JsonObject failure)
+        {
+            if (failure["shard"] is null)
+            {
+                return null;
+            }
+
+            var shard = Object(failure["shard"], "'shard'");
+
+            return (Number(shard, "index") ?? throw new System.Text.Json.JsonException("'index' is missing"),
+                Number(shard, "count") ?? throw new System.Text.Json.JsonException("'count' is missing"));
+        }
+
+        static (int From, int To)? LogRange(JsonObject holder)
+            => holder["log"] switch
+            {
+                null => null,
+                JsonArray { Count: 2 } range => (Whole(range[0], "a log range"), Whole(range[1], "a log range")),
+                _ => throw new System.Text.Json.JsonException("'log' is no range of two lines"),
+            };
+
+        static JsonObject Object(JsonNode? node, string what)
+            => node as JsonObject ?? throw new System.Text.Json.JsonException($"{what} is no object");
+
+        static IEnumerable<JsonNode?> Items(JsonObject holder, string name)
+            => holder[name] switch
+            {
+                null => [],
+                JsonArray items => items,
+                _ => throw new System.Text.Json.JsonException($"'{name}' is no list"),
+            };
+
+        static string Required(JsonObject holder, string name)
+            => Optional(holder, name) ?? throw new System.Text.Json.JsonException($"'{name}' is missing");
+
+        static string? Optional(JsonObject holder, string name)
+            => holder[name] is null ? null : Text(holder[name], $"'{name}'");
+
+        static string Text(JsonNode? node, string what)
+            => node is JsonValue value && value.TryGetValue<string>(out var read) ? read : throw new System.Text.Json.JsonException($"{what} is no text");
+
+        static int? Number(JsonObject holder, string name)
+            => holder[name] is null ? null : Whole(holder[name], $"'{name}'");
+
+        static int Whole(JsonNode? node, string what)
+            => node is JsonValue value && value.TryGetValue<int>(out var read) ? read : throw new System.Text.Json.JsonException($"{what} is no whole number");
+    }
 
     /// <summary>A diagnostic said as one line: its tool, its code, its place and its message's first line.</summary>
     private static string Said(Diagnostic diagnostic)

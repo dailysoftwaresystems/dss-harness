@@ -535,15 +535,15 @@ public sealed class CiWaitStepRunner(
         foreach (var check in reading.Red)
         {
             string? kept = null;
+            string? masked = null;
             long? lines = null;
             IReadOnlyList<string> failing = [];
-            ResultDigest? digest = null;
 
             // Named for its job and the job's id: two red jobs of one name - in two workflows, or named apart only by
             // case or by a character no path carries - would otherwise keep one file, each the other's log.
             if (check.Log is { } log && check.Check.JobId is { } jobId)
             {
-                var masked = mask.Redact(log);
+                masked = mask.Redact(log);
                 kept = Path.Combine(logs, $"{PhaseLogs.NameFor(check.Job ?? check.Check.Name)}.{jobId.ToString(CultureInfo.InvariantCulture)}{PhaseLogs.Extension}");
                 fileSystem.CreateDirectory(logs);
                 fileSystem.WriteAllTextAtomic(kept, masked);
@@ -561,12 +561,14 @@ public sealed class CiWaitStepRunner(
                     cancellationToken).ConfigureAwait(false);
                 lines = pages.Lines;
                 failing = [.. (await FailingPageAsync(pages, masked.Contains(ErrorMark, StringComparison.Ordinal), cancellationToken).ConfigureAwait(false)).Entries.Select(entry => entry.Text)];
-
-                // The kept log digested: the forge's decoration stripped, the workflow's own annotations first, then
-                // whatever forms a CI log holds - so a red job's entry starts from what failed, not from a page.
-                digest = PhaseParsers.DigestOf(PhaseParsers.StrippedCi(masked), PhaseParsers.ForCi(context.Config.Results.Matchers))
-                    ?.WithInTree(new DigestTree(context.Layout.MainCheckoutRoot, null, fileSystem));
             }
+
+            // The check digested: its annotations with a place first, then its kept log read by every form a CI log holds,
+            // each path placed against the job's own workspace on its runner - so a red job's entry starts from what
+            // failed, not from a page; and beside it only the raw lines it does not hold.
+            var digest = CiDigest.Of(masked, check.Annotations, check.Check.Repository, mask.Redact, context.Config.Results.Matchers);
+
+            failing = digest?.TailBeside(failing) ?? failing;
 
             red.Add(new JsonObject
             {

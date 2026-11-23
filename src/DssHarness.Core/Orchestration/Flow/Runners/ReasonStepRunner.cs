@@ -1101,8 +1101,9 @@ public sealed class ReasonStepRunner(
 
     /// <summary>
     /// The red legs of the agent's newest build or test that was red, as the record says them: each red leg, its phase,
-    /// the ledger's line for it, and what the phase printed digested - the digest instead of a pointer to logs, so the
-    /// step that goes on starts from the first error. Empty where none was red.
+    /// the ledger's line for it, what the phase printed digested - so the step that goes on starts from the first error -
+    /// the raw lines the entry carries beside it, and the log the phase wrote as the entry names it, which the record
+    /// copies. Empty where none was red.
     /// </summary>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as, whose steps ran them.</param>
@@ -1113,9 +1114,12 @@ public sealed class ReasonStepRunner(
             return [];
         }
 
+        // A step whose output the engine wrote of the legs it ran, never one a model answered: the log a red entry names is
+        // copied for the record, and a path a model wrote there would hand the agent a file its policy never let it read.
         foreach (var step in steps
             .Where(step => string.Equals(step.Agent, agent, StringComparison.Ordinal)
                 && step.FinishedAt is not null
+                && step.Type is { } type && WorkflowStepTypes.Find(type) is { AnswersLegs: true }
                 && step.Output?["red"] is JsonArray { Count: > 0 })
             .OrderByDescending(step => step.FinishedAt))
         {
@@ -1128,11 +1132,18 @@ public sealed class ReasonStepRunner(
                 {
                     var phase = red["phase"] is JsonValue named && named.GetValueKind() == JsonValueKind.String ? named.GetValue<string>() : null;
 
-                    // The digest instead of a pointer to logs: what a red result printed, typed and said for a model,
-                    // so the step that goes on starts from the first error and not from a directory to search.
+                    // What a red result printed, typed and said for a model, so the step that goes on starts from the
+                    // first error; the raw lines beside it, so a leg no parser read is never said by its line alone.
                     var digest = red["digest"] is { } typed && typed.GetValueKind() == JsonValueKind.Object ? typed.ToJsonString() : null;
+                    IReadOnlyList<string> tail = red["tail"] is JsonArray lines
+                        ? [.. lines.OfType<JsonValue>().Where(line => line.GetValueKind() == JsonValueKind.String).Select(line => line.GetValue<string>())]
+                        : [];
 
-                    legs.Add(new AgentRedLeg(leg.GetValue<string>(), phase ?? string.Empty, detail.GetValue<string>(), digest));
+                    // Its log, whose lines the digest's ranges number, as the entry names it - the copy the step kept beside
+                    // its ledger in an agent's worktree; the record copies it, so it points into no run's records.
+                    var log = red["log"] is JsonValue file && file.GetValueKind() == JsonValueKind.String ? file.GetValue<string>() : null;
+
+                    legs.Add(new AgentRedLeg(leg.GetValue<string>(), phase ?? string.Empty, detail.GetValue<string>(), digest, tail, log));
                 }
             }
 
