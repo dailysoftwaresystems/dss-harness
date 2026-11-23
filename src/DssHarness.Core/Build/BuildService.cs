@@ -135,6 +135,13 @@ public sealed record BuildResult(
     public FailedUnits? FailedUnits { get; init; }
 
     /// <summary>
+    /// The failing phase's log digested by the parsers its toolchain chose, where the build did not pass: the typed
+    /// diagnostics with the first error in the order the tool met it. <see langword="null"/> where it passed, or
+    /// nothing the parsers chose read anything in what the phase printed.
+    /// </summary>
+    public ResultDigest? Digest { get; init; }
+
+    /// <summary>
     /// The line of the leg <paramref name="leg"/> whose build this is, where the build is what its line says: its verdict and
     /// why, the notes and compilers it names, the last lines of the phase it stopped at, and the units it failed to build.
     /// Made here, once, for every command that builds a leg, so none of them leaves out what another says.
@@ -155,6 +162,7 @@ public sealed record BuildResult(
         LogTail = Tail,
         TailPhase = TailPhase,
         FailedUnits = FailedUnits,
+        Digest = Digest,
     };
 }
 
@@ -642,12 +650,37 @@ public sealed class BuildService(
             }
 
             // The units only where the build's failure is the verdict: one a moving tree or a shared directory outranked was
-            // a build of a tree that never existed, and what it failed says nothing of the code.
+            // a build of a tree that never existed, and what it failed says nothing of the code. The digest with them:
+            // the failing phase's log read by the parsers its toolchain chose, so a red build's line starts from what
+            // the compiler already said instead of a tail searched for it.
             return new BuildResult(verdict, buildDirectory, phases, rebuilt, dependencies)
             {
                 Compilers = compilers,
                 FailedUnits = verdict.Verdict == LegVerdict.Failed ? failedUnits : null,
+                Digest = verdict.Verdict == LegVerdict.Passed ? null : DigestOf(),
             };
+
+            ResultDigest? DigestOf()
+            {
+                var failed = phases.LastOrDefault(phase => !phase.Passed);
+
+                if (failed is null)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    return PhaseParsers
+                        .DigestOf([.. failed.Output.Lines()], PhaseParsers.ForBuild(request.Variant.Toolchain, config.Results.Matchers))
+                        ?.WithInTree(request.TreeRoot);
+                }
+                catch (PhaseOutputUnreadException)
+                {
+                    // The log the digest would be read from is gone: the tail may be too, and the verdict already says what it is.
+                    return null;
+                }
+            }
         }
     }
 

@@ -157,6 +157,37 @@ public sealed class FlowChecksTests
             FlowChecks.Red([Check("gate", "build", FlowInstanceState.Done, output, at: 1)]));
     }
 
+    /// <summary>
+    /// A red leg whose entry holds a digest says its first error on the line - what printed it, its code, its place and
+    /// its message's first line - so a reader starts there and not at the tail; a leg whose entry carries none says
+    /// nothing more, as one whose digest holds no error does not.
+    /// </summary>
+    [Fact]
+    public void ARedLegHoldingADigest_SaysItsFirstErrorOnTheLine()
+    {
+        var output = Legs(passed: false, ("win", "failed"), ("linux", "failed"));
+
+        output["red"] = new JsonArray(
+            new JsonObject
+            {
+                ["leg"] = "win",
+                ["verdict"] = "failed",
+                ["phase"] = "build",
+                ["digest"] = new JsonObject
+                {
+                    ["errors"] = 2,
+                    ["first"] = new JsonObject { ["kind"] = "diagnostic", ["said"] = "msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context (printed 2 times)" },
+                },
+            },
+            new JsonObject { ["leg"] = "linux", ["verdict"] = "failed", ["phase"] = "test", ["digest"] = null });
+
+        Assert.Equal(
+            string.Join("\n",
+                "gate (build) in the main tree: win failed at build - msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context (printed 2 times)",
+                "gate (build) in the main tree: linux failed at test"),
+            FlowChecks.Red([Check("gate", "build", FlowInstanceState.Done, output, at: 1)]));
+    }
+
     private static FlowCheck Check(
         string instance,
         string kind,

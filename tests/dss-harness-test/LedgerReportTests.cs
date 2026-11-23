@@ -1420,6 +1420,45 @@ public sealed class LedgerReportTests
         Assert.False(legs[1].TryGetProperty("tailPhase", out var noPhase) && noPhase.ValueKind != System.Text.Json.JsonValueKind.Null);
     }
 
+    /// <summary>
+    /// The first error of each red leg that holds one is printed under its verdict, as a block below the table, before
+    /// the units and the tails - the place a reader starts - and the JSON ledger carries the digest whole: every
+    /// diagnostic and failure typed, for a reader that asks. A leg that digested nothing says neither.
+    /// </summary>
+    [Fact]
+    public void TheFirstErrorOfARedLeg_IsSaidUnderItsVerdict_AndTheJsonCarriesTheDigestWhole()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("mac-release", LegVerdict.Failed, TimeSpan.FromSeconds(80), "test exited 8") with
+            {
+                LogTail = ["1 test failed out of 412"],
+                TailPhase = "test",
+                Digest = ResultDigest.Of(
+                    [],
+                    [new TestFailure("ctest", "git_state", "git_state", Message: "state mismatch")],
+                    []),
+            },
+            Entry("win-msvc-release", LegVerdict.Passed, TimeSpan.FromSeconds(134), "412 tests"),
+        ],
+        durationWarningFactor: 0);
+
+        var rows = report.Render();
+        var first = Assert.Single(rows, row => row.StartsWith("mac-release: first error:", StringComparison.Ordinal));
+
+        Assert.Equal("mac-release: first error: ctest git_state: state mismatch", first);
+        Assert.DoesNotContain(rows, row => row.StartsWith("win-msvc-release: first error:", StringComparison.Ordinal));
+
+        using var json = System.Text.Json.JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+        var legs = json.RootElement.GetProperty("legs");
+        var digest = legs[0].GetProperty("digest");
+
+        Assert.Equal(1, digest.GetProperty("failed").GetInt32());
+        Assert.Equal("git_state", digest.GetProperty("failures")[0].GetProperty("id").GetString());
+        Assert.Equal("state mismatch", digest.GetProperty("failures")[0].GetProperty("message").GetString());
+        Assert.False(legs[1].TryGetProperty("digest", out var none) && none.ValueKind != System.Text.Json.JsonValueKind.Null);
+    }
+
     [Fact]
     public void TheJsonLedger_CarriesEveryTimingMark()
     {

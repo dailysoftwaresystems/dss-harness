@@ -58,7 +58,9 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The workflows topic says what a leg step's red entry carries of the units its build failed - failedUnits, which the
-    /// output's schema declares - and that {run.red} says what the leg's line said of them.
+    /// output's schema declares - and that {run.red} says what the leg's line said of them, and what it carries of the
+    /// errors its phase printed - digest, the first four distinct said for a model with the rest counted, the tail then
+    /// holding only what no parser held.
     /// </summary>
     [Fact]
     public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsUnits()
@@ -76,9 +78,33 @@ public sealed partial class HelpTests
         foreach (var type in new[] { "build", "test", "run" })
         {
             Assert.Contains("\"failedUnits\":{\"type\":[\"object\",\"null\"]", WorkflowStepTypes.Find(type)!.Output, StringComparison.Ordinal);
+            Assert.Contains("\"digest\":", WorkflowStepTypes.Find(type)!.Output, StringComparison.Ordinal);
         }
 
         Assert.DoesNotContain("failedUnits", WorkflowStepTypes.Find("check-mutations")!.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic says what a red leg's entry carries of the errors its phase printed: digest, said for a
+    /// model - the first error whole with its stack rendered to its frames in the tree, the next distinct to four as
+    /// one line each, the rest counted by code and by file - and the tail then holding only the lines no parser held,
+    /// for a model sees either the typed errors or the raw lines, never both repeated; the ledger's --json keeps the
+    /// whole digest typed, and a red leg's first error is said on {run.red}'s line and under its verdict in the table.
+    /// </summary>
+    [Fact]
+    public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsErrors()
+    {
+        var prose = Prose.Words(HelpText.Of("workflows").StandardOutput);
+
+        Assert.Contains(
+            "Each red leg's entry also carries, in digest, what the phase that did not pass printed, typed: the first error whole - its "
+                + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four as "
+                + "one line each, every test failure of the four with its stack, and the rest counted by code and by file, and where the "
+                + "digest holds typed errors the entry's tail holds only the lines no parser held, for a model reads either the typed "
+                + "errors or the raw lines, never both repeated. The ledger's --json keeps the whole digest typed for a reader that asks, "
+                + "each red leg's first error is said under its verdict in the table, and {run.red} says it on its line",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -554,7 +580,13 @@ public sealed partial class HelpTests
                 + "commit is refused, nothing swept. Each answers passed, true where every leg passed; exitCode, the command's; "
                 + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
                 + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
-                + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. What "
+                + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. Each "
+                + "red leg's entry also carries, in digest, what the phase that did not pass printed, typed: the first error whole - its "
+                + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four "
+                + "as one line each, every test failure of the four with its stack, and the rest counted by code and by file, and where "
+                + "the digest holds typed errors the entry's tail holds only the lines no parser held, for a model reads either the "
+                + "typed errors or the raw lines, never both repeated. The ledger's --json keeps the whole digest typed for a reader "
+                + "that asks, each red leg's first error is said under its verdict in the table, and {run.red} says it on its line. What "
                 + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
                 + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "
                 + "agent-clients'); where this machine has none, agentPolicy.isolation required fails the step "

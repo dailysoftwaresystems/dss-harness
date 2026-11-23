@@ -588,15 +588,37 @@ public static class WorkflowStepTypes
     /// <summary>
     /// What a step that runs legs answers - <c>build</c>, <c>test</c>, <c>run</c> and, naming each red entry's
     /// <paramref name="arms"/>, <c>check-mutations</c>: whether it passed, the command's exit code, each leg's verdict,
-    /// the red legs alone with the tail of the phase that did not pass, and where the run's records are.
+    /// the red legs alone with the digest of the phase that did not pass - where one was read - and, where it holds
+    /// typed errors, only the lines no parser held as the tail, and where the run's records are.
     /// </summary>
     private static string LegsOutput(bool arms) => ObjectOf(
         ("passed", Flag),
         ("exitCode", WholeNumber),
         ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
+        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), ("digest", DigestOutput), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
         ("runDirectory", TextOrNull),
         ("isolation", IsolationOutput));
+
+    /// <summary>
+    /// What a red entry's digest holds, as a model reads it: the counts by severity and outcome, the first error said
+    /// whole - its stack rendered to its frames in the tree, its log range one read away - the next distinct errors to
+    /// four in all as one line each, every test failure of the four with its rendered stack, the rest counted by code
+    /// and by file, and the lines no parser held. Null where the phase's output was never digested.
+    /// </summary>
+    private static string DigestOutput => ObjectOrNullOf(
+        ("errors", WholeNumber),
+        ("warnings", WholeNumber),
+        ("notes", WholeNumber),
+        ("failed", WholeNumber),
+        ("errored", WholeNumber),
+        ("timedOut", WholeNumber),
+        ("crashed", WholeNumber),
+        ("first", ObjectOrNullOf(("kind", Text), ("tool", TextOrNull), ("framework", TextOrNull), ("code", TextOrNull), ("severity", TextOrNull), ("message", TextOrNull), ("file", TextOrNull), ("line", WholeNumberOrNull), ("column", WholeNumberOrNull), ("count", WholeNumber), ("log", WholeNumbersOrNull), ("stack", ListOf(Text)), ("said", Text))),
+        ("diagnostics", ListOf(ObjectOf(("said", Text), ("count", WholeNumber), ("log", WholeNumbersOrNull)))),
+        ("failures", ListOf(ObjectOf(("framework", Text), ("id", Text), ("message", TextOrNull), ("file", TextOrNull), ("line", WholeNumberOrNull), ("outcome", Text), ("stack", ListOf(Text))))),
+        ("byCode", ListOf(ObjectOf(("of", Text), ("count", WholeNumber)))),
+        ("byFile", ListOf(ObjectOf(("of", Text), ("count", WholeNumber)))),
+        ("unparsed", ListOf(Text)));
 
     /// <summary>
     /// What a step that runs the agents' work answers of the operating system's isolation it ran under: the mode, and the
@@ -673,6 +695,9 @@ public static class WorkflowStepTypes
 
     /// <summary>A schema of a whole number, or null.</summary>
     private static string WholeNumberOrNull => """{"type":["integer","null"]}""";
+
+    /// <summary>A list of whole numbers, or null where there is none.</summary>
+    private static string WholeNumbersOrNull => """{"type":["array","null"],"items":{"type":"integer"}}""";
 
     /// <summary>A schema of a number, whole or not.</summary>
     private static string Number => """{"type":"number"}""";

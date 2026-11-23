@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 
 namespace DssHarness.Core.Results;
 
@@ -201,5 +202,261 @@ public sealed record ResultDigest(
             failures.Count(failure => failure.Outcome == "crashed"),
             folded.FirstOrDefault(diagnostic => diagnostic.Severity == "error"),
             [.. unparsed.Take(Bound)]);
+    }
+
+    /// <summary>
+    /// This digest with every frame of every stack it holds marked by whether its file is inside <paramref name="root"/>:
+    /// a rooted file under it, or a relative one, which a tool run in the tree names by its place there. The one place
+    /// a frame is marked, so every reader of a digest reads one mark.
+    /// </summary>
+    /// <param name="root">The tree the phase ran in.</param>
+    public ResultDigest WithInTree(string root)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+
+        return this with
+        {
+            Diagnostics = [.. Diagnostics.Select(diagnostic => diagnostic with { Stack = Marked(diagnostic.Stack) })],
+            Failures = [.. Failures.Select(failure => failure with
+            {
+                Stack = Marked(failure.Stack),
+                Exception = failure.Exception is { } thrown ? thrown with { Stack = Marked(thrown.Stack), CausedBy = [.. thrown.CausedBy.Select(CauseMarked)] } : null,
+            })],
+            First = First is { } first ? first with { Stack = Marked(first.Stack) } : null,
+        };
+
+        ExceptionRecord CauseMarked(ExceptionRecord cause)
+            => cause with { Stack = Marked(cause.Stack), CausedBy = [.. cause.CausedBy.Select(CauseMarked)] };
+
+        IReadOnlyList<StackFrame> Marked(IReadOnlyList<StackFrame>? stack)
+            => stack is null ? [] : [.. stack.Select(frame => frame with { InTree = Inside(frame.File) })];
+
+        bool Inside(string? file)
+            => file is null
+                || !DssHarness.Core.Platform.PlatformPaths.IsRootedOnAnyPlatform(file)
+                || DssHarness.Core.FileSystem.PathContainment.IsStrictlyInside(root, file, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The first error said as one line - the ledger's, a red check's and a continuation record's: what printed it,
+    /// its code, its place and its message's first line, the count of its printings where it printed more than once.
+    /// Null where the digest holds no error and no failure.
+    /// </summary>
+    public string? FirstSaid()
+        => First is { } first ? Said(first)
+            : Failures.FirstOrDefault(failure => failure.Outcome is "failed" or "errored") is { } failure
+                ? $"{failure.Framework} {failure.Id}{(failure.File is { } file ? $" ({file}{(failure.Line is { } line ? $":{line.ToString(CultureInfo.InvariantCulture)}" : string.Empty)})" : string.Empty)}: {FirstLine(failure.Message)}"
+            : null;
+
+    /// <summary>
+    /// The digest as a model reads it: the counts, the first error said whole with its stack rendered to its frames in
+    /// the tree, the next distinct errors to four in all - one line each - every test failure of the four with its
+    /// rendered stack, the rest counted by code and by file, and the lines no parser held. A rule of rendering, never
+    /// of the record: the whole digest stays in the ledger's own <c>--json</c> (<see cref="Document"/>).
+    /// </summary>
+    public JsonObject ForAModel()
+    {
+        var said = Diagnostics.Where(diagnostic => diagnostic.Severity == "error").ToList();
+        var first = First ?? (said.Count > 0 ? said[0] : null);
+        var more = said.Where(diagnostic => !ReferenceEquals(diagnostic, first)).Take(Math.Max(0, 4 - (first is null ? 0 : 1))).ToList();
+
+        return new JsonObject
+        {
+            ["errors"] = Errors,
+            ["warnings"] = Warnings,
+            ["notes"] = Notes,
+            ["failed"] = Failed,
+            ["errored"] = Errored,
+            ["timedOut"] = TimedOut,
+            ["crashed"] = Crashed,
+            ["first"] = first is not null || Failures.Count > 0
+                ? OneOf(first, Failures.FirstOrDefault())
+                : null,
+            ["diagnostics"] = new JsonArray([.. more.Select(diagnostic => (JsonNode)new JsonObject
+            {
+                ["said"] = Said(diagnostic),
+                ["count"] = diagnostic.Count,
+                ["log"] = LogOf(diagnostic),
+            })]),
+            ["failures"] = new JsonArray([.. Failures.Take(Bound > 4 ? 4 : Bound).Select(failure => (JsonNode)new JsonObject
+            {
+                ["framework"] = failure.Framework,
+                ["id"] = failure.Id,
+                ["message"] = FirstLine(failure.Message),
+                ["file"] = failure.File,
+                ["line"] = failure.Line,
+                ["outcome"] = failure.Outcome,
+                ["stack"] = Rendered(failure.Exception?.Stack ?? failure.Stack),
+            })]),
+            ["byCode"] = new JsonArray([.. Diagnostics
+                .Where(diagnostic => diagnostic.Code is not null)
+                .GroupBy(diagnostic => diagnostic.Code!, StringComparer.Ordinal)
+                .Select(group => (JsonNode)new JsonObject { ["of"] = group.Key, ["count"] = group.Sum(diagnostic => diagnostic.Count) })]),
+            ["byFile"] = new JsonArray([.. Diagnostics
+                .Where(diagnostic => diagnostic.File is not null)
+                .GroupBy(diagnostic => diagnostic.File!, StringComparer.Ordinal)
+                .Select(group => (JsonNode)new JsonObject { ["of"] = group.Key, ["count"] = group.Sum(diagnostic => diagnostic.Count) })]),
+            ["unparsed"] = new JsonArray([.. (Unparsed ?? []).Select(line => (JsonNode?)line)]),
+        };
+
+        JsonObject? OneOf(Diagnostic? diagnostic, TestFailure? failure)
+            => diagnostic is not null
+                ? new JsonObject
+                {
+                    ["kind"] = "diagnostic",
+                    ["tool"] = diagnostic.Tool,
+                    ["code"] = diagnostic.Code,
+                    ["severity"] = diagnostic.Severity,
+                    ["message"] = FirstLine(diagnostic.Message),
+                    ["file"] = diagnostic.File,
+                    ["line"] = diagnostic.Line,
+                    ["column"] = diagnostic.Column,
+                    ["count"] = diagnostic.Count,
+                    ["log"] = LogOf(diagnostic),
+                    ["stack"] = Rendered(diagnostic.Stack),
+                    ["said"] = Said(diagnostic),
+                }
+                : failure is not null
+                    ? new JsonObject
+                    {
+                        ["kind"] = "failure",
+                        ["framework"] = failure.Framework,
+                        ["id"] = failure.Id,
+                        ["message"] = FirstLine(failure.Message),
+                        ["file"] = failure.File,
+                        ["line"] = failure.Line,
+                        ["outcome"] = failure.Outcome,
+                        ["stack"] = Rendered(failure.Exception?.Stack ?? failure.Stack),
+                        ["said"] = FirstSaid(),
+                    }
+                    : null;
+    }
+
+    /// <summary>The digest as one JSON document, whole: every diagnostic and failure it holds, fully, with its counts - the ledger's <c>--json</c> and the GUI's.</summary>
+    public JsonObject Document()
+        => new()
+        {
+            ["errors"] = Errors,
+            ["warnings"] = Warnings,
+            ["notes"] = Notes,
+            ["failed"] = Failed,
+            ["errored"] = Errored,
+            ["timedOut"] = TimedOut,
+            ["crashed"] = Crashed,
+            ["diagnostics"] = new JsonArray([.. Diagnostics.Select(diagnostic => (JsonNode)new JsonObject
+            {
+                ["tool"] = diagnostic.Tool,
+                ["severity"] = diagnostic.Severity,
+                ["code"] = diagnostic.Code,
+                ["message"] = diagnostic.Message,
+                ["file"] = diagnostic.File,
+                ["line"] = diagnostic.Line,
+                ["column"] = diagnostic.Column,
+                ["endLine"] = diagnostic.EndLine,
+                ["endColumn"] = diagnostic.EndColumn,
+                ["symbol"] = diagnostic.Symbol,
+                ["project"] = diagnostic.Project,
+                ["count"] = diagnostic.Count,
+                ["stack"] = Rendered(diagnostic.Stack),
+                ["log"] = LogOf(diagnostic),
+            })]),
+            ["failures"] = new JsonArray([.. Failures.Select(failure => (JsonNode)new JsonObject
+            {
+                ["framework"] = failure.Framework,
+                ["id"] = failure.Id,
+                ["name"] = failure.Name,
+                ["class"] = failure.Class,
+                ["method"] = failure.Method,
+                ["message"] = failure.Message,
+                ["expected"] = failure.Expected,
+                ["actual"] = failure.Actual,
+                ["file"] = failure.File,
+                ["line"] = failure.Line,
+                ["outcome"] = failure.Outcome,
+                ["duration"] = failure.Duration,
+                ["stack"] = Rendered(failure.Exception?.Stack ?? failure.Stack),
+                ["exception"] = failure.Exception is { } thrown
+                    ? new JsonObject
+                    {
+                        ["type"] = thrown.Type,
+                        ["message"] = thrown.Message,
+                        ["stack"] = Rendered(thrown.Stack),
+                        ["causedBy"] = new JsonArray([.. thrown.CausedBy.Select(cause => (JsonNode)new JsonObject
+                        {
+                            ["type"] = cause.Type,
+                            ["message"] = cause.Message,
+                            ["stack"] = Rendered(cause.Stack),
+                        })]),
+                    }
+                    : null,
+            })]),
+            ["unparsed"] = new JsonArray([.. (Unparsed ?? []).Select(line => (JsonNode?)line)]),
+        };
+
+    /// <summary>A diagnostic said as one line: its tool, its code, its place and its message's first line.</summary>
+    private static string Said(Diagnostic diagnostic)
+        => $"{diagnostic.Tool}{(diagnostic.Code is { } code ? $" {code}" : string.Empty)}"
+            + (diagnostic.File is { } file
+                ? $" {file}{(diagnostic.Line is { } line ? $"({line.ToString(CultureInfo.InvariantCulture)}{(diagnostic.Column is { } column ? $",{column.ToString(CultureInfo.InvariantCulture)}" : string.Empty)})" : string.Empty)}"
+                : string.Empty)
+            + $": {FirstLine(diagnostic.Message)}"
+            + (diagnostic.Count > 1 ? $" (printed {diagnostic.Count.ToString(CultureInfo.InvariantCulture)} times)" : string.Empty);
+
+    /// <summary>The first line of a message, trimmed: the line a one-line saying says.</summary>
+    private static string? FirstLine(string? message)
+        => message?.Split('\n').Select(part => part.Trim()).FirstOrDefault(part => part.Length > 0);
+
+    /// <summary>A diagnostic's log range, as the schema's list of whole numbers says it.</summary>
+    private static JsonArray? LogOf(Diagnostic diagnostic)
+        => diagnostic.Log is { } log ? new JsonArray(log.From, log.To) : null;
+
+    /// <summary>
+    /// A stack as a model reads it: every frame inside the tree, the one frame on each side where it crosses out of
+    /// it, and a line for each run of frames left out - which module or package held them, where the frames name one.
+    /// </summary>
+    private static JsonArray Rendered(IReadOnlyList<StackFrame>? stack)
+    {
+        var lines = new JsonArray();
+        var run = new List<StackFrame>();
+
+        foreach (var frame in stack ?? [])
+        {
+            if (frame.InTree)
+            {
+                Flush();
+                lines.Add(frame.Text.Trim());
+            }
+            else
+            {
+                run.Add(frame);
+            }
+        }
+
+        Flush();
+        return lines;
+
+        void Flush()
+        {
+            if (run.Count == 0)
+            {
+                return;
+            }
+
+            if (run.Count <= 2)
+            {
+                foreach (var frame in run)
+                {
+                    lines.Add(frame.Text.Trim());
+                }
+            }
+            else
+            {
+                lines.Add(run[0].Text.Trim());
+                lines.Add($"... {(run.Count - 2).ToString(CultureInfo.InvariantCulture)} frames in {run.FirstOrDefault(frame => frame.Module is not null)?.Module ?? "outside the tree"}");
+                lines.Add(run[^1].Text.Trim());
+            }
+
+            run.Clear();
+        }
     }
 }

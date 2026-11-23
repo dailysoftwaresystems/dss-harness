@@ -38,6 +38,30 @@ public sealed class BuildServiceTests
     }
 
     /// <summary>
+    /// A failing build's log is digested by the parsers its toolchain chose - an MSVC build's error read by the MSVC
+    /// form, with the first error in the order the compiler met it - and the leg's line carries it beside the units
+    /// and the tail.
+    /// </summary>
+    [Fact]
+    public async Task AFailingBuildsLog_IsDigestedByTheParsersItsToolchainChose()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (_, factory) = await TrackedWithFactoryAsync(temp, cancellationToken);
+        var service = Service(factory, exitCode: 1, phases: new Printing(1, "src/main.cpp(5): error C2065: 'x': undeclared identifier\n"));
+
+        var result = await service.BuildAsync(Config(), Request(temp, [App]), cancellationToken);
+
+        Assert.NotEqual(LegVerdict.Passed, result.Verdict.Verdict);
+
+        var first = result.Digest!.First!;
+
+        Assert.Equal(("msvc", "error", "C2065", "src/main.cpp", 5), (first.Tool, first.Severity, first.Code, first.File, first.Line));
+        Assert.Equal(1, result.Digest.Errors);
+        Assert.Equal(result.Digest, result.Line(Leg, false, TimeSpan.Zero).Digest);
+    }
+
+    /// <summary>
     /// A build whose inputs cannot be watched runs no phase: the refusal leaves before configure, saying why in the
     /// words a leg ends unmeasured with, and the build writes no record of itself - one would say its directory was
     /// built from a tree no phase of it read. The same build runs both, and records itself, where the watch starts.
@@ -2987,6 +3011,22 @@ public sealed class BuildServiceTests
     {
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new ProcessResult(exitCode, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>Every phase prints <paramref name="output"/> and exits as told: a failing phase whose log says why.</summary>
+    private sealed class Printing(int exitCode, string output) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            foreach (var line in output.TrimEnd('\n').Split('\n'))
+            {
+                request.OnOutputLine?.Invoke(line.TrimEnd('\r'));
+            }
+
+            return Task.FromResult(new ProcessResult(exitCode, output, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
 
         public string? FindExecutable(string command) => command;
     }

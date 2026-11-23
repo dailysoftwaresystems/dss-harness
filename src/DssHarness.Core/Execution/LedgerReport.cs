@@ -101,6 +101,9 @@ public sealed record LedgerLine(
     /// <summary>The units the leg's build failed to build, as <see cref="LegEntry.FailedUnits"/> says.</summary>
     public Build.FailedUnits? FailedUnits { get; init; }
 
+    /// <summary>What the leg's failing phase digested to, as <see cref="LegEntry.Digest"/> says: the typed errors, whole.</summary>
+    public ResultDigest? Digest { get; init; }
+
     /// <summary>Each mutation arm the leg was asked about, as <see cref="LegEntry.Arms"/> says.</summary>
     public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
 
@@ -403,6 +406,7 @@ public sealed class LedgerReport
                     KeptOutputs = entry.KeptOutputs,
                     KeptOnFailure = entry.KeptOnFailure,
                     FailedUnits = entry.FailedUnits,
+                    Digest = entry.Digest,
                     Arms = entry.Arms,
                     Tree = entry.Tree,
                     PendingSweep = entry.PendingSweep,
@@ -489,9 +493,28 @@ public sealed class LedgerReport
 
         rows.AddRange(RenderArms());
         rows.AddRange(RenderTimings());
+        rows.AddRange(RenderFirstErrors());
         rows.AddRange(RenderFailedUnits());
         rows.AddRange(RenderTails());
         rows.AddRange(RenderKeptOnFailure());
+
+        return rows;
+    }
+
+    /// <summary>
+    /// The first error of each red leg that holds one, as a block below the table: one line a leg, under its verdict -
+    /// the place a reader starts, before the units, the tails or any log. Nothing where the leg digested nothing, for
+    /// a verdict that failed without a tool's saying why is said by its detail alone.
+    /// </summary>
+    private IReadOnlyList<string> RenderFirstErrors()
+    {
+        var rows = new List<string>();
+
+        foreach (var line in Lines.Where(line => line.Digest?.FirstSaid() is not null))
+        {
+            rows.Add(string.Empty);
+            rows.Add($"{line.Leg}: first error: {line.Digest!.FirstSaid()}");
+        }
 
         return rows;
     }
@@ -849,6 +872,10 @@ public sealed class LedgerReport
                 // Only for a leg that has one: a phase of its own did not pass.
                 LogTail = line.LogTail.Count > 0 ? line.LogTail : null,
                 line.TailPhase,
+
+                // The digest of the phase that did not pass, whole and typed, where one was read - the errors a model
+                // reads rendered, and everything kept for a reader that asks.
+                digest = line.Digest?.Document(),
 
                 // Only where CMake named the compilers it configured the leg's build with.
                 Compilers = line.Compilers.Count > 0

@@ -236,6 +236,86 @@ public sealed class ResultDigestTests
         Assert.Equal("System.ArgumentException", attempt.Exception.CausedBy[0].Type);
     }
 
+    /// <summary>
+    /// The parsers a phase's log is read by are chosen: an MSVC build's by its toolchain, a test's by its runner, and
+    /// a configured matcher everywhere - so a log no rule names is left as it stands, and a matcher's findings fold
+    /// with the built-ins'.
+    /// </summary>
+    [Fact]
+    public void APhaseLog_IsDigestedByTheParsersChosenForIt_MatchersAmongThem()
+    {
+        var msvc = PhaseParsers.ForBuild("msvc", []);
+        var gcc = PhaseParsers.ForBuild("gcc", []);
+        var none = PhaseParsers.ForTests("tools/run-tests", []);
+        var ctest = PhaseParsers.ForTests("ctest", []);
+
+        Assert.Contains(msvc, parser => parser.Name == "msvc");
+        Assert.Contains(gcc, parser => parser.Name == "gcc");
+        Assert.DoesNotContain(gcc, parser => parser.Name == "msvc");
+        Assert.Empty(none);
+        Assert.Contains(ctest, parser => parser.Name == "ctest-console");
+
+        var mine = new ProblemMatcher(
+            "mytool",
+            @"^(?<file>[^:]+):(?<line>\d+): (?<message>ERROR .+)$",
+            Severity: "error",
+            File: "file",
+            Line: "line",
+            Message: "message");
+        mine.Compile();
+
+        var digest = PhaseParsers.DigestOf(
+            ["mytool.cpp:12: ERROR the frobnicator jammed", "unrelated line"],
+            PhaseParsers.ForBuild(null, [mine]));
+
+        var first = digest!.First!;
+
+        Assert.Equal(("mytool", "error", "mytool.cpp", 12), (first.Tool, first.Severity, first.File, first.Line));
+        Assert.Equal("ERROR the frobnicator jammed", first.Message);
+        Assert.Empty(digest?.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// Every frame of every stack is marked by whether its file is inside the tree: a rooted file under it, a relative
+    /// one, and a rooted file elsewhere - the one place a frame is marked, so every reader reads one.
+    /// </summary>
+    [Fact]
+    public void EveryFrameOfEveryStack_IsMarkedByWhetherItsFileIsInTheTree()
+    {
+        var root = Path.GetFullPath(Path.Combine("x", "tree"));
+        var digest = ResultDigest.Of(
+            [new Diagnostic("gcc", "error", null, "jammed", "src/main.c", 3, 9, Stack:
+            [
+                new StackFrame("in src/main.c", "src/main.c", 3),
+                new StackFrame("in /usr/include/stdio.h", Path.Combine(Path.GetPathRoot(root) ?? "/", "usr", "include", "stdio.h"), 12),
+                new StackFrame("elsewhere", Path.Combine(Path.GetPathRoot(root) ?? "/", "elsewhere", "out.c"), 1),
+            ])],
+            [],
+            []);
+
+        var marked = digest.WithInTree(root);
+
+        Assert.Equal([true, false, false], marked.Diagnostics[0].Stack!.Select(frame => frame.InTree).ToList());
+    }
+
+    /// <summary>The digest as one JSON document keeps everything: every diagnostic and failure whole, its counts, its unparsed lines.</summary>
+    [Fact]
+    public void TheDocument_KeepsEverythingWhole()
+    {
+        var digest = ResultDigest.Of(
+            [new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Program.cs", 12, 35, Count: 2, Log: (10, 11))],
+            [],
+            ["a stray line"]);
+
+        var document = digest.Document();
+
+        Assert.Equal(1, document["errors"]!.GetValue<int>());
+        Assert.Equal("CS0103", document["diagnostics"]![0]!["code"]!.GetValue<string>());
+        Assert.Equal(2, document["diagnostics"]![0]!["count"]!.GetValue<int>());
+        Assert.Equal([10, 11], document["diagnostics"]![0]!["log"]!.AsArray().Select(line => line!.GetValue<int>()));
+        Assert.Equal(["a stray line"], document["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+    }
+
     private static IReadOnlyList<string> Lines(params string[] lines) => lines;
 
     private sealed class MsBuildParserFixture : IResultParser

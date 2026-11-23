@@ -203,6 +203,49 @@ public sealed class TestServiceTests
         Assert.Equal(["corpus-out/report.json"], result.Entry.KeptOnFailure?.Kept);
     }
 
+    /// <summary>
+    /// Where the invocation named no results, or nothing it named read, the phase's own console is parsed by the
+    /// runner's parsers: a red ctest run's failed list is the digest, typed, with no file ever written.
+    /// </summary>
+    [Fact]
+    public async Task AFailedRunNamingNoResults_IsDigestedFromItsConsole()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+
+        var runner = new LinesRunner(1, "The following tests FAILED:", "  3 - demo_test (Failed)");
+        var result = await Service(factory, runner).RunAsync(
+            Config(),
+            Request(temp, new TestInvocation { Runner = "ctest", Args = [], SuccessPattern = "tests passed" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+
+        var one = Assert.Single(result.Entry.Digest!.Failures);
+
+        Assert.Equal(("ctest", "demo_test", "failed"), (one.Framework, one.Id, one.Outcome));
+        Assert.Null(result.Entry.Digest.First);
+    }
+
+    /// <summary>A runner that prints each of its lines and exits as told, so a phase's log holds what a test decided.</summary>
+    private sealed class LinesRunner(int exitCode, params string[] lines) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            foreach (var line in lines)
+            {
+                request.OnOutputLine?.Invoke(line);
+            }
+
+            return Task.FromResult(new ProcessResult(exitCode, string.Join("\n", lines) + "\n", string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
     /// <summary>A pass keeps nothing: no directory, no line, for there is no evidence to keep.</summary>
     [Fact]
     public async Task APassedInvocation_KeepsNothing()

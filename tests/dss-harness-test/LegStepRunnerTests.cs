@@ -657,24 +657,96 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = LegStepRunner.Output(Result(entries[..3], HarnessExit.CommandFailed, "a leg failed"), arms: false);
 
         Assert.Equal(
-            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"failedUnits":{"tool":"ninja","count":1,"units":[{"source":"src/a.c","step":"CMakeFiles/app.dir/a.c.o"}],"keptGoing":true,"stopsAtFirst":true,"stepsRun":2,"stepsPlanned":3,"said":"1 unit(s) failed to build; ninja went on past them and ran 2 of the 3 steps it had to run: the one it did not run needs one that failed"}}],"runDirectory":"/runs/r"}""",
+            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"failedUnits":{"tool":"ninja","count":1,"units":[{"source":"src/a.c","step":"CMakeFiles/app.dir/a.c.o"}],"keptGoing":true,"stopsAtFirst":true,"stepsRun":2,"stepsPlanned":3,"said":"1 unit(s) failed to build; ninja went on past them and ran 2 of the 3 steps it had to run: the one it did not run needs one that failed"}}],"runDirectory":"/runs/r"}""",
             legs.ToJsonString());
 
         var sweep = LegStepRunner.Output(Result([entries[0], entries[3], entries[4]], LegExit.Survived, "an arm survived") with { RunDirectory = null }, arms: true);
 
         // A sweep's leg red by an arm says the arm alone; one that also failed outside every arm says both.
         Assert.Equal(
-            """[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"arm":null},{"leg":"swept","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"arm":"A-ONE"},"""
-                + """{"leg":"both","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"arm":"A-THREE"},{"leg":"both","verdict":"failed","phase":"build","detail":"the clean build failed","tail":[],"arm":null}]""",
+            """[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"arm":null},{"leg":"swept","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"arm":"A-ONE"},"""
+                + """{"leg":"both","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"arm":"A-THREE"},{"leg":"both","verdict":"failed","phase":"build","detail":"the clean build failed","tail":[],"digest":null,"arm":null}]""",
             sweep["red"]!.ToJsonString());
         Assert.Null(sweep["runDirectory"]);
 
         Assert.True(LegStepRunner.Output(Result([entries[2]], HarnessExit.Success, "passed"), arms: false)["passed"]!.GetValue<bool>());
         Assert.False(LegStepRunner.Output(Result([], HarnessExit.Success, "nothing"), arms: false)["passed"]!.GetValue<bool>());
-
         // Each holds to its type's schema, as the run's records validate it.
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("build")!.Output!)!, legs));
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("check-mutations")!.Output!)!, sweep));
+    }
+
+    /// <summary>
+    /// A red entry whose leg holds a digest renders it for a model: the first error said whole with its stack rendered
+    /// to its frames in the tree, the next distinct to four as one line each, the rest counted by code and by file -
+    /// and the tail then holds only the lines no parser held, for a model sees either the typed errors or the raw
+    /// lines, never both repeated.
+    /// </summary>
+    [Fact]
+    public void ARedEntryHoldingADigest_RendersItForAModel_AndItsTailHoldsOnlyTheUnparsed()
+    {
+        var digest = ResultDigest.Of(
+            [
+                new Diagnostic(
+                    "msbuild",
+                    "error",
+                    "CS0103",
+                    "The name 'x' does not exist in the current context",
+                    "src/Program.cs",
+                    12,
+                    35,
+                    Project: "src/App.csproj",
+                    Stack:
+                    [
+                        new StackFrame("   at App.Program.Main() in src/Program.cs:line 5", "src/Program.cs", 5, Symbol: "App.Program.Main", InTree: true),
+                        new StackFrame("   at System.Lazy.SetValue()", Module: "System.Private.CoreLib"),
+                        new StackFrame("   at System.Lazy.CreateValue()", Module: "System.Private.CoreLib"),
+                        new StackFrame("   at System.Lazy.Create()", Module: "System.Private.CoreLib"),
+                        new StackFrame("   at App.Program.Run() in src/Program.cs:line 20", "src/Program.cs", 20, Symbol: "App.Program.Run", InTree: true),
+                    ]),
+                new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Program.cs", 12, 35, Project: "src/App.iOS.csproj"),
+                new Diagnostic("msbuild", "error", "CS1002", "; expected", "src/Other.cs", 40, 1),
+            ],
+            [],
+            ["a stray line nobody parsed"]);
+
+        var legs = LegStepRunner.Output(
+            Result([new LegEntry { Leg = "broken", Verdict = LegVerdict.Failed, Detail = "build failed", TailPhase = "build", LogTail = ["error: x"], Digest = digest }], HarnessExit.CommandFailed, "a leg failed"),
+            arms: false);
+
+        var red = legs["red"]!.AsArray().Single()!.AsObject();
+
+        Assert.Equal(["a stray line nobody parsed"], red["tail"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        var model = red["digest"]!.AsObject();
+
+        Assert.Equal(2, model["errors"]!.GetValue<int>());
+
+        var first = red["digest"]!["first"]!.AsObject();
+
+        Assert.Equal("msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context (printed 2 times)", first["said"]!.GetValue<string>());
+        Assert.Equal(2, first["count"]!.GetValue<int>());
+
+        // The stack as a model reads it: every frame in the tree, the crossing frame on each side, and the run between left out.
+        Assert.Equal(
+            [
+                "at App.Program.Main() in src/Program.cs:line 5",
+                "at System.Lazy.SetValue()",
+                "... 1 frames in System.Private.CoreLib",
+                "at System.Lazy.Create()",
+                "at App.Program.Run() in src/Program.cs:line 20",
+            ],
+            first["stack"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        var more = red["digest"]!["diagnostics"]!.AsArray().Single()!.AsObject();
+
+        Assert.Equal("msbuild CS1002 src/Other.cs(40,1): ; expected", more["said"]!.GetValue<string>());
+
+        Assert.Equal(
+            [("CS0103", 2), ("CS1002", 1)],
+            red["digest"]!["byCode"]!.AsArray().Select(entry => (entry!["of"]!.GetValue<string>(), entry["count"]!.GetValue<int>())));
+
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("build")!.Output!)!, legs));
     }
 
     /// <summary>Makes agent a1 of the run as its create-agent step does, and answers the run's layout and the agent's worktree.</summary>

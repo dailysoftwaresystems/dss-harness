@@ -158,10 +158,13 @@ public static class FlowChecks
 
         if (red.Count > 0)
         {
-            // A red leg whose build its own tool failed says what its line said of the units, which its entry names each of.
+            // A red leg whose build its own tool failed says what its line said of the units, which its entry names each of,
+            // and whose digest holds an error says it - the first, where the tool met it, so a reader starts there and not
+            // at the tail.
             return red.Select(entry => $"{Named(check)}: {Text(entry, "leg") ?? Text(entry, "name")} {Text(entry, "verdict") ?? Text(entry, "conclusion") ?? "red"}"
                 + (Text(entry, "phase") is { } phase ? $" at {phase}" : string.Empty)
-                + (Text((entry as JsonObject)?["failedUnits"], "said") is { } units ? $" - {units}" : string.Empty));
+                + (Text((entry as JsonObject)?["failedUnits"], "said") is { } units ? $" - {units}" : string.Empty)
+                + (Text((entry as JsonObject)?["digest"]?["first"], "said") is { } first ? $" - {first}" : string.Empty));
         }
 
         var findings = Each(check.Output, "findings").Count();

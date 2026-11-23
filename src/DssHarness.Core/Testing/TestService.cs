@@ -382,10 +382,27 @@ public sealed class TestService(
 
         // What the invocation named as its structured results, read where they are - evidence beside the verdict, as
         // the keeps are, but never copied: what a file holds typed already is the digest, and nothing searches a log
-        // for it. A file naming nothing, or no form owning it, is said inside the digest, not refused.
+        // for it. A file naming nothing, or no form owning it, is said inside the digest, not refused. Where nothing
+        // was named or nothing read, the phase's own log is parsed by the runner's parsers, for a red run's console
+        // says what its file forgot to.
         var digest = reached.Verdict == LegVerdict.Passed
             ? null
-            : TestResults.Read(_fileSystem, invocation.Results, paths, request.BuildDirectory, mask: null, cancellationToken);
+            : TestResults.Read(_fileSystem, invocation.Results, paths, request.BuildDirectory, mask: null, cancellationToken)
+                ?? LogDigest();
+
+        ResultDigest? LogDigest()
+        {
+            try
+            {
+                return PhaseParsers
+                    .DigestOf([.. phase.Output.Lines()], PhaseParsers.ForTests(command.Program, config.Results.Matchers))
+                    ?.WithInTree(request.TreeRoot);
+            }
+            catch (PhaseOutputUnreadException)
+            {
+                return null;
+            }
+        }
 
         var entry = new LegEntry
         {

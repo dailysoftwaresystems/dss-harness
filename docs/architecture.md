@@ -9695,6 +9695,20 @@ arguments the shipped runners take for these files where they take them: `ctest 
 straight into the build directory, which exists, and each named under `results` to match
 (`Configuration\DefaultConfigFactory.cs`).
 
+Where a digest goes (`LegStepRunner.Output`, `Execution\LedgerReport.cs`, `Orchestration\Flow\FlowChecks.cs`): every
+red entry of a leg step's output carries one, in `digest`, said for a model - the first error whole with its stack
+rendered to the frames inside the tree (the crossing frame on each side, a line for each run left out, which module
+held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the rest
+counted by code and by file, the lines no parser held - and where the digest holds typed errors the entry's tail
+holds only those lines, for a model reads either the typed errors or the raw lines, never both repeated. The cut is a
+rule of rendering, never of the record: the ledger's `--json` carries the whole digest typed
+(`ResultDigest.Document`), the text ledger says each red leg's first error under its verdict, before the units and
+the tails, and `{run.red}` says it on each red line. A build's failing phase is digested by the parsers its
+toolchain chose and a test's by its runner's, with the configured matchers everywhere
+(`Results\PhaseParsers.cs`, the one owner of the choice; a test's structured results files are read first, and its
+console only where they gave nothing); every frame is marked by whether its file is inside the tree where the digest
+is made (`ResultDigest.WithInTree`, the one place a frame is marked).
+
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.

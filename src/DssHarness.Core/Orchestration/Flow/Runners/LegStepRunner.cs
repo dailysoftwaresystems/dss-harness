@@ -196,14 +196,14 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
             foreach (var arm in redArms)
             {
-                red.Add(Red(line.Leg, arm.Verdict, phase: null, arm.Detail, [], arm.Arm, failedUnits: null));
+                red.Add(Red(line.Leg, arm.Verdict, phase: null, arm.Detail, [], arm.Arm, failedUnits: null, digest: null));
             }
 
             // The leg's own entry, where its verdict is its own - it failed outside every arm - and not one of its arms':
             // a sweep's leg is red by the worst of its own verdicts and its arms', and neither hides the other.
             if (!redArms.Any(arm => arm.Verdict == line.Verdict))
             {
-                red.Add(Red(line.Leg, line.Verdict, line.TailPhase, line.Detail, line.LogTail, arm: null, line.FailedUnits));
+                red.Add(Red(line.Leg, line.Verdict, line.TailPhase, line.Detail, line.LogTail, arm: null, line.FailedUnits, line.Digest));
             }
         }
 
@@ -216,7 +216,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             ["runDirectory"] = result.RunDirectory,
         };
 
-        JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm, FailedUnits? failedUnits)
+        JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm, FailedUnits? failedUnits, ResultDigest? digest)
         {
             var entry = new JsonObject
             {
@@ -224,7 +224,8 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
                 ["verdict"] = Verdicts.Display(verdict),
                 ["phase"] = phase,
                 ["detail"] = detail,
-                ["tail"] = new JsonArray([.. tail.Select(line => (JsonNode?)line)]),
+                ["tail"] = new JsonArray([.. (digest is { Diagnostics: { Count: > 0 } } or { Failures: { Count: > 0 } } ? digest.Unparsed ?? [] : tail).Select(line => (JsonNode?)line)]),
+                ["digest"] = digest?.ForAModel(),
             };
 
             // A sweep's entry names its arm, or none where the leg failed outside every arm; no other step's has the key.
