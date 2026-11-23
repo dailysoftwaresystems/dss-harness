@@ -162,7 +162,7 @@ public static class FlowRunReport
 
             foreach (var one in array)
             {
-                lines.Add($"  {Said(one)}");
+                lines.Add(name == "errors" ? $"  {ErrorSaid(one!)}" : $"  {Said(one)}");
             }
         }
 
@@ -303,7 +303,7 @@ public static class FlowRunReport
 
             foreach (var one in array)
             {
-                lines.Add($"- {Said(one)}");
+                lines.Add(member == "errors" ? $"- {ErrorSaid(one!)}" : $"- {Said(one)}");
             }
         }
 
@@ -369,6 +369,14 @@ public static class FlowRunReport
         var widths = head.Select((_, at) => Math.Max(head[at].Length, rows.Count == 0 ? 0 : rows.Max(row => row[at].Length))).ToList();
         return string.Join("\n", [string.Join("  ", head.Select((cell, at) => cell.PadRight(widths[at]))), .. rows.Select(row => string.Join("  ", row.Select((cell, at) => cell.PadRight(widths[at]))))]);
     }
+
+    /// <summary>One failed attempt said as a person reads it: the step, the attempt, how it ended, and what handled the step.</summary>
+    private static string ErrorSaid(JsonNode error)
+        => $"{error["step"]?.GetValue<string>()}, attempt {Said(error["attempt"])}"
+            + (error["exit"] is { } exit ? $", exit {Said(exit)}" : string.Empty)
+            + (error["error"] is { } said ? $": {said.GetValue<string>()}" : string.Empty)
+            + (error["handledBy"] is { } by ? $" (handled by {by.GetValue<string>()})" : string.Empty)
+            + (error["question"] is { } asked ? $", asked as {asked.GetValue<string>()}" : string.Empty);
 
     /// <summary>How a value of the document is said as one line of text, whatever it holds.</summary>
     private static string Said(JsonNode? node)

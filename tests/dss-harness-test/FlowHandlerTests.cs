@@ -1708,8 +1708,9 @@ public sealed class FlowHandlerRecordsTests
         var left = FlowReports.Write(harness.FileSystem, layout, flow, null, "done; 1 failure was handled: build, by fix", 0, clock.GetUtcNow());
         var report = harness.FileSystem.ReadAllText(layout.ReportFile);
 
-        Assert.Contains("## Failures a handler took", report, StringComparison.Ordinal);
-        Assert.Contains("- build, by fix", report, StringComparison.Ordinal);
+        Assert.Contains("## Errors", report, StringComparison.Ordinal);
+        Assert.Contains("- build, attempt 1", report, StringComparison.Ordinal);
+        Assert.Contains("(handled by fix)", report, StringComparison.Ordinal);
         Assert.Empty(left);
     }
 

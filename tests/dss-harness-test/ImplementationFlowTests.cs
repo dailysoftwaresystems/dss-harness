@@ -6325,9 +6325,9 @@ public sealed class ImplementationFlowTests
             Assert.True(spent.Usd > 0, $"{spent.Usd}");
             Assert.Null(spent.Uncounted);
 
-            var report = File.ReadAllLines(kit.RunOf().ReportFile).Single(line => line.Contains(" USD", StringComparison.Ordinal));
+            var report = File.ReadAllLines(kit.RunOf().ReportFile).Single(line => line.StartsWith("- budget:", StringComparison.Ordinal));
 
-            Assert.StartsWith("- ", report, StringComparison.Ordinal);
+            Assert.Contains(" USD", report, StringComparison.Ordinal);
             Assert.DoesNotContain("not known", report, StringComparison.Ordinal);
 
             // With the fallback's prices taken out, the run under the budget is refused before it starts, naming the model
