@@ -1048,7 +1048,7 @@ public sealed class FlowService(
             return CommandOutcome.Usage($"--steps names {string.Join(", ", unknown.Select(instance => $"'{instance}'"))}, which run '{run}' does not hold");
         }
 
-        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config, top), _store.ReadDefinition(layout), by, wanted));
+        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config, top), by, wanted));
 
         if (json)
         {
@@ -1063,18 +1063,19 @@ public sealed class FlowService(
     /// <summary>
     /// A run's records as they stand, for its report - the one place the read verb, the analysis and the session's end
     /// read them: its state, questions, updates, events (a torn last line said in its notes), its item agents' closure
-    /// ledgers, the issues it owed a later round and its frozen definition, with the thresholds every report of the run
-    /// is computed by.
+    /// ledgers, the issues it owed a later round and its frozen definition - read as the definition or why it cannot be
+    /// read, so the report says which it was rather than the read refusing the whole report - with the thresholds every
+    /// report of the run is computed by.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
     /// <param name="flow">The run's state.</param>
     /// <param name="thresholds">The thresholds its signals are computed by (<see cref="FlowReportThresholds.Of"/>).</param>
-    /// <param name="definition">The definition the run ran, as read; null where it does not read.</param>
     /// <param name="by">What the dollars are grouped by; null for the model.</param>
     /// <param name="steps">The instances whose rows alone the steps table keeps; null for every one.</param>
-    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowReportThresholds thresholds, WorkflowDefinition? definition, string? by = null, IReadOnlySet<string>? steps = null)
+    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowReportThresholds thresholds, string? by = null, IReadOnlySet<string>? steps = null)
     {
         var (events, torn) = FlowEventLog.Read(_fileSystem, layout.EventsFile);
+        var (definition, why) = _store.ReadDefinitionOrWhy(layout);
 
         return new FlowRunReportSource(
             layout,
@@ -1088,7 +1089,8 @@ public sealed class FlowService(
             EventsTorn: torn is not null,
             By: by,
             Steps: steps,
-            NextRound: _store.ReadNextRound(layout));
+            NextRound: _store.ReadNextRound(layout),
+            DefinitionWhy: why);
     }
 
     /// <inheritdoc/>
@@ -1118,14 +1120,16 @@ public sealed class FlowService(
             return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to analyse");
         }
 
-        var definition = _store.ReadDefinition(layout);
+        var (definition, definitionWhy) = _store.ReadDefinitionOrWhy(layout);
 
         if (definition is null)
         {
-            return CommandOutcome.Refused($"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to analyse");
+            return CommandOutcome.Refused(definitionWhy is { } why
+                ? $"'{layout.DefinitionFile}' does not read: {why}, so run '{run}' holds no definition to analyse"
+                : $"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to analyse");
         }
 
-        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config), definition));
+        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config)));
         var said = report.ToJsonString(ReportJson.Options);
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
 
@@ -1794,7 +1798,7 @@ public sealed class FlowService(
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
 
             FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
-            var source = SourceOf(layout, flow, FlowReportThresholds.Of(context.Config), _store.ReadDefinition(layout));
+            var source = SourceOf(layout, flow, FlowReportThresholds.Of(context.Config));
             var questions = source.Questions;
             var exit = ExitOf(end, flow);
             var left = FlowReports.Write(_fileSystem, source, end.Summary, exit, _clock.GetUtcNow());

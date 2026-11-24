@@ -530,6 +530,20 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         return Read<WorkflowDefinition>(orchestrator.DefinitionFile, DefinitionKind, _ => null);
     }
 
+    /// <summary>
+    /// The orchestrator entry as it ran, frozen, or why it cannot be read: the entry null and the why set where the file
+    /// is there and does not read, both null where it is not there - for a reader that answers anyway and says so in its
+    /// own words, where <see cref="ReadDefinition"/> refuses the whole read.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    public (WorkflowDefinition? Definition, string? Why) ReadDefinitionOrWhy(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+
+        var (definition, why, _) = ReadOrWhy(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => JsonStateFile.Read<WorkflowDefinition>(_fileSystem, orchestrator.DefinitionFile));
+        return (definition, why);
+    }
+
     /// <summary>Writes the orchestrator entry as it ran, frozen.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <param name="definition">The definition, as it ran.</param>
@@ -1063,36 +1077,47 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     private T? Read<T>(string path, string what, Func<T, string?> problemOf, Func<T?> read)
         where T : class
     {
+        var (record, why, asOne) = ReadOrWhy(path, what, problemOf, read);
+
+        return why is null ? record
+            : asOne ? throw Unreadable(path, what, why)
+            : throw new HarnessException(HarnessExit.CommandFailed, $"'{path}', {what}, could not be read: {why}. Nothing was changed.");
+    }
+
+    /// <summary>
+    /// A record as <paramref name="read"/> reads it, with why it cannot be where it cannot: the record null where none
+    /// was read and the why null where one was or the file is not there, and the third saying which trouble the why
+    /// names - the record does not read as one, or this process could not read it at all. The one reading every record
+    /// of the store is read by, whether its caller refuses the read or answers anyway and says why.
+    /// </summary>
+    private (T? Record, string? Why, bool AsOne) ReadOrWhy<T>(string path, string what, Func<T, string?> problemOf, Func<T?> read)
+        where T : class
+    {
         // A record this process cannot look for is not a record that is not there.
         if (Kind(path, what) == PathKind.None)
         {
-            return null;
+            return (null, null, true);
         }
-
-        T? record;
 
         try
         {
-            record = read();
+            var record = read();
+            return record is null ? (null, "it holds null", true) : problemOf(record) is { } problem ? (null, problem, true) : (record, null, true);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
             // Removed between the look and the read - a run's owner released as a stop watches for it - the record is
             // not there, as one never written is not.
-            return null;
+            return (null, null, true);
         }
         catch (JsonException ex)
         {
-            throw Unreadable(path, what, ex.Message.TrimEnd('.'));
+            return (null, ex.Message.TrimEnd('.'), true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new HarnessException(HarnessExit.CommandFailed, $"'{path}', {what}, could not be read: {ex.Message.TrimEnd('.')}. Nothing was changed.");
+            return (null, ex.Message.TrimEnd('.'), false);
         }
-
-        return record is null ? throw Unreadable(path, what, "it holds null")
-            : problemOf(record) is { } problem ? throw Unreadable(path, what, problem)
-            : record;
     }
 
     /// <summary>

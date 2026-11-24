@@ -3889,7 +3889,8 @@ run's order (the instance order of `flow.json`), every row of a list with an id 
 what it is of), every number in one fixed form (durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word
 of now: a run still going is said so at the time of its last record, marked partial. What the records cannot give is
 said in its `notes` - an events file whose last line was torn (the report is as of the event before it), a definition
-that does not read (no critical path is named). Its sections are the run (its sessions, its wall time, its active
+that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
+critical path is named). Its sections are the run (its sessions, its wall time, its active
 time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
 kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt

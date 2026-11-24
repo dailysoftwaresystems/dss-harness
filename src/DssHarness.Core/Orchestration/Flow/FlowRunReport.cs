@@ -74,6 +74,7 @@ public sealed record FlowReportThresholds(
 /// <param name="By">What the dollars are grouped by: <c>model</c> (where null), <c>provider</c>, <c>step</c>, <c>agent</c> or <c>type</c>.</param>
 /// <param name="Steps">The instances whose rows alone the steps table keeps; null for every one.</param>
 /// <param name="NextRound">The issues the run owed a later round, <c>next-round.json</c>, each with the item that settled it; null where the run owed none.</param>
+/// <param name="DefinitionWhy">Why the definition could not be read, where the file is there and does not read; null where it reads or is not there.</param>
 public sealed record FlowRunReportSource(
     OrchestratorLayout Layout,
     FlowFile Flow,
@@ -86,7 +87,8 @@ public sealed record FlowRunReportSource(
     bool EventsTorn = false,
     string? By = null,
     IReadOnlySet<string>? Steps = null,
-    FlowNextRoundFile? NextRound = null);
+    FlowNextRoundFile? NextRound = null,
+    string? DefinitionWhy = null);
 
 /// <summary>
 /// The report of a run, built from its records alone (<see cref="FlowRunReport.Of"/>): what the run was and how it
@@ -127,7 +129,9 @@ public static class FlowRunReport
 
         if (source.Definition is null)
         {
-            notes.Add($"'{source.Layout.DefinitionFile}' does not read, so the report names no critical path: the steps' dependencies are the definition's");
+            notes.Add(source.DefinitionWhy is { } why
+                ? $"'{source.Layout.DefinitionFile}' does not read: {why} - so the report names no critical path: the steps' dependencies are the definition's"
+                : $"'{source.Layout.DefinitionFile}' is not there, so the report names no critical path: the steps' dependencies are the definition's");
         }
 
         return new JsonObject

@@ -373,10 +373,11 @@ public sealed class FlowRunReportTests
 
     /// <summary>
     /// The report's notes say what its records could not give it: an events file whose last line was torn - the report
-    /// as of the event before it - and a definition that does not read, so no critical path is named.
+    /// as of the event before it - and a definition that is not there, or is there and does not read with why said, so
+    /// no critical path is named.
     /// </summary>
     [Fact]
-    public void TheNotes_SayATornEventsLine_AndADefinitionThatDoesNotRead()
+    public void TheNotes_SayATornEventsLine_AndADefinitionThatIsNotThereOrDoesNotRead()
     {
         var source = Source();
 
@@ -384,9 +385,51 @@ public sealed class FlowRunReportTests
         Assert.Equal(
             [
                 $"the last line of '{source.Layout.EventsFile}' was torn - a writer stopped mid-line - and is not read: the report is as of the event before it",
-                $"'{source.Layout.DefinitionFile}' does not read, so the report names no critical path: the steps' dependencies are the definition's",
+                $"'{source.Layout.DefinitionFile}' is not there, so the report names no critical path: the steps' dependencies are the definition's",
             ],
             FlowRunReport.Of(source with { EventsTorn = true, Definition = null })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
+        Assert.Equal(
+            [$"'{source.Layout.DefinitionFile}' does not read: it holds null - so the report names no critical path: the steps' dependencies are the definition's"],
+            FlowRunReport.Of(source with { Definition = null, DefinitionWhy = "it holds null" })["notes"]!.AsArray().Select(note => note!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A definition that does not read is a note in the report, never a refusal of the whole read: the verb answers exit
+    /// 0 with the report and its note saying why the file does not read - and no critical path - in text, Markdown and
+    /// the one JSON document; the analysis, which needs the definition, is refused naming why it does not read.
+    /// </summary>
+    [Fact]
+    public async Task ADefinitionThatDoesNotRead_IsANoteInTheReport_NeverARefusalOfTheWholeRead()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(kit.Main, kit.Main), "o1");
+        kit.Harness.OrchestrationStore.WriteFlow(layout, Source().Flow with { Run = "o1" });
+
+        // The frozen definition, damaged where the run keeps it: a file that is there and does not read.
+        File.WriteAllText(layout.DefinitionFile, "null");
+
+        var text = await CliRunner.RunAsync([FlowService.ReadReportCommand, "o1", "-C", kit.Main], TestContext.Current.CancellationToken);
+        var markdown = await CliRunner.RunAsync([FlowService.ReadReportCommand, "o1", "--markdown", "-C", kit.Main], TestContext.Current.CancellationToken);
+        var json = await CliRunner.RunAsync([FlowService.ReadReportCommand, "o1", "--json", "-C", kit.Main], TestContext.Current.CancellationToken);
+        var analysed = await CliRunner.RunAsync([FlowService.AnalyzeReportCommand, "o1", "-C", kit.Main], TestContext.Current.CancellationToken);
+
+        var note = $"'{layout.DefinitionFile}' does not read: it holds null - so the report names no critical path: the steps' dependencies are the definition's";
+
+        Assert.Equal(0, text.ExitCode);
+        Assert.Contains("notes:", text.StandardOutput.Replace("\r\n", "\n").Split('\n'));
+        Assert.Contains($"  {note}", text.StandardOutput.Replace("\r\n", "\n").Split('\n'));
+        Assert.Contains($"- {note}", markdown.StandardOutput.Replace("\r\n", "\n").Split('\n'));
+
+        var document = JsonNode.Parse(json.StandardOutput)!.AsObject();
+
+        Assert.Equal(["exitCode", "summary", "report"], document.Select(member => member.Key));
+        Assert.Equal((0, "o1"), (document["exitCode"]!.GetValue<int>(), document["report"]!["run"]!.GetValue<string>()));
+        Assert.Empty(document["report"]!["criticalPath"]!.AsArray());
+        Assert.Equal([note], document["report"]!["notes"]!.AsArray().Select(each => each!.GetValue<string>()));
+
+        Assert.Equal(HarnessExit.Refused, analysed.ExitCode);
+        Assert.Contains($"'{layout.DefinitionFile}' does not read: it holds null, so run 'o1' holds no definition to analyse", analysed.StandardOutput + analysed.StandardError, StringComparison.Ordinal);
     }
 
     /// <summary>
