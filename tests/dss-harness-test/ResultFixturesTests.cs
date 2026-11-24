@@ -15,14 +15,13 @@ namespace DssHarness.Tests;
 /// says what a person reads off the output: the counts, the first error and its place, the failures' names, the first
 /// stack's frames and which of them are the project's, the causes; it is asserted first. Its <c>digest.json</c>, the whole
 /// document, pins everything else against drift, and only it is rewritten when the regenerate switch is set. The bytes a
-/// model is handed for every fixture are pinned in all.
+/// model is handed for every fixture are pinned in all. Each digest is read against the tree its tool ran in as the
+/// expectation names it - its root, holding exactly the files the expectation calls the tree's - so whether a frame is
+/// the tree's is the same answer on every machine and every system, as the tool's own paths are.
 /// </summary>
 public sealed class ResultFixturesTests
 {
     private static string Root => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "results");
-
-    /// <summary>The tree each fixture's places are read against: this repository's, which holds none of the files the fixtures' tools named.</summary>
-    private static DigestTree Tree => new(Prose.RepositoryRoot(), null, new DssHarness.Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create()));
 
     /// <summary>The bytes every fixture's digest said for a model costs, in all: pinned, so a change that grows or shrinks them is seen.</summary>
     private const int HeldBytes = 44_999;
@@ -86,12 +85,13 @@ public sealed class ResultFixturesTests
 
         if (expect["stack"] is JsonObject stack)
         {
+            // The frames the tool printed, said as it printed them, and which of them the digest placed in the tree.
             var frames = StackOf(digest, stack["of"]?.GetValue<string>());
-            var root = expect["root"]!.GetValue<string>();
+            var placed = StackOf(Placed(fixture, expect, digest), stack["of"]?.GetValue<string>());
 
             Assert.Equal(
                 $"{stack["frames"]!.GetValue<int>()} frames; in the tree: {string.Join(" | ", stack["inTree"]!.AsArray().Select(frame => frame!.GetValue<string>()))}",
-                $"{frames.Count} frames; in the tree: {string.Join(" | ", frames.Where(frame => frame.File is { } file && PlatformPaths.IsInsideAsWritten(root, file)).Select(frame => $"{frame.File}:{Text(frame.Line)}"))}");
+                $"{frames.Count} frames; in the tree: {string.Join(" | ", frames.Where((_, at) => placed[at].InTree).Select(frame => $"{frame.File}:{Text(frame.Line)}"))}");
         }
 
         if (expect["causes"] is JsonArray causes)
@@ -109,8 +109,8 @@ public sealed class ResultFixturesTests
     [MemberData(nameof(Each))]
     public void EachToolsOutput_GivesItsStoredDigest(string fixture)
     {
-        var digest = Read(fixture, Expectation(fixture));
-        var document = digest!.WithInTree(Tree).Document().ToJsonString();
+        var expect = Expectation(fixture);
+        var document = Placed(fixture, expect, Read(fixture, expect)!).Document().ToJsonString();
         var stored = Path.Combine(Root, fixture, "digest.json");
 
         if (Environment.GetEnvironmentVariable("DSSHARNESS_REGENERATE_RESULTS") is not null)
@@ -137,9 +137,9 @@ public sealed class ResultFixturesTests
 
         foreach (var fixture in Fixtures)
         {
-            var digest = Read(fixture, Expectation(fixture));
+            var expect = Expectation(fixture);
             var lines = File.ReadAllLines(Output(fixture));
-            var held = Encoding.UTF8.GetByteCount(digest!.WithInTree(Tree).ForAModel().ToJsonString());
+            var held = Encoding.UTF8.GetByteCount(Placed(fixture, expect, Read(fixture, expect)!).ForAModel().ToJsonString());
 
             if (lines.Length > 50)
             {
@@ -207,6 +207,27 @@ public sealed class ResultFixturesTests
     }
 
     /// <summary>
+    /// <paramref name="digest"/> with every place read against the tree its tool ran in: the expectation's root, holding
+    /// exactly the files its first stack's frames in the tree name - each named below the root as it is written, so the
+    /// tree is the same on every machine. A CI job's digest is placed already, against the job's workspace on its runner.
+    /// </summary>
+    private static ResultDigest Placed(string fixture, JsonObject expect, ResultDigest digest)
+    {
+        if (expect["read"]!.AsObject().ContainsKey("ci"))
+        {
+            return digest;
+        }
+
+        var root = expect["root"]?.GetValue<string>() ?? throw new InvalidOperationException($"'{fixture}': its expectation names no root to read its places against");
+        var held = (expect["stack"]?["inTree"]?.AsArray() ?? [])
+            .Select(frame => frame!.GetValue<string>())
+            .Select(frame => PlatformPaths.RelativeAsWritten(root, frame[..frame.LastIndexOf(':')]) ?? throw new InvalidOperationException($"'{fixture}': '{frame}' is not below its root"))
+            .ToHashSet(StringComparer.Ordinal);
+
+        return digest.WithInTree(new DigestTree(root, null, new FixtureTree(root, held)));
+    }
+
+    /// <summary>
     /// The stack the expectation names: the failure's named <paramref name="of"/> where it names one, else the first a reader
     /// meets - the first error's chain where there is a first error, else the first failure's thrown error's stack, else its
     /// own.
@@ -230,6 +251,20 @@ public sealed class ResultFixturesTests
     }
 
     private static int Count(JsonObject expect, string name) => expect[name]?.GetValue<int>() ?? 0;
+
+    /// <summary>
+    /// The tree a fixture's tool ran in, holding exactly <paramref name="held"/>: a file is the tree's where its path is
+    /// <paramref name="root"/>, a separator and one of them - the root joined to a name below it by whichever machine
+    /// reads it, one form's root joined by the other's separator among them.
+    /// </summary>
+    private sealed class FixtureTree(string root, IReadOnlySet<string> held) : PassThroughFileSystem(new DssHarness.Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create()))
+    {
+        public override bool FileExists(string path)
+            => path.Length > root.Length + 1
+                && path.StartsWith(root, StringComparison.Ordinal)
+                && path[root.Length] is '/' or '\\'
+                && held.Contains(path[(root.Length + 1)..].Replace('\\', '/'));
+    }
 
     private static string Text(int? number) => number?.ToString(CultureInfo.InvariantCulture) ?? "-";
 }
