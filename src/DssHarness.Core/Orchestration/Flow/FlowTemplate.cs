@@ -54,7 +54,21 @@ public static class FlowTemplate
     {
         ArgumentNullException.ThrowIfNull(template);
 
-        return Read(template, quoted);
+        return Pieces(new Execution.LegPathNames.Literals(template), quoted);
+    }
+
+    /// <summary>
+    /// The template <paramref name="literals"/> tells the brace groups of, in its pieces, as
+    /// <see cref="Pieces(string, bool)"/> reads them: walked once, from its start to its end, every place asked once and
+    /// in order, so the groups are sought in time linear in the template's length (<see cref="Execution.LegPathNames.Literals.Spanned"/>).
+    /// </summary>
+    /// <param name="literals">The brace groups of the template, which hold it.</param>
+    /// <param name="quoted">Whether a placeholder's text in quotes is read as its own.</param>
+    internal static IEnumerable<Piece> Pieces(Execution.LegPathNames.Literals literals, bool quoted)
+    {
+        ArgumentNullException.ThrowIfNull(literals);
+
+        return Read(literals, quoted);
     }
 
     /// <summary>
@@ -101,8 +115,9 @@ public static class FlowTemplate
         return -1;
     }
 
-    private static IEnumerable<Piece> Read(string template, bool quoted)
+    private static IEnumerable<Piece> Read(Execution.LegPathNames.Literals literals, bool quoted)
     {
+        var template = literals.Template;
         var text = new StringBuilder();
         var textAt = 0;
         var at = 0;
@@ -115,7 +130,7 @@ public static class FlowTemplate
             }
 
             // A doubled brace and another expander's group are text, by the configuration's own rule of them.
-            if (Execution.LegPathNames.LiteralAt(template, at) is { } literal)
+            if (literals.At(at) is { } literal)
             {
                 text.Append(literal.Text);
                 at += literal.Length;

@@ -487,23 +487,52 @@ public static class LegPathNames
     /// </summary>
     private const string LiteralPattern = @"(?<doubled>\{\{|\}\})|(?<other>\$\{[^}]*\})";
 
-    /// <summary>The brace group <see cref="LiteralPattern"/> names, where the reader stands (<see cref="LinearRegex.MatchFrom"/>).</summary>
-    private static readonly Regex LiteralHere = LinearRegex.Compile(@"\A(?:" + LiteralPattern + ")");
+    /// <summary>A brace group <see cref="LiteralPattern"/> names, wherever it starts.</summary>
+    private static readonly Regex Literal = LinearRegex.Compile(LiteralPattern);
 
     /// <summary>
-    /// The brace group <see cref="LiteralPattern"/> names that starts at <paramref name="at"/> of
-    /// <paramref name="template"/> - the text it writes and how much of the template it takes - or
-    /// null where none starts there.
+    /// The brace groups <see cref="LiteralPattern"/> names in one template, told place by place to a reader walking it:
+    /// the leftmost group at or past where the reader asks is sought (<see cref="LinearRegex.MatchFrom"/>) and kept while
+    /// it lies ahead - a group starts at a place exactly when the leftmost one sought from that place starts at it - so a
+    /// reader whose places never go back has the template searched in time linear in its length, however many of
+    /// another expander's groups it leaves unclosed.
     /// </summary>
     /// <param name="template">The template, as it is written.</param>
-    /// <param name="at">Where to look.</param>
-    public static (string Text, int Length)? LiteralAt(string template, int at)
+    public sealed class Literals(string template)
     {
-        ArgumentNullException.ThrowIfNull(template);
+        /// <summary>The leftmost group found at or past <see cref="_from"/>; null before the first is sought.</summary>
+        private Match? _ahead;
 
-        var match = LinearRegex.MatchFrom(LiteralHere, template, at);
+        /// <summary>Where <see cref="_ahead"/> was sought from.</summary>
+        private int _from;
 
-        return !match.Success ? null : (match.Groups["doubled"].Success ? match.Value[..1] : match.Value, match.Length);
+        /// <summary>The template, as it is written.</summary>
+        public string Template { get; } = template ?? throw new ArgumentNullException(nameof(template));
+
+        /// <summary>
+        /// How much of the template the searches spanned: each from where it was sought to the end of the group it found,
+        /// or to the template's end where it found none - what a search reads to answer.
+        /// </summary>
+        public long Spanned { get; private set; }
+
+        /// <summary>
+        /// The brace group that starts at <paramref name="at"/> - the text it writes and how much of the template it takes -
+        /// or null where none starts there.
+        /// </summary>
+        /// <param name="at">Where to look.</param>
+        public (string Text, int Length)? At(int at)
+        {
+            if (_ahead is null || _from > at || (_ahead.Success && _ahead.Index < at))
+            {
+                _ahead = LinearRegex.MatchFrom(Literal, Template, at);
+                _from = at;
+                Spanned += (_ahead.Success ? _ahead.Index + _ahead.Length : Template.Length) - at;
+            }
+
+            return _ahead.Success && _ahead.Index == at
+                ? (_ahead.Groups["doubled"].Success ? _ahead.Value[..1] : _ahead.Value, _ahead.Length)
+                : null;
+        }
     }
 
     /// <summary>

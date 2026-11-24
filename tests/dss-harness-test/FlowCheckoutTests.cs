@@ -332,6 +332,23 @@ public sealed class FlowCheckoutTests : IDisposable
         Assert.Equal(["input.line"], WorkflowExpressions.TemplateReads("{{x}} ${y} {input.line|text}").Select(read => read.Whole));
     }
 
+    /// <summary>
+    /// A template is read in one pass, however much text stands before its first brace group and however many of another
+    /// expander's groups it leaves unclosed - a <c>${</c> whose brace is doubled is text - so the search for its groups
+    /// spans the template once: never once from each place it reads to the next group, nor from each <c>$</c> to the end.
+    /// </summary>
+    [Fact]
+    public void ATemplateOfManyUnclosedGroups_IsSearchedOnceFromItsStartToItsEnd()
+    {
+        var template = new string('x', 1000) + string.Concat(Enumerable.Repeat("${{", 1000));
+        var literals = new DssHarness.Core.Execution.LegPathNames.Literals(template);
+
+        var piece = Assert.Single(FlowTemplate.Pieces(literals, quoted: false));
+
+        Assert.Equal(new FlowTemplate.Piece(0, new string('x', 1000) + string.Concat(Enumerable.Repeat("${", 1000)), FlowTemplate.PieceKind.Text), piece);
+        Assert.Equal(template.Length, literals.Spanned);
+    }
+
     /// <summary>Two patterns overlap where some path - there or not yet - is matched by both, and not otherwise.</summary>
     [Theory]
     [InlineData("src/a.cs", "src/a.cs", true)]
