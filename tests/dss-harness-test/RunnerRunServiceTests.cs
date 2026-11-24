@@ -1152,6 +1152,32 @@ public sealed class RunnerRunServiceTests
             (failure.Framework, failure.Outcome, failure.Exception?.Type, failure.Exception?.Message));
     }
 
+    /// <summary>
+    /// A red run step's digest reads the places its step printed from the directory the step ran in, as a build's and a
+    /// test's are read from where their tools ran: a step that runs in a directory of its own and prints a path relative to
+    /// it names that directory's file, never the tree root's file of the same relative path.
+    /// </summary>
+    [Fact]
+    public async Task ARedRunStepsDigest_ReadsThePlacesItPrinted_FromTheDirectoryTheStepRanIn()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile("src/main.rs", "fn main() {}\n");
+        temp.WriteFile("tools/gen/src/main.rs", "fn main() {}\n");
+
+        // Rust's own words for a panic, the place relative to the package the step ran in.
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("gen", "say-and-exit", ["thread 'main' panicked at src/main.rs:12:5:\nno record named first", string.Empty, "101"]) with { WorkingDirectory = "tools/gen" }],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        var failure = Assert.Single(result.Entry.Digest!.Failures);
+        Assert.Equal(("rust", "tools/gen/src/main.rs", (int?)12), (failure.Framework, failure.File, failure.Line));
+    }
+
     [Fact]
     public async Task AnExpectedExceptionWhoseCheckIsNotConfirmed_LeavesTheFailureGenuine()
     {

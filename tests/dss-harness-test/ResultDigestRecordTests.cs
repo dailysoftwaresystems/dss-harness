@@ -448,20 +448,53 @@ public sealed class ResultDigestRecordTests
 
     /// <summary>
     /// A test a results file's case was said through - the first failure its own output printed, whose message and place
-    /// the case took - is one the files named: the log's printing of that failure is no second failure.
+    /// the case took - is one the files named: the log's printing of that failure is no second failure, and gives the
+    /// case its range in the log, so the lines the console printed of it are one read away. Two cases said through
+    /// failures that print alike are each given their own printing, in the order the files met them.
     /// </summary>
     [Fact]
-    public void ATestACaseWasSaidThrough_IsOneTheFilesNamed()
+    public void ATestACaseWasSaidThrough_IsOneTheFilesNamed_GivenItsPrintingsRangeInTheLog()
     {
         var gathering = new ResultDigest.Gathering();
         var printed = new TestFailure("gtest", "StoreTest.Loads", Message: "Expected equality", File: "test/store_test.cc", Line: 12);
 
         gathering.Add(new TestFailure("junit", "unit_tests", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
-        gathering.Beside(new PhaseFindings([], [printed with { Log = (4, 6) }]), file => file);
+        gathering.Add(new TestFailure("junit", "more_unit_tests", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
+        gathering.Beside(new PhaseFindings([], [printed with { Log = (40, 46) }, printed with { Log = (60, 66) }]), file => file);
 
-        var only = Assert.Single(gathering.Digest().Failures);
+        Assert.Equal(
+            [("unit_tests", ((int, int)?)(40, 46)), ("more_unit_tests", (60, 66))],
+            gathering.Digest().Failures.Select(failure => (failure.Id, failure.Log)));
+    }
 
-        Assert.Equal(("unit_tests", ((int, int)?)null), (only.Id, only.Log));
+    /// <summary>
+    /// A thrown error a results file's case was said through names no test: the log's printing of that same error is the
+    /// case's, given to it and never a second failure, but a process that died of an error with the same type and message -
+    /// the JVM's own "Exception in thread" - is a crash no results file is written for, and is said beside the case.
+    /// </summary>
+    [Fact]
+    public void AThrownErrorACaseWasSaidThrough_NamesNoTest_AndAProcessThatDiedOfItIsSaid()
+    {
+        var gathering = new ResultDigest.Gathering();
+        var thrown = new ExceptionRecord("java.lang.IllegalStateException", "no record", [new StackFrame("at app.Store.load(Store.java:14)", "Store.java", 14)], []);
+        var printed = new TestFailure("jvm", "java.lang.IllegalStateException: no record", Message: "no record", Exception: thrown, Outcome: "errored");
+
+        gathering.Add(new TestFailure("junit", "app.StoreTest.loads", Name: "loads", Class: "app.StoreTest", Message: "no record", Exception: thrown), printed);
+        gathering.Beside(
+            new PhaseFindings(
+                [],
+                [
+                    printed with { Log = (12, 14) },
+                    printed with { Outcome = "crashed", Log = (30, 32) },
+                ]),
+            file => file);
+
+        var digest = gathering.Digest();
+
+        Assert.Equal(
+            [("app.StoreTest.loads", "failed", ((int, int)?)(12, 14)), ("java.lang.IllegalStateException: no record", "crashed", (30, 32))],
+            digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Log)));
+        Assert.Equal((1, 1), (digest.Failed, digest.Crashed));
     }
 
     /// <summary>

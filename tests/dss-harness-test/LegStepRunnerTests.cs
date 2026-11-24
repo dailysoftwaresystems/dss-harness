@@ -180,7 +180,7 @@ public sealed class LegStepRunnerTests : IDisposable
             },
         };
         var said = new Said();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "checks", Type = "build" }, repository.Path, said), Token);
 
@@ -228,7 +228,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var layout = inAnAgent ? (await AgentAsync(harness, repository)).Layout : await LayoutAsync(harness, repository);
         var legs = new FakeLegs();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
         var step = new WorkflowStep { Name = "checks", Type = "build", In = inAnAgent ? "make" : null };
 
         var result = await runner.RunAsync(Run(step, repository.Path, worksIn: inAnAgent ? "a1" : null), Token);
@@ -286,7 +286,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 HarnessExit.CommandFailed,
                 "a leg failed"),
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
         var step = new WorkflowStep { Name = "checks", Type = "build", In = "make" };
 
         var result = await runner.RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
@@ -316,6 +316,72 @@ public sealed class LegStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// Where the run keeps a graph of the tree a leg step's legs ran in, each red leg's digest is joined to the declarations
+    /// the graph holds at its places in the tree, checked first by the files they name: the first error's symbol is the
+    /// member enclosing its line - its kind, its qualified name and its handle in the view - a frame of a failure's stack in
+    /// the tree is rendered with it, a frame outside the tree as printed, and the ledger the step keeps holds the same. A
+    /// run that keeps no graph says none, and the step makes none for it.
+    /// </summary>
+    [Fact]
+    public async Task ARedLegsDigest_IsJoinedToTheDeclarationsOfTheRunsGraph_WhereTheRunKeepsOne()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        repository.WriteFile(
+            "src/Store.cs",
+            "namespace App;\n\npublic sealed class Store\n{\n    public int Load(string name)\n    {\n        var found = 0;\n        return found + x;\n    }\n}\n");
+        await harness.CommitAllAsync(repository.Path, "the store", Token);
+
+        var digest = ResultDigest.Of(
+            [new Diagnostic("csc", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Store.cs", 8, 24)],
+            [
+                new TestFailure(
+                    "xunit",
+                    "App.Tests.StoreTests.Loads",
+                    Exception: new ExceptionRecord(
+                        "System.InvalidOperationException",
+                        "no record",
+                        [
+                            new StackFrame("at App.Store.Load(String name) in src/Store.cs:line 7", "src/Store.cs", 7, Symbol: "App.Store.Load", InTree: true),
+                            new StackFrame("at System.Linq.Enumerable.First()", Symbol: "System.Linq.Enumerable.First"),
+                        ],
+                        [])),
+            ],
+            []);
+        var legs = new FakeLegs
+        {
+            Answer = Result([new LegEntry { Leg = "native", Verdict = LegVerdict.Failed, TailPhase = "build", Digest = digest }], HarnessExit.CommandFailed, "a leg failed"),
+        };
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
+        var layout = await LayoutAsync(harness, repository);
+
+        var ungraphed = await runner.RunAsync(Run(new WorkflowStep { Name = "plain", Type = "build" }, repository.Path), Token);
+
+        Assert.Null(ungraphed.Output!["red"]![0]!["digest"]!["first"]!["symbol"]);
+        Assert.False(File.Exists(layout.GraphManifestFile));
+
+        var context = await harness.ContextLoader.LoadAsync(repository.Path, Token);
+        await harness.CodebaseGraph.SyncAsync(FlowGraphSyncs.RequestOf(context, new FlowRunPlace(repository.Path, "r1", null, Flow), "test"), Token);
+        var view = new DssHarness.Core.Codebase.CodebaseGraphQueries((await harness.CodebaseGraph.ReadOnlyAsync(layout, null, Token))!);
+        var load = view.AtLine("src/Store.cs", 8)!;
+        var said = $"member App.Store.Load {load.Handle}";
+
+        var graphed = await runner.RunAsync(Run(new WorkflowStep { Name = "graphed", Type = "build" }, repository.Path), Token);
+
+        // The graph's own answer at the place, named as the join names it: a member, its qualified name, its handle.
+        Assert.Equal(("member", "App.Store.Load"), (load.Kind, load.Qualified));
+        var entry = graphed.Output!["red"]![0]!;
+        Assert.Equal(said, entry["digest"]!["first"]!["symbol"]!.GetValue<string>());
+        Assert.Equal(
+            [$"at App.Store.Load(String name) in src/Store.cs:line 7 [{said}]", "at System.Linq.Enumerable.First()"],
+            entry["digest"]!["failures"]![0]!["stack"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        var ledger = JsonNode.Parse(File.ReadAllText(Path.Combine(layout.InstanceDirectory("graphed", null), OrchestratorLayout.StepLedgerFileName)))!;
+        var kept = ledger["legs"]![0]!["digest"]!;
+        Assert.Equal(said, kept["diagnostics"]![0]!["symbol"]!.GetValue<string>());
+        Assert.Equal($"App.Store.Load [{said}]", kept["failures"]![0]!["exception"]!["stack"]![0]!["symbol"]!.GetValue<string>());
+    }
+
+    /// <summary>
     /// The logs a step keeps are its last attempt's alone, each found and kept as its phase's log is named - a runner's
     /// step whose name holds a character a path cannot carry among them - and an attempt whose legs all passed keeps none,
     /// whatever the attempt before it kept.
@@ -337,14 +403,14 @@ public sealed class LegStepRunnerTests : IDisposable
         var step = new WorkflowStep { Name = "shape", Type = "build", In = "make" };
         var kept = Path.Combine(layout.InstanceDirectory("shape", "a1"), OrchestratorLayout.StepLogsDirectoryName);
 
-        var failed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, red, new TestIsolation())
+        var failed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, red, new TestIsolation(), harness.GraphSyncs)
             .RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.Equal("step (2/2)", failed.Output!["red"]![0]!["phase"]!.GetValue<string>());
         Assert.Equal(["native.step (2-2).log"], Directory.EnumerateFiles(kept).Select(Path.GetFileName));
         Assert.Equal("the second line failed\n", File.ReadAllText(Path.Combine(kept, "native.step (2-2).log")));
 
-        var passed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, new FakeLegs(), new TestIsolation())
+        var passed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, new FakeLegs(), new TestIsolation(), harness.GraphSyncs)
             .RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.True(passed.Passed, passed.Error);
@@ -398,7 +464,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var none = TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it");
         var step = new WorkflowStep { Name = "checks", Type = "build" };
 
-        var refused = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, none)
+        var refused = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, none, harness.GraphSyncs)
             .RunAsync(Run(step, repository.Path), Token);
 
         Assert.Equal(
@@ -409,14 +475,14 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal([repository.Path], none.Executions[0].WritableRoots);
 
         var (preferring, preferred) = await RepositoryAsync(Config(localCopy: false, isolation: "preferred"));
-        var ran = await new BuildStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, none)
+        var ran = await new BuildStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, none, preferring.GraphSyncs)
             .RunAsync(Run(step, preferred.Path), Token);
 
         Assert.True(ran.Passed, ran.Error);
         Assert.Equal("""{"mode":"preferred","none":"bubblewrap is not here"}""", ran.Output!["isolation"]!.ToJsonString());
 
         var sweeping = new TestIsolation();
-        _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, sweeping, preferring.WorktreeService)
+        _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, sweeping, preferring.WorktreeService, preferring.GraphSyncs)
             .RunAsync(Run(new WorkflowStep { Name = "arms", Type = "check-mutations" }, preferred.Path), Token);
         var copy = Path.Combine(preferred.Path, HarnessLayout.LegsDirectoryName, "a-copy");
         var actionBuild = Path.Combine(copy, HarnessLayout.ActionBuildRelative("probe", "r9", "native"));
@@ -445,7 +511,7 @@ public sealed class LegStepRunnerTests : IDisposable
     {
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var legs = new FakeLegs();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
         var step = new WorkflowStep { Name = "checks", Type = "build", In = "make" };
 
         var unmade = await runner.RunAsync(Run(step, repository.Path), Token);
@@ -475,10 +541,10 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = new FakeLegs();
         IFlowStepTypeRunner[] runners =
         [
-            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService),
+            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs),
         ];
         WorkflowStep[] steps =
         [
@@ -531,10 +597,10 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = new FakeLegs();
         IFlowStepTypeRunner[] runners =
         [
-            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService),
+            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs),
         ];
         var urgent = new FlowRunPlace(repository.Path, "r1", null, Flow with { Priority = 3 });
         var governing = new WorkflowStep
@@ -596,7 +662,7 @@ public sealed class LegStepRunnerTests : IDisposable
             },
         };
         made = legs;
-        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService);
+        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs);
 
         var byItem = await runner.RunAsync(
             Run(
@@ -694,7 +760,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = new FakeLegs { WhileItRuns = _ => swept = File.ReadAllText(Path.Combine(made!.Asked[^1].Directory, "src", "rate.cs")) };
         made = legs;
 
-        var result = await new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService)
+        var result = await new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs)
             .RunAsync(Run(new WorkflowStep { Name = "item-arms", Type = "check-mutations", Base = SweepStepRunner.ItemBase }, repository.Path, instance: "rounds#1.items[0].rearm#1.item-arms"), Token);
 
         Assert.True(result.Passed, result.Error);
@@ -721,7 +787,7 @@ public sealed class LegStepRunnerTests : IDisposable
         File.WriteAllText(Path.Combine(path, "left.txt"), "written by the attempt a crash ended\n");
 
         var legs = new FakeLegs();
-        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService);
+        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs);
         var again = await runner.RunAsync(Run(step, repository.Path, instance: "rounds#1.items[0].item-arms"), Token);
 
         Assert.True(again.Passed, again.Error);
@@ -740,7 +806,7 @@ public sealed class LegStepRunnerTests : IDisposable
             },
         };
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, stopped, new TestIsolation(), harness.WorktreeService)
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, stopped, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs)
             .RunAsync(Run(step, repository.Path, instance: "rounds#1.items[0].item-arms"), stop.Token));
 
         Assert.Single(stopped.Asked);
@@ -758,7 +824,7 @@ public sealed class LegStepRunnerTests : IDisposable
     {
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var legs = new FakeLegs();
-        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService);
+        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs);
 
         var none = await runner.RunAsync(
             Run(
@@ -804,7 +870,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 Cause = OutcomeCause.None,
             },
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "build", Type = "build" }, repository.Path), Token);
 
@@ -840,7 +906,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 }
             },
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "build", Type = "build" }, repository.Path), Token);
 
@@ -860,7 +926,7 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// What a leg step answers: each leg's own verdict; red holding the red legs alone - a leg that failed, with the phase
-    /// that did not pass, the ledger's line and the last lines it printed, and the units its build failed as the ledger's
+    /// that did not pass, the ledger's line and, in tail, what it printed that its digest does not say, and the units its build failed as the ledger's
     /// --json says them - and not one incomplete or passed; of a sweep,
     /// each arm that is not as its registry says, naming it, and a leg that failed outside every arm with no arm; passed
     /// only where every leg passed; and no run directory where the run made none.

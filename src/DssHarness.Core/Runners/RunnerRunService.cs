@@ -457,7 +457,7 @@ public sealed class RunnerRunService(
         {
             ContentionWarnings.Write(_output, CommandName, request.Leg, contention, config.Contention);
         }
-        var decided = await DecideAsync(request, state, values, PhaseParsers.ForRun(config, request.Runner), cancellationToken).ConfigureAwait(false);
+        var decided = await DecideAsync(request, state, values, PhaseParsers.ForRun(config, request.Runner), config.Worktrees.Root, cancellationToken).ConfigureAwait(false);
 
         // What the guards saw is folded in the same way every other verb folds it, so a step whose
         // tree moved reports the verdict a test leg would and not a sentence of its own. A fold that
@@ -1152,8 +1152,8 @@ public sealed class RunnerRunService(
         }
 
         // Its output as its log keeps it, masked as each line was kept: read from there by whatever looks
-        // for an exception in it, never held.
-        state.Failure = new FailedStep(phase.Name, verdict, result.Output);
+        // for an exception in it, never held; and the directory it ran in, which a relative path it printed is read from.
+        state.Failure = new FailedStep(phase.Name, verdict, result.Output, result.WorkingDirectory);
         state.Stopped = true;
     }
 
@@ -1181,12 +1181,18 @@ public sealed class RunnerRunService(
     /// The verdict and the outcome the leg reached, an expected exception applied only where its
     /// checks confirmed it.
     /// </summary>
-
+    /// <param name="request">The run.</param>
+    /// <param name="state">The run so far.</param>
+    /// <param name="values">What the run's lines are masked by.</param>
+    /// <param name="parsers">The parsers a failing step's output is digested by.</param>
+    /// <param name="worktreesRoot">The configured worktrees root, which with the rest of the tool's own state the digest's placing never reads a declaration from.</param>
+    /// <param name="cancellationToken">Stops the run checks.</param>
     private async Task<Decision> DecideAsync(
         RunnerRunRequest request,
         RunState state,
         ActionValues values,
         IReadOnlyList<IResultParser> parsers,
+        string worktreesRoot,
         CancellationToken cancellationToken)
     {
         if (state.Failure is not { } failed)
@@ -1206,8 +1212,9 @@ public sealed class RunnerRunService(
 
         // The failing step's own output digested once, through the one owner of a phase's digest: the thrown error the
         // entry is matched against is read from it, and where the step's own failure is the leg's verdict the leg's
-        // entry carries it, as a build's and a test's carry theirs.
-        var digest = PhaseDigest.Of(failed.Output, parsers, new DigestTree(request.TreeRoot, null, _fileSystem));
+        // entry carries it, as a build's and a test's carry theirs - its places read from the directory the step ran in,
+        // as theirs are from where their tools ran.
+        var digest = PhaseDigest.Of(failed.Output, parsers, new DigestTree(request.TreeRoot, failed.WorkingDirectory, _fileSystem, worktreesRoot));
 
         var genuine = new Decision(
             failed.Verdict with { Detail = values.Redact(failed.Verdict.Detail) },
@@ -1892,8 +1899,8 @@ public sealed class RunnerRunService(
         return (program, arguments, working);
     }
 
-    /// <summary>The step whose failure ended the run, with what it reported.</summary>
-    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, PhaseOutput Output);
+    /// <summary>The step whose failure ended the run, with what it reported and the directory it ran in (<see cref="PhaseResult.WorkingDirectory"/>).</summary>
+    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, PhaseOutput Output, string? WorkingDirectory);
 
     /// <summary>
     /// The verdict and outcome one attempt reached, with the entry and the gate behind it and the failing step's digest

@@ -349,6 +349,19 @@ public sealed class LedgerReport
         => [.. Lines.SelectMany(line => line.SetUps.Select(setUp => (Leg: line.Leg, SetUp: setUp))).Concat(Lineless).Where(left => left.SetUp.LeftRunning)];
 
     /// <summary>
+    /// This report with each line's digest as <paramref name="digestOf"/> gives it, every other fact of each line and of
+    /// the report as it was: a leg step's red legs' digests joined to the declarations of the run's graph where the graph
+    /// is (<see cref="ResultDigest.Declared"/>), once the legs that made them have ended.
+    /// </summary>
+    /// <param name="digestOf">A line's digest as the report is to hold it.</param>
+    public LedgerReport WithDigests(Func<LedgerLine, ResultDigest?> digestOf)
+    {
+        ArgumentNullException.ThrowIfNull(digestOf);
+
+        return new LedgerReport([.. Lines.Select(line => line with { Digest = digestOf(line) })], Lineless);
+    }
+
+    /// <summary>
     /// Builds the report, marking a phase that took more than
     /// <paramref name="durationWarningFactor"/> times what its siblings took, and a test count that
     /// stands apart from its siblings'.

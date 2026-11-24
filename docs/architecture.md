@@ -9928,14 +9928,15 @@ What a red phase or a failed test prints is typed, never left as a log to search
 shapes (`Results\ResultDigest.cs`) and one of the parsers that read them
 (`Results\ResultParsers.cs`). A `Diagnostic` is a compiler's or a linter's line - its tool, its
 severity, its code, its message, its file, line and column, the declaration enclosing that place where
-the tree's graph is held, its project, how many times it was
+a graph of the tree was asked (`ResultDigest.Declared`), its project, how many times it was
 printed again (once per translation unit or per target framework, folded into one), the chain that
 led to it as `StackFrame`s and the line range of its log - and a `TestFailure` is a failed test's
 identity, its assertion, its duration, its outcome (`failed`, `errored`, `timedOut`, `crashed`),
 its log range and, where the failure is a thrown error, its `ExceptionRecord`: type, message, stack
 and the cause chain, each cause a record nested under the one it caused - the failure's stack held
 there, never twice. A `StackFrame` carries its line as printed, its place, its symbol - the function
-as printed, the enclosing declaration said beside it where the tree's graph holds the file - its kind
+as printed, and the declaration the tree's graph holds at its line where one was joined, said beside
+it in the record (`StackFrame.SymbolSaid`) - its kind
 (`call`, `include`, `instantiation`, `macro`, `async`) and whether the tree holds its file. A
 `ResultDigest` is made in one place (`ResultDigest.Gathering`), a finding at a time in the order
 the output met them, and applies every bound there, each said: a diagnostic printed again is
@@ -10064,7 +10065,7 @@ names none - the rule, the message, the place and its range). A member of anothe
 form's is read as absent; a file a crash cut short gives every finding before the break and says
 the break, and a line of the Dart stream that is no event is counted and the first said. Text read
 from these files is masked as the phase's log is, through the one mask its log is written through
-(`ResultDigest.MaskedBy`), every text a digest holds. A path naming nothing, or a file no form
+(`ResultDigest.Gathering.Through`), every text a digest holds. A path naming nothing, or a file no form
 owns, is said in the digest's unparsed lines - never refused, for the failure may have been before
 the file was written. `init` seeds the arguments the shipped runners take for these files where
 they take them: `ctest --output-junit`, `dotnet test --logger trx` with `--results-directory`,
@@ -10077,7 +10078,8 @@ rendered to the frames inside the tree (the crossing frame on each side, a line 
 held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the
 rest - every printing the four do not say - counted by code and by file, the lines no parser held; each thing said once,
 the first problem's message in its saying alone, and a member that says nothing - a count of none, an empty list, a
-null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`); and what
+null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`), each place
+inside the tree with the declaration it stands in where the step's run keeps a graph of the tree; and what
 raw lines go beside it is one owner's to say (`ResultDigest.Handed`): where the digest holds an error or a failure it
 says the lines no parser held - the last 50, the nearest the failure, with how many the bound left out - and the entry's
 tail holds none, and where it holds neither the tail goes whole - a red job's failing page as well - and the digest says
@@ -10105,8 +10107,11 @@ stack there by its runtime's own form, so a case that says only how its test end
 and place from the first failure its test printed, or says all it printed where nothing is typed - and its log read
 beside them in the same digest all the same, each finding said once (`ResultDigest.Gathering.Beside`): a diagnostic the
 files lack, a crash, a host that died, a test that hung, every failure where the files name none, is added; a test both
-name is the file's, given what the log holds of it and the file lacks, its range in the log among it; and what the files
-could not give is said beside them. Every place is then read against the
+name is the file's, given what the log holds of it and the file lacks, its range in the log among it - and so is the
+console's printing of the first failure a case's test printed, matched as the same reader's failure of the same id that
+ended the same way, each printing to the next case said through it, never by an error's heading alone, so a process
+that died of the error a case's test threw is a crash the files lack, said beside it; and what the files could not give
+is said beside them. Every place is then read against the
 tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed - a diagnostic's file and its
 project's, each frame's, a failure's, each count's by file): a path - relative ones read from the directory the tool
 ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by
@@ -10118,18 +10123,33 @@ file the project declares that name in. A Go test's place is read from its packa
 it relative to that directory and names the package by its import path on its result line after the failures, which
 the parser gives each as its class: the import path less the module path of the `go.mod` nearest the tree's root that
 owns it - of two equally near, the longer module path - and where no `go.mod` of the tree owns the package the place
-stays as printed, never read from where the tool ran. A Dart frame's `package:demo/store.dart` is the `store.dart` of
-the `lib` directory beside the `pubspec.yaml` nearest the root that names the package `demo`, and stays as written
-where none does. The declarations are found by reading the tree a level at a time from its root, no deeper than a
-question needs and each level at most once for a digest however many of its places ask, so a copy of the tree kept
-inside it never wins over the tree's own and the placing stays linear in the tree and the places
-(`ResultDigest.WithInTree`, the one place a digest's paths ask the tree's file system). Where the tree's graph is
-held, each placed file and line the graph has a declaration for gains it (`CodebaseGraphQueries.AtLine`, asked
-through the tree's own declaration ask, each place once): a diagnostic's symbol is it - the declaration's kind, its
-qualified name and its handle, said as the graph names a node - and a frame says it beside the function its line
-printed, or alone where the frame printed none, so a place joins to the code it stands in by a handle the graph
-answers; a tree with no graph - one no run made a graph of, a job's workspace on its runner - and a place the graph
-does not hold say none, and a digest placed by a workspace's convention alone never asks.
+stays as printed, never read from where the tool ran. The `go.mod` files are found by reading the tree a level at a
+time from its root, no deeper than a question needs and each level at most once for a digest however many of its
+places ask, never going down into git's own directory, at any depth, or into the tool's own state the tree holds
+(`HarnessLayout.StatePaths`: the copies its legs work in, its mutation workers, its agents' worktrees, its
+orchestrators' records), so the placing stays linear in the tree and the places (`ResultDigest.WithInTree`, the one
+place a digest's paths ask the tree's file system). A Dart frame's `package:demo/store.dart` is read as Dart reads
+it: through the `.dart_tool/package_config.json` of the package the tool ran in - the nearest above the directory it
+ran in, up to the tree's root, a workspace's where the package keeps none of its own - read once for a digest, the
+package's root read against the configuration's own directory and the file below the directory of its URIs it names;
+a package it places outside the tree (the pub cache's), one it does not name, and every `package:` name where no
+configuration is above where the tool ran stay as written, and nothing of the tree is walked for them.
+
+The declaration a place stands in is joined where the graph is, never where the phase ran: a host keeps no graph, and a
+plain `build`, `test` or `run` asks none, so their digests' symbols are null. A workflow's leg step whose run keeps a
+codebase graph of the tree its legs ran in - the base for the main tree, the agent's view for its worktree, none for a
+sweep on a copy of a commit - joins each red leg's digest to it before its ledger is kept (`FlowStepLegs`,
+`FlowGraphSyncs.DeclarationsAsync`): the view is checked by the files the digests' places in the tree name, as every
+answer the graph gives checks the files it names, and each place is asked by its line
+(`CodebaseGraphQueries.AtLine`), once however many findings name it, through the one owner of a digest's symbols
+(`ResultDigest.Declared`). Only a place in the tree is asked - a diagnostic's own, named as the tree names its files,
+and each frame the placing marked the tree's, a diagnostic's chain and every failure's stack down its causes - never a
+frame outside it. A diagnostic's symbol is the declaration - a type, a member, a section - with its kind, its
+qualified name and its handle, said as the graph names a node; a frame holds it beside the function its line printed
+(`StackFrame.Declaration`), and the record says both. A model reads it as the first error's `symbol` and in brackets
+after each frame of a rendered stack inside the tree, so a place joins to the code it stands in by a handle the graph
+answers; a check that fails is said as every sync of the engine's own that fails is, and the step goes on with its
+places joined to none.
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first`, the first thing that went wrong in
 the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and

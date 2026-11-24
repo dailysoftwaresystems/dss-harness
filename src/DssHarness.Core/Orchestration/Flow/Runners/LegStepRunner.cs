@@ -25,7 +25,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <c>red</c> holds the red legs alone. Its legs are run as every step of the engine runs legs (<see cref="FlowStepLegs"/>,
 /// a reason step's measure calls' owner too): under a process scope recorded in the step's directory, and the ledger kept
 /// there, with - for a step in an agent's worktree - the log of each red leg's phase that did not pass, whole, where this
-/// machine ran it: that worktree, and the run directory in it, go when the agent does.
+/// machine ran it: that worktree, and the run directory in it, go when the agent does. Where its legs run in the tree the
+/// step works in and the run keeps a graph of that tree, each red leg's digest is joined to the declarations the graph
+/// holds at its places before the ledger is kept (<see cref="FlowGraphSyncs.DeclarationsAsync"/>).
 /// </summary>
 /// <remarks>
 /// What its legs build, test and run is what the run's agents wrote: the work of each leg this machine runs is held inside
@@ -43,7 +45,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">Keeps the ledger and the red logs in the step's directory.</param>
 /// <param name="children">Records in its directory the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
-public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation) : IFlowStepTypeRunner, IFlowHandoffRunner
+/// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
+public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation, FlowGraphSyncs graph) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     private readonly FlowStepLegs _legs = new(fileSystem, children, isolation);
 
@@ -104,7 +107,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
         if (copy is null)
         {
-            return await RunLegsInAsync(run, context, layout, tree, cancellationToken).ConfigureAwait(false);
+            return await RunLegsInAsync(run, place, context, layout, tree, cancellationToken).ConfigureAwait(false);
         }
 
         FlowStepResult result;
@@ -112,7 +115,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
         try
         {
-            result = await RunLegsInAsync(run, context, layout, copy.Path, cancellationToken).ConfigureAwait(false);
+            result = await RunLegsInAsync(run, graphed: null, context, layout, copy.Path, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -128,14 +131,28 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
     }
 
     /// <summary>Runs the step's legs in <paramref name="tree"/>, as every step of the engine runs legs, and reads what they reached.</summary>
-    private async Task<FlowStepResult> RunLegsInAsync(FlowStepRun run, HarnessContext context, OrchestratorLayout layout, string tree, CancellationToken cancellationToken)
+    /// <param name="run">The step, its keys filled.</param>
+    /// <param name="graphed">
+    /// The run's place where the legs run in the tree the step works in, whose graph the run may keep - each red leg's
+    /// digest joined to its declarations; null for legs on a copy of a commit, which no graph of the run is of.
+    /// </param>
+    /// <param name="context">The repository and its configuration, as the main checkout reads them.</param>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="tree">The tree the legs work in.</param>
+    /// <param name="cancellationToken">Stops the legs.</param>
+    private async Task<FlowStepResult> RunLegsInAsync(FlowStepRun run, FlowRunPlace? graphed, HarnessContext context, OrchestratorLayout layout, string tree, CancellationToken cancellationToken)
     {
         // The legs run as every step of the engine runs them: the isolation their work is held inside decided before
         // anything of the step starts - where it is required and this machine has none, no leg runs - under the step's
-        // process scope, and the ledger kept in the step's directory, with each red leg's failing log in an agent's worktree.
+        // process scope, and the ledger kept in the step's directory, with each red leg's failing log in an agent's worktree
+        // and each red leg's digest joined to the declarations of the run's graph of the tree, where it keeps one.
         var watch = new StepWatch(run.Events);
         var directory = layout.InstanceDirectory(run.Instance, run.WorksIn);
-        var request = new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, directory, directory, RedLogs: run.WorksIn is not null, $"'{run.Instance}'") { WritesBeside = WritesBeside };
+        var request = new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, directory, directory, RedLogs: run.WorksIn is not null, $"'{run.Instance}'")
+        {
+            WritesBeside = WritesBeside,
+            Declarations = graphed is null ? null : (files, token) => graph.DeclarationsAsync(run, graphed, context, files, token),
+        };
         var ran = await _legs.RunAsync(
             request,
             legIsolation => RunLegsAsync(run, context, tree, watch, legIsolation, cancellationToken),
@@ -545,8 +562,9 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="builds">Builds the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
-public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IBuildLegs builds, IAgentIsolation isolation)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
+/// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
+public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IBuildLegs builds, IAgentIsolation isolation, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "build";
@@ -572,8 +590,9 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="tests">Tests the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
-public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, ITestLegs tests, IAgentIsolation isolation)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
+/// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
+public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, ITestLegs tests, IAgentIsolation isolation, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "test";
@@ -611,8 +630,9 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="runners">Runs the runner on the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
-public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IRunnerLegs runners, IAgentIsolation isolation)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
+/// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
+public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IRunnerLegs runners, IAgentIsolation isolation, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "run";
@@ -658,8 +678,9 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
 /// <param name="mutations">Sweeps the arms on the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
 /// <param name="worktrees">Makes and takes away the copy of the commit the sweep runs on.</param>
-public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations, IAgentIsolation isolation, IWorktreeService worktrees)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
+/// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
+public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations, IAgentIsolation isolation, IWorktreeService worktrees, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "check-mutations";

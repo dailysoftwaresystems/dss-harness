@@ -31,6 +31,15 @@ public sealed record FlowStepLegsRequest(HarnessConfig Config, string MainChecko
     /// the workers a sweep makes its arms in; nothing for every other step.
     /// </summary>
     public Func<string, IReadOnlyList<string>> WritesBeside { get; init; } = _ => [];
+
+    /// <summary>
+    /// The declarations of the run's graph each red leg's digest is joined with before the step's records are kept
+    /// (<see cref="ResultDigest.Declared"/>), asked by the files of the tree its places name and answering null where
+    /// there are none to give (<see cref="FlowGraphSyncs.DeclarationsAsync"/>): a leg step's whose legs run in the tree the
+    /// step works in; none for every other - a sweep on a copy of a commit, which no graph of the run is of, and a measure
+    /// call - whose digests' places stay with no declaration.
+    /// </summary>
+    public Func<IReadOnlyList<string>, CancellationToken, Task<Func<string, int, EnclosingDeclaration?>?>>? Declarations { get; init; }
 }
 
 /// <summary>What a step's legs came to: their run, or the isolation's refusal and nothing run, and the isolation the work was decided under.</summary>
@@ -85,6 +94,7 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
             result = await legs(new StepLegIsolation(isolation, request.Config, request.MainCheckout, request.Tree, request.WritesBeside)).ConfigureAwait(false);
         }
 
+        result = await DeclaredAsync(result, request.Declarations, cancellationToken).ConfigureAwait(false);
         Keep(result, request.Records, request.RedLogs);
 
         return new FlowStepLegsRan(result, null, held.Record.ToOutput());
@@ -108,6 +118,49 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
         return result.Cancelled
             || lines.Count == 0
             || result.Stopped && (HarnessExit.RefusesTheRun(result.ExitCode) || placed.Any(leg => !lines.Any(line => line.Leg == leg)));
+    }
+
+    /// <summary>
+    /// <paramref name="result"/> with each red leg's digest joined to the declarations <paramref name="declarations"/>
+    /// gives for the files of the tree its places name (<see cref="ResultDigest.Declared"/>), so the ledger the step keeps
+    /// and the entries it answers hold the same; as it was where nothing is asked - no declarations given, a run cut off,
+    /// no red leg with a place in the tree, an ask that answers none - and where a stop comes while the graph is asked, for
+    /// what the legs reached is kept whatever stops the step after they ended.
+    /// </summary>
+    private static async Task<LegRunResult> DeclaredAsync(
+        LegRunResult result,
+        Func<IReadOnlyList<string>, CancellationToken, Task<Func<string, int, EnclosingDeclaration?>?>>? declarations,
+        CancellationToken cancellationToken)
+    {
+        if (declarations is null || result.Cancelled)
+        {
+            return result;
+        }
+
+        var files = result.Report.Lines.Where(Joined).SelectMany(line => line.Digest!.FilesInTree()).Distinct(StringComparer.Ordinal).ToList();
+
+        if (files.Count == 0)
+        {
+            return result;
+        }
+
+        Func<string, int, EnclosingDeclaration?>? declarationAt;
+
+        try
+        {
+            declarationAt = await declarations(files, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return result;
+        }
+
+        return declarationAt is null
+            ? result
+            : result with { Report = result.Report.WithDigests(line => Joined(line) ? line.Digest!.Declared(declarationAt) : line.Digest) };
+
+        // A red leg's digest is what a model is handed, and what the step's ledger keeps of it.
+        static bool Joined(LedgerLine line) => line.Digest is not null && FlowLegVerdicts.ClassOf(line.Verdict) == FlowLegClass.Red;
     }
 
     /// <summary>

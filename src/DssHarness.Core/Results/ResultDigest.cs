@@ -1,16 +1,19 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Results;
 
 /// <summary>
 /// One diagnostic a compiler, a build tool or a linter printed: what is wrong, where, how bad it is, and the chain
 /// that led to it - typed once so a model reads the error and never searches a log for it. The path is relative to
-/// the tree where the tree holds the file; the symbol is the declaration the graph finds at that line, where it holds
-/// the file.
+/// the tree where the tree holds the file; the symbol is the declaration the graph finds at that line, where a graph of
+/// the tree was asked.
 /// </summary>
 /// <param name="Tool">The tool that printed it: <c>msbuild</c>, <c>csc</c>, <c>msvc</c>, <c>gcc</c>, <c>clang</c>, <c>cmake</c>, <c>ninja</c>, <c>link</c>, <c>ld</c>, <c>tsc</c>, <c>eslint</c>, <c>dart</c>, <c>go</c>, or a configured matcher's name.</param>
 /// <param name="Severity">How bad it is: <c>error</c>, <c>warning</c> or <c>note</c>.</param>
@@ -21,7 +24,7 @@ namespace DssHarness.Core.Results;
 /// <param name="Column">The column it names; null where it names none.</param>
 /// <param name="EndLine">The last line it names, where the tool gives a range; null where it does not.</param>
 /// <param name="EndColumn">The last column it names, where the tool gives a range; null where it does not.</param>
-/// <param name="Symbol">The declaration enclosing that line, said as the tree's graph holds it - its kind, its qualified name, the node's handle (<see cref="EnclosingDeclaration.Said"/>) - where the tree's graph holds the file (<see cref="ResultDigest.WithInTree(DigestTree)"/>); null where it does not or the tree has no graph.</param>
+/// <param name="Symbol">The declaration enclosing that line, said as the tree's graph holds it - its kind, its qualified name, the node's handle (<see cref="EnclosingDeclaration.Said"/>) - joined where the graph is (<see cref="ResultDigest.Declared"/>); null where no graph was asked, where the place is outside the tree, or where the graph holds no declaration there.</param>
 /// <param name="Project">The project or target the tool named; null where it names none.</param>
 /// <param name="Count">How many times the same diagnostic was printed - once per translation unit or per target framework, folded into one; 1 where it was printed once.</param>
 /// <param name="Stack">The chain the tool printed that led to it, as frames, innermost first; empty where it printed none, as MSBuild's own errors are - never null.</param>
@@ -105,8 +108,9 @@ public sealed record Diagnostic(
 /// <param name="Outcome">How it failed: <c>failed</c>, <c>errored</c>, <c>timedOut</c> or <c>crashed</c>.</param>
 /// <param name="Shard">The shard that ran it, its index of the count of shards; null where the leg ran unsharded.</param>
 /// <param name="Log">
-/// The line range of the log it was read from (from, to) - a results file's, that of the log's failure of the same test
-/// (<see cref="ResultDigest.Gathering.Beside"/>); null where no log said it.
+/// The line range of the log it was read from (from, to) - a results file's, that of the log's failure of the same test,
+/// or of the log's printing of the failure its case was said through (<see cref="ResultDigest.Gathering.Beside"/>); null
+/// where no log said it.
 /// </param>
 public sealed record TestFailure(
     string Framework,
@@ -164,18 +168,15 @@ public sealed record Counted(string Of, int Count);
 
 /// <summary>
 /// The tree a digest's places are read against: where the work ran, the directory the tool that printed them ran in -
-/// which a relative path it printed is read from - and the file system that says whether the tree holds a file. Where
-/// the tree's graph is held, its declaration for a place is asked through <see cref="DeclarationAt"/>.
+/// which a relative path it printed is read from - the file system that says whether the tree holds a file, and where
+/// the configuration keeps its agents' worktrees, which with the rest of the tool's own state in the tree
+/// (<see cref="HarnessLayout.StatePaths"/>) no declaration of the tree's is read from.
 /// </summary>
 /// <param name="Root">The tree the phase ran in, as the machine that ran it writes it.</param>
 /// <param name="WorkingDirectory">The directory the tool ran in, which a relative path it printed is read from; <see langword="null"/> for the root.</param>
 /// <param name="FileSystem">The file system the tree is on.</param>
-/// <param name="DeclarationAt">
-/// The tree's graph's declaration enclosing a place, a file named as the tree names it and a line of it
-/// (<see cref="EnclosingDeclaration"/>); <see langword="null"/> where the tree has no graph, and answering
-/// <see langword="null"/> where the graph does not hold the file.
-/// </param>
-public sealed record DigestTree(string Root, string? WorkingDirectory, IFileSystem FileSystem, Func<string, int, EnclosingDeclaration?>? DeclarationAt = null);
+/// <param name="WorktreesRoot">The configured worktrees root (<see cref="WorktreeSettings.Root"/>); its default where the tree's configuration names none.</param>
+public sealed record DigestTree(string Root, string? WorkingDirectory, IFileSystem FileSystem, string WorktreesRoot = WorktreeSettings.DefaultRoot);
 
 /// <summary>
 /// The declaration enclosing a place of a digest, as the tree's graph holds it: what was declared - its kind, its
@@ -326,16 +327,15 @@ public sealed record ResultDigest
     /// <c>file:</c> URI as the path it names - and is in the tree only where the tree holds that file: a frame that names
     /// no file, a runtime's own module (<c>dart:</c>, <c>node:</c>), a bare name the tree has no file of
     /// (<c>Thread.java</c>), a path outside the root, are in none. A runtime's own name for one of the project's files is
-    /// read through the file the project declares that name in (<see cref="ProjectPackages"/>): a Go test's place, which
-    /// <c>go test</c> prints relative to its package's directory and names the package by its import path, from that
-    /// directory - the import path less the module path of the <c>go.mod</c> nearest the tree's root that owns it - and a
-    /// Dart <c>package:name/path</c> from the <c>lib</c> directory beside the <c>pubspec.yaml</c> nearest the root that
-    /// names the package; where no file of the tree declares the name, the place stays as written. Placed by the one owner
-    /// of placing a digest's paths (<see cref="WithInTree(Func{string, string?}, Func{string, string, string?})"/>), and the
-    /// one place a digest's paths ask the tree's file system: the tree's declarations are read once for the digest,
-    /// however many of its places ask. Where the tree's graph is held (<see cref="DigestTree.DeclarationAt"/>), each place
-    /// it has a declaration for gains it - a diagnostic's symbol, said with a frame's printed one - the one owner of the
-    /// digest's symbols, asked by the placed file and the line, each place once.
+    /// read as the runtime reads it (<see cref="ProjectPackages"/>): a Go test's place, which <c>go test</c> prints
+    /// relative to its package's directory and names the package by its import path, from that directory - the import path
+    /// less the module path of the <c>go.mod</c> nearest the tree's root that owns it - and a Dart <c>package:name/path</c>
+    /// below the directory the package configuration of where the tool ran gives the package
+    /// (<c>.dart_tool/package_config.json</c>); where nothing of the tree declares the name, the place stays as written.
+    /// Placed by the one owner of placing a digest's paths
+    /// (<see cref="WithInTree(Func{string, string?}, Func{string, string, string?})"/>), and the one place a digest's paths
+    /// ask the tree's file system: the tree's declarations are read once for the digest, however many of its places ask.
+    /// The declaration the tree's graph holds at a place is joined where the graph is (<see cref="Declared"/>), never here.
     /// </summary>
     /// <param name="tree">The tree the phase ran in, and where its tool ran.</param>
     public ResultDigest WithInTree(DigestTree tree)
@@ -344,13 +344,12 @@ public sealed record ResultDigest
         ArgumentException.ThrowIfNullOrWhiteSpace(tree.Root);
 
         var packages = new ProjectPackages(tree);
-        var placed = WithInTree(
+
+        return WithInTree(
             file => ProjectPackages.DartPackageOf(file) is { } named
                 ? packages.DartLibraryOf(named.Package) is { } library ? Held(named.Path, library) : null
                 : Held(file, tree.WorkingDirectory),
             (file, package) => packages.GoPackageDirectoryOf(package) is { } directory ? Held(file, directory) : null);
-
-        return tree.DeclarationAt is { } declarationAt ? Declared(placed, declarationAt) : placed;
 
         // A path the tree holds, read from the directory a relative one was printed relative to, named as the tree's.
         string? Held(string file, string? from)
@@ -360,58 +359,121 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// <paramref name="digest"/> with the declaration the tree's graph holds said at each of its places that one holds:
-    /// a diagnostic's symbol is it, and a frame says it beside the function its line printed - so what and where is file,
-    /// declaration and line, and the handle joins the place to the graph's node. Each place asked once, however many
-    /// findings name it; a place the graph does not hold, a place that names no file or no line, and every digest of a
-    /// tree with no graph, say none.
+    /// The files of the tree this digest's places name, each once in the order first met: those <see cref="Declared"/>
+    /// asks about, which an ask checks first so it answers of each file as it is.
     /// </summary>
-    /// <param name="digest">The digest, its places already named as the tree names them.</param>
-    /// <param name="declarationAt">The tree's graph's declaration enclosing a placed file and line.</param>
-    private static ResultDigest Declared(ResultDigest digest, Func<string, int, EnclosingDeclaration?> declarationAt)
-    {
-        var asked = new Dictionary<(string? File, int? Line), string?>();
+    public IReadOnlyList<string> FilesInTree() => [.. PlacesInTree().Select(place => place.File).Distinct(StringComparer.Ordinal)];
 
-        return digest with
+    /// <summary>
+    /// This digest with the declaration the tree's graph holds enclosing each of its places in the tree joined to it - the
+    /// one owner of a digest's symbols: a diagnostic's symbol is it (<see cref="EnclosingDeclaration.Said"/>), and each
+    /// frame holds it as its <see cref="StackFrame.Declaration"/> beside the function its line printed - so what and where
+    /// is file, declaration and line, and the handle joins the place to the graph's node. Only a place in the tree is asked
+    /// (<see cref="PlacesInTree"/>): a diagnostic's own, and each frame the placing marked the tree's - a diagnostic's
+    /// chain, every failure's stack and each of its causes' - never a frame outside the tree, a runtime's own module, or a
+    /// place that names no file or no line. Each place asked once, however many findings name it; one the graph holds no
+    /// declaration at says none. Joined where the graph is - a leg step of a run that keeps a graph of the tree its legs
+    /// ran in - for a digest made where its phase ran, against that machine's copy of the tree, names its places as the
+    /// tree does.
+    /// </summary>
+    /// <param name="declarationAt">The tree's graph's declaration enclosing a file of the tree, named as the tree names it, at a line of it; null where it holds none.</param>
+    public ResultDigest Declared(Func<string, int, EnclosingDeclaration?> declarationAt)
+    {
+        ArgumentNullException.ThrowIfNull(declarationAt);
+
+        var asked = new Dictionary<(string File, int Line), EnclosingDeclaration?>();
+
+        return this with
         {
-            Diagnostics = [.. digest.Diagnostics.Select(diagnostic => diagnostic with { Symbol = DeclaredAt(diagnostic.File, diagnostic.Line) })],
-            Failures = [.. digest.Failures.Select(failure => failure with
+            Diagnostics = [.. Diagnostics.Select(diagnostic => diagnostic with
+            {
+                Symbol = InTree(diagnostic) is { } place ? At(place)?.Said() : diagnostic.Symbol,
+                Stack = Frames(diagnostic.Stack),
+            })],
+            Failures = [.. Failures.Select(failure => failure with
             {
                 Exception = failure.Exception is { } thrown ? Thrown(thrown) : null,
-                Stack = [.. failure.Stack.Select(Frame)],
+                Stack = Frames(failure.Stack),
             })],
         };
 
-        ExceptionRecord Thrown(ExceptionRecord thrown) => thrown with
-        {
-            Stack = [.. thrown.Stack.Select(Frame)],
-            CausedBy = [.. thrown.CausedBy.Select(Thrown)],
-        };
+        ExceptionRecord Thrown(ExceptionRecord thrown) => thrown with { Stack = Frames(thrown.Stack), CausedBy = [.. thrown.CausedBy.Select(Thrown)] };
 
-        StackFrame Frame(StackFrame frame) => frame with
-        {
-            Symbol = DeclaredAt(frame.File, frame.Line) is { } declared
-                ? frame.Symbol is { } printed ? $"{printed} [{declared}]" : declared
-                : frame.Symbol,
-        };
+        IReadOnlyList<StackFrame> Frames(IReadOnlyList<StackFrame> stack)
+            => [.. stack.Select(frame => InTree(frame) is { } place ? frame with { Declaration = At(place) } : frame)];
 
-        string? DeclaredAt(string? file, int? line)
+        EnclosingDeclaration? At((string File, int Line) place)
         {
-            if (file is not { } held || line is not { } at)
+            if (!asked.TryGetValue(place, out var declared))
             {
-                return null;
+                asked[place] = declared = declarationAt(place.File, place.Line);
             }
 
-            var place = (held, at);
-
-            if (!asked.TryGetValue(place, out var said))
-            {
-                asked[place] = said = declarationAt(held, at)?.Said();
-            }
-
-            return said;
+            return declared;
         }
     }
+
+    /// <summary>
+    /// Every place of this digest in the tree, in the order met: each diagnostic's own - its file named as the tree names
+    /// one (<see cref="InTree(Diagnostic)"/>) - and its chain's frames, then each failure's frames, its own stack's and its
+    /// thrown error's down its causes, each the placing marked the tree's (<see cref="InTree(StackFrame)"/>).
+    /// </summary>
+    private IEnumerable<(string File, int Line)> PlacesInTree()
+    {
+        foreach (var diagnostic in Diagnostics)
+        {
+            if (InTree(diagnostic) is { } place)
+            {
+                yield return place;
+            }
+
+            foreach (var framed in Placed(diagnostic.Stack))
+            {
+                yield return framed;
+            }
+        }
+
+        foreach (var failure in Failures)
+        {
+            foreach (var framed in Placed(failure.Stack))
+            {
+                yield return framed;
+            }
+
+            // Each cause after the record that names it, on an explicit stack, as deep as the chain goes.
+            for (var causes = new Stack<ExceptionRecord>(failure.Exception is { } thrown ? [thrown] : []); causes.TryPop(out var record);)
+            {
+                foreach (var framed in Placed(record.Stack))
+                {
+                    yield return framed;
+                }
+
+                for (var at = record.CausedBy.Count - 1; at >= 0; at--)
+                {
+                    causes.Push(record.CausedBy[at]);
+                }
+            }
+        }
+
+        static IEnumerable<(string File, int Line)> Placed(IReadOnlyList<StackFrame> stack)
+            => stack.Select(InTree).OfType<(string File, int Line)>();
+    }
+
+    /// <summary>
+    /// A diagnostic's own place where it is in the tree: its file named as the placing names every file the tree holds -
+    /// relative to the root with <c>/</c>, never rooted, climbing out of the root or of a scheme other than a path's
+    /// (<see cref="PlatformPaths.RelativeAsWritten"/> reads it as it is) - and a line; null otherwise. A tool's path the
+    /// tree does not hold stays as written, and one written so names the tree's file of that path to every reader of the
+    /// digest, so its declaration is that file's.
+    /// </summary>
+    private static (string File, int Line)? InTree(Diagnostic diagnostic)
+        => diagnostic is { File: { } file, Line: { } line } && PlatformPaths.RelativeAsWritten(null, file) is { } relative && string.Equals(relative, file, StringComparison.Ordinal)
+            ? (file, line)
+            : null;
+
+    /// <summary>A frame's place where the placing marked it the tree's (<see cref="StackFrame.InTree"/>) and it names a line; null otherwise.</summary>
+    private static (string File, int Line)? InTree(StackFrame frame)
+        => frame is { InTree: true, File: { } file, Line: { } line } ? (file, line) : null;
 
     /// <summary>
     /// This digest with every place it names placed by <paramref name="inTree"/> - the one place a frame is marked and a
@@ -698,8 +760,9 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// The first problem said whole, where it is a diagnostic: its tool, code, severity, place, count, log range, rendered
-    /// stack and saying - its message's first line said once, in its saying.
+    /// The first problem said whole, where it is a diagnostic: its tool, code, severity, place, the declaration enclosing it
+    /// where one was joined (<see cref="Declared"/>), count, log range, rendered stack and saying - its message's first line
+    /// said once, in its saying.
     /// </summary>
     private static JsonObject FirstOf(Diagnostic diagnostic)
         => new()
@@ -711,6 +774,7 @@ public sealed record ResultDigest
             ["file"] = diagnostic.File,
             ["line"] = diagnostic.Line,
             ["column"] = diagnostic.Column,
+            ["symbol"] = diagnostic.Symbol,
             ["count"] = diagnostic.Count,
             ["log"] = LogOf(diagnostic.Log),
             ["stack"] = Rendered(diagnostic.Stack, diagnostic.StackCut),
@@ -813,7 +877,7 @@ public sealed record ResultDigest
             ["causesCut"] = thrown.CausesCut,
         };
 
-    /// <summary>A stack as one JSON document holds it: every frame whole - its text, its place, its symbol, its module, its kind and whether its file is in the tree; empty where there is none.</summary>
+    /// <summary>A stack as one JSON document holds it: every frame whole - its text, its place, its symbol with the declaration joined to it (<see cref="StackFrame.SymbolSaid"/>), its module, its kind and whether its file is in the tree; empty where there is none.</summary>
     private static JsonArray Frames(IReadOnlyList<StackFrame> stack)
         => new([.. stack.Select(frame => (JsonNode)new JsonObject
         {
@@ -822,7 +886,7 @@ public sealed record ResultDigest
             ["line"] = frame.Line,
             ["column"] = frame.Column,
             ["module"] = frame.Module,
-            ["symbol"] = frame.Symbol,
+            ["symbol"] = frame.SymbolSaid,
             ["kind"] = frame.Kind,
             ["inTree"] = frame.InTree,
         })]);
@@ -1072,7 +1136,8 @@ public sealed record ResultDigest
         => new([.. RenderedLines(stack, cut).Select(line => (JsonNode?)line)]);
 
     /// <summary>
-    /// A stack as a model reads it: every frame inside the tree, the one frame on each side where it crosses out of
+    /// A stack as a model reads it: every frame inside the tree, with the declaration the tree's graph holds at its line in
+    /// brackets after it where one was joined (<see cref="Declared"/>), the one frame on each side where it crosses out of
     /// it, a line for each run of frames left out - which module or package held them, where the frames name one - and,
     /// where the record's bound cut the middle, a line saying how many the log holds there.
     /// </summary>
@@ -1094,7 +1159,7 @@ public sealed record ResultDigest
             if (frame.InTree)
             {
                 Flush();
-                lines.Add(frame.Text.Trim());
+                lines.Add(frame.Declaration is { } declared ? $"{frame.Text.Trim()} [{declared.Said()}]" : frame.Text.Trim());
             }
             else
             {
@@ -1135,17 +1200,23 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// What a runtime names a project's own files by, found where the project declares it in the tree: a Go package by the
-    /// import path of the <c>go.mod</c> that owns it - its directory below that file's, the import path less the module's
-    /// path - and a Dart package by the name its <c>pubspec.yaml</c> gives it, its files below the <c>lib</c> directory
-    /// beside that file. A tree may hold several of each - and the copies of the tree the harness keeps inside it hold the
-    /// same again, deeper - so the declaration that answers is the one nearest the tree's root; of two Go modules equally
-    /// near, the longer module path, as Go gives a package to the most specific module; of those, the first by its
-    /// directory's path. The tree is read a level at a time from its root - each level's declarations read before the
-    /// level below it is listed - and no deeper than a question needs, every level read at most once for the digest and
-    /// each answer kept: however many places ask, of whatever names, the tree is read once at most, so the whole placing
-    /// stays linear in the tree and the places. A directory reached through a link is never walked, and one that cannot be
-    /// read, or a declaration that cannot, declares nothing: the places it would have given stay as written.
+    /// What a runtime names a project's own files by, read as the runtime reads it. A Go package by the import path of the
+    /// <c>go.mod</c> that owns it - its directory below that file's, the import path less the module's path - found where
+    /// the project declares it in the tree: a tree may hold several, so the declaration that answers is the one nearest the
+    /// tree's root; of two equally near, the longer module path, as Go gives a package to the most specific module; of
+    /// those, the first by its directory's path. The tree is read a level at a time from its root - each level's
+    /// declarations read before the level below it is listed - and no deeper than a question needs, every level read at most
+    /// once for the digest and each answer kept: however many places ask, of whatever names, the tree is walked once at
+    /// most, so the whole placing stays linear in the tree and the places. The walk never goes down into git's own
+    /// directory, at any depth, nor into the tool's own state the tree holds (<see cref="HarnessLayout.StatePaths"/>) - the
+    /// copies its legs work in, its mutation workers, its agents' worktrees, its orchestrators' records - whose files are
+    /// no declaration of the tree's. A Dart package by the package configuration Dart itself resolves a <c>package:</c>
+    /// URI through: the <c>.dart_tool/package_config.json</c> of the package the tool ran in - beside the nearest
+    /// <c>pubspec.yaml</c> above where it ran, or its workspace's - read once for the digest, each package's files below the
+    /// root and the package directory it names; a package it places outside the tree - one of the pub cache - and every
+    /// name where no configuration is above where the tool ran, are in no tree, and nothing of the tree is walked for them.
+    /// A directory reached through a link is never walked, and one that cannot be read, or a declaration that cannot,
+    /// declares nothing: the places it would have given stay as written.
     /// </summary>
     private sealed class ProjectPackages(DigestTree tree)
     {
@@ -1155,29 +1226,30 @@ public sealed record ResultDigest
         /// <summary>The directive of a <c>go.mod</c> that declares its module's path.</summary>
         private const string ModuleDirective = "module";
 
-        /// <summary>The file a Dart package is declared in, at its directory's top.</summary>
-        private const string DartPackageFile = "pubspec.yaml";
+        /// <summary>The directory, beside a Dart package's <c>pubspec.yaml</c>, that holds what its tools made of it.</summary>
+        private const string DartToolDirectory = ".dart_tool";
 
-        /// <summary>The key of a <c>pubspec.yaml</c> that names its package.</summary>
-        private const string NameKey = "name:";
-
-        /// <summary>The directory beside a <c>pubspec.yaml</c> its package's <c>package:</c> URIs name files below.</summary>
-        private const string DartLibrary = "lib";
+        /// <summary>The file in <see cref="DartToolDirectory"/> that names the root of every package the package resolves.</summary>
+        private const string DartPackageConfig = "package_config.json";
 
         /// <summary>The scheme a Dart URI names a package's file with: <c>package:name/path</c>.</summary>
         private const string DartScheme = "package:";
 
+        /// <summary>The directory git keeps a repository's own records in, never a declaration of the tree's.</summary>
+        private const string GitDirectory = ".git";
+
         private readonly Dictionary<string, string?> _goAsked = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, string?> _dartAsked = new(StringComparer.Ordinal);
-        private readonly List<Declared> _met = [];
+        private readonly List<GoModule> _met = [];
+        private readonly HashSet<string> _toolState = [.. HarnessLayout.StatePaths(tree.WorktreesRoot)];
+        private Dictionary<string, string>? _dartLibraries;
         private List<TreeDirectory> _level = [new(tree.Root, string.Empty)];
         private bool _levelRead;
         private bool _whole;
         private int _depth;
 
         /// <summary>
-        /// The package a Dart URI names and the file's path below the package's <c>lib</c> - <c>package:demo/store.dart</c>
-        /// is <c>demo</c>'s <c>store.dart</c> - or null where it is no such URI.
+        /// The package a Dart URI names and the file's path below the package's own directory of its URIs -
+        /// <c>package:demo/store.dart</c> is <c>demo</c>'s <c>store.dart</c> - or null where it is no such URI.
         /// </summary>
         /// <param name="file">The file as the runtime wrote it.</param>
         public static (string Package, string Path)? DartPackageOf(string file)
@@ -1202,8 +1274,7 @@ public sealed record ResultDigest
         {
             if (!_goAsked.TryGetValue(importPath, out var directory))
             {
-                directory = Answered(module => module.Kind == GoModuleFile
-                        && importPath.StartsWith(module.Name, StringComparison.Ordinal)
+                directory = Answered(module => importPath.StartsWith(module.Name, StringComparison.Ordinal)
                         && (importPath.Length == module.Name.Length || importPath[module.Name.Length] == '/'))
                     is { } owner
                         ? Written(owner.Relative, importPath[owner.Name.Length..].TrimStart('/'))
@@ -1215,29 +1286,108 @@ public sealed record ResultDigest
         }
 
         /// <summary>
-        /// The <c>lib</c> directory of the Dart package named <paramref name="package"/>, written as the tree's root is, or
-        /// null where no <c>pubspec.yaml</c> of the tree names it.
+        /// The directory the Dart package named <paramref name="package"/> keeps the files its <c>package:</c> URIs name,
+        /// as the package configuration of the package the tool ran in places it - written so a path below it is read
+        /// against the tree's root - or null where that configuration names no such package, or there is none.
         /// </summary>
         /// <param name="package">The package's name, as a <c>package:</c> URI gives it.</param>
         public string? DartLibraryOf(string package)
         {
-            if (!_dartAsked.TryGetValue(package, out var library))
-            {
-                library = Answered(declared => declared.Kind == DartPackageFile && string.Equals(declared.Name, package, StringComparison.Ordinal))
-                    is { } named
-                        ? Written(named.Relative, DartLibrary)
-                        : null;
-                _dartAsked[package] = library;
-            }
+            _dartLibraries ??= DartLibraries();
 
-            return library;
+            return _dartLibraries.GetValueOrDefault(package);
         }
 
         /// <summary>
-        /// The declaration nearest the root that <paramref name="answers"/>, the tree read further only while none of the
+        /// Each package the Dart package configuration of where the tool ran names, by its name, with the directory of its
+        /// URIs: the configuration Dart reads, in the <see cref="DartToolDirectory"/> of the directory the tool ran in or of
+        /// the nearest one above it, up to the tree's root - its packages' roots read against its own directory, as Dart
+        /// reads them, a <c>file:</c> one as the path it names. None where no such configuration is, or it does not read.
+        /// </summary>
+        private Dictionary<string, string> DartLibraries()
+        {
+            foreach (var directory in Enclosing())
+            {
+                var tools = Path.Combine(directory, DartToolDirectory);
+                var config = Path.Combine(tools, DartPackageConfig);
+
+                if (!tree.FileSystem.FileExists(config))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using var read = tree.FileSystem.OpenRead(config);
+
+                    return PackagesOf(JsonDepth.ParseStream(read), tools);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+                {
+                    return [];
+                }
+            }
+
+            return [];
+        }
+
+        /// <summary>
+        /// The directories a package configuration names, by package: each package's <c>rootUri</c> - a reference read
+        /// against <paramref name="tools"/>, the configuration's own directory, its escapes decoded, or a <c>file:</c> URI as
+        /// the path it names - and below it its <c>packageUri</c>, the root itself where it names none; a package of another
+        /// scheme, or one that does not say its name and its root as text, is none.
+        /// </summary>
+        /// <param name="config">The configuration as read.</param>
+        /// <param name="tools">The directory the configuration is in, as the tree's root is written.</param>
+        private static Dictionary<string, string> PackagesOf(JsonNode? config, string tools)
+        {
+            var packages = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            foreach (var package in (config?["packages"] as JsonArray ?? []).OfType<JsonObject>())
+            {
+                if (Text(package["name"]) is not { Length: > 0 } name || Text(package["rootUri"]) is not { Length: > 0 } rootUri)
+                {
+                    continue;
+                }
+
+                var root = PlatformPaths.AsAPath(rootUri) is not { } path ? null
+                    : string.Equals(path, rootUri, StringComparison.Ordinal) ? $"{tools.TrimEnd('/', '\\')}/{Uri.UnescapeDataString(rootUri)}"
+                    : path;
+
+                if (root is not null)
+                {
+                    packages.TryAdd(name, $"{root.TrimEnd('/', '\\')}/{Uri.UnescapeDataString(Text(package["packageUri"]) ?? string.Empty)}");
+                }
+            }
+
+            return packages;
+
+            static string? Text(JsonNode? node)
+                => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+        }
+
+        /// <summary>
+        /// The directory the tool ran in, and each above it up to the tree's root, nearest first: only the root where it
+        /// ran in the root, or anywhere the root does not hold.
+        /// </summary>
+        private IEnumerable<string> Enclosing()
+        {
+            var below = tree.WorkingDirectory is { } working ? PlatformPaths.RelativeAsWritten(tree.Root, working) : null;
+            var parts = below?.Split('/') ?? [];
+
+            for (var count = parts.Length; count > 0; count--)
+            {
+                yield return Path.Combine([tree.Root, .. parts[..count]]);
+            }
+
+            yield return tree.Root;
+        }
+
+        /// <summary>
+        /// The <c>go.mod</c> nearest the root that <paramref name="answers"/>, the tree read further only while none of the
         /// levels read so far holds one; null where the whole tree holds none.
         /// </summary>
-        private Declared? Answered(Func<Declared, bool> answers)
+        private GoModule? Answered(Func<GoModule, bool> answers)
         {
             var found = Nearest(answers);
 
@@ -1251,7 +1401,7 @@ public sealed record ResultDigest
         }
 
         /// <summary>The declaration nearest the root among those read that <paramref name="answers"/>; null where none does.</summary>
-        private Declared? Nearest(Func<Declared, bool> answers)
+        private GoModule? Nearest(Func<GoModule, bool> answers)
             => _met
                 .Where(answers)
                 .OrderBy(declared => declared.Depth)
@@ -1271,12 +1421,7 @@ public sealed record ResultDigest
                 {
                     if (GoModulePathOf(Path.Combine(directory.Path, GoModuleFile)) is { } module)
                     {
-                        _met.Add(new Declared(GoModuleFile, _depth, directory.Relative, module));
-                    }
-
-                    if (DartPackageNameOf(Path.Combine(directory.Path, DartPackageFile)) is { } package)
-                    {
-                        _met.Add(new Declared(DartPackageFile, _depth, directory.Relative, package));
+                        _met.Add(new GoModule(_depth, directory.Relative, module));
                     }
                 }
 
@@ -1297,7 +1442,10 @@ public sealed record ResultDigest
             _whole = below.Count == 0;
         }
 
-        /// <summary>Adds to <paramref name="below"/> each directory directly beneath <paramref name="directory"/> that is no link; none where it cannot be read.</summary>
+        /// <summary>
+        /// Adds to <paramref name="below"/> each directory directly beneath <paramref name="directory"/> the walk goes down
+        /// into: no link, no git directory and none of the tool's own state; none where it cannot be read.
+        /// </summary>
         private void Beneath(TreeDirectory directory, List<TreeDirectory> below)
         {
             List<TreeDirectory> found = [];
@@ -1306,9 +1454,16 @@ public sealed record ResultDigest
             {
                 foreach (var path in tree.FileSystem.EnumerateDirectories(directory.Path))
                 {
-                    if (Path.GetFileName(path) is { Length: > 0 } name && !tree.FileSystem.IsLink(path))
+                    if (Path.GetFileName(path) is not { Length: > 0 } name || name == GitDirectory)
                     {
-                        found.Add(new TreeDirectory(path, directory.Relative.Length == 0 ? name : $"{directory.Relative}/{name}"));
+                        continue;
+                    }
+
+                    var relative = directory.Relative.Length == 0 ? name : $"{directory.Relative}/{name}";
+
+                    if (!_toolState.Contains(relative) && !tree.FileSystem.IsLink(path))
+                    {
+                        found.Add(new TreeDirectory(path, relative));
                     }
                 }
             }
@@ -1320,8 +1475,8 @@ public sealed record ResultDigest
             below.AddRange(found);
         }
 
-        /// <summary>The lines of the file at <paramref name="file"/> read by <paramref name="read"/>; null where there is none or it cannot be read.</summary>
-        private string? Declaration(string file, Func<IEnumerable<string>, string?> read)
+        /// <summary>The module path the <c>go.mod</c> at <paramref name="file"/> declares; null where there is none, it cannot be read, or it declares none.</summary>
+        private string? GoModulePathOf(string file)
         {
             if (!tree.FileSystem.FileExists(file))
             {
@@ -1330,19 +1485,13 @@ public sealed record ResultDigest
 
             try
             {
-                return read(FileLines.Read(tree.FileSystem, file).Select(line => line.Text));
+                return ModulePathOf(FileLines.Read(tree.FileSystem, file).Select(line => line.Text));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 return null;
             }
         }
-
-        /// <summary>The module path the <c>go.mod</c> at <paramref name="file"/> declares; null where there is none, it cannot be read, or it declares none.</summary>
-        private string? GoModulePathOf(string file) => Declaration(file, ModulePathOf);
-
-        /// <summary>The package name the <c>pubspec.yaml</c> at <paramref name="file"/> gives; null where there is none, it cannot be read, or it gives none.</summary>
-        private string? DartPackageNameOf(string file) => Declaration(file, PackageNameOf);
 
         /// <summary>
         /// The path a <c>go.mod</c>'s <c>module</c> directive declares, read as Go reads the file's lines: a <c>//</c>
@@ -1401,33 +1550,6 @@ public sealed record ResultDigest
             return null;
         }
 
-        /// <summary>
-        /// The name a <c>pubspec.yaml</c> gives its package: its top-level <c>name:</c> key, a line that begins with it,
-        /// its value bare or quoted and a <c>#</c> comment after it taken off; null where the file gives none. The lines after
-        /// it are never read.
-        /// </summary>
-        /// <param name="lines">The file's lines, in order.</param>
-        private static string? PackageNameOf(IEnumerable<string> lines)
-        {
-            foreach (var line in lines)
-            {
-                if (!line.StartsWith(NameKey, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var value = line[NameKey.Length..];
-                var comment = value.IndexOf(" #", StringComparison.Ordinal);
-                var said = (comment >= 0 ? value[..comment] : value).Trim();
-
-                return said.Length >= 2 && said[0] is '"' or '\'' && said[^1] == said[0]
-                    ? said[1..^1].Trim() is { Length: > 0 } inner ? inner : null
-                    : said.Length > 0 ? said : null;
-            }
-
-            return null;
-        }
-
         /// <summary>A module path as written, its quotes taken off; null where nothing is inside them.</summary>
         private static string? Unquoted(string said)
             => said.Length >= 2 && ((said[0] == '"' && said[^1] == '"') || (said[0] == '`' && said[^1] == '`'))
@@ -1446,10 +1568,10 @@ public sealed record ResultDigest
         private sealed record TreeDirectory(string Path, string Relative);
 
         /// <summary>
-        /// A declaration met: the file it is (<c>go.mod</c>, <c>pubspec.yaml</c>), how many levels below the root, its
-        /// directory's path below the root, and the name it declares - a module's path, a package's name.
+        /// A <c>go.mod</c> met: how many levels below the root, its directory's path below the root, and the module path it
+        /// declares.
         /// </summary>
-        private sealed record Declared(string Kind, int Depth, string Relative, string Name);
+        private sealed record GoModule(int Depth, string Relative, string Name);
     }
 
     /// <summary>
@@ -1477,6 +1599,7 @@ public sealed record ResultDigest
         private readonly Dictionary<string, int> _fileAt = new(StringComparer.Ordinal);
         private readonly List<TestFailure> _failures = [];
         private readonly HashSet<string> _named = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string Framework, string Id, string Outcome), Queue<int>> _saidThrough = [];
         private readonly Queue<string> _unparsed = new();
         private readonly Gathering? _into;
         private readonly ILineMask? _mask;
@@ -1555,8 +1678,11 @@ public sealed record ResultDigest
 
         /// <summary>
         /// Gathers <paramref name="failure"/>, the next the runner met, said through <paramref name="saidThrough"/>: the
-        /// failure its test's own output printed first, whose message and place it took - so the test that failure names
-        /// is one this gathering has said, as much as the failure's own.
+        /// failure its test's own output printed first, whose message and place it took - so a log's printing of that same
+        /// failure (<see cref="Printing"/>) is this one's, no second failure, and gives it what the log holds of it and it
+        /// lacks (<see cref="Beside"/>). The test a failure names is its own id alone; the failure it was said through names
+        /// a test only by being that printing, for its id may be no test's - a thrown error's heading, where a stack form
+        /// read it - and a process another printing of that error says died is another failure.
         /// </summary>
         /// <param name="failure">The failure, as its reader read it.</param>
         /// <param name="saidThrough">The failure it was said through; null where it was said through none.</param>
@@ -1576,19 +1702,38 @@ public sealed record ResultDigest
             }
 
             _named.Add(held.Id);
-
-            if (saidThrough is not null)
-            {
-                _named.Add(saidThrough.Id);
-            }
-
             _byOutcome[held.Outcome] = _byOutcome.GetValueOrDefault(held.Outcome) + 1;
 
-            if (_failures.Count < Bound)
+            var kept = _failures.Count < Bound;
+
+            if (kept)
             {
                 _failures.Add(held);
             }
+
+            if (saidThrough is not null)
+            {
+                if (!_saidThrough.TryGetValue(Printing(saidThrough), out var cases))
+                {
+                    _saidThrough[Printing(saidThrough)] = cases = new Queue<int>();
+                }
+
+                // Each printing of it the log holds gives the next failure said through it, in the order the files met
+                // them; one past the bound is counted, and its printing is still no second failure.
+                if (kept)
+                {
+                    cases.Enqueue(_failures.Count - 1);
+                }
+            }
         }
+
+        /// <summary>
+        /// What makes a log's failure a printing of a failure a results file's case was said through: the same reader's
+        /// failure of the same id that ended the same way - the same text read by the same parsers, as a test's own output
+        /// and the log that printed it are. An error a test threw and the same error a process died of are two printings
+        /// that did not end the same way.
+        /// </summary>
+        private static (string Framework, string Id, string Outcome) Printing(TestFailure failure) => (failure.Framework, failure.Id, failure.Outcome);
 
         /// <summary>
         /// Gathers <paramref name="line"/>, the next line no parser held: every one counted, the last <see cref="Bound"/>
@@ -1624,10 +1769,13 @@ public sealed record ResultDigest
         /// test no file names that did not merely fail - it crashed, errored or timed out, which no results file is written
         /// for - or, where the files name no failure at all, every one. A test that merely failed is one the files hold
         /// where they hold any: its console names it in its own words (jest's <c>›</c> path against jest-junit's joined
-        /// title), and it is never said twice. A failure of a test a file names is no second failure: it gives the file's
-        /// failure of that test what the file's lacks - a message where it says none, a place where it names none, its stack
-        /// and its thrown error where it holds neither, and its range in the log, so the lines the log printed of it are one
-        /// read away.
+        /// title), and it is never said twice. A failure of a test a file names, and a printing of the failure a file's case
+        /// was said through (<see cref="Add(TestFailure, TestFailure?)"/>) - the gtest test a CTest case's own output named,
+        /// printed again on the console - is no second failure: it gives the file's failure what the file's lacks - a message
+        /// where it says none, a place where it names none, its stack and its thrown error where it holds neither, and its
+        /// range in the log, so the lines the log printed of it are one read away. A thrown error a case was said through is
+        /// matched by its printing alone, never by its heading: the same error a process died of, which no results file is
+        /// written for, is the log's own crash, said.
         /// </summary>
         /// <param name="log">What the log's parsers found in it, in the order of its lines.</param>
         /// <param name="place">
@@ -1647,8 +1795,7 @@ public sealed record ResultDigest
 
             var filed = _counted.Select(identity => Same(identity.Code, identity.File, identity.Line, identity.Column, identity.Message)).ToHashSet();
             var anyFiled = _byOutcome.Count > 0;
-            var named = log.Failures.Where(failure => _named.Contains(failure.Id)).ToList();
-            var unnamed = log.Failures.Where(failure => !_named.Contains(failure.Id) && (!anyFiled || failure.Outcome != "failed")).ToList();
+            var unnamed = new List<TestFailure>();
             var heldAt = new Dictionary<string, int>(StringComparer.Ordinal);
 
             for (var at = 0; at < _failures.Count; at++)
@@ -1656,11 +1803,22 @@ public sealed record ResultDigest
                 heldAt.TryAdd(_failures[at].Id, at);
             }
 
-            foreach (var failure in named)
+            // A failure of a test a file names gives the file's failure of that test what it lacks; a printing of a failure
+            // a file's case was said through gives that case's - the next case said through it, for each printing; any
+            // other is the log's own.
+            foreach (var failure in log.Failures)
             {
-                if (heldAt.TryGetValue(failure.Id, out var at) && Held(failure, say: false) is { } said)
+                if (_named.Contains(failure.Id))
                 {
-                    _failures[at] = Given(_failures[at], said);
+                    Give(heldAt.TryGetValue(failure.Id, out var test) ? test : null, failure);
+                }
+                else if (_saidThrough.TryGetValue(Printing(failure), out var cases))
+                {
+                    Give(cases.TryDequeue(out var said) ? said : null, failure);
+                }
+                else if (!anyFiled || failure.Outcome != "failed")
+                {
+                    unnamed.Add(failure);
                 }
             }
 
@@ -1680,6 +1838,16 @@ public sealed record ResultDigest
             // One diagnostic, however each form writes it: its code and place, its message where it names no code.
             (string? Code, string? File, int? Line, int? Column, string? Message) Same(string? code, string? file, int? line, int? column, string message)
                 => (code, file is null ? null : place(file), line, column, code is null ? message : null);
+
+            // The held failure at the place given, given what the log's printing of it holds and it lacks; nothing where it is
+            // past the bound, counted already.
+            void Give(int? at, TestFailure logged)
+            {
+                if (at is { } held && Held(logged, say: false) is { } said)
+                {
+                    _failures[held] = Given(_failures[held], said);
+                }
+            }
 
             // A file's failure given what the log's of the same test holds and it lacks: its stack and thrown error as one.
             static TestFailure Given(TestFailure filed, TestFailure logged)

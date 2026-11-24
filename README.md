@@ -193,21 +193,23 @@ such word - was stopped from outside. `dssharness help
 legs` lists each generator's way.
 
 What a red leg's phase that did not pass printed is digested, typed: a build's log by the parsers its
-toolchain chose, a test's structured results where its invocation names any and its log by its
-runner's parsers where they gave nothing, a runner's failing step by every runtime's stack form, with
+toolchain chose, a test's structured results where its invocation names any and, beside them, its log
+by its runner's parsers, a runner's failing step by every runtime's stack form, with
 `results.matchers` everywhere. The text ledger says each red leg's first error in a block below its
 table; `--json` carries the digest typed as `digest`, its bounds said - the first 50 diagnostics of
 each severity, the first 50 failures and the last 50 lines no parser held kept, the rest counted by
 code and by file over the whole output, each stack held to its first 48 and last 16 frames, each
 cause chain followed 8 deep, every cut counted - every diagnostic and failure with its place, stack,
-causes and counts, each place inside the tree carrying the declaration a graph of the tree holds
-enclosing it - the declaration's kind, its qualified name, its handle - where one is held, each file
-inside the tree named
-relative to it (a Go test's, which `go test` prints relative to its package, read from the package's
-directory below the `go.mod` that owns its import path; a Dart `package:` frame of the project's own
-package from the `lib` beside the `pubspec.yaml` that names it), each log range numbering the lines of
-that phase's log as the file numbers them - and
-a leg a host ran carries the host's own digest, every text in it naming the host as configured.
+causes and counts, each file inside the tree named relative to it (a Go test's, which `go test` prints
+relative to its package, read from the package's directory below the `go.mod` that owns its import
+path; a Dart `package:` frame as Dart reads it, through the `.dart_tool/package_config.json` of the
+package the tool ran in), each log range numbering the lines of that phase's log as the file numbers
+them - and a leg a host ran carries the host's own digest, every text in it naming the host as
+configured. A plain `build`, `test` or `run` asks no graph, so its digest's symbols are null; a
+workflow's leg step whose run keeps a codebase graph of the tree its legs ran in joins each red leg's
+digest to it before it keeps the step's ledger: each place inside the tree carries the declaration
+the graph holds enclosing it - its kind, its qualified name, its handle - which a model reads as the
+first error's `symbol` and in brackets after each frame of a stack inside the tree.
 
 ## Running legs at once
 
@@ -324,7 +326,9 @@ says all it printed where nothing is typed. A skipped test is no failure. A path
 a file no form owns or one a crash cut short is said in the digest, not refused. The phase's log
 is read by its runner's parsers all the same, beside the files, each finding said once: what the
 files lack — a diagnostic, a crash, a host that died, a test that hung — is added, and a test
-both name is the file's, given its range in the log. `init` seeds the arguments the shipped
+both name — the console's printing of the first failure a case's test printed among them — is the
+file's, given its range in the log; a process that died of the error a case's test threw is a crash
+the files lack, said beside it. `init` seeds the arguments the shipped
 runners take for these files (`ctest --output-junit`, `dotnet test --logger trx` with
 `--results-directory`, `dart test --file-reporter`), each writing into `{resultsDir}`, and names
 the files under `results` to match.

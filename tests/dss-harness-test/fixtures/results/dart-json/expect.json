@@ -4,7 +4,7 @@
   },
   "root": "D:\\a\\app\\app",
   "workingDirectory": "D:\\a\\app\\app\\dart",
-  "tree": [{ "path": "dart/pubspec.yaml", "text": "name: demo\nenvironment:\n  sdk: ^3.5.0\n" }, "dart/test/store_test.dart", "dart/lib/store.dart"],
+  "tree": [{ "path": "dart/pubspec.yaml", "text": "name: demo\nenvironment:\n  sdk: ^3.5.0\n" }, { "path": "dart/.dart_tool/package_config.json", "text": "{\n  \"configVersion\": 2,\n  \"packages\": [\n    {\n      \"name\": \"matcher\",\n      \"rootUri\": \"file:///C:/Users/runneradmin/AppData/Local/Pub/Cache/hosted/pub.dev/matcher-0.12.16+1\",\n      \"packageUri\": \"lib/\",\n      \"languageVersion\": \"3.0\"\n    },\n    {\n      \"name\": \"demo\",\n      \"rootUri\": \"../\",\n      \"packageUri\": \"lib/\",\n      \"languageVersion\": \"3.5\"\n    }\n  ],\n  \"generator\": \"pub\",\n  \"generatorVersion\": \"3.5.0\"\n}\n" }, "dart/test/store_test.dart", "dart/lib/store.dart"],
   "failed": 1,
   "errored": 1,
   "first": null,

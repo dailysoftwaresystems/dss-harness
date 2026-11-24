@@ -380,8 +380,10 @@ public static partial class HelpTopics
             + "are said in the digest's unparsed lines, not refused - the failure may have been before the file was written. "
             + "The phase's own log is read by its runner's parsers all the same, beside what the files gave, each finding "
             + "said once: what the files lack - a diagnostic, a crash, a host that died, a test that hung - is added, and a "
-            + "test both name is the file's, given what the log holds of it and the file lacks, its range in the log among "
-            + "it. A pass reads nothing, as it keeps nothing. init seeds the arguments the "
+            + "test both name - the console's printing of the first failure a case's test printed among them - is the file's, "
+            + "given what the log holds of it and the file lacks, its range in the log among it; a process that died of the "
+            + "error a case's test threw is a crash the files lack, said beside it. A pass reads nothing, as it keeps nothing. "
+            + "init seeds the arguments the "
             + "shipped runners take for these files - ctest --output-junit, dotnet test --logger trx with --results-directory, "
             + $"dart test --file-reporter - each writing into {{{LegPathNames.ResultsDirectory}}}, and names the files under results "
             + "to match.");

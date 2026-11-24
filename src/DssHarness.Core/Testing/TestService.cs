@@ -397,7 +397,7 @@ public sealed class TestService(
             digest = PhaseDigest.Of(
                 phase.Output,
                 parsers,
-                new DigestTree(request.TreeRoot, working, _fileSystem),
+                new DigestTree(request.TreeRoot, working, _fileSystem, config.Worktrees.Root),
                 into => TestResults.Read(_fileSystem, invocation.Results, paths, paths.ResultsDirectory!, parsers, into, asked.Mask, cancellationToken));
         }
 

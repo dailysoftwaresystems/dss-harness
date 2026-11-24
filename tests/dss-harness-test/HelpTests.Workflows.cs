@@ -110,10 +110,12 @@ public sealed partial class HelpTests
                 + "else the run's own - null for a leg a host ran, whose log stays there and whose digest, made there, travels on its "
                 + "line. The ledger's --json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics "
                 + "of each severity, the first 50 failures and the last 50 lines no parser held, the rest counted, a stack held to its "
-                + "first 48 and last 16 frames with the cut counted, each place inside the tree carrying the declaration a graph of "
-                + "the tree holds enclosing it where one is held - the declaration's kind, its qualified name, its handle - the text "
-                + "ledger says each red leg's first error in a block below "
-                + "its table, and {run.red} says it on its line",
+                + "first 48 and last 16 frames with the cut counted - the text ledger says each red leg's first error in a block below "
+                + "its table, and {run.red} says it on its line. Where the run keeps a codebase graph of the tree the step's legs ran "
+                + "in, each red leg's digest is joined to it before the step's ledger is kept: each place inside the tree carries the "
+                + "declaration the graph holds enclosing it - its kind, its qualified name, its handle - the first error's as its "
+                + "symbol and each frame of a stack inside the tree with it in brackets after its line; a plain build, test or run "
+                + "command asks no graph, and its digest's symbols are null",
             prose,
             StringComparison.Ordinal);
     }
@@ -640,7 +642,7 @@ public sealed partial class HelpTests
                 + "nothing as the step started, are refused, nothing swept; and 'item' is refused where the file is read in a step no "
                 + "forEach holds, a forEach that uses its file among them. Each answers passed, true where every leg passed; exitCode, the command's; "
                 + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
-                + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
+                + "line and, in tail, what it printed that its digest does not say, and of a sweep each arm that violated, survived or was unattributed, with its arm "
                 + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. Each "
                 + "red leg's entry also carries, in digest, what the phase that did not pass printed, typed: the first error whole - its "
                 + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four "
@@ -653,10 +655,12 @@ public sealed partial class HelpTests
                 + "else the run's own - null for a leg a host ran, whose log stays there and whose digest, made there, travels on its "
                 + "line. The ledger's --json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics "
                 + "of each severity, the first 50 failures and the last 50 lines no parser held, the rest counted, a stack held to its "
-                + "first 48 and last 16 frames with the cut counted, each place inside the tree carrying the declaration a graph of "
-                + "the tree holds enclosing it where one is held - the declaration's kind, its qualified name, its handle - the text "
-                + "ledger says each red leg's first error in a block below "
-                + "its table, and {run.red} says it on its line. What "
+                + "first 48 and last 16 frames with the cut counted - the text ledger says each red leg's first error in a block below "
+                + "its table, and {run.red} says it on its line. Where the run keeps a codebase graph of the tree the step's legs ran "
+                + "in, each red leg's digest is joined to it before the step's ledger is kept: each place inside the tree carries the "
+                + "declaration the graph holds enclosing it - its kind, its qualified name, its handle - the first error's as its "
+                + "symbol and each frame of a stack inside the tree with it in brackets after its line; a plain build, test or run "
+                + "command asks no graph, and its digest's symbols are null. What "
                 + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
                 + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "
                 + "agent-clients'); where this machine has none, agentPolicy.isolation required fails the step "

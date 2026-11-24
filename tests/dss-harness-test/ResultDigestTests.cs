@@ -172,35 +172,55 @@ public sealed class ResultDigestTests
     }
 
     /// <summary>
-    /// A Dart frame that names one of the project's own files by its package - <c>package:demo/store.dart</c> - is the
-    /// tree's, read from the <c>lib</c> directory beside the <c>pubspec.yaml</c> nearest the root that names the package
-    /// (its name quoted or beside a comment as YAML writes it; the root's over a copy of the tree inside it; a name only
-    /// when it is the whole name), and the failure's place is that frame: the throw site, never its caller. A package no
-    /// <c>pubspec.yaml</c> of the tree names, a file its <c>lib</c> does not hold and the runtime's own library are in none,
-    /// and stay as the runtime wrote them.
+    /// A Dart frame that names a package's file - <c>package:demo/store.dart</c> - is read as Dart reads it: through the
+    /// package configuration of the package the tool ran in, the <c>.dart_tool/package_config.json</c> nearest above where
+    /// it ran - a workspace's further up is not read where a nearer one is - each package's root read against the
+    /// configuration's own directory, and its file below the package's directory of its URIs; the failure's place is that
+    /// frame, the throw site, never its caller. A package the configuration places outside the tree - the pub cache's - a
+    /// package it does not name, a file that is not there and the runtime's own library are in none and stay as written,
+    /// and nothing of the tree is listed for any of them.
     /// </summary>
     [Fact]
-    public void ADartFrameNamingTheProjectsOwnPackage_IsReadFromThePackagesLibrary_ThroughItsPubspec()
+    public void ADartFrameNamingAPackage_IsReadThroughThePackageConfigurationOfWhereTheToolRan()
     {
         using var temp = new TempDirectory();
-        temp.WriteFile("app/pubspec.yaml", "# The app.\nname: \"demo\" # its package\nenvironment:\n  sdk: ^3.5.0\n");
+        temp.WriteFile("app/pubspec.yaml", "name: demo\n");
         temp.WriteFile("app/lib/store.dart");
-        temp.WriteFile(".legs/copy/app/pubspec.yaml", "name: demo\n");
-        temp.WriteFile(".legs/copy/app/lib/store.dart");
+        temp.WriteFile("app/test/store_test.dart");
+        temp.WriteFile(
+            "app/.dart_tool/package_config.json",
+            """
+            {
+              "configVersion": 2,
+              "packages": [
+                { "name": "test_api", "rootUri": "file:///home/runner/.pub-cache/hosted/pub.dev/test_api-0.7.3", "packageUri": "lib/", "languageVersion": "3.4" },
+                { "name": "demo_tools", "rootUri": "../../tools", "packageUri": "lib/", "languageVersion": "3.5" },
+                { "name": "demo", "rootUri": "../", "packageUri": "lib/", "languageVersion": "3.5" }
+              ],
+              "generator": "pub",
+              "generatorVersion": "3.5.0"
+            }
+            """);
         temp.WriteFile("tools/pubspec.yaml", "name: demo_tools\n");
         temp.WriteFile("tools/lib/gen.dart");
 
-        // The first frame names a package no pubspec names, so the whole tree is read before the others are asked.
+        // A workspace's configuration above the package's own, which a nearer one leaves unread: were it read, demo's files
+        // would be the tools package's, where no store.dart is.
+        temp.WriteFile(".dart_tool/package_config.json", """{ "configVersion": 2, "packages": [{ "name": "demo", "rootUri": "../tools/", "packageUri": "lib/" }] }""");
+        temp.WriteFile(".legs/copy/app/lib/store.dart");
+        var files = new CountedListings();
+
         var stack = new List<StackFrame>
         {
             new("#0 expect (package:test_api/expect.dart:5:3)", "package:test_api/expect.dart", 5),
             new("#1 Store.load (package:demo/store.dart:14:7)", "package:demo/store.dart", 14),
             new("#2 gen (package:demo_tools/gen.dart:3:1)", "package:demo_tools/gen.dart", 3),
             new("#3 gone (package:demo/gone.dart:2:1)", "package:demo/gone.dart", 2),
-            new("#4 _throw (dart:core/errors.dart:9:1)", "dart:core/errors.dart", 9),
+            new("#4 other (package:other/other.dart:1:1)", "package:other/other.dart", 1),
+            new("#5 _throw (dart:core/errors.dart:9:1)", "dart:core/errors.dart", 9),
         };
         var marked = ResultDigest.Of([], [new TestFailure("dart", "Bad state: no record", Exception: new ExceptionRecord("StateError", "no record", stack, []))], [])
-            .WithInTree(new DigestTree(temp.Path, temp.Combine("app"), new PhysicalFileSystem(FilePermissionsFactory.Create())));
+            .WithInTree(new DigestTree(temp.Path, temp.Combine("app", "test"), files));
 
         Assert.Equal(
             [
@@ -208,31 +228,30 @@ public sealed class ResultDigestTests
                 ("app/lib/store.dart", true),
                 ("tools/lib/gen.dart", true),
                 ("package:demo/gone.dart", false),
+                ("package:other/other.dart", false),
                 ("dart:core/errors.dart", false),
             ],
             marked.Failures[0].Exception!.Stack.Select(frame => (frame.File!, frame.InTree)));
         Assert.Equal(("app/lib/store.dart", (int?)14), (marked.Failures[0].File, marked.Failures[0].Line));
+        Assert.Empty(files.Listed);
     }
 
     /// <summary>
-    /// Where the tree's graph is held, each place of the digest that it has a declaration for says it: a diagnostic's
-    /// symbol is the declaration enclosing its line - its kind, its qualified name and its handle, as the graph names a
-    /// node - and a frame says it beside the function its line printed, or alone where the frame printed none. A place
-    /// the graph does not hold, a frame that names no file, and every digest of a tree with no graph, say none; the
-    /// declaration is asked by the place as the tree names it, each place once however many findings name it.
+    /// The declarations of the tree's graph are joined where the graph is, at the digest's places in the tree alone: a
+    /// diagnostic's symbol is the declaration enclosing its line - its kind, its qualified name and its handle, as the graph
+    /// names a node - and each frame the placing marked the tree's, a diagnostic's chain and a failure's stack down its
+    /// causes, holds it beside the function its line printed, the record saying both. A frame outside the tree and a
+    /// diagnostic's file written outside the root are never asked, each place is asked once however many findings name it,
+    /// and a place the graph holds no declaration at says none.
     /// </summary>
     [Fact]
-    public void APlacesEnclosingDeclaration_FromTheTreesGraph_IsSaidAtEachPlaceTheGraphHolds()
+    public void TheGraphsDeclarations_AreJoinedAtTheDigestsPlacesInTheTree_EachAskedOnce()
     {
-        using var temp = new TempDirectory();
-        temp.WriteFile("src/Program.cs");
-        temp.WriteFile("src/Other.cs");
         var asked = new List<string>();
-
-        var marked = ResultDigest.Of(
+        var digest = ResultDigest.Of(
             [
-                // Printed as the tool did, by a path the placing reads: the graph is asked by the place as the tree names it.
-                new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", temp.Combine("src", "Program.cs").Replace('\\', '/'), 12, 35, Log: (10, 11)),
+                new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Program.cs", 12, 35, Log: (10, 11)),
+                new Diagnostic("gcc", "error", null, "jammed", "/usr/include/stdio.h", 3, Stack: [new StackFrame("In file included from src/main.c:2:", "src/main.c", 2, Kind: "include", InTree: true)]),
             ],
             [
                 new TestFailure(
@@ -242,59 +261,99 @@ public sealed class ResultDigestTests
                         "System.InvalidOperationException",
                         "no record",
                         [
-                            new StackFrame("at App.Tests.Holds() in src/Program.cs:12", "src/Program.cs", 12, Symbol: "App.Tests.Holds"),
+                            new StackFrame("at App.Tests.Holds() in src/Program.cs:12", "src/Program.cs", 12, Symbol: "App.Tests.Holds", InTree: true),
                             new StackFrame("at System.Text.StringBuilder.Append(char)", "mscorlib.cs", 123, Symbol: "System.Text.StringBuilder.Append"),
-                            new StackFrame("at Nowhere()", "nowhere.cs", 5, Symbol: "Nowhere"),
-                            new StackFrame("in src/Other.cs:3", "src/Other.cs", 3),
+                            new StackFrame("in src/Other.cs:3", "src/Other.cs", 3, InTree: true),
                         ],
-                        [new ExceptionRecord("System.ArgumentException", "inner", [new StackFrame("at Inner() in src/Other.cs:9", "src/Other.cs", 9, Symbol: "Inner")], [])])),
+                        [new ExceptionRecord("System.ArgumentException", "inner", [new StackFrame("at Inner() in src/Other.cs:9", "src/Other.cs", 9, Symbol: "Inner", InTree: true)], [])])),
             ],
-            [])
-            .WithInTree(new DigestTree(
-                temp.Path,
-                null,
-                new PhysicalFileSystem(FilePermissionsFactory.Create()),
-                (file, line) =>
-                {
-                    asked.Add($"{file}:{line.ToString(CultureInfo.InvariantCulture)}");
+            []);
 
-                    return (file, line) switch
-                    {
-                        ("src/Program.cs", 12) => new EnclosingDeclaration("member", "App.Tests.Holds", "4f2a9b"),
-                        ("src/Other.cs", 3) => new EnclosingDeclaration("member", "App.Other.Load", "8c1d2e"),
-                        ("src/Other.cs", 9) => new EnclosingDeclaration("type", "App.Other", "9b7c3d"),
-                        _ => null,
-                    };
-                }));
+        var declared = digest.Declared((file, line) =>
+        {
+            asked.Add($"{file}:{line.ToString(CultureInfo.InvariantCulture)}");
 
-        Assert.Equal("member App.Tests.Holds 4f2a9b", marked.Diagnostics[0].Symbol);
+            return (file, line) switch
+            {
+                ("src/Program.cs", 12) => new EnclosingDeclaration("member", "App.Tests.Holds", "4f2a9b"),
+                ("src/Other.cs", 9) => new EnclosingDeclaration("type", "App.Other", "9b7c3d"),
+                ("src/main.c", 2) => new EnclosingDeclaration("member", "main", "1a2b3c"),
+                _ => null,
+            };
+        });
+
+        Assert.Equal(new string?[] { "member App.Tests.Holds 4f2a9b", null }, declared.Diagnostics.Select(diagnostic => diagnostic.Symbol));
+        Assert.Equal(new EnclosingDeclaration("member", "main", "1a2b3c"), Assert.Single(declared.Diagnostics[1].Stack).Declaration);
+
+        var thrown = declared.Failures[0].Exception!;
+
+        // The function as printed stays the frame's own; the record says the declaration beside it.
+        Assert.Equal(new string?[] { "App.Tests.Holds", "System.Text.StringBuilder.Append", null }, thrown.Stack.Select(frame => frame.Symbol));
+        Assert.Equal(new string?[] { "App.Tests.Holds [member App.Tests.Holds 4f2a9b]", "System.Text.StringBuilder.Append", null }, thrown.Stack.Select(frame => frame.SymbolSaid));
         Assert.Equal(
-            [
-                "App.Tests.Holds [member App.Tests.Holds 4f2a9b]",
-                "System.Text.StringBuilder.Append",
-                "Nowhere",
-                "member App.Other.Load 8c1d2e",
-            ],
-            marked.Failures[0].Exception!.Stack.Select(frame => frame.Symbol));
-        Assert.Equal("Inner [type App.Other 9b7c3d]", marked.Failures[0].Exception!.CausedBy[0].Stack[0].Symbol);
+            "Inner [type App.Other 9b7c3d]",
+            declared.Document()["failures"]![0]!["exception"]!["causedBy"]![0]!["stack"]![0]!["symbol"]!.GetValue<string>());
 
-        // The diagnostic and the frame name the same place: the graph answers it once.
-        Assert.Equal(["src/Program.cs:12", "mscorlib.cs:123", "nowhere.cs:5", "src/Other.cs:3", "src/Other.cs:9"], asked);
+        // Only the places in the tree, each once: the diagnostic and the frame name the same place.
+        Assert.Equal(["src/Program.cs:12", "src/main.c:2", "src/Other.cs:3", "src/Other.cs:9"], asked);
+        Assert.Equal(["src/Program.cs", "src/main.c", "src/Other.cs"], digest.FilesInTree());
     }
 
     /// <summary>
-    /// The tree's declarations are read once for a digest, however many of its places ask: several Go tests of packages no
-    /// <c>go.mod</c> owns, and a Dart frame of a package no <c>pubspec.yaml</c> names, each needing the whole tree read, list
-    /// each directory of it exactly once - the placing stays linear in the tree and the places - and every place stays as
-    /// written.
+    /// What a model is handed of a digest says the declarations joined to it: the first error's symbol, and each frame of a
+    /// rendered stack inside the tree with its declaration in brackets after its line, so a model reads file, declaration
+    /// and line together; a frame outside the tree is rendered as printed.
     /// </summary>
     [Fact]
-    public void TheTreesDeclarations_AreReadOnceForADigest_HoweverManyOfItsPlacesAsk()
+    public void WhatAModelIsHanded_SaysTheDeclarationsJoinedToTheDigest()
+    {
+        var digest = ResultDigest.Of(
+            [new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Store.cs", 14, 9)],
+            [
+                new TestFailure(
+                    "xunit",
+                    "App.Tests.Loads",
+                    Exception: new ExceptionRecord(
+                        "System.InvalidOperationException",
+                        "no record",
+                        [
+                            new StackFrame("at App.Store.Load() in src/Store.cs:line 14", "src/Store.cs", 14, Symbol: "App.Store.Load", InTree: true),
+                            new StackFrame("at System.Linq.Enumerable.First()", Symbol: "System.Linq.Enumerable.First"),
+                        ],
+                        [])),
+            ],
+            []).Declared((file, line) => (file, line) == ("src/Store.cs", 14) ? new EnclosingDeclaration("member", "App.Store.Load", "4f2a9b") : null);
+
+        var handed = ResultDigest.Handed(digest, [], PhaseParsers.AsRead).Digest!;
+
+        Assert.Equal("member App.Store.Load 4f2a9b", handed["first"]!["symbol"]!.GetValue<string>());
+        Assert.Equal(
+            ["at App.Store.Load() in src/Store.cs:line 14 [member App.Store.Load 4f2a9b]", "at System.Linq.Enumerable.First()"],
+            handed["failures"]![0]!["stack"]!.AsArray().Select(line => line!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// The tree's declarations are read once for a digest, however many of its places ask, and never from what is not the
+    /// tree's own: several Go tests of packages no <c>go.mod</c> owns, each needing the whole tree read, list each directory
+    /// of it exactly once - the placing stays linear in the tree and the places - while git's own directory, at any depth,
+    /// and the tool's own state the tree holds - the copies its legs work in, its mutation workers and a former version's,
+    /// its agents' worktrees where the configuration keeps them, a worker's dependency sources - are never listed; a Dart
+    /// frame of a package no configuration above where the tool ran names lists nothing; and every place stays as written.
+    /// </summary>
+    [Fact]
+    public void TheTreesDeclarations_AreReadOnceForADigest_NeverFromWhatIsNotTheTreesOwn()
     {
         using var temp = new TempDirectory();
         temp.WriteFile("a/b/c/c_test.go");
         temp.WriteFile("d/d_test.go");
         temp.WriteFile("e/f/f.dart");
+        temp.WriteFile(".git/objects/info");
+        temp.WriteFile("a/.git/hooks/pre-commit");
+        temp.WriteFile(".legs/copy/go.mod", "module example.org\n");
+        temp.WriteFile(".m/w-1/go.mod", "module example.org\n");
+        temp.WriteFile(".mutations/w-0/go.mod", "module example.org\n");
+        temp.WriteFile(".worktrees/agent/go.mod", "module example.org\n");
+        temp.WriteFile(".harness-config/deps/module/go.mod", "module example.org\n");
         var files = new CountedListings();
 
         var marked = ResultDigest.Of(
@@ -306,9 +365,9 @@ public sealed class ResultDigestTests
                 new TestFailure("dart", "Bad state", Exception: new ExceptionRecord("StateError", "bad", [new StackFrame("#0 f (package:other/f.dart:4:1)", "package:other/f.dart", 4)], [])),
             ],
             [])
-            .WithInTree(new DigestTree(temp.Path, null, files));
+            .WithInTree(new DigestTree(temp.Path, null, files, ".worktrees"));
 
-        string[] directories = [temp.Path, .. Directory.EnumerateDirectories(temp.Path, "*", SearchOption.AllDirectories)];
+        string[] directories = [temp.Path, temp.Combine("a"), temp.Combine("a", "b"), temp.Combine("a", "b", "c"), temp.Combine("d"), temp.Combine("e"), temp.Combine("e", "f"), temp.Combine(".harness-config")];
 
         Assert.Equal(directories.Order(StringComparer.Ordinal).Select(directory => (directory, 1)), files.Listed.OrderBy(listed => listed.Key, StringComparer.Ordinal).Select(listed => (listed.Key, listed.Value)));
         Assert.Equal(["c_test.go", "d_test.go", "e_test.go", null], marked.Failures.Select(failure => failure.File));
@@ -363,6 +422,49 @@ public sealed class ResultDigestTests
                 + $"{ExceptionRecord.CauseBound.ToString(CultureInfo.InvariantCulture)} deep, every cut counted",
             Prose.Words(Prose.Document("README.md")),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every type and member the architecture's section on results digested names in code - backticked, a type and the
+    /// member or nested type after it - is one the code holds, so a member renamed or taken out is never left named there as
+    /// the owner of the rule the prose says.
+    /// </summary>
+    [Fact]
+    public void TheArchitecturesDigestSection_NamesOnlyMembersTheCodeHolds()
+    {
+        var document = File.ReadAllText(Path.Combine(Prose.RepositoryRoot(), "docs", "architecture.md")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var start = document.IndexOf("\n## Results digested\n", StringComparison.Ordinal);
+        var end = document.IndexOf("\n## ", start + 1, StringComparison.Ordinal);
+        var spans = document[start..end].Split('`');
+        var types = typeof(ResultDigest).Assembly.GetTypes();
+
+        // Each code span's name, up to a call's parenthesis: a type and what is named in it, every part a type's or a
+        // member's name - a file's name (Thread.java) and a path are not.
+        var named = spans
+            .Where((_, at) => at % 2 == 1)
+            .Select(span => span.Split('(')[0])
+            .Where(span => span.Split('.') is { Length: > 1 } parts && parts.All(part => part.Length > 0 && char.IsAsciiLetterUpper(part[0]) && part.All(char.IsAsciiLetterOrDigit)))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(1, spans.Length % 2);
+        Assert.Contains("ResultDigest.Gathering.Through", named);
+        Assert.DoesNotContain(named, name => !Holds(name));
+
+        bool Holds(string name)
+        {
+            const System.Reflection.BindingFlags Every = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.FlattenHierarchy;
+            var parts = name.Split('.');
+            IEnumerable<Type> holders = types.Where(type => !type.IsNested && type.Name.Split('`')[0] == parts[0]);
+
+            foreach (var part in parts[1..^1])
+            {
+                holders = [.. holders.SelectMany(type => type.GetNestedTypes(Every)).Where(type => type.Name.Split('`')[0] == part)];
+            }
+
+            return holders.Any(type => type.GetMember(parts[^1], Every).Length > 0);
+        }
     }
 
     /// <summary>
@@ -441,7 +543,7 @@ public sealed class ResultDigestTests
     [InlineData("""{"failures":[{"framework":"xunit","id":"t","outcome":"failed","stack":[{"text":"at A()","inTree":"yes"}]}]}""", "'inTree' is no flag")]
     [InlineData("""[]""", "a digest is no object")]
     [InlineData("""{"errors":1,"leftOut":{"diagnostics":2}}""", "it says it left out other than its counts and what it holds make")]
-    [InlineData("""{"failures":[{"framework":"xunit","id":"t","outcome":"failed","exception":{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m"}]}]}]}]}]}]}]}]}}],"failed":1}""", "a cause chain is deeper than its bound of 8")]
+    [InlineData("""{"failures":[{"framework":"xunit","id":"t","outcome":"failed","exception":{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m","causedBy":[{"type":"T","message":"m"}]}]}]}]}]}]}]}]}]}}],"failed":1}""", "a cause chain is deeper than its bound of 8")]
     public void ADocumentOfNoDigestsShape_IsRefused_NamingWhatIsWrong(string document, string problem)
         => Assert.Equal(problem, Assert.Throws<System.Text.Json.JsonException>(() => ResultDigest.Read(System.Text.Json.Nodes.JsonNode.Parse(document))).Message);
 }
