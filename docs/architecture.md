@@ -10245,10 +10245,12 @@ the order the tool met it, the lines its `log` names one read away in the entry'
 `rediagnose.md` say the same, and the continuation record carries each red leg's ledger line, its digest - written as
 every JSON an agent reads is (`AgentEnvelope.Written`: JSON's own escapes alone), so an apostrophe or an angle bracket a
 tool printed reads as it printed it - the raw lines its entry carries beside it, each line once as the entry holds
-them - none where the digest holds a problem and says the lines no parser held itself, the phase's last lines where it
-holds none or there is no digest, so a leg no parser read is never said by its line alone - and a copy of the log its entry names, put with
-the record's other copies (`ReasonStepRunner.RedLegsOf`, `AgentContinuation`), so a step that goes on starts from the
-first error with its log one read away. Red legs are read only from a step whose output the engine wrote of the legs it
+them (`ResultDigest.Handed`) - none where the digest holds a problem and the phase's log is one read away, the digest
+saying the lines no parser held itself, and the phase's last lines where it holds none, where there is no digest, and
+where no log of the phase is on this machine - a host's that could not be brought back - so a leg no parser read is
+never said by its line alone and no line it printed is out of reach - and a copy of the log its entry names - a host's
+its run brought back among them - put with the record's other copies (`ReasonStepRunner.RedLegsOf`,
+`AgentContinuation`), so a step that goes on starts from the first error with its log one read away. Red legs are read only from a step whose output the engine wrote of the legs it
 ran (`WorkflowStepTypes.StepType.AnswersLegs`), never from a model's answer: a path a model wrote there would have the
 record copy a file the agent's policy never let it read.
 

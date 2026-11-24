@@ -24,13 +24,15 @@ public sealed record AgentContinuedStep(string Instance, string Ended, string Di
 /// </param>
 /// <param name="Tail">
 /// The raw lines the red entry carries beside its digest, which says none of them again
-/// (<see cref="Results.ResultDigest.Handed"/>): none where the digest holds a problem and says the lines no parser held
-/// itself, the phase's last lines where it holds none or there is no digest - so a leg whose output no parser read is
-/// never said by its ledger line alone.
+/// (<see cref="Results.ResultDigest.Handed"/>): none where the digest holds a problem and the phase's log is one read
+/// away, the digest saying the lines no parser held itself; the phase's last lines where it holds none, where there is
+/// no digest, and where no log of the phase is on this machine - a host's that could not be brought back - so a leg whose
+/// output no parser read is never said by its ledger line alone, and no line it printed is out of reach.
 /// </param>
 /// <param name="Log">
-/// The log the phase wrote, whose lines the digest's ranges number, where this machine holds it: the record copies it
-/// and names the copy; null where it holds none - a leg a host ran keeps its log there.
+/// The log the phase wrote, whose lines the digest's ranges number, where this machine holds it - a leg's this machine
+/// ran, and a host's its run brought back: the record copies it and names the copy; null where it holds none - a host's
+/// whose log could not be brought back.
 /// </param>
 public sealed record AgentRedLeg(string Leg, string Phase, string LedgerLine, string? Digest, IReadOnlyList<string>? Tail = null, string? Log = null);
 
