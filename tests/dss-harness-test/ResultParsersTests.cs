@@ -1025,9 +1025,10 @@ public sealed class ResultParsersTests
 
     /// <summary>
     /// <c>go test -v</c> streams each test's logged lines as it runs, under the <c>===</c> line that named it, and says
-    /// them again under its <c>--- FAIL</c> line: the failure's message is what the test logged, held once - the copy the
-    /// stream already said is not held twice - its place the first line that names one, and a subtest's failure its own,
-    /// the parent's <c>=== NAME</c> line back and its <c>--- FAIL</c> after it.
+    /// them again under its <c>--- FAIL</c> line: the failure's message is what the test logged, held once - read from
+    /// the stream where Go did not repeat it, the copy the stream already said not held twice where it did - its place
+    /// the first line that names one, and a subtest's failure its own, the parent's <c>=== NAME</c> line back and its
+    /// <c>--- FAIL</c> after it.
     /// </summary>
     [Fact]
     public void AVerboseGoRun_KeepsEachTestsLoggedLines_UnderItsFailLine_SaidOnce()
@@ -1037,7 +1038,6 @@ public sealed class ResultParsersTests
                 "=== RUN   TestStoreLoads",
                 "    store_test.go:14: Load(\"first\") = 3, want 4",
                 "--- FAIL: TestStoreLoads (0.00s)",
-                "    store_test.go:14: Load(\"first\") = 3, want 4",
                 "FAIL",
                 "FAIL\texample.com/app/store\t0.004s",
                 "=== RUN   TestGroup",
