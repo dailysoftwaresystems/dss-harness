@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Build;
 using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Results;
@@ -1190,15 +1191,15 @@ internal sealed class CMakeParser : IBuiltInParser
 }
 
 /// <summary>
-/// Ninja's form: a <c>FAILED: outputs</c> block, the command it ran on the line under it, and what that command printed -
+/// Ninja's form: a <c>FAILED: outputs</c> block - its edge read by the one owner of such a line
+/// (<see cref="Ninja.FailedListed"/>), the exit code ninja writes between it and the outputs taken off - the command it
+/// ran on the line under it, and what that command printed -
 /// the edge every diagnostic said inside it names as its project. An edge is a diagnostic of its own only where nothing
 /// inside it said an error, for then it is all that says what failed. Ninja's own <c>ninja: error:</c> is an error;
 /// <c>ninja: build stopped</c> and its progress lines end an edge.
 /// </summary>
 internal sealed class NinjaParser : IBuiltInParser
 {
-    private static readonly Regex Failed = LinearRegex.Compile(@"^FAILED: (?:\[code=\d+\] )?(?<outputs>.+?)\s*$");
-
     private static readonly Regex Own = LinearRegex.Compile(@"^ninja: (?<severity>error|fatal|warning): (?<message>.+)$");
 
     private static readonly Regex Stopped = LinearRegex.Compile(@"^ninja: build stopped: .*$");
@@ -1226,10 +1227,10 @@ internal sealed class NinjaParser : IBuiltInParser
                 return LineTaken.Took;
             }
 
-            if (Failed.Match(line.Text) is { Success: true } failed)
+            if (Ninja.FailedListed(line.Text) is { } listed)
             {
                 Close(sink);
-                _edge = failed.Groups["outputs"].Value;
+                _edge = listed;
                 _from = line.Number;
                 _to = line.Last;
                 _saidBefore = sink.Said;

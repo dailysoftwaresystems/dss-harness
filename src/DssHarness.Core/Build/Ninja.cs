@@ -49,6 +49,15 @@ internal static class Ninja
     private static readonly Regex FailedCode = LinearRegex.Compile(@"\A\[code=-?[0-9]+\] ");
 
     /// <summary>
+    /// The outputs a <c>FAILED:</c> line lists, the exit code written between it and them taken off; null where the line
+    /// is no <c>FAILED:</c> line. The one reading of such a line: whatever asks what a failed step was making - the
+    /// failed units of a build, the digest's edge - reads it here, never a pattern of its own.
+    /// </summary>
+    /// <param name="line">The line as ninja printed it.</param>
+    internal static string? FailedListed(string line)
+        => line.StartsWith(FailedStep, StringComparison.Ordinal) ? FailedCode.Replace(line[FailedStep.Length..], string.Empty).Trim() : null;
+
+    /// <summary>
     /// What samurai says under its name of a step that failed, before the command the step ran - its own <c>FAILED:</c>
     /// line: the status it exited with, the signal that ended it, or a status samurai could not tell.
     /// </summary>
@@ -258,9 +267,8 @@ internal static class Ninja
                 continue;
             }
 
-            if (line.StartsWith(FailedStep, StringComparison.Ordinal))
+            if (FailedListed(line) is { } listed)
             {
-                var listed = FailedCode.Replace(line[FailedStep.Length..], string.Empty).Trim();
                 var edge = EdgeListed(listed, manifest);
                 var step = FirstOutput(listed, manifest);
 
@@ -478,7 +486,7 @@ internal static class Ninja
             // that decides: a build's output can be larger than any text the harness could hold.
             foreach (var line in phase.Output.Lines().SelectMany(line => TextLines.Split(TerminalText.Plain(line)).Select(part => part.Text)))
             {
-                if (line.StartsWith(FailedStep, StringComparison.Ordinal))
+                if (FailedListed(line) is not null)
                 {
                     return null;
                 }
@@ -538,7 +546,7 @@ internal static class Ninja
         {
             foreach (var line in phase.Output.Lines().SelectMany(line => TextLines.Split(TerminalText.Plain(line)).Select(part => part.Text)))
             {
-                if (line.StartsWith(FailedStep, StringComparison.Ordinal))
+                if (FailedListed(line) is not null)
                 {
                     failedStep = true;
                     continue;

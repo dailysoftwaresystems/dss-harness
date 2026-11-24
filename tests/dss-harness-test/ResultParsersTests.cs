@@ -1132,6 +1132,25 @@ public sealed class ResultParsersTests
         Assert.Empty(digest.Unparsed ?? []);
     }
 
+    /// <summary>
+    /// Ninja's <c>FAILED:</c> line is read by the one owner of it (<see cref="DssHarness.Core.Build.Ninja"/>), as the
+    /// build's own reading of its failed units reads it: the exit code ninja writes between <c>FAILED:</c> and the step's
+    /// outputs - a negative one, a Windows crash's - taken off, so the edge whose build failed is the outputs alone,
+    /// never the code glued into the edge's name and every diagnostic's project.
+    /// </summary>
+    [Fact]
+    public void NinjasFailedLine_IsReadByItsOneOwner_ItsExitCodeTakenOffTheEdge()
+    {
+        var digest = PhaseParsers.DigestOf(
+            ["FAILED: [code=-1073741819] CMakeFiles/app.dir/src/main.cpp.obj"],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [("ninja", "error", "build of 'CMakeFiles/app.dir/src/main.cpp.obj' failed", "CMakeFiles/app.dir/src/main.cpp.obj", (1, 1))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Severity, diagnostic.Message, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
     private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
     {
