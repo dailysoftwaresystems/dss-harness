@@ -1023,6 +1023,91 @@ public sealed class ResultParsersTests
         "store_tests: /home/runner/work/app/app/tests/store_test.cc:18: virtual void StoreTest_Loads_Test::TestBody(): Assertion `count == 2' failed.",
     ];
 
+    /// <summary>
+    /// <c>go test -v</c> streams each test's logged lines as it runs, under the <c>===</c> line that named it, and says
+    /// them again under its <c>--- FAIL</c> line: the failure's message is what the test logged, held once - the copy the
+    /// stream already said is not held twice - its place the first line that names one, and a subtest's failure its own,
+    /// the parent's <c>=== NAME</c> line back and its <c>--- FAIL</c> after it.
+    /// </summary>
+    [Fact]
+    public void AVerboseGoRun_KeepsEachTestsLoggedLines_UnderItsFailLine_SaidOnce()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "=== RUN   TestStoreLoads",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "=== RUN   TestGroup",
+                "=== RUN   TestGroup/sub",
+                "=== PAUSE TestGroup/sub",
+                "=== CONT  TestGroup/sub",
+                "=== NAME  TestGroup/sub",
+                "    sub_test.go:10: inner failure",
+                "--- FAIL: TestGroup/sub (0.00s)",
+                "    sub_test.go:10: inner failure",
+                "=== NAME  TestGroup",
+                "--- FAIL: TestGroup (0.00s)",
+                "=== RUN   TestPasses",
+                "=== NAME  TestPasses",
+                "    pass_test.go:4: a line the stream logged of a passing test",
+                "--- PASS: TestPasses (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.008s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "store_test.go", 14, "store_test.go:14: Load(\"first\") = 3, want 4"),
+                ("TestGroup/sub", "example.com/app/store", "sub_test.go", 10, "sub_test.go:10: inner failure"),
+                ("TestGroup", "example.com/app/store", null, null, null),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.File, failure.Line, failure.Message)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A Go package that did not build is said by its own block, never silenced by another package's failing test: the
+    /// <c># pkg</c> line Go prints ahead of its compiler's words holds for the line under it, and a compiler's line
+    /// under it is a diagnostic of that package, its project the package's import path, so the digest says the failing
+    /// test and the package's compiler error both; where the block said nothing - a missing dependency's words, which
+    /// name no file - the <c>FAIL pkg [build failed]</c> line is the failure that says it.
+    /// </summary>
+    [Fact]
+    public void AGoPackageThatDidNotBuild_IsSaidByItsOwnBlock_NeverSilencedByAnotherPackagesTest()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "# example.com/app/sum [example.com/app/sum.test]",
+                "sum/sum.go:12:9: undefined: total",
+                "FAIL\texample.com/app/sum [build failed]",
+                "# example.com/app/tools [example.com/app/tools.test]",
+                "no required module provides package example.com/other; to add it:",
+                "\tgo get example.com/other",
+                "FAIL\texample.com/app/tools [build failed]",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "failed"),
+                ("example.com/app/tools", null, "errored"),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.Outcome)));
+        Assert.Equal("build failed", digest.Failures[1].Message);
+        Assert.Equal(
+            [("go", "error", "undefined: total", "sum/sum.go", 12, 9, "example.com/app/sum", (5, 6))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Severity, diagnostic.Message, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Column!.Value, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
     private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
     {

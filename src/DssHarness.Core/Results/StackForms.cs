@@ -977,17 +977,24 @@ internal sealed class DartStackParser : IBuiltInParser
 
 /// <summary>
 /// Go's output: <c>go test</c>'s console - each <c>--- FAIL: TestName (0.00s)</c> with the lines its test logged under
-/// it, the first naming its place as <c>file.go:12: message</c>, a test whose subtests failed said by them - and a panic:
-/// <c>panic: message</c> (or the runtime's <c>fatal error: message</c>), the signal line under it, and the panicking
-/// goroutine's stack - each frame a function line, <c>main.f(...)</c> or <c>main.(*T).M(args)</c>, then its place,
-/// <c>\tpath:line +0x1d</c>, an inlined frame's with no offset; <c>created by</c> a frame too. Every other goroutine's
-/// stack is part of the record; a panic inside a test has crashed that test. A panic no goroutine follows is given back.
+/// it, the first naming its place as <c>file.go:12: message</c>, a test whose subtests failed said by them - and, run
+/// verbose, the stream as it happens: <c>=== RUN</c> naming the test, <c>=== CONT</c> and <c>=== NAME</c> naming it
+/// again as its output resumes (<c>=== PAUSE</c> ends it for then), each test's indented logged lines kept from its
+/// <c>===</c> line to its <c>--- FAIL</c> - where Go says them again, and the copy the stream already said is not held
+/// twice - or dropped at its <c>--- PASS</c>. A package that did not build is said by its own block: the
+/// <c># pkg [variant]</c> line Go prints ahead of its compiler's words, held for the line under it - a compiler's line
+/// <c>file.go:L:C: message</c>, read as a diagnostic of that package, its project the package's import path - and the
+/// <c>FAIL pkg [build failed]</c> line said only where nothing between the block's head and it said why, so a failing
+/// test in another package never silences it. A panic: <c>panic: message</c> (or the runtime's <c>fatal error:
+/// message</c>), the signal line under it, and the panicking goroutine's stack - each frame a function line,
+/// <c>main.f(...)</c> or <c>main.(*T).M(args)</c>, then its place, <c>\tpath:line +0x1d</c>, an inlined frame's with no
+/// offset; <c>created by</c> a frame too. Every other goroutine's stack is part of the record; a panic inside a test
+/// has crashed that test. A panic no goroutine follows is given back.
 /// <c>go test</c> prints a package's result after its output - <c>FAIL\texample.com/mod/store\t0.01s</c> - so the
 /// failures read since the last such line are said with it, each naming the package by its import path as its class: the
 /// place a test logged is printed relative to that package's directory, which only the tree's module that owns the import
 /// path places (<see cref="ResultDigest.WithInTree(DigestTree)"/>), and a failure no such line followed is said with no
-/// class. The bare <c>FAIL</c> and <c>exit status N</c> say only what was said before them; a package that did not build
-/// (<c>FAIL pkg [build failed]</c>) is said where nothing before it said why.
+/// class. The bare <c>FAIL</c> and <c>exit status N</c> say only what was said before them.
 /// </summary>
 internal sealed class GoPanicParser : IBuiltInParser
 {
@@ -996,7 +1003,21 @@ internal sealed class GoPanicParser : IBuiltInParser
 
     private static readonly Regex Failed = LinearRegex.Compile(@"^(?<indent>\s*)--- FAIL: (?<name>\S+) \((?<seconds>\d+(?:\.\d+)?)s\)$");
 
+    private static readonly Regex Passed = LinearRegex.Compile(@"^--- PASS: (?<name>\S+) \((?<seconds>\d+(?:\.\d+)?)s\)$");
+
     private static readonly Regex Logged = LinearRegex.Compile(@"^\s+(?<file>[^\s:]+\.go):(?<line>\d+): (?<message>.*)$");
+
+    /// <summary>The stream's markers, as <c>go test -v</c> names the test whose output follows: a run begun, continued or named again.</summary>
+    private static readonly Regex Streamed = LinearRegex.Compile(@"^=== (?:RUN|CONT|NAME)\s+(?<name>\S+)$");
+
+    /// <summary>The stream's marker that pauses a parallel test: no output of its follows until it is named again.</summary>
+    private static readonly Regex Paused = LinearRegex.Compile(@"^=== PAUSE\s+\S+$");
+
+    /// <summary>A package's head, as Go prints it ahead of what its build said: <c># pkg</c>, the test variant in brackets where one is named.</summary>
+    private static readonly Regex Built = LinearRegex.Compile(@"^# (?<package>\S+)(?: \[[^\]]+\])?$");
+
+    /// <summary>A line of Go's compiler, under a package's head: <c>file.go:L:C: message</c>, a drive's path included.</summary>
+    private static readonly Regex Compiled = LinearRegex.Compile(@"^(?<file>(?:[A-Za-z]:)?[^:\s]*\.go):(?<line>\d+):(?<col>\d+): (?<message>.+)$");
 
     private static readonly Regex Package = LinearRegex.Compile(@"^FAIL\t(?<package>\S+)(?:\t\S+|\s+\[(?<reason>[^\]]+)\])$");
 
@@ -1034,6 +1055,10 @@ internal sealed class GoPanicParser : IBuiltInParser
         private readonly List<TestFailure> _package = [];
         private int _from;
         private int _to;
+        private string? _running;
+        private readonly Dictionary<string, List<string>> _streamed = new(StringComparer.Ordinal);
+        private int _repeated;
+        private (string Package, int Head, bool First, bool Decided)? _build;
 
         public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
@@ -1061,7 +1086,19 @@ internal sealed class GoPanicParser : IBuiltInParser
                         _line = ParsedText.Whole(logged.Groups["line"]);
                     }
 
-                    _logged.Add(text.Trim());
+                    // Run verbose, Go says a failing test's logged lines again under its --- FAIL line: the copy the
+                    // stream already said is not held twice.
+                    var said = text.Trim();
+
+                    if (_repeated < _logged.Count && _logged[_repeated] == said)
+                    {
+                        _repeated++;
+                    }
+                    else
+                    {
+                        _logged.Add(said);
+                    }
+
                     _to = line.Last;
                     return LineTaken.Took;
                 }
@@ -1074,6 +1111,24 @@ internal sealed class GoPanicParser : IBuiltInParser
             if (Failed.Match(text) is { Success: true } failed)
             {
                 _test = (failed.Groups["name"].Value, failed.Groups["indent"].Length, double.TryParse(failed.Groups["seconds"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds) ? seconds : null, line.Number);
+                _repeated = 0;
+
+                // The lines the stream logged under the test's === line are its failure's message, its first place
+                // their first line that names one.
+                if (_streamed.Remove(failed.Groups["name"].Value, out var streamed))
+                {
+                    foreach (var said in streamed)
+                    {
+                        if (_file is null && Logged.Match(said) is { Success: true } placed)
+                        {
+                            _file = placed.Groups["file"].Value;
+                            _line = ParsedText.Whole(placed.Groups["line"]);
+                        }
+
+                        _logged.Add(said.Trim());
+                    }
+                }
+
                 _to = line.Last;
                 return LineTaken.Took;
             }
@@ -1089,15 +1144,88 @@ internal sealed class GoPanicParser : IBuiltInParser
                 return LineTaken.Held;
             }
 
+            if (Paused.IsMatch(text))
+            {
+                _running = null;
+                return LineTaken.Took;
+            }
+
+            if (Streamed.Match(text) is { Success: true } running)
+            {
+                _running = running.Groups["name"].Value;
+                return LineTaken.Took;
+            }
+
+            if (Passed.Match(text) is { Success: true } passed)
+            {
+                _streamed.Remove(passed.Groups["name"].Value);
+                _running = null;
+                return LineTaken.Took;
+            }
+
+            if (_running is { } streaming && text.Length - text.TrimStart().Length > 0 && text.Trim().Length > 0 && !Failed.IsMatch(text))
+            {
+                // The stream logs a test's own lines as it runs, under the === line that named it; they are kept until
+                // the test's --- FAIL line says them, or its --- PASS drops them.
+                if (!_streamed.TryGetValue(streaming, out var logged))
+                {
+                    logged = [];
+                    _streamed[streaming] = logged;
+                }
+
+                logged.Add(text);
+                return LineTaken.Took;
+            }
+
+            if (_build is { } building)
+            {
+                if (Compiled.Match(text) is { Success: true } compiled)
+                {
+                    sink.Add(new Diagnostic(
+                        Framework,
+                        "error",
+                        null,
+                        compiled.Groups["message"].Value,
+                        compiled.Groups["file"].Value,
+                        ParsedText.Whole(compiled.Groups["line"]),
+                        ParsedText.Whole(compiled.Groups["col"]),
+                        Project: building.Package,
+                        Log: (building.First ? building.Head : line.Number, line.Last)));
+                    _build = building with { First = false, Decided = true };
+                    return LineTaken.Took;
+                }
+
+                if (!building.Decided)
+                {
+                    // The line under a package's head, which says whether its compiler said anything: it did not, so
+                    // the head is given back and this line offered again on its own. The head still names the block its
+                    // package's result line asks of.
+                    _build = building with { Decided = true };
+                    return LineTaken.Left;
+                }
+            }
+            else if (Built.Match(text) is { Success: true } built)
+            {
+                _build = (built.Groups["package"].Value, line.Number, First: true, Decided: false);
+                return LineTaken.Held;
+            }
+
             if (Package.Match(text) is { Success: true } package)
             {
                 Said(sink, package.Groups["package"].Value);
+                _streamed.Clear();
+                _running = null;
 
-                if (package.Groups["reason"].Success && sink.Said == 0)
+                // A package that did not build is said where nothing its own block said why - from its head to this
+                // line - never over the whole log, where another package's failing test said plenty.
+                var from = _build is { } open && open.Package == package.Groups["package"].Value ? open.Head : line.Number;
+
+                if (package.Groups["reason"].Success && !sink.SaidWithin(from, line.Number - 1))
                 {
                     sink.Add(new TestFailure(Framework, package.Groups["package"].Value, Message: package.Groups["reason"].Value, Outcome: "errored", Log: (line.Number, line.Last)));
                 }
 
+                _build = null;
                 return LineTaken.Took;
             }
 
@@ -1119,6 +1247,9 @@ internal sealed class GoPanicParser : IBuiltInParser
 
             CloseTest();
             Said(sink, null);
+            _streamed.Clear();
+            _running = null;
+            _build = null;
             return given ? LineTaken.Left : LineTaken.Took;
         }
 

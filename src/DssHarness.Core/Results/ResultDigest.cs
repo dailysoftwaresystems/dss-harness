@@ -12,7 +12,7 @@ namespace DssHarness.Core.Results;
 /// the tree where the tree holds the file; the symbol is the declaration the graph finds at that line, where it holds
 /// the file.
 /// </summary>
-/// <param name="Tool">The tool that printed it: <c>msbuild</c>, <c>csc</c>, <c>msvc</c>, <c>gcc</c>, <c>clang</c>, <c>cmake</c>, <c>ninja</c>, <c>link</c>, <c>ld</c>, <c>tsc</c>, <c>eslint</c>, <c>dart</c>, or a configured matcher's name.</param>
+/// <param name="Tool">The tool that printed it: <c>msbuild</c>, <c>csc</c>, <c>msvc</c>, <c>gcc</c>, <c>clang</c>, <c>cmake</c>, <c>ninja</c>, <c>link</c>, <c>ld</c>, <c>tsc</c>, <c>eslint</c>, <c>dart</c>, <c>go</c>, or a configured matcher's name.</param>
 /// <param name="Severity">How bad it is: <c>error</c>, <c>warning</c> or <c>note</c>.</param>
 /// <param name="Code">The tool's code for it (<c>CS0103</c>, <c>C2065</c>, <c>-Wunused-variable</c>, <c>TS2304</c>, <c>LNK2019</c>); null where the tool gives none.</param>
 /// <param name="Message">The message, one line, masked; never empty.</param>

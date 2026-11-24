@@ -9933,7 +9933,12 @@ said ahead of its message, for a diagnostic's project is the project or target a
 `FAILED:` edge; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
 the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries, the
 JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's, Dart's, Go's panic and
-`go test`'s console, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
+`go test`'s console - its verbose stream read too, each test's logged lines kept from the `===` line
+that named it to its `--- FAIL` line, which says them again, held once - and a package that did not
+build said by its own block, the `# pkg` line ahead of its compiler's words holding for the line under
+it, a compiler's line under it a diagnostic of that package, its `[build failed]` result said only
+where nothing between its head and it said why, so a failing test in another package never silences
+it, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
 or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
 failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
 test`'s, jest's, vitest's). A crash a report says inside a test a runner said began is that test's
