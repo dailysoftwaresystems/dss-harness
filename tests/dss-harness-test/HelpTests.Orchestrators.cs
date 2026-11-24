@@ -314,6 +314,23 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic says what a run's report says of the run itself - its sessions and each of the times the
+    /// report computes, the wall, the active and the paused, beside its wait for a person and its budget - so a reader
+    /// knows which times the report holds and what each one counts.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysTheRunsTimesTheReportHolds()
+    {
+        Assert.Contains(
+            $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
+                + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+                + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
+                + "sessions), its wait for a person and its budget; the totals of its tokens by kind",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic says what a run's report says its reviews converged to: the counts by which a repository
     /// sees whether its rounds converge, of each item and of the run.
     /// </summary>

@@ -297,6 +297,7 @@ public static partial class HelpTopics
             builder,
             $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
             + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+            + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
             + "sessions), its wait for a person and its budget; the totals of its tokens by kind and its dollars grouped "
             + "(totals.dollarsBy: each part of an attempt by the model that served it, each advice by the advisor's); one row "
             + "per step instance, in the order the run made them, with its state, its attempts, its waits by cause, its run "
