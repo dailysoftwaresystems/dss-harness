@@ -1594,9 +1594,10 @@ internal sealed class RustPanicParser : IBuiltInParser
 /// through their <c>SUMMARY:</c> and the shadow bytes under it; and UndefinedBehaviorSanitizer's <c>path:line:col: runtime
 /// error: message</c>, with its stack where one was asked for and its <c>SUMMARY:</c>. The report's first stack is its
 /// stack - each frame <c>#N 0x... in symbol path:line[:col]</c>, <c>(module+0x...)</c> where only the binary is known -
-/// and the stacks after it (where the memory was allocated, freed, last written) are part of the record. A sanitizer's
-/// report has crashed the program that printed it. A report read inside a test a runner said began is that test's
-/// failure (<see cref="ResultSink.AddCrash"/>).
+/// and the stacks after it (where the memory was allocated, freed, last written) are part of the record. A report the
+/// sanitizer aborted the program over - its <c>==pid==ABORTING</c> closed it - has <c>crashed</c> it; every other - a
+/// runtime error UBSan recovered from and ran on, a warning - has <c>errored</c> it. A report read inside a test a runner
+/// said began is that test's failure (<see cref="ResultSink.AddCrash"/>).
 /// </summary>
 internal sealed class SanitizerParser : IBuiltInParser
 {
@@ -1659,6 +1660,7 @@ internal sealed class SanitizerParser : IBuiltInParser
         private bool _stacked;
         private bool _summary;
         private bool _runtime;
+        private bool _aborted;
         private int _from;
         private int _to;
 
@@ -1670,6 +1672,7 @@ internal sealed class SanitizerParser : IBuiltInParser
             {
                 if (Aborting.IsMatch(text))
                 {
+                    _aborted = true;
                     _to = line.Last;
                     Close(sink);
                     return LineTaken.Took;
@@ -1750,6 +1753,7 @@ internal sealed class SanitizerParser : IBuiltInParser
             _runtime = runtime;
             _stacked = false;
             _summary = false;
+            _aborted = false;
             _file = null;
             _line = null;
             _from = line.Number;
@@ -1767,7 +1771,7 @@ internal sealed class SanitizerParser : IBuiltInParser
                     File: _file,
                     Line: _line,
                     Exception: new ExceptionRecord(kind, _message!, [.. _frames], []),
-                    Outcome: "crashed",
+                    Outcome: _aborted ? "crashed" : "errored",
                     Log: (_from, _to)));
             }
 

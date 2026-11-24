@@ -1108,6 +1108,30 @@ public sealed class ResultParsersTests
         Assert.Empty(digest.Unparsed ?? []);
     }
 
+    /// <summary>
+    /// A sanitizer's report has crashed the program only where the sanitizer aborted it - its <c>==pid==ABORTING</c>
+    /// closed the report - and errored it where the program ran on, as one recovers from UndefinedBehaviorSanitizer's
+    /// runtime error by default: the report still said, its place the line it named, never a crash the program did not
+    /// make. The lines are the tool's own output (g++ 13's UBSan, recovering).
+    /// </summary>
+    [Fact]
+    public void ASanitizersReport_HasCrashedTheProgramOnlyWhereItAbortedIt()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "ubsan.c:5:18: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'",
+                "next is -2147483648",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        var said = Assert.Single(digest.Failures);
+
+        Assert.Equal(
+            ("sanitizer", "errored", "UndefinedBehaviorSanitizer: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'", "ubsan.c", 5),
+            (said.Framework, said.Outcome, said.Id, said.File!, said.Line!.Value));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
     private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
     {
