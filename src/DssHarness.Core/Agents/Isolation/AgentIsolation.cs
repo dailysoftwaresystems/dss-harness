@@ -763,9 +763,9 @@ public sealed class AgentIsolation(
         {
             root = UserState.IsolationDirectory(host.HomeDirectory, host.Current, _environment);
         }
-        catch (DirectoryNotFoundException ex)
+        catch (VariableNamesNoDirectoryException ex)
         {
-            return Held.None(mode, $"the isolation's caches have nowhere to be kept: {ex.Message.TrimEnd('.')}", $"name a fully qualified directory in {UserState.Variable}, or leave it unset");
+            return Held.None(mode, $"the isolation's caches have nowhere to be kept: {ex.Message.TrimEnd('.')}", VariableNamesNoDirectoryException.Remedy);
         }
 
         var gitPlaces = await GitPlacesAsync(ground.Trees, cancellationToken).ConfigureAwait(false);

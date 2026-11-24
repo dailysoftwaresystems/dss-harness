@@ -22,8 +22,11 @@ public static class UserState
     /// <summary>
     /// The variable of this tool's own that names the directory it keeps its per-user state in, as a fully qualified path,
     /// in place of the system's default: read first, on every system, by <see cref="Directory"/> and
-    /// <see cref="IsolationDirectory"/> alike. Set to anything else, it names no directory, and is refused for it rather
-    /// than read as the default, which is the very place its setter meant to leave.
+    /// <see cref="IsolationDirectory"/> alike. Set to nothing, it counts as unset, as the XDG variables' empty values do -
+    /// a shell's <c>export</c> of a variable that holds nothing gives it so, and Windows cannot hold an empty value at all.
+    /// Set to anything else that is not a fully qualified path, it names no directory, and is refused for it
+    /// (<see cref="VariableNamesNoDirectoryException"/>) by every reader of this tool's per-user state rather than read as
+    /// the default, which is the very place its setter meant to leave.
     /// </summary>
     public const string Variable = "DSSHARNESS_USER_STATE";
 
@@ -35,7 +38,10 @@ public static class UserState
     /// the home directory this process was given. Every file and folder below it that a command of this tool keeps is
     /// <see cref="File"/>'s to name, and this names the place they share.
     /// </summary>
-    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    /// <exception cref="DirectoryNotFoundException">
+    /// No directory of this user's own could be named: a <see cref="VariableNamesNoDirectoryException"/> where
+    /// <see cref="Variable"/> names none.
+    /// </exception>
     public static string Directory => DirectoryOf(Environment.GetEnvironmentVariable);
 
     /// <summary>
@@ -43,7 +49,10 @@ public static class UserState
     /// directory it names, where it names one, else below the home directory this process was given.
     /// </summary>
     /// <param name="environment">Reads the variable.</param>
-    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    /// <exception cref="DirectoryNotFoundException">
+    /// No directory of this user's own could be named: a <see cref="VariableNamesNoDirectoryException"/> where
+    /// <see cref="Variable"/> names none.
+    /// </exception>
     internal static string DirectoryOf(Func<string, string?> environment)
         => Given(environment) ?? Path.Combine(ApplicationData(), ToolPackage.Command);
 
@@ -57,7 +66,7 @@ public static class UserState
     /// <param name="home">The user's home.</param>
     /// <param name="platform">This machine's system.</param>
     /// <param name="environment">Reads this process's environment.</param>
-    /// <exception cref="DirectoryNotFoundException"><see cref="Variable"/> names no directory.</exception>
+    /// <exception cref="VariableNamesNoDirectoryException"><see cref="Variable"/> names no directory.</exception>
     public static string IsolationDirectory(string home, PlatformId platform, Func<string, string?> environment)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(home);
@@ -127,16 +136,16 @@ public static class UserState
 
     /// <summary>
     /// The directory <see cref="Variable"/> names in <paramref name="environment"/>; null where it is not set, or set to
-    /// nothing.
+    /// nothing, which counts as unset.
     /// </summary>
     /// <param name="environment">Reads the variable.</param>
-    /// <exception cref="DirectoryNotFoundException">It is set to a path that is not fully qualified.</exception>
+    /// <exception cref="VariableNamesNoDirectoryException">It is set to a path that is not fully qualified.</exception>
     private static string? Given(Func<string, string?> environment)
         => environment(Variable) switch
         {
             null or "" => null,
             var given when Path.IsPathFullyQualified(given) => given,
-            var given => throw new DirectoryNotFoundException($"{Variable} names '{given}', which is no fully qualified path"),
+            var given => throw new VariableNamesNoDirectoryException(given),
         };
 
     /// <summary>This user's own application data directory, below the home directory this process was given.</summary>
@@ -167,4 +176,19 @@ public static class UserState
                 "no directory of this user's own application data could be named: the process was given no home, and the "
                 + "system has none for its account");
     }
+}
+
+/// <summary>
+/// <see cref="UserState.Variable"/> set to a value that names no directory: refused by every reader of this tool's
+/// per-user state, naming what it holds, never read as the default its setter meant to leave. A
+/// <see cref="DirectoryNotFoundException"/>, as a process given no home meets one, so every reader that keeps nothing
+/// then is refused alike; the one reader that takes a process given no home to declare nothing - the machine's settings
+/// file - tells this apart from it, and refuses.
+/// </summary>
+/// <param name="given">What the variable holds.</param>
+public sealed class VariableNamesNoDirectoryException(string given)
+    : DirectoryNotFoundException($"{UserState.Variable} names '{given}', which is no fully qualified path")
+{
+    /// <summary>What puts it right, as a refusal's remedy says it.</summary>
+    public const string Remedy = $"name a fully qualified directory in {UserState.Variable}, or leave it unset";
 }

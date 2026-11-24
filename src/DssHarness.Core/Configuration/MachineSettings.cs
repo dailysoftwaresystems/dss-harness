@@ -23,7 +23,9 @@ public sealed class MachineSettings
 /// <summary>What a machine's settings file says, as a survey of that machine answers it.</summary>
 /// <param name="Path">
 /// The file, as that machine shows it - its home written <c>~</c> where it answers another machine; <see langword="null"/>
-/// where no directory of the user's own could be named there, and the machine declares nothing of itself.
+/// where no directory of the user's own could be named there: where the process there was given no home, the machine
+/// declares nothing of itself, and where <see cref="UserState.Variable"/> names no directory, <paramref name="Problem"/>
+/// says so.
 /// </param>
 /// <param name="Admission">Its <c>admission</c>, or <see langword="null"/> where it declares none or could not be read.</param>
 /// <param name="Problem">Why it could not be read, naming it, where it could not; every leg it would admit is refused then.</param>
@@ -34,7 +36,9 @@ public sealed record MachineSettingsAnswer(string? Path, AdmissionSettings? Admi
 /// (<see cref="UserState"/>), beside the records of the heavy legs admitted onto it - read by every command this user runs
 /// here, whichever repository or worktree it runs in, and never by another machine's. Read as config.json is read: a key
 /// it does not know, a key written twice or a value no machine could admit by is refused, naming the file, and never read
-/// past. A file that is not there declares nothing.
+/// past. A file that is not there declares nothing, and so does a process given no home, which can name none; a
+/// <see cref="UserState.Variable"/> that names no directory is refused as a file that cannot be read is, naming the
+/// variable, never read as a machine that declares nothing - which would admit at once every leg its rule holds back.
 /// </summary>
 /// <remarks>
 /// One per machine, named by what tells the machine from every other, as the admission records are: a home two machines
@@ -47,18 +51,26 @@ public sealed class MachineSettingsFile(IFileSystem fileSystem, Func<string> pat
     /// <summary>What the file's name begins with.</summary>
     public const string FilePrefix = "settings";
 
+    // What puts a file that is there and cannot be read right.
+    private const string PutItRight = "put it right, or remove it to admit by config.json alone";
+
     private readonly IFileSystem _fileSystem = fileSystem;
 
-    // The file, or why no directory of this user's own could be named to hold it: asked once.
-    private readonly Lazy<(string? Path, string? Nowhere)> _path = new(() =>
+    // The file; where none could be named, the variable's refusal where it names no directory, and nothing for a process
+    // given no home, which declares nothing: asked once.
+    private readonly Lazy<(string? Path, VariableNamesNoDirectoryException? Unnamed)> _path = new(() =>
     {
         try
         {
             return (path(), null);
         }
-        catch (DirectoryNotFoundException ex)
+        catch (VariableNamesNoDirectoryException ex)
         {
-            return (null, ex.Message.TrimEnd('.'));
+            return (null, ex);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return (null, null);
         }
     });
 
@@ -86,20 +98,29 @@ public sealed class MachineSettingsFile(IFileSystem fileSystem, Func<string> pat
     public static string FileNameFor(string machineId) => UserState.MachineFileName(FilePrefix, machineId);
 
     /// <summary>
-    /// The file; <see langword="null"/> where no directory of this user's own could be named, where this machine declares
-    /// nothing of itself.
+    /// The file; <see langword="null"/> where no directory of this user's own could be named: where the process was given
+    /// no home, this machine declares nothing of itself, and where <see cref="UserState.Variable"/> names no directory,
+    /// <see cref="Read"/> refuses, naming it.
     /// </summary>
     public string? Location => _path.Value.Path;
 
-    /// <summary>What the file declares; nothing where it is not there, or no directory of this user's own could be named.</summary>
+    /// <summary>What the file declares; nothing where it is not there, or the process was given no home.</summary>
     /// <exception cref="ConfigException">
     /// The file is there and could not be read, is not what a settings file holds - a key it does not know, a key written
-    /// twice, no object at all - or declares an admission no machine could admit by: refused, naming it, so a machine
+    /// twice, no object at all - or declares an admission no machine could admit by: refused, naming it; or
+    /// <see cref="UserState.Variable"/> names no directory to read it from: refused, naming the variable. So a machine
     /// whose own count could not be read is never admitted by a tree's.
     /// </exception>
     public MachineSettings Read()
     {
-        if (_path.Value.Path is not { } file)
+        var (named, unnamed) = _path.Value;
+
+        if (unnamed is not null)
+        {
+            throw Refused(null, unnamed.Message.TrimEnd('.'), VariableNamesNoDirectoryException.Remedy, unnamed);
+        }
+
+        if (named is not { } file)
         {
             return new MachineSettings();
         }
@@ -117,7 +138,7 @@ public sealed class MachineSettingsFile(IFileSystem fileSystem, Func<string> pat
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw Refused(file, ex.Message.TrimEnd('.'), ex);
+            throw Refused(file, ex.Message.TrimEnd('.'), PutItRight, ex);
         }
 
         MachineSettings? settings;
@@ -128,12 +149,12 @@ public sealed class MachineSettingsFile(IFileSystem fileSystem, Func<string> pat
         }
         catch (JsonException ex)
         {
-            throw Refused(file, ex.Message.TrimEnd('.'), ex);
+            throw Refused(file, ex.Message.TrimEnd('.'), PutItRight, ex);
         }
 
         if (settings is null)
         {
-            throw Refused(file, "it holds null where an object is expected", null);
+            throw Refused(file, "it holds null where an object is expected", PutItRight, null);
         }
 
         var problems = new List<string>();
@@ -142,7 +163,7 @@ public sealed class MachineSettingsFile(IFileSystem fileSystem, Func<string> pat
 
         return problems.Count == 0
             ? settings
-            : throw Refused(file, string.Join("; ", problems), null);
+            : throw Refused(file, string.Join("; ", problems), PutItRight, null);
     }
 
     /// <summary>
@@ -166,10 +187,13 @@ public sealed class MachineSettingsFile(IFileSystem fileSystem, Func<string> pat
         }
     }
 
-    /// <summary>The refusal of the file at <paramref name="file"/>, for <paramref name="why"/>.</summary>
-    private static ConfigException Refused(string file, string why, Exception? inner)
+    /// <summary>
+    /// The refusal of the file at <paramref name="file"/> - or of the one no file could be named for, where it is
+    /// <see langword="null"/> - for <paramref name="why"/>, with what puts it right.
+    /// </summary>
+    private static ConfigException Refused(string? file, string why, string remedy, Exception? inner)
         => new(
-            $"This machine's settings file '{file}' could not be read: {why}. Until it can be, no heavy leg is admitted onto this "
-            + "machine by it, nor by any tree's config.json in its place; put it right, or remove it to admit by config.json alone.",
+            $"This machine's settings file{(file is null ? string.Empty : $" '{file}'")} could not be read: {why}. Until it can be, no heavy "
+            + $"leg is admitted onto this machine by it, nor by any tree's config.json in its place; {remedy}.",
             inner);
 }

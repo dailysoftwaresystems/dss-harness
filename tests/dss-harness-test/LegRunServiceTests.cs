@@ -3719,6 +3719,36 @@ public sealed class LegRunServiceTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Where the tool's own variable names no directory, a heavy leg is refused before it runs though no tree's config.json
+    /// declares admission - a configuration's refusal, naming the variable - since the machine's settings file, which holds
+    /// the machine to its own count, cannot be read: read as a machine that declares nothing, the leg ran at once beside
+    /// every other, whatever count the machine declares, and nothing named the variable.
+    /// </summary>
+    [Fact]
+    public async Task AVariableNamingNoDirectory_RefusesAHeavyLeg_ThoughNoTreeDeclaresAdmission()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ran = false;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = Heavy },
+            ran: _ => ran = true,
+            machineSettings: HostDoubles.MachineSettingsUnderAnUnnamedState(harness.FileSystem));
+
+        Assert.Equal((HarnessExit.ConfigInvalid, false), (outcome.ExitCode, ran));
+        Assert.Equal(
+            $"This machine's settings file could not be read: {UserState.Variable} names '{HostDoubles.UnnamedStateValue}', which is no fully "
+                + "qualified path. Until it can be, no heavy leg is admitted onto this machine by it, nor by any tree's config.json in its place; "
+                + $"name a fully qualified directory in {UserState.Variable}, or leave it unset.",
+            outcome.Message);
+    }
+
     /// <summary>A WSL leg of this machine, which declares admission under hosts.local.</summary>
     private static HarnessConfig WslLeg() => new()
     {

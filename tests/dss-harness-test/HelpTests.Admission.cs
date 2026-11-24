@@ -136,7 +136,8 @@ public sealed partial class HelpTests
     /// <summary>
     /// Where the help names this tool's per-user directory - the admission topic's records, the mutations topic's fixture -
     /// it names the variable of the tool's own that moves it, read first on every system, the isolation's caches below it,
-    /// and the refusal of a value that names no directory; each name read from the code.
+    /// an empty value counted as unset, and the refusal of any other value that names no directory - the settings file's
+    /// and a heavy leg's; each name read from the code.
     /// </summary>
     [Fact]
     public async Task TheHelp_NamesTheToolsOwnVariable_WhereverItNamesTheToolsPerUserDirectory()
@@ -148,8 +149,10 @@ public sealed partial class HelpTests
             $"Where {UserState.Variable} names a directory - a fully qualified path, read first on every system - that directory holds them in "
                 + "place of <user data>/dssharness, with every other file this tool keeps for its user and, in "
                 + $"{UserState.IsolationDirectoryName} below it, the isolation's caches. The variable is the tool's own, so moving it moves nothing "
-                + "another program keeps in the home or the user data. Set to anything that is not a fully qualified path, it names no directory: "
-                + "nothing is read from or kept in the default in its place, and a heavy leg, whose slot is kept there, is refused, naming it.",
+                + "another program keeps in the home or the user data. Set empty, it counts as unset, as the XDG variables' empty values do; "
+                + "Windows holds no empty value. Set to anything else that is not a fully qualified path, it names no directory: nothing is read "
+                + "from or kept in the default in its place - the settings file is refused as one that cannot be read, and a heavy leg, whose "
+                + "slot is kept there, is refused - each naming it.",
             admission,
             StringComparison.Ordinal);
         Assert.Contains(

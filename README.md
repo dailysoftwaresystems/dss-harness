@@ -261,17 +261,19 @@ copy of its last commit: so the machine's own settings file,
 `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on Linux, and
 `<user data>/dssharness` the directory `DSSHARNESS_USER_STATE` names in its place, on every system,
 where it names one: a fully qualified path, the tool's own, so moving it moves nothing another program
-keeps in the home or the user data, and anything else is refused, never read as the default - holds
+keeps in the home or the user data; set empty, it counts as unset, as the XDG variables' empty values
+do (Windows holds no empty value), and anything else is refused, never read as the default - holds
 `{ "admission": { ... } }` in the same keys, read as strictly as `config.json`, and each field it
 declares wins over what any tree's `config.json` says for that machine, `hosts.<machine>.admission`
 and `defaults.admission` staying the rule for each field it leaves out. A count it declares is every
 leg's in line, so a worktree committed before the count was raised no longer holds the machine to the
 old one. Every command this user runs there reads it; an ssh host reads its own. A file that cannot
-be read, or holds what `config.json` would refuse, is refused naming it, and no heavy leg is admitted
-until it is put right; a leg's rule is read once, as its work begins, so a file put wrong while a run
-goes on never fails a leg that has run - a unit of one whose work has begun, an arm of a sweep, is
-weighed by the count the file declared as that work began, its refusal said once. `dssharness legs`
-says, for each host it reaches, the rule in force and where each field came from. Run
+be read, or holds what `config.json` would refuse, is refused naming it - and where
+`DSSHARNESS_USER_STATE` names no directory, the file is refused naming the variable - and no heavy
+leg is admitted until it is put right; a leg's rule is read once, as its work begins, so a file put
+wrong while a run goes on never fails a leg that has run - a unit of one whose work has begun, an arm
+of a sweep, is weighed by the count the file declared as that work began, its refusal said once.
+`dssharness legs` says, for each host it reaches, the rule in force and where each field came from. Run
 `dssharness help admission` for the rules.
 
 ## Design

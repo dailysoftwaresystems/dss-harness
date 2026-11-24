@@ -4,8 +4,9 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// Where this tool keeps its per-user state (<see cref="UserState"/>): in the directory its own variable names, on every
-/// system, before the system's default - the isolation's own directory below it - and a value that names no directory
-/// refused rather than read as the default; and the test process's own, never the machine user's.
+/// system, before the system's default - the isolation's own directory below it - an empty value read as unset, and any
+/// other value that names no directory refused rather than read as the default; and the test process's own, never the
+/// machine user's.
 /// </summary>
 public sealed class UserStateTests
 {
@@ -42,7 +43,9 @@ public sealed class UserStateTests
     /// <summary>
     /// Where the variable names nothing - not set, or set to nothing - the isolation's own directory is in the user's cache
     /// directory as each system places it: LOCALAPPDATA on Windows, else AppData\Local in the home; XDG_CACHE_HOME
-    /// elsewhere, else the home's cache directory, macOS's the Library's.
+    /// elsewhere, else the home's cache directory, macOS's the Library's. An empty value counts as unset, as the XDG
+    /// variables' empty values do: a shell's export of a variable that holds nothing sets it so, and Windows cannot hold an
+    /// empty value at all, so refusing it would refuse on Linux and macOS alone what Windows reads as unset.
     /// </summary>
     [Fact]
     public void WhereTheVariableNamesNothing_TheIsolationsDirectory_IsInTheUsersCacheDirectory()
@@ -75,7 +78,8 @@ public sealed class UserStateTests
 
     /// <summary>
     /// A variable naming no fully qualified path names no directory, and is refused, naming what it holds - never read as
-    /// the system's default, the very place it was set to leave - by the state's directory and the isolation's alike.
+    /// the system's default, the very place it was set to leave - by the state's directory and the isolation's alike, as
+    /// the variable's own refusal, which the settings file tells apart from a process given no home.
     /// </summary>
     [Theory]
     [InlineData("state")]
@@ -86,8 +90,8 @@ public sealed class UserStateTests
 
         string? Environment(string name) => name == UserState.Variable ? given : null;
 
-        var state = Assert.Throws<DirectoryNotFoundException>(() => UserState.DirectoryOf(Environment));
-        var isolation = Systems.Select(system => Assert.Throws<DirectoryNotFoundException>(() => UserState.IsolationDirectory(temp.Path, system, Environment)).Message);
+        var state = Assert.Throws<VariableNamesNoDirectoryException>(() => UserState.DirectoryOf(Environment));
+        var isolation = Systems.Select(system => Assert.Throws<VariableNamesNoDirectoryException>(() => UserState.IsolationDirectory(temp.Path, system, Environment)).Message);
         var said = $"{UserState.Variable} names '{given}', which is no fully qualified path";
 
         Assert.Equal(said, state.Message);

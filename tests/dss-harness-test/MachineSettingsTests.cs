@@ -4,6 +4,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -83,6 +84,36 @@ public sealed class MachineSettingsTests
         Assert.Equal(
             new MachineSettingsAnswer(path.Replace(temp.Path, "~", StringComparison.Ordinal), null, refused.Message.Replace(temp.Path, "~", StringComparison.Ordinal)),
             answer);
+    }
+
+    /// <summary>
+    /// A variable of the tool's own that names no directory refuses the settings file as one that cannot be read is, naming
+    /// the variable - a survey's answer placing no file and saying why - and the rule a leg is admitted by refuses a heavy
+    /// leg by it though no tree's config.json declares admission: read as a machine that declares nothing, every leg the
+    /// machine's own count holds back was admitted at once, and nothing named the variable. A process given no home names
+    /// no file, and declares nothing.
+    /// </summary>
+    [Fact]
+    public void AVariableNamingNoDirectory_RefusesTheSettingsFile_NamingIt_WhileAProcessGivenNoHomeDeclaresNothing()
+    {
+        var unnamed = HostDoubles.MachineSettingsUnderAnUnnamedState();
+        var homeless = new MachineSettingsFile(new PhysicalFileSystem(FilePermissionsFactory.Create()), () => throw new DirectoryNotFoundException("the process was given no home"));
+        var said = $"This machine's settings file could not be read: {UserState.Variable} names '{HostDoubles.UnnamedStateValue}', which is no fully qualified path. "
+            + "Until it can be, no heavy leg is admitted onto this machine by it, nor by any tree's config.json in its place; "
+            + $"name a fully qualified directory in {UserState.Variable}, or leave it unset.";
+
+        static AdmissionReading RuleBy(MachineSettingsFile file)
+            => AdmissionReading.Of(() => AdmissionSection.For(HostId.Local, here: null, () => file.Answer(path => path), dispatched: null, new HarnessConfig()));
+
+        var refused = Assert.Throws<ConfigException>(() => unnamed.Read());
+        var heavy = Assert.Throws<HarnessException>(() => RuleBy(unnamed).RuleInForce());
+
+        Assert.Equal(said, refused.Message);
+        Assert.Equal(new MachineSettingsAnswer(null, null, said), unnamed.Answer(path => path));
+        Assert.Equal((HarnessExit.ConfigInvalid, said), (heavy.ExitCode, heavy.Message));
+        Assert.Equal((null, (AdmissionSettings?)null), (homeless.Location, homeless.Read().Admission));
+        Assert.Equal(new MachineSettingsAnswer(null), homeless.Answer(path => path));
+        Assert.Null(RuleBy(homeless).RuleInForce());
     }
 
     /// <summary>

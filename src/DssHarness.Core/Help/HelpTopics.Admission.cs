@@ -264,9 +264,11 @@ public static partial class HelpTopics
         builder.AppendLine("every system - that directory holds them in place of <user data>/dssharness, with");
         builder.AppendLine($"every other file this tool keeps for its user and, in {UserState.IsolationDirectoryName}");
         builder.AppendLine("below it, the isolation's caches. The variable is the tool's own, so moving it moves");
-        builder.AppendLine("nothing another program keeps in the home or the user data. Set to anything that is");
-        builder.AppendLine("not a fully qualified path, it names no directory: nothing is read from or kept in");
-        builder.AppendLine("the default in its place, and a heavy leg, whose slot is kept there, is refused,");
+        builder.AppendLine("nothing another program keeps in the home or the user data. Set empty, it counts as");
+        builder.AppendLine("unset, as the XDG variables' empty values do; Windows holds no empty value. Set to");
+        builder.AppendLine("anything else that is not a fully qualified path, it names no directory: nothing is");
+        builder.AppendLine("read from or kept in the default in its place - the settings file is refused as one");
+        builder.AppendLine("that cannot be read, and a heavy leg, whose slot is kept there, is refused - each");
         builder.AppendLine("naming it.");
 
         return builder.ToString();

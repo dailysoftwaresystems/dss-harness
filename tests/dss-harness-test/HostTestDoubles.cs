@@ -648,6 +648,25 @@ internal static class HostDoubles
             fileSystem ?? new Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create()),
             Path.Combine(TestHost.TemporaryRoot, "machine-settings", Guid.NewGuid().ToString("N"), MachineSettingsFile.FileNameFor("tests")));
 
+    /// <summary>
+    /// What <see cref="UnnamedState"/> sets <see cref="UserState.Variable"/> to: a path missing its leading separator, as a
+    /// job that meant <c>/srv/dss-state</c> sets it.
+    /// </summary>
+    public const string UnnamedStateValue = "srv/dss-state";
+
+    /// <summary>An environment whose <see cref="UserState.Variable"/> names no directory (<see cref="UnnamedStateValue"/>).</summary>
+    public static string? UnnamedState(string name) => name == UserState.Variable ? UnnamedStateValue : null;
+
+    /// <summary>
+    /// A machine's settings file named as <see cref="MachineSettingsFile.PathFor"/> names it, in the directory
+    /// <see cref="UserState"/> reads from an environment whose variable names none (<see cref="UnnamedState"/>): naming it
+    /// meets the variable's own refusal, as a process given that variable does.
+    /// </summary>
+    public static MachineSettingsFile MachineSettingsUnderAnUnnamedState(Core.FileSystem.IFileSystem? fileSystem = null)
+        => new(
+            fileSystem ?? new Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create()),
+            () => Path.Combine(UserState.DirectoryOf(UnnamedState), MachineSettingsFile.FileNameFor("tests")));
+
     /// <summary>A machine that runs <paramref name="current"/> on <paramref name="processor"/>.</summary>
     public static IHostPlatform Platform(PlatformId current = PlatformId.Linux, string processor = "x86_64", string? home = null)
     {

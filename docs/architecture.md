@@ -7205,7 +7205,10 @@ one per machine and per user (`MachineSettingsFile`). It holds `{ "admission": {
 `config.json`'s `admission` takes, read by the same options and the same rules
 (`HarnessConfigValidator.ValidateAdmission`): a key it does not know, a key written twice or a value
 out of its bounds is refused, naming the file, and no heavy leg is admitted by it - nor by a tree's
-`config.json` in its place - until it is put right; a file that is not there declares nothing. A leg's
+`config.json` in its place - until it is put right; a file that is not there declares nothing, and so
+does a process given no home, which can name none, while a `DSSHARNESS_USER_STATE` that names no
+directory is refused as a file that cannot be read is, naming the variable
+(`VariableNamesNoDirectoryException`), never read as a machine that declares nothing. A leg's
 rule is read once, as its work begins, and carried with it (`PlacedLeg.AdmittedBy`, an
 `AdmissionReading`): its slot, its floor - in a WSL distribution too, which is sent that reading - and
 the page cache dropped as it ends all answer to it, and nothing reads the file again after the leg's
@@ -7249,10 +7252,13 @@ names none, the state is in the user data and the isolation's directory in the u
 (`XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS - and `LOCALAPPDATA` on Windows). The
 variable is the tool's own: the home, the user data and the user cache are every program's, and moving
 one of them to move the tool's state would move with it every reader of `~` - the host's home written
-`~`, the agent policy's, ssh's keys - and every other program's caches, NuGet's and npm's among them. A
-value that is not a fully qualified path names no directory: it is refused, never read as the default
-the variable was set to leave - a heavy leg's slot has nowhere to be kept, and an isolation has nowhere
-for its caches, each said naming the variable. The test suite gives its own process a directory below
+`~`, the agent policy's, ssh's keys - and every other program's caches, NuGet's and npm's among them.
+An empty value counts as unset, as the XDG variables' empty values do: a shell's `export` of a
+variable that holds nothing gives it so, and Windows holds no empty value at all. Any other value that
+is not a fully qualified path names no directory: it is refused (`VariableNamesNoDirectoryException`),
+never read as the default the variable was set to leave - the settings file is refused as one that
+cannot be read, a heavy leg's slot has nowhere to be kept, and an isolation has nowhere for its caches,
+each said naming the variable. The test suite gives its own process a directory below
 its temporary root through it, which every child it starts inherits, so no test reads or writes what
 the machine's user keeps, and every reader of `~` still reads the machine's home.
 
