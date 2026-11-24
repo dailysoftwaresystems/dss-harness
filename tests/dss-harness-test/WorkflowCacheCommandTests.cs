@@ -106,6 +106,23 @@ public sealed class WorkflowCacheCommandTests
     }
 
     /// <summary>
+    /// The CLI a test starts naming no home of its own keeps this tool's state in the test process's own user data, never
+    /// in the machine's own user's: the cache it names is there, beside this machine's settings file and its dispatch queue -
+    /// so no developer's count of heavy legs, and no queue their own commands share, reaches a test.
+    /// </summary>
+    [Fact]
+    public async Task TheCliATestStarts_KeepsItsStateInTheTestProcesssOwnUserData_NeverTheMachineUsersOwn()
+    {
+        using var temp = new TempDirectory();
+
+        var json = await CliRunner.RunAsync(["workflow-cache", "list", "--json"], Token, temp.Path);
+
+        Assert.Equal(
+            (HarnessExit.Success, Path.Combine(CliRunner.UserStateDirectory, WorkflowCache.DirectoryName)),
+            (json.ExitCode, JsonNode.Parse(json.StandardOutput)!["cache"]!.GetValue<string>()));
+    }
+
+    /// <summary>
     /// An environment giving the CLI a user's data of its own, below <paramref name="temp"/>, and the workflow cache's
     /// directory it then names: a test never reaches the cache of the machine's own user.
     /// </summary>
