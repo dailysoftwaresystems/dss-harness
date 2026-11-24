@@ -1714,6 +1714,32 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
     }
 
     /// <summary>
+    /// A loop's <c>break</c> and <c>continue</c> are statements, no names: written alone, with the number of loops they leave, or with that
+    /// number in parentheses, in any case, none is a constant the code reads nor a function it calls - else the linker would look for a
+    /// constant <c>App\break</c> beside every loop - and the code around them is read as it is.
+    /// </summary>
+    [Fact]
+    public void ABreakAndAContinue_WithOrWithoutTheirNumber_AreNoReferences()
+    {
+        var extract = Read("src/loop.php", """
+            <?php
+            namespace App;
+            function loop(array $rows) {
+                foreach ($rows as $row) { break; }
+                foreach ($rows as $row) { foreach ($row as $cell) { break 2; } }
+                foreach ($rows as $row) { continue; }
+                foreach ($rows as $row) { foreach ($row as $cell) { continue 2; } }
+                foreach ($rows as $row) { foreach ($row as $cell) { if ($cell > LIMIT) { BREAK (2); } Continue(1); } }
+                return helper();
+            }
+            """);
+
+        Assert.Equal(
+            [(CodeEdgeKinds.Uses, "LIMIT", "scope", "App", 8), (CodeEdgeKinds.Calls, "helper", "scope", "App", 9)],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier), reference.Line)));
+    }
+
+    /// <summary>
     /// A property with hooks that a body declares - in an anonymous class, or in a class a function's body declares - is no node: each hook's
     /// name, where the hook begins - past its attributes, its <c>final</c> and its <c>&amp;</c>, as a type's own hooks begin - is a declared name and
     /// no use, a short hook's among them, and what its arrow's expression or its body calls and reads is the call and the use of the

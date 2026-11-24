@@ -55,10 +55,13 @@ internal sealed class PhpReading
         VariableCall = "variable-call",
         UnfollowedInclude = "unfollowed-include";
 
-    /// <summary>The words a parenthesis follows that call nothing: PHP's statements and the constructs that read like calls.</summary>
+    /// <summary>
+    /// The words a parenthesis follows that call nothing: PHP's statements - a loop's <c>break</c> and <c>continue</c> among them, whose
+    /// number of loops may stand in parentheses, <c>break (2);</c> - and the constructs that read like calls.
+    /// </summary>
     private static readonly HashSet<string> NoCalls = new(StringComparer.OrdinalIgnoreCase)
     {
-        "if", "elseif", "else", "while", "do", "for", "foreach", "switch", "match", "case", "default", "catch", "try", "finally",
+        "if", "elseif", "else", "while", "do", "for", "foreach", "switch", "match", "case", "default", "catch", "try", "finally", "break", "continue",
         "array", "list", "isset", "unset", "empty", "exit", "die", "echo", "print", "return", "fn", "function", "include",
         "include_once", "require", "require_once", "declare", "new", "clone", "use", "and", "or", "xor", "instanceof",
         "insteadof", "global", "static", "yield", "throw", "as", "goto", "const", "abstract", "final", "class", "interface",
