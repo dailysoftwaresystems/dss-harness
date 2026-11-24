@@ -1119,6 +1119,39 @@ public sealed class RunnerRunServiceTests
         Assert.NotEqual(LegVerdict.Passed, genuine.Verdict.Verdict);
     }
 
+    /// <summary>
+    /// A red run step's leg entry carries the digest of what the step printed, as a red build's and a red test's do:
+    /// the failing step's own log read once by the parsers chosen for a runner's steps, its thrown error the failure
+    /// the entry's verdict rests on - the same digest the expected-exception entry is matched against, never a second
+    /// reading of the log.
+    /// </summary>
+    [Fact]
+    public async Task ARedRunStepsEntry_CarriesItsDigestsFirst_TheThrownErrorItsLogPrinted()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // .NET's own words for an error a step's program did not catch: the head, a frame under it, both on one
+        // stream in one write, and a non-zero exit - the shape a step that dies leaves in its log.
+        const string printed = "System.InvalidOperationException: The operation is invalid.\n"
+            + "   at Demo.Corpus.Measure() in corpus/Program.cs:12";
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "say-and-exit", [printed, string.Empty, "7"])],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        Assert.NotNull(result.Entry.Digest);
+        Assert.Null(result.Entry.Digest!.First);
+        var failure = Assert.Single(result.Entry.Digest.Failures);
+        Assert.Equal(
+            ("dotnet", "errored", "System.InvalidOperationException", "The operation is invalid."),
+            (failure.Framework, failure.Outcome, failure.Exception?.Type, failure.Exception?.Message));
+    }
+
     [Fact]
     public async Task AnExpectedExceptionWhoseCheckIsNotConfirmed_LeavesTheFailureGenuine()
     {

@@ -9989,7 +9989,8 @@ the names it was written under (`ResultDigest.Read`, the one owner of the shape 
 naming the host as the configuration declares it, never by an address its name resolved to, and a digest of no shape
 this build writes refused as a ledger it cannot read is. A phase is digested in one place (`Results\PhaseDigest.cs`)
 wherever its failure is the leg's verdict - a moving tree's or a shared directory's says nothing of the code - a
-build's failing phase by the parsers its project and its toolchain's compiler chose and a test's by its runner's, each
+build's failing phase by the parsers its project and its toolchain's compiler chose, a test's by its runner's and a
+runner's failing step by every runtime's stack form, each
 with the matchers that read it (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first
 - what a JUnit case's own test printed (its failure's body, `system-out`, `system-err`) read by the runner's parsers, a
 stack there by its runtime's own form, so a case that says only how its test ended (CTest's `Failed`) takes its message
