@@ -85,17 +85,25 @@ public sealed class FlowReportsTests
     /// The report carries the counts by which a repository sees whether its rounds converge, gathered by the one owner
     /// the run's words read too: each class's claim as its item's newest class-closure check judged the record - a check
     /// run again after a rework is the one that stands, a plan audit's own closure member is no item's record, and an
-    /// item whose check was skipped has none - the classes its reviews reopened with how often, by each item's ledger,
-    /// which its reopened-twice signal reads by the route's own rule, and the homes touched often enough to name.
+    /// item whose check was skipped has none - each item's counts, the classes its reviews reopened with how often, by
+    /// each item's ledger, which its reopened-twice signal reads by the route's own rule, the homes touched often enough
+    /// to name, and each issue carried to a later round, fixed there or left.
     /// </summary>
     [Fact]
-    public void TheReportCarriesTheClosureCounts_OfRecordsReopeningsAndHotspots()
+    public void TheReportCarriesTheClosureCounts_OfRecordsItemsReopeningsHotspotsAndLaterRounds()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
         static JsonNode Checked(string record, string hotspots = "[]")
             => JsonNode.Parse($$"""{"passed":true,"problems":[],"hotspots":{{hotspots}},"touches":[],"record":{{record}}}""")!;
+        const string RateRecord = """
+            [{"class":"c-rate","claim":"the rate holds over every format",
+              "sites":[{"path":"src/Rates/Home.cs","after":"home"},{"path":"src/Old.cs","after":"reads-home"},{"path":"docs/old.md","after":"deleted"},{"path":"src/Older.cs","after":"deleted"}],
+              "universe":{"axes":[],"cellsPinned":4,"cellsArmed":0},
+              "neighbours":[{"cell":"json","result":"passed"},{"cell":"xml","result":"failed-fixed"},{"cell":"yaml","result":"unmeasured","reason":"no reader"}],
+              "homeAudit":{"consolidated":["the rate"],"invariants":["one place decides"],"structural":["Home holds it"]}}]
+            """;
         var file = new FlowFile(
             1,
             "r1",
@@ -111,7 +119,9 @@ public sealed class FlowReportsTests
                 new FlowStepRecord("rounds#1.items[0].class-closure", "class-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-rate","claim":"named a case: one format"}]""")),
                 new FlowStepRecord("rounds#1.items[1].class-closure", "class-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-frame","claim":"the frame is decided once"}]""")),
                 new FlowStepRecord("rounds#1.items[0].fix#1.route", "route", false, "Done", 1, 1, [], [], Type: "route-findings", Output: JsonNode.Parse("""{"rework":[],"homeAudit":[],"reopened":[{"class":"c-rate","rounds":1}]}""")),
-                new FlowStepRecord("rounds#1.items[0].fix#1.revise.reclass-closure", "reclass-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-rate","claim":"the rate holds over every format"}]""", """[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}]""")),
+                new FlowStepRecord("rounds#1.items[0].fix#1.revise.reclass-closure", "reclass-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: Checked(RateRecord, """[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}]""")),
+                new FlowStepRecord("rounds#1.items[0].fix#2.route", "route", false, "Done", 1, 2, [], [], Type: "route-findings", Output: JsonNode.Parse("""{"rework":[],"homeAudit":[],"reopened":[{"class":"c-rate","rounds":2}]}""")),
+                new FlowStepRecord("rounds#1.items[0].fix#3.route", "route", false, "Failed", 1, 1, [], [], Type: "route-findings", Output: JsonNode.Parse("""{"rework":[],"homeAudit":[],"reopened":[{"class":"c-rate","rounds":9}]}""")),
                 new FlowStepRecord("rounds#1.items[2].class-closure", "class-closure", false, "Skipped", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-skip","claim":"never judged"}]""")),
             ],
             [],
@@ -120,19 +130,44 @@ public sealed class FlowReportsTests
         {
             ("a1", new FlowClosureLedgerFile(1, "a1", [new FlowClosureReopens("c-rate", ["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"])])),
         };
+        var next = new FlowNextRoundFile(
+            1,
+            "r1",
+            DateTimeOffset.UnixEpoch,
+            [
+                new FlowNextIssue("nx-1", "a broken parser", "it reads one format", ["src/Parser.cs"], ["src/Parser.cs"], "", [], "rounds#1.items[0].triage", DateTimeOffset.UnixEpoch) { SettledBy = "rounds#2.items[0]" },
+                new FlowNextIssue("nx-2", "a stale document", "it names the old rate", ["docs/rate.md"], ["docs/rate.md"], "", [], "rounds#1.items[1].triage", DateTimeOffset.UnixEpoch),
+            ]);
 
-        _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch, ledgers: ledgers);
+        _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch, ledgers: ledgers, nextRound: next);
 
         var report = harness.FileSystem.ReadAllText(layout.ReportFile).Replace("\r\n", "\n");
 
+        // Of each item: its rounds of review - a routing that failed is none - its home audits, and of each class of the
+        // record its newest check judged the sites now reading the home and those deleted, the cells pinned, the
+        // neighbours measured and not, and its send-backs as the item's newest routing that ended done counted them.
         Assert.Contains(
             "## Convergence\n\n"
                 + "- 'c-rate': the rate holds over every format\n"
                 + "- 'c-frame': the frame is decided once\n"
+                + "- item 'rounds#1.items[0]': 2 review round(s), 1 home audit(s), classes 'c-rate' (1 site(s) consolidated, 2 deleted, 4 cell(s) pinned, 2 neighbour(s) measured, 1 unmeasured, sent back 2 time(s), home audited)\n"
+                + "- item 'rounds#1.items[1]': 0 review round(s), 0 home audit(s), classes 'c-frame' (0 site(s) consolidated, 0 deleted, 0 cell(s) pinned, 0 neighbour(s) measured, 0 unmeasured, sent back 0 time(s))\n"
                 + "- 'c-rate', reopened 2 time(s)\n"
-                + "- 'c-rate' home 'src/Rates/Home.cs', touched 6 time(s)\n",
+                + "- 'c-rate' home 'src/Rates/Home.cs', touched 6 time(s)\n"
+                + "- issue 'nx-1' a broken parser: fixed in a later round, by 'rounds#2.items[0]'\n"
+                + "- issue 'nx-2' a stale document: next round, not settled\n",
             report,
             StringComparison.Ordinal);
+
+        // The report's document keeps each item's counts as numbers, and each issue with the item that settled it.
+        var document = JsonNode.Parse(harness.FileSystem.ReadAllText(layout.ReportJsonFile))!["convergence"]!;
+
+        Assert.Equal(
+            """[{"item":"rounds#1.items[0]","reviewRounds":2,"homeAudits":1,"classes":[{"class":"c-rate","sitesConsolidated":1,"sitesDeleted":2,"cellsPinned":4,"neighboursMeasured":2,"neighboursUnmeasured":1,"sendBacks":2,"homeAudit":true}]},{"item":"rounds#1.items[1]","reviewRounds":0,"homeAudits":0,"classes":[{"class":"c-frame","sitesConsolidated":0,"sitesDeleted":0,"cellsPinned":0,"neighboursMeasured":0,"neighboursUnmeasured":0,"sendBacks":0,"homeAudit":false}]}]""",
+            document["items"]!.ToJsonString());
+        Assert.Equal(
+            """[{"id":"nx-1","said":"'nx-1' a broken parser: fixed in a later round, by 'rounds#2.items[0]'","settledBy":"rounds#2.items[0]"},{"id":"nx-2","said":"'nx-2' a stale document: next round, not settled","settledBy":null}]""",
+            document["nextRound"]!.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         Assert.Contains("'c-rate' was reopened 2 times", report, StringComparison.Ordinal);
         Assert.DoesNotContain("c-plan", report, StringComparison.Ordinal);
         Assert.DoesNotContain("c-skip", report, StringComparison.Ordinal);

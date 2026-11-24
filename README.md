@@ -765,9 +765,13 @@ rework's does before the sweep runs again on the bytes it landed as; any other f
 is the machine's, and goes where the item's other failures go. The run's report and its
 pull request's body carry the counts by which a repository sees whether its rounds converge: each
 class's closing claim as its item's closure check judged the record - the universe, never a case -
-the classes its reviews reopened with how many rounds, and the homes touched often enough to name
-(`{run.claims}`, `{run.reopened}` and `{run.hotspots}`); the pull request's body and the handoff say
-too what became of each issue carried to a later round. The self-audit reads the same records whole
+and, of each item, its classes with the sites consolidated into the home and those deleted, the
+cells pinned, the neighbours measured and those not, its rounds of review, how often a review sent
+each class back and its home audits (`{run.counts}`); and of the run, the classes its reviews
+reopened with how many rounds, the homes touched often enough to name, with their touches, and the
+issues carried to a later round, fixed there or left (`{run.claims}`, `{run.reopened}`,
+`{run.hotspots}`; the pull request's body and the handoff say the issues as `{run.preExisting}`
+does). The self-audit reads the same records whole
 and the same hotspots as `{run.closure}` and `{run.hotspots}`, through the instance-closure lens: a diff that touches one site and names a case, a theme repeating in the run's
 commit subjects, a hotspot's path, a pin that lists the case by hand - each disproved or made a work
 item. A pre-existing

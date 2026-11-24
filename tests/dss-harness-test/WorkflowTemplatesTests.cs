@@ -841,6 +841,22 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The pull request's body carries the counts by which a repository sees whether its rounds converge, as the report
+    /// does: each class's claim, each item's counts, the classes reopened, the hotspots and what became of each issue
+    /// carried to a later round - and of the closure's run texts it reads every one but the records whole, which are the
+    /// self-audit's.
+    /// </summary>
+    [Fact]
+    public void ThePullRequestsBody_CarriesEveryCountOfTheClosure()
+    {
+        var body = WorkflowTemplates.TextOf("prompts/pr-body.md")!;
+
+        Assert.Equal(
+            [WorkflowExpressions.RunClaims, WorkflowExpressions.RunCounts, WorkflowExpressions.RunHotspots, "preExisting", WorkflowExpressions.RunReopened],
+            [.. WorkflowExpressions.RunTexts.Where(text => body.Contains($"{{run.{text}}}", StringComparison.Ordinal)).Except(["ran", "notRun", "red", "leftover", "assumptions"]).Order(StringComparer.Ordinal)]);
+    }
+
+    /// <summary>
     /// The prompts that search for a class's sites name the graph's <c>sites</c> operation first and text search after
     /// it - the plan's, the plan audit's and the item audit's, and the plan's searches - so a class's site list is
     /// never searched by text alone where the graph joins the data, and what the graph lists only is said by the

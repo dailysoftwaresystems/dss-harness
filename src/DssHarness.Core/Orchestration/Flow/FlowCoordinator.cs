@@ -8045,14 +8045,8 @@ public sealed class FlowCoordinator
     {
         var issue = NextIssueOf(instance);
         _nextRound.Add(issue);
-        _tally.Add(new PreExistingTally(NextRoundState, $"{issue.Title} ({string.Join(", ", issue.Where)})", Next: issue.Id));
+        _tally.Add(new PreExistingTally(FlowNextIssue.OwedState, $"{issue.Title} ({string.Join(", ", issue.Where)})", Next: issue.Id));
     }
-
-    /// <summary>What <c>{run.preExisting}</c> says became of an issue the run owes its next round, while it is owed.</summary>
-    private const string NextRoundState = "next round";
-
-    /// <summary>What <c>{run.preExisting}</c> says became of an issue the run owed its next round, once a work item settled it.</summary>
-    private const string SettledState = "fixed in a later round";
 
     /// <summary>
     /// What became of a pre-existing issue, as <c>{run.preExisting}</c> says it: its tally's state, save that one the
@@ -8062,7 +8056,7 @@ public sealed class FlowCoordinator
     /// <param name="entry">The issue's tally.</param>
     private string StateOf(PreExistingTally entry)
         => entry.Next is { } id && _nextRound.Any(issue => issue.SettledBy is not null && string.Equals(issue.Id, id, StringComparison.Ordinal))
-            ? SettledState
+            ? FlowNextIssue.SettledState
             : entry.State;
 
     /// <summary>
@@ -11609,14 +11603,15 @@ public sealed class FlowCoordinator
 
         // What the run's class-closure checks and routings say of its items' classes, gathered by their one owner: each
         // item's record as its newest check judged it - whole for the self-audit's instance-closure lens, and each
-        // class's claim alone - the hotspots those checks named, and the classes its reviews reopened.
+        // class's claim alone - the hotspots those checks named, the classes its reviews reopened, and each item's counts.
         IReadOnlyList<FlowClosureRecords.Step> closing = [.. _created.Select(instance
             => new FlowClosureRecords.Step(instance.Id, instance.Step.IsGroup ? null : instance.Step.Type, instance.State == FlowInstanceState.Done, instance.Output))];
         var records = FlowClosureRecords.RecordsOf(closing);
-        var closure = records.Select(record => new JsonArray([.. record.Select(entry => (JsonNode?)entry.DeepClone())]).ToJsonString()).ToList();
+        var closure = records.Select(record => new JsonArray([.. record.Select(entry => (JsonNode?)entry.DeepClone())]).ToJsonString(DssHarness.Core.Agents.AgentEnvelope.Written)).ToList();
         var claims = records.SelectMany(record => record).Select(entry => $"'{TextOf(entry["class"])}': {TextOf(entry["claim"])}").ToList();
         var hotspots = FlowClosureRecords.HotspotsOf(closing).Select(hotspot => $"'{hotspot.Class}' home '{hotspot.Path}' touched {hotspot.Touches.ToString(System.Globalization.CultureInfo.InvariantCulture)} times").ToList();
         var reopened = FlowClosureRecords.ReopenedOf(closing).Select(@class => $"'{@class.Class}' reopened in {@class.Rounds.ToString(System.Globalization.CultureInfo.InvariantCulture)} round(s)").ToList();
+        var counts = FlowClosureRecords.ItemsOf(closing).Select(item => item.Said()).ToList();
 
         return new JsonObject
         {
@@ -11640,6 +11635,7 @@ public sealed class FlowCoordinator
             [WorkflowExpressions.RunClaims] = claims.Count > 0 ? string.Join("; ", claims) : FlowChecks.None,
             [WorkflowExpressions.RunHotspots] = hotspots.Count > 0 ? string.Join("; ", hotspots) : FlowChecks.None,
             [WorkflowExpressions.RunReopened] = reopened.Count > 0 ? string.Join("; ", reopened) : FlowChecks.None,
+            [WorkflowExpressions.RunCounts] = counts.Count > 0 ? string.Join("; ", counts) : FlowChecks.None,
         };
     }
 
@@ -13735,7 +13731,7 @@ public sealed class FlowCoordinator
 
             foreach (var owedIssue in _nextRound)
             {
-                _tally.Add(new PreExistingTally(NextRoundState, $"{owedIssue.Title} ({string.Join(", ", owedIssue.Where)})", Next: owedIssue.Id));
+                _tally.Add(new PreExistingTally(FlowNextIssue.OwedState, $"{owedIssue.Title} ({string.Join(", ", owedIssue.Where)})", Next: owedIssue.Id));
             }
 
             foreach (var triage in _created.Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting && created.State == FlowInstanceState.Done))

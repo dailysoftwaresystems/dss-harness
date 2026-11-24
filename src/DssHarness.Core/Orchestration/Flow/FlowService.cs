@@ -1052,7 +1052,8 @@ public sealed class FlowService(
             FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
             LedgersOf(layout, flow),
             _store.ReadDefinition(layout),
-            thresholds));
+            thresholds,
+            _store.ReadNextRound(layout)));
         var wanted = steps is { Count: > 0 } named ? named.ToHashSet(StringComparer.Ordinal) : null;
         var document = ReportOf(report, flow, wanted, by);
 
@@ -1113,7 +1114,8 @@ public sealed class FlowService(
             FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
             LedgersOf(layout, flow),
             definition,
-            thresholds));
+            thresholds,
+            _store.ReadNextRound(layout)));
         var said = report.ToJsonString(ReportJson.Options);
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
 
@@ -1797,7 +1799,8 @@ public sealed class FlowService(
                 _store.ReadFlowUpdates(layout),
                 FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
                 LedgersOf(layout, flow),
-                _store.ReadDefinition(layout));
+                _store.ReadDefinition(layout),
+                _store.ReadNextRound(layout));
             var named = RecordsOf(layout, inbox);
 
             var result = new FlowRunResult(

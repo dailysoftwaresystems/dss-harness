@@ -2138,6 +2138,12 @@ public sealed class ImplementationFlowTests
             // The round after's item settled it, its commit made: the file names it.
             Assert.Equal("rounds#2.items[0]", issue.SettledBy);
             Assert.Empty(kit.Harness.OrchestrationStore.ReadPreExistingIssues(kit.RunOf())!.Issues);
+
+            // The run's report says what became of it, as the file holds it.
+            Assert.Contains(
+                "\n- issue 'nx-1' the frame is decided twice in the parser: fixed in a later round, by 'rounds#2.items[0]'\n",
+                File.ReadAllText(kit.RunOf().ReportFile).Replace("\r\n", "\n"),
+                StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -2305,12 +2311,19 @@ public sealed class ImplementationFlowTests
             var reopened = Assert.Single(ledger.Classes);
             Assert.Equal(("c-rate", 2), (reopened.Class, reopened.Reopens));
 
-            // The report carries the counts: its convergence, the class's claim as its last check judged the record and the
-            // class reopened twice, whole - no home touched often enough by the run's commits to be named a hotspot - and the
-            // signal of the reopening.
+            // The report carries the counts: its convergence, the class's claim as its last check judged the record, the
+            // item's counts - three rounds of review, the two sites that were not the home deleted, the two cells pinned, the
+            // class sent back twice and home audited - and the class reopened twice, whole - no home touched often enough by
+            // the run's commits to be named a hotspot - and the signal of the reopening.
             var report = File.ReadAllText(kit.RunOf().ReportFile).Replace("\r\n", "\n");
 
-            Assert.Contains("\n## Convergence\n\n- 'c-rate': the rate holds over every format\n- 'c-rate', reopened 2 time(s)\n\n## Questions\n", report, StringComparison.Ordinal);
+            Assert.Contains(
+                "\n## Convergence\n\n"
+                    + "- 'c-rate': the rate holds over every format\n"
+                    + "- item 'rounds#1.items[0]': 3 review round(s), 1 home audit(s), classes 'c-rate' (0 site(s) consolidated, 2 deleted, 2 cell(s) pinned, 0 neighbour(s) measured, 0 unmeasured, sent back 2 time(s), home audited)\n"
+                    + "- 'c-rate', reopened 2 time(s)\n\n## Questions\n",
+                report,
+                StringComparison.Ordinal);
             Assert.Contains("\n- kind classReopenedTwice; steps ; said 'c-rate' was reopened 2 times\n", report, StringComparison.Ordinal);
         }
 

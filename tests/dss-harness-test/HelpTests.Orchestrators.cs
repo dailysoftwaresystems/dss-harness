@@ -314,6 +314,22 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic says what a run's report says its reviews converged to: the counts by which a repository
+    /// sees whether its rounds converge, of each item and of the run.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhatTheReportSaysTheReviewsConvergedTo()
+    {
+        Assert.Contains(
+            "what its reviews converged to - the classes closed, each item's counts (its rounds of review and home audits, and of "
+                + "each class the sites consolidated and deleted, the cells pinned, the neighbours measured and not, and how often a "
+                + "review sent it back), the classes reopened, the hotspots, the issues carried to a later round, fixed there or "
+                + "left, and what its loops left - and the signals a reader starts from",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators and layout topics say where a step's contained child's session, and the group of its legs' work, is recorded, and that every command
     /// over an orchestrator first ends what a killed process left of them - and on which systems - from the layout's own names.
     /// </summary>

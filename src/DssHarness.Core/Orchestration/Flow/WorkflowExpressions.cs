@@ -108,10 +108,10 @@ public static class WorkflowExpressions
     /// The run's texts after <c>run</c>, written by the engine from its step records for a template - what it checked,
     /// what it has not yet, what it knows to be red, what its loops left, what its agents assumed, the pre-existing
     /// issues it took, each item's class record as its closure check judged it, each class's closing claim alone, the
-    /// hotspots of those checks, and the classes its reviews reopened with how many rounds - never values for an
-    /// expression. What each says of the classes is gathered by one owner (<see cref="FlowClosureRecords"/>).
+    /// hotspots of those checks, the classes its reviews reopened with how many rounds, and each item's counts - never
+    /// values for an expression. What each says of the classes is gathered by one owner (<see cref="FlowClosureRecords"/>).
     /// </summary>
-    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting", RunClosure, RunClaims, RunHotspots, RunReopened];
+    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting", RunClosure, RunClaims, RunHotspots, RunReopened, RunCounts];
 
     /// <summary>The run's text of each item's class record, whole, as the newest closure check of the item judged it - for the self-audit's instance-closure lens.</summary>
     public const string RunClosure = "closure";
@@ -124,6 +124,13 @@ public static class WorkflowExpressions
 
     /// <summary>The run's text of each class its reviews reopened, with how many rounds reopened it.</summary>
     public const string RunReopened = "reopened";
+
+    /// <summary>
+    /// The run's text of each item's counts (<see cref="FlowClosureItem.Said"/>): its rounds of review and home audits, and
+    /// of each class the sites consolidated and deleted, the cells pinned, the neighbours measured and not, and how often
+    /// a review sent it back.
+    /// </summary>
+    public const string RunCounts = "counts";
 
     /// <summary>The texts after <c>carried</c>: the same three of what one commit carries, for its message and its variables alone.</summary>
     public static IReadOnlyList<string> CarriedTexts { get; } = ["ran", "notRun", "red"];

@@ -930,6 +930,21 @@ public sealed record FlowNextIssue(
     /// </summary>
     public string? SettledBy { get; init; }
 
+    /// <summary>What the run's words and its report say became of an issue the run owes its next round, while it is owed.</summary>
+    public const string OwedState = "next round";
+
+    /// <summary>What the run's words and its report say became of an issue the run owed its next round, once a work item settled it.</summary>
+    public const string SettledState = "fixed in a later round";
+
+    /// <summary>
+    /// What became of the issue, as the run's report says it: fixed in a later round, by the work item that settled it,
+    /// or owed the next round still - what a run that ended with it so left.
+    /// </summary>
+    public string Said()
+        => SettledBy is { } settled
+            ? $"'{Id}' {Title}: {SettledState}, by '{settled}'"
+            : $"'{Id}' {Title}: {OwedState}, not settled";
+
     /// <summary>
     /// Each member of the value <c>run.nextRound</c> and a round's plan check read of an issue, in order, with what it
     /// holds of the issue: a text, or a list of texts. The one owner of that value's shape - its value
@@ -1116,25 +1131,141 @@ public static class FlowClosureRecords
     /// </summary>
     /// <param name="steps">The run's steps, in the order they were made.</param>
     public static IReadOnlyList<(string Class, int Rounds)> ReopenedOf(IEnumerable<Step> steps)
-        => [.. NewestOf(steps, RouteType)
-            .SelectMany(route => (route["reopened"] as JsonArray ?? []).OfType<JsonObject>())
-            .Select(entry => (TextOf(entry[FindingRoutes.ClassMember]), CountOf(entry[FindingRoutes.RoundsMember])))];
+        => [.. NewestOf(steps, RouteType).SelectMany(ReopenedIn)];
+
+    /// <summary>
+    /// What each item's work did to its classes, so a repository can see whether its rounds converge: of each class of the
+    /// record the item's newest check judged, the sites consolidated into its home and those deleted, the cells pinned, the
+    /// neighbours measured and those not, and how many rounds its reviews sent it back - the item's ledger as its newest
+    /// routing counted it - whether it carries a home audit; and how many rounds of review routed the item, each routing
+    /// that ended done one round, however often it ran. In the order the items' checks were first met; an item whose record
+    /// names no class is left out, as <see cref="RecordsOf"/> leaves it.
+    /// </summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<FlowClosureItem> ItemsOf(IEnumerable<Step> steps)
+    {
+        var all = steps.ToList();
+        var routed = all
+            .Where(step => step.Done && string.Equals(step.Type, RouteType, StringComparison.Ordinal))
+            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
+            .ToDictionary(item => item.Key, item => item.Select(step => step.Instance).Distinct(StringComparer.Ordinal).Count(), StringComparer.Ordinal);
+        var sentBack = NewestOfEach(all, RouteType)
+            .ToDictionary(
+                route => route.Item,
+                route => (IReadOnlyList<(string Class, int Rounds)>)[.. ReopenedIn(route.Output)],
+                StringComparer.Ordinal);
+
+        return [.. NewestOfEach(all, CheckType)
+            .Select(check => (check.Item, Record: (IReadOnlyList<ClassClosureRecord>)[.. (check.Output["record"] as JsonArray ?? []).Select(ClassClosureRecord.In).OfType<ClassClosureRecord>()]))
+            .Where(item => item.Record.Count > 0)
+            .Select(item => new FlowClosureItem(
+                item.Item,
+                routed.GetValueOrDefault(item.Item),
+                [.. item.Record.Select(entry => new FlowClosureClass(
+                    entry.Class,
+                    entry.SitesConsolidated,
+                    entry.SitesDeleted,
+                    entry.CellsPinned,
+                    entry.NeighboursMeasured,
+                    entry.NeighboursUnmeasured,
+                    sentBack.GetValueOrDefault(item.Item, []).Where(reopened => string.Equals(reopened.Class, entry.Class, StringComparison.Ordinal)).Sum(reopened => reopened.Rounds),
+                    entry.HomeAudit is not null))]))];
+    }
 
     /// <summary>The newest step of <paramref name="type"/> of each item that ended done, its output, in the order the items were first met.</summary>
     private static IEnumerable<JsonObject> NewestOf(IEnumerable<Step> steps, string type)
+        => NewestOfEach(steps, type).Select(newest => newest.Output);
+
+    /// <summary>The newest step of <paramref name="type"/> of each item that ended done, with its item, in the order the items were first met.</summary>
+    private static IEnumerable<(string Item, JsonObject Output)> NewestOfEach(IEnumerable<Step> steps, string type)
         => steps
             .Where(step => step.Done && string.Equals(step.Type, type, StringComparison.Ordinal) && step.Output is JsonObject)
             .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
-            .Select(item => (JsonObject)item.Last().Output!);
+            .Select(item => (item.Key, (JsonObject)item.Last().Output!));
+
+    /// <summary>Each class a routing's output says the item's reviews reopened, with how many rounds.</summary>
+    private static IEnumerable<(string Class, int Rounds)> ReopenedIn(JsonObject route)
+        => (route["reopened"] as JsonArray ?? []).OfType<JsonObject>()
+            .Select(entry => (TextOf(entry[FindingRoutes.ClassMember]), CountOf(entry[FindingRoutes.RoundsMember])));
 
     /// <summary>A JSON text's value; empty where it is none.</summary>
     private static string TextOf(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : string.Empty;
 
     /// <summary>A JSON whole number's value; 0 where it is none.</summary>
-    private static int CountOf(JsonNode? node)
+    internal static int CountOf(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<int>(out var count) ? count : 0;
 }
+
+/// <summary>
+/// What one item's work did to its classes (<see cref="FlowClosureRecords.ItemsOf"/>): the rounds of review that routed
+/// it, and each class of the record its newest check judged - said in one sentence by the run's words and the report
+/// alike (<see cref="Said"/>), and kept in the report's document as <see cref="ToJson"/> writes it.
+/// </summary>
+/// <param name="Item">The item, by its instance id.</param>
+/// <param name="ReviewRounds">How many rounds of review routed it.</param>
+/// <param name="Classes">Each class of its record, in the record's order.</param>
+public sealed record FlowClosureItem(string Item, int ReviewRounds, IReadOnlyList<FlowClosureClass> Classes)
+{
+    /// <summary>How many of its classes carry a home audit.</summary>
+    public int HomeAudits => Classes.Count(@class => @class.HomeAudit);
+
+    /// <summary>The item in one sentence: its rounds of review and home audits, and each class's counts.</summary>
+    public string Said()
+        => $"'{Item}': {Count(ReviewRounds)} review round(s), {Count(HomeAudits)} home audit(s), classes "
+            + string.Join(", ", Classes.Select(@class => $"'{@class.Class}' ({Count(@class.SitesConsolidated)} site(s) consolidated, {Count(@class.SitesDeleted)} deleted, "
+                + $"{Count(@class.CellsPinned)} cell(s) pinned, {Count(@class.NeighboursMeasured)} neighbour(s) measured, {Count(@class.NeighboursUnmeasured)} unmeasured, "
+                + $"sent back {Count(@class.SendBacks)} time(s){(@class.HomeAudit ? ", home audited" : string.Empty)})"));
+
+    /// <summary>The item as the report's document keeps it.</summary>
+    public JsonObject ToJson()
+        => new()
+        {
+            ["item"] = Item,
+            ["reviewRounds"] = ReviewRounds,
+            ["homeAudits"] = HomeAudits,
+            ["classes"] = new JsonArray([.. Classes.Select(@class => (JsonNode?)new JsonObject
+            {
+                ["class"] = @class.Class,
+                ["sitesConsolidated"] = @class.SitesConsolidated,
+                ["sitesDeleted"] = @class.SitesDeleted,
+                ["cellsPinned"] = @class.CellsPinned,
+                ["neighboursMeasured"] = @class.NeighboursMeasured,
+                ["neighboursUnmeasured"] = @class.NeighboursUnmeasured,
+                ["sendBacks"] = @class.SendBacks,
+                ["homeAudit"] = @class.HomeAudit,
+            })]),
+        };
+
+    /// <summary>The item the report's document keeps in <paramref name="node"/>, as <see cref="ToJson"/> wrote it.</summary>
+    /// <param name="node">One entry of the report's convergence <c>items</c>.</param>
+    public static FlowClosureItem In(JsonNode? node)
+        => new(
+            node?["item"] is JsonValue item && item.TryGetValue<string>(out var id) ? id : string.Empty,
+            FlowClosureRecords.CountOf(node?["reviewRounds"]),
+            [.. (node?["classes"] as JsonArray ?? []).OfType<JsonObject>().Select(@class => new FlowClosureClass(
+                @class["class"] is JsonValue named && named.TryGetValue<string>(out var name) ? name : string.Empty,
+                FlowClosureRecords.CountOf(@class["sitesConsolidated"]),
+                FlowClosureRecords.CountOf(@class["sitesDeleted"]),
+                FlowClosureRecords.CountOf(@class["cellsPinned"]),
+                FlowClosureRecords.CountOf(@class["neighboursMeasured"]),
+                FlowClosureRecords.CountOf(@class["neighboursUnmeasured"]),
+                FlowClosureRecords.CountOf(@class["sendBacks"]),
+                @class["homeAudit"] is JsonValue audited && audited.TryGetValue<bool>(out var audit) && audit))]);
+
+    private static string Count(int count) => count.ToString(CultureInfo.InvariantCulture);
+}
+
+/// <summary>What one item's work did to one of its classes, as its record and its routings count it.</summary>
+/// <param name="Class">The class, by its id.</param>
+/// <param name="SitesConsolidated">How many of its sites now read their home.</param>
+/// <param name="SitesDeleted">How many of its sites the work deleted.</param>
+/// <param name="CellsPinned">How many cells of its universe the pin covers.</param>
+/// <param name="NeighboursMeasured">How many of its neighbours were measured.</param>
+/// <param name="NeighboursUnmeasured">How many of its neighbours were not, each with its reason.</param>
+/// <param name="SendBacks">How many rounds of review sent it back.</param>
+/// <param name="HomeAudit">Whether its record carries a home audit.</param>
+public sealed record FlowClosureClass(string Class, int SitesConsolidated, int SitesDeleted, int CellsPinned, int NeighboursMeasured, int NeighboursUnmeasured, int SendBacks, bool HomeAudit);
 
 /// <summary>
 /// The run's live owner, <c>.orchestrators/&lt;run&gt;.owner.json</c>: the process that drives it. A live owner refuses

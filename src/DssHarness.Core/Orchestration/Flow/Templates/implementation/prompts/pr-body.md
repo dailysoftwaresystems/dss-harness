@@ -28,6 +28,12 @@ Each class's closing claim, as its item's closure check judged the record - the 
 
 {run.claims}
 
+What each item's work did to its classes - its rounds of review and its home audits, and of each class the sites
+consolidated into its home and those deleted, the cells its pin covers, the neighbours measured and those not, and how
+many rounds a review sent it back:
+
+{run.counts}
+
 The classes the reviews reopened, with how many rounds reopened each - a second reopening asks the class's home audit:
 
 {run.reopened}

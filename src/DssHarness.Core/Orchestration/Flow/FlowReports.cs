@@ -109,6 +109,7 @@ public static class FlowReports
     /// <param name="events">The run's events, as the session left them; null where they were not read.</param>
     /// <param name="ledgers">The closure ledgers of the run's item agents; null where they were not read.</param>
     /// <param name="definition">The definition the run ran, frozen as it began; null where it cannot be read.</param>
+    /// <param name="nextRound">The issues the run owed a later round, each with the item that settled it; null where it owed none.</param>
     /// <returns>What is left for a person, the report's last section, one line each.</returns>
     public static IReadOnlyList<string> Write(
         IFileSystem fileSystem,
@@ -121,7 +122,8 @@ public static class FlowReports
         FlowUpdatesFile? updates = null,
         IReadOnlyList<FlowEvent>? events = null,
         IReadOnlyList<(string Agent, FlowClosureLedgerFile Ledger)>? ledgers = null,
-        WorkflowDefinition? definition = null)
+        WorkflowDefinition? definition = null,
+        FlowNextRoundFile? nextRound = null)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(layout);
@@ -131,7 +133,7 @@ public static class FlowReports
         // The report of the run is built by its one owner from the records alone; this, the session's end, writes it
         // with the session's own words at its head and its questions, updates, handoffs and what is left for a person
         // said in full - the detail a person reads - after the sections every form of the report holds.
-        var report = FlowRunReport.Of(new FlowRunReportSource(layout, flow, questions, updates, events, ledgers, definition));
+        var report = FlowRunReport.Of(new FlowRunReportSource(layout, flow, questions, updates, events, ledgers, definition, NextRound: nextRound));
         var left = LeftForAPerson(layout, flow, questions, updates);
         var handoffs = HandoffsOf(layout, flow);
 

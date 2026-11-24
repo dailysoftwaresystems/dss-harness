@@ -638,9 +638,12 @@ public static partial class HelpTopics
             + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check. "
             + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
             + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing, "
-            + "as do {run.closure}, {run.claims}, {run.hotspots} and {run.reopened}: of each item, the class record its newest "
-            + "class-closure check that ended done judged, whole, and each class's claim alone, the hotspots that check named, "
-            + "and the classes its reviews reopened with how many rounds, as its newest routing counted them - a step known by "
+            + "as do {run.closure}, {run.claims}, {run.hotspots}, {run.reopened} and {run.counts}: of each item, the class record "
+            + "its newest class-closure check that ended done judged, whole, and each class's claim alone, the hotspots that check "
+            + "named, the classes its reviews reopened with how many rounds, as its newest routing counted them, and its counts - "
+            + "the rounds of review that routed it, each routing that ended done one round, its home audits, and of each class of "
+            + "that record the sites consolidated into its home (reads-home) and those deleted, the cells its pin covers "
+            + "(cellsPinned), the neighbours measured and those not, and how many rounds a review sent it back - a step known by "
             + "its type, so no other step's closure member is read as an item's record, and an item no check judged has none.");
         builder.AppendLine();
         AppendWrapped(

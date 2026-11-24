@@ -32,8 +32,8 @@ public sealed record FlowReportThresholds(
 
 /// <summary>
 /// The records a report is built from, and nothing else: the run's state in one file, its questions and answers, its
-/// plan updates, its events, the closure ledgers of its item agents and the definition it ran - all read from the
-/// run's own directory, never asked of a model or a host.
+/// plan updates, its events, the closure ledgers of its item agents, the issues it owed a later round and the
+/// definition it ran - all read from the run's own directory, never asked of a model or a host.
 /// </summary>
 /// <param name="Layout">The run's own paths, where its records and its handoffs are.</param>
 /// <param name="Flow">The run's state, <c>flow.json</c>.</param>
@@ -43,6 +43,7 @@ public sealed record FlowReportThresholds(
 /// <param name="Ledgers">Each item agent's closure ledger, by its agent; empty where the run holds none.</param>
 /// <param name="Definition">The definition the run ran, frozen as it began; null where it cannot be read - the report then names no critical path.</param>
 /// <param name="Thresholds">The thresholds its signals are computed by.</param>
+/// <param name="NextRound">The issues the run owed a later round, <c>next-round.json</c>, each with the item that settled it; null where the run owed none.</param>
 public sealed record FlowRunReportSource(
     OrchestratorLayout Layout,
     FlowFile Flow,
@@ -51,7 +52,8 @@ public sealed record FlowRunReportSource(
     IReadOnlyList<FlowEvent>? Events = null,
     IReadOnlyList<(string Agent, FlowClosureLedgerFile Ledger)>? Ledgers = null,
     WorkflowDefinition? Definition = null,
-    FlowReportThresholds? Thresholds = null);
+    FlowReportThresholds? Thresholds = null,
+    FlowNextRoundFile? NextRound = null);
 
 /// <summary>
 /// The report of a run, built from its records alone (<see cref="FlowRunReport.Of"/>): what the run was and how it
@@ -325,6 +327,11 @@ public static class FlowRunReport
                 lines.Add($"- '{@class!["class"]?.GetValue<string>()}': {@class["claim"]?.GetValue<string>()}");
             }
 
+            foreach (var item in convergence["items"]?.AsArray() ?? [])
+            {
+                lines.Add($"- item {FlowClosureItem.In(item).Said()}");
+            }
+
             foreach (var @class in convergence["classesReopened"]?.AsArray() ?? [])
             {
                 lines.Add($"- '{@class!["class"]?.GetValue<string>()}', reopened {@class["reopens"]?.GetValue<string>()} time(s)");
@@ -333,6 +340,11 @@ public static class FlowRunReport
             foreach (var hotspot in convergence["hotspots"]?.AsArray() ?? [])
             {
                 lines.Add($"- '{hotspot!["class"]?.GetValue<string>()}' home '{hotspot["path"]?.GetValue<string>()}', touched {hotspot["touches"]?.GetValue<string>()} time(s)");
+            }
+
+            foreach (var issue in convergence["nextRound"]?.AsArray() ?? [])
+            {
+                lines.Add($"- issue {issue!["said"]?.GetValue<string>()}");
             }
         }
     }
@@ -746,6 +758,14 @@ public static class FlowRunReport
             })]);
         }
 
+        // What each item's work did to its classes, by the same owner and in the same words as the run's {run.counts}.
+        var items = FlowClosureRecords.ItemsOf(closing);
+
+        if (items.Count > 0)
+        {
+            convergence["items"] = new JsonArray([.. items.Select(item => (JsonNode?)item.ToJson())]);
+        }
+
         // The classes the reviews reopened, by each item's ledger - the one count of them, read by the signals too.
         var reopened = (source.Ledgers ?? [])
             .SelectMany(ledger => ledger.Ledger.Classes)
@@ -772,6 +792,18 @@ public static class FlowRunReport
                 ["class"] = hotspot.Class,
                 ["path"] = hotspot.Path,
                 ["touches"] = hotspot.Touches,
+            })]);
+        }
+
+        // Each issue the run carried to a later round, as its list of them says what became of it: fixed there by the work
+        // item that settled it, or left owed.
+        if (source.NextRound is { Issues.Count: > 0 } next)
+        {
+            convergence["nextRound"] = new JsonArray([.. next.Issues.Select(issue => (JsonNode?)new JsonObject
+            {
+                ["id"] = issue.Id,
+                ["said"] = issue.Said(),
+                ["settledBy"] = issue.SettledBy,
             })]);
         }
 

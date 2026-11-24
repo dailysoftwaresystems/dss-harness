@@ -3389,11 +3389,19 @@ check judged - one a person skipped - has none. `{run.closure}` gives each recor
 hotspots, read by the self-audit's instance-closure lens (`self-audit.md`, `auditor.md`: the tells - one site and a case
 named, a theme in the run's commit subjects, a hotspot's path, a pin listing the case by hand - and the disproof,
 searching the data and measuring unnamed cells and the optimised form); the pull request's body (`pr-body.md`) carries
-the counts - each class's claim alone (`{run.claims}`), the classes the reviews reopened with how many rounds
-(`{run.reopened}`) and the hotspots - and says what became of each issue carried to a later round
-(`{run.preExisting}`), and the report's convergence the same claims and hotspots, its reopenings read from the items'
-ledgers (`FlowClosureLedgerFile`), whose count its `classReopenedTwice` signal reads by the route's own rule
-(`FlowClosureReopens.AsksItsHomeAudit`).
+the counts - each class's claim alone (`{run.claims}`), each item's counts (`{run.counts}`), the classes the reviews
+reopened with how many rounds (`{run.reopened}`) and the hotspots with their touches - and says what became of each
+issue carried to a later round (`{run.preExisting}`), and the report's convergence the same claims, items' counts and
+hotspots, its reopenings read from the items' ledgers (`FlowClosureLedgerFile`), whose count its `classReopenedTwice`
+signal reads by the route's own rule (`FlowClosureReopens.AsksItsHomeAudit`), and each issue of `next-round.json`, fixed
+in a later round by the item that settled it or left owed (`FlowNextIssue.Said`, whose two states `{run.preExisting}`
+says too). An item's counts (`FlowClosureRecords.ItemsOf`, said by `FlowClosureItem.Said` alike in the run's text and
+the report, kept in `report.json` as `FlowClosureItem.ToJson` writes it) are read where they are held: of each class of
+the record its newest check judged, the sites now reading their home and those deleted, the cells its pin covers and the
+neighbours measured and those not, by the record's one reading (`ClassClosureRecord`: `SitesConsolidated`,
+`SitesDeleted`, `CellsPinned`, `NeighboursMeasured`, `NeighboursUnmeasured`), whether it carries a home audit, and how
+many rounds a review sent it back, as the item's newest routing counted its ledger; and the item's rounds of review, its
+routings that ended done, each instance once however often it ran.
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
@@ -3845,8 +3853,9 @@ its wall and active and paused times, its waits for a person, its budget), the t
 share of input, dollars by model, the retries and the fallbacks), one row per step (its state, attempts, waits by
 cause, run time, model, tokens, dollars, exit), the critical path (the longest road through the run's instances by
 wall time over the definition's `dependsOn`, each link with what it waited for - what a faster run must shorten), the
-failed attempts, the questions people answered with their waits and recommendations, the convergence (classes closed
-and reopened, hotspots, what loops left) and the signals a reader starts from - the slowest and most expensive steps,
+failed attempts, the questions people answered with their waits and recommendations, the convergence (classes closed,
+each item's counts, classes reopened, hotspots, the issues carried to a later round, fixed there or left, what loops
+left) and the signals a reader starts from - the slowest and most expensive steps,
 the most retried, every fallback, the longest wait for a person, queue waits past a share of a step's own time, a
 cache share under its bound on an attempt whose input reaches past it, a review at its bound, a class reopened twice,
 a hotspot, spend that could not be counted - each naming its steps and its numbers, their thresholds keys of

@@ -116,6 +116,7 @@ internal static class ClassClosureReading
 /// <param name="Sites">Each path it was decided at, read as <paramref name="HomePath"/> is: the file, the symbol, what decided there before, and what decides there after.</param>
 /// <param name="Searches">Each search the data was searched by: what was searched, how, the query, and the call that made it.</param>
 /// <param name="Axes">The names of the universe the record pins.</param>
+/// <param name="CellsPinned">How many cells of the universe the pin covers, as the record says it.</param>
 /// <param name="PinTests">Each test the pin names.</param>
 /// <param name="ArmId">The arm that proves the class closed, where one is named.</param>
 /// <param name="ArmWhy">Why no arm is named, where none is.</param>
@@ -131,6 +132,7 @@ public sealed record ClassClosureRecord(
     IReadOnlyList<(string Path, string Symbol, string Before, string After)> Sites,
     IReadOnlyList<(string Data, string Query, string Call)> Searches,
     IReadOnlyList<string> Axes,
+    int CellsPinned,
     IReadOnlyList<string> PinTests,
     string? ArmId,
     string? ArmWhy,
@@ -138,6 +140,27 @@ public sealed record ClassClosureRecord(
     string Claim,
     ClassHomeAudit? HomeAudit)
 {
+    /// <summary>What decides at a site after the work where the site now reads its home: the decision consolidated there.</summary>
+    public const string ReadsHome = "reads-home";
+
+    /// <summary>What decides at a site after the work where the site is gone.</summary>
+    public const string Deleted = "deleted";
+
+    /// <summary>What a neighbour's measurement showed where none was made, with the reason.</summary>
+    public const string Unmeasured = "unmeasured";
+
+    /// <summary>How many of its sites now read their home: the decisions consolidated into it.</summary>
+    public int SitesConsolidated => Sites.Count(site => site.After == ReadsHome);
+
+    /// <summary>How many of its sites the work deleted.</summary>
+    public int SitesDeleted => Sites.Count(site => site.After == Deleted);
+
+    /// <summary>How many of its neighbours were measured: passed, or failed and fixed.</summary>
+    public int NeighboursMeasured => Neighbours.Count - NeighboursUnmeasured;
+
+    /// <summary>How many of its neighbours were not measured, each with its reason.</summary>
+    public int NeighboursUnmeasured => Neighbours.Count(neighbour => neighbour.Result == Unmeasured);
+
     /// <summary>
     /// The record <paramref name="node"/> holds, or <see langword="null"/> where it is not an object: the schema the
     /// answer was held to has already judged its shape.
@@ -154,6 +177,7 @@ public sealed record ClassClosureRecord(
                 ReadSites(entry["sites"] as JsonArray),
                 ReadSearches(entry["searches"] as JsonArray),
                 ClassClosureReading.Axes(entry["universe"] as JsonObject),
+                entry["universe"]?["cellsPinned"] is JsonValue pinned && pinned.TryGetValue<int>(out var cells) ? cells : 0,
                 ReadTests((entry["pin"] as JsonObject)?["tests"] as JsonArray),
                 Text(entry["arm"]?["id"]),
                 Text(entry["arm"]?["why"]),
@@ -582,12 +606,12 @@ public static class ClassClosureRules
             // A site that is a whole file names no symbol of its own: what it declared there was the class's, by its home's name.
             var symbol = string.IsNullOrWhiteSpace(site.Symbol) ? entry.HomeSymbol : site.Symbol;
 
-            if (site.After == "deleted" && proof.Declares is { } declares && declares(site.Path, symbol))
+            if (site.After == ClassClosureRecord.Deleted && proof.Declares is { } declares && declares(site.Path, symbol))
             {
                 problems.Add($"class '{entry.Class}': the site '{site.Path}' is deleted, but it still declares '{symbol}'");
             }
 
-            if (site.After == "reads-home" && proof.Changed is { } changed && !changed.Any(path => proof.SamePath(path, site.Path)))
+            if (site.After == ClassClosureRecord.ReadsHome && proof.Changed is { } changed && !changed.Any(path => proof.SamePath(path, site.Path)))
             {
                 problems.Add($"class '{entry.Class}': the site '{site.Path}' reads its home, but the agent changed nothing at it");
             }
@@ -632,7 +656,7 @@ public static class ClassClosureRules
 
         foreach (var (cell, measuredBy, result, reason) in entry.Neighbours)
         {
-            if (result == "unmeasured")
+            if (result == ClassClosureRecord.Unmeasured)
             {
                 if (reason.Length == 0)
                 {
