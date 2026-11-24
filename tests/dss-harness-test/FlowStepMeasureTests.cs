@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Execution;
@@ -791,9 +792,9 @@ public sealed class FlowStepMeasureTests
 
     /// <summary>
     /// A machine step's attempt that a crash cut off is completed from the ledger its legs' run kept in the step's own
-    /// directory: its run closes where that ledger was written - the latest time the step's own records give, where it
-    /// had closed at the run's last record, which stood at the attempt's start - and its legs are the ledger's lines,
-    /// each read as the live ending writes them, with the machine's wait and the digest's counts.
+    /// directory: its run closes where that ledger was written, the latest time the step's own records give, and its legs
+    /// are the ledger's lines, each read as the live ending reads them - with the machine's wait, each phase and its time,
+    /// and the digest's counts, the lines no parser read counted over all it printed.
     /// </summary>
     [Fact]
     public async Task AResume_ClosesACutMachineStep_AtItsOwnLedgersTime_WithTheLegsItsLinesSay()
@@ -837,6 +838,7 @@ public sealed class FlowStepMeasureTests
                     Verdict = LegVerdict.Failed,
                     Duration = TimeSpan.FromSeconds(90),
                     Admission = new AdmissionFact(Admitted: true, WaitedSeconds: 2.5),
+                    Phases = [new PhaseRecord("configure", TimeSpan.FromSeconds(12), false), new PhaseRecord("build", TimeSpan.FromSeconds(78), false)],
                     Digest = ResultDigest.Of(
                         [
                             new Diagnostic("gcc", "error", "-Wreturn-type", "control reaches end of non-void function", "src/app.c", 41),
@@ -844,7 +846,7 @@ public sealed class FlowStepMeasureTests
                             new Diagnostic("gcc", "warning", "-Wformat", "format '%d' expects argument of type 'int'", "src/app.c", 50),
                         ],
                         [],
-                        ["a stray line nobody parsed"]),
+                        [.. Enumerable.Range(1, ResultDigest.Bound + 10).Select(number => $"error: a stray line nobody parsed, the {number.ToString(CultureInfo.InvariantCulture)}th")]),
                 },
             ],
             durationWarningFactor: 0);
@@ -876,11 +878,35 @@ public sealed class FlowStepMeasureTests
         Assert.Equal(
             [
                 new FlowStepLeg("linux", "passed", 30.0),
-                new FlowStepLeg("windows-gcc", "failed", 90.0, 2.5, null, 2, 1, 0, 1),
+                new FlowStepLeg("windows-gcc", "failed", 90.0, 2.5, [new FlowStepPhase("configure", 12.0), new FlowStepPhase("build", 78.0)], 2, 1, 0, ResultDigest.Bound + 10),
             ],
             cut.Legs);
         Assert.Equal(("Done", 2), (build.Attempts[1].Outcome, build.Attempts[1].N));
         Assert.Equal((90.0, 3510.0), (build.Ran, build.Paused));
+    }
+
+    /// <summary>
+    /// A leg's count of the lines that look like errors and no parser read is every one its failing phase printed, as
+    /// the digest counts them - never the last ones it keeps - so a leg that printed more than the bound is not said to
+    /// have printed only that many.
+    /// </summary>
+    [Fact]
+    public void ALegsUnparsedLines_AreCountedOverAllItPrinted()
+    {
+        var printed = ResultDigest.Bound * 6;
+        var line = LedgerReport.From(
+            [
+                new LegEntry
+                {
+                    Leg = "linux",
+                    Verdict = LegVerdict.Failed,
+                    Digest = ResultDigest.Of([], [], [.. Enumerable.Range(1, printed).Select(number => $"error: the {number.ToString(CultureInfo.InvariantCulture)}th")]),
+                },
+            ],
+            durationWarningFactor: 0).Lines.Single();
+
+        Assert.Equal(ResultDigest.Bound, line.Digest!.Unparsed.Count);
+        Assert.Equal(printed, FlowStepLeg.Of(line).Unparsed);
     }
 
     /// <summary>

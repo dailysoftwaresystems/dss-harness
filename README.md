@@ -205,7 +205,9 @@ relative to its package, read from the package's directory below the `go.mod` th
 path; a Dart `package:` frame as Dart reads it, through the `.dart_tool/package_config.json` of the
 package the tool ran in), each log range numbering the lines of that phase's log as the file numbers
 them - and a leg a host ran carries the host's own digest, every text in it naming the host as
-configured. A plain `build`, `test` or `run` asks no graph, so its digest's symbols are null; a
+configured, and has the log of its phase that did not pass brought back into this run's records as it
+ends, named on its line as `logBroughtBack`. Each leg's line carries its phases with their times, as
+`phases`. A plain `build`, `test` or `run` asks no graph, so its digest's symbols are null; a
 workflow's leg step whose run keeps a codebase graph of the tree its legs ran in joins each red leg's
 digest to it before it keeps the step's ledger: each place inside the tree carries the declaration
 the graph holds enclosing it - its kind, its qualified name, its handle - which a model reads as the
@@ -2321,12 +2323,15 @@ that failed with the phase that did not pass, what it printed digested and said 
 error whole with its stack and its log range, the next ones a line each, the rest - what those do not say - counted by
 code and by file, a count of none and an empty list left out, the lines no parser held said in it - the last 50, the
 nearest the failure, with how many the bound left out - so every line reaches a model once), the raw lines beside it
-(`tail`: none where the digest holds a typed error or failure, for it says the lines no parser held itself; the phase's
-last lines whole where it holds none, the digest saying only those the tail does not),
+(`tail`: none where the digest holds a typed error or failure and the phase's log is one read away, for it says the
+lines no parser held itself; the phase's last lines whole otherwise - it holds none, or no log of the phase is on this
+machine - the digest saying only those the tail does not),
 the log whose lines the digest's ranges number (`log`: the copy kept in the step's directory in an agent's worktree,
-else the run's own, null for a leg a host ran), and for `build`, `test` and `run` the units its build
+else the run's own, a leg's a host ran brought back by its run as the leg ended - null only where a host's could not be
+brought back), and for `build`, `test` and `run` the units its build
 failed as `failedUnits` (null where its own tool failed no build of it), a sweep's arm with its arm - a leg in a copy letting the
-tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
+tree go once its copy is made, and keep the ledger - written as the legs' run begins and as each leg ends, so a crash
+while they work is read where their work stopped - and in an agent's worktree each red leg's failing log, in the step's
 directory, the work of each leg this machine runs held inside the isolation of the agents' work and answered as
 `isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `class-closure`, which judges
 an item's closing record before its fold with no model, as the class-closure paragraph above says; `route-findings`, which

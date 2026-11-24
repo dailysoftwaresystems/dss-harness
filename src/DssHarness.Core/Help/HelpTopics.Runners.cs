@@ -338,7 +338,9 @@ public static partial class HelpTopics
         builder.AppendLine("needs has to say 'persist'.");
         builder.AppendLine();
         builder.AppendLine("A leg that did not pass carries, in --json, the last lines its last failing phase printed as");
-        builder.AppendLine("logTail and that phase's name as tailPhase - a host's leg among them, whose log stays there.");
+        builder.AppendLine("logTail and that phase's name as tailPhase - a host's leg among them, whose log of that phase");
+        builder.AppendLine("is brought back into this run's records as the leg ends, named as logBroughtBack, so the whole");
+        builder.AppendLine("of it is one read away here too. Each leg's line carries its phases with their times as phases.");
         builder.AppendLine();
         builder.AppendLine("A leg's line in --json names each file its steps kept as keptOutputs, relative to the");
         builder.AppendLine($"tree - the path '{ToolPackage.Command} sync --pull' takes to bring it back from the host that");

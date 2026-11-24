@@ -248,7 +248,10 @@ public static partial class HelpTopics
         builder.AppendLine("check-mutations --list begins no run, and names neither.");
         builder.AppendLine("A host runs a leg under a run of its own: the dispatcher names it once, '<leg>: run");
         builder.AppendLine("<id> on <host>', never relaying the host's own line, and the leg's --json holds it as");
-        builder.AppendLine("hostRunId.");
+        builder.AppendLine("hostRunId. The log of the phase such a leg did not pass is brought back as it ends,");
+        builder.AppendLine("into this run's records beside a local leg's ('<leg>/<phase>.log'), and the leg's --json");
+        builder.AppendLine("names it as logBroughtBack; one that cannot be brought back is said on the leg's");
+        builder.AppendLine("progress, and named on no line.");
         builder.AppendLine("Action files are tracked, so a worktree has its own and a runner acts on the tree it");
         builder.AppendLine("was asked about.");
 

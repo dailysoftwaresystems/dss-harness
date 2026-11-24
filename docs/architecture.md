@@ -3886,12 +3886,17 @@ record still `Running` - is completed at the resume from its own stored stream (
 events of the attempt the record says it was on, replayed through the engine's own count of a run's spending, each turn
 priced as it was reported): only the turns past what its entry was charged (`reports`) are charged now, its run ends
 where its stream did, and a stream that does not read whole, or cannot be priced, says so as the part's uncounted
-reason. A machine step keeps no stream: its cut attempt is completed from the ledger its legs' run kept in its step
-directory (`LegStepRunner.CutAccountOf`, read through the same account every cut step is completed by) - each line a leg
-of the attempt as its measure keeps it, and the attempt closed where the ledger was written, the latest time the step's
-own records give; a directory that holds no ledger, or one an attempt before left there - written before this attempt's
-run began, and so not this attempt's - leaves the attempt with no legs and its run closed at the run's last record, as a
-step that kept no record of its own. The machine a step's legs run on tells its holds as each wait of a leg's admission begins and ends
+reason. A machine step keeps no stream: its cut attempt is completed from the ledger its legs' run keeps in its step
+directory as it goes (`FlowStepLegs`: written as the run claims its directory of records, naming the run and that
+directory, again as each leg ends with every line so far, and whole at the run's end - `ILegRunWatch.Began` and
+`ILegRunWatch.Ended`, which carries the leg's line), read by the ledger's own reader (`LegStepRunner.CutAccountOf`, read
+through the same account every cut step is completed by) - each line a leg of the attempt that ended, as its measure keeps
+it (`FlowStepLeg.Of`, the live ending's own reading, its phases with their times and its digest's counts among it), and
+the attempt closed where its legs' work stopped: the latest the ledger and any record of the run it names were written,
+each phase's log as it streams among them, so a build cut off two hours into its legs closes two hours in, with the legs
+that had ended; a directory that holds no ledger, one that does not read - a line's digest of no digest's shape among it -
+or one an attempt before left there - written before this attempt's run began, and so not this attempt's - leaves the
+attempt with no legs and its run closed at the run's last record, as a step that kept no record of its own. The machine a step's legs run on tells its holds as each wait of a leg's admission begins and ends
 (`AdmissionRequest.Told`, `ILegRunWatch.Admitting`; an ssh host's by a note its dispatcher reads) - a wait for a slot in
 the dispatch queue's fair order, for the memory and for the room, then taken as the queue grants the leg its slot and
 ended as the slot is given back or the leg is refused or stopped as it waits, so the measure sees every wait the queue
@@ -7873,7 +7878,8 @@ while a gate ran turned a green suite red, with four test processes live at once
 - The ledger reports command time and harness overhead (sync, fingerprints, sampling)
   separately. A phase slower than `defaults.durationWarningFactor` times the same phase
   on sibling legs of the same kind is marked suspect. A timing mark never
-  changes a verdict. An emulated leg is never compared with a native one.
+  changes a verdict. An emulated leg is never compared with a native one, and a leg another
+  machine ran is compared there, among the legs it ran, never against this machine's.
 - `keepAwake` holds a host awake while a leg's own work runs there. A host that slept once
   reported a 4 millisecond test at 729 seconds. The command is started on the machine that
   runs the work - by the DssHarness on a host a leg was dispatched to, under that host's own
@@ -8230,7 +8236,16 @@ refused, not admitted, skipped - has no line. A leg another host ran was run the
 its own: the dispatcher names it once, `<leg>: run <id> on <host>`, never relaying the host's own
 run line (a later one of that shape is a program's own output, and is relayed as it came), the
 leg's `--json` holds the id as `hostRunId`, and its records and logs arrive as the host spelled
-them, its home written as `~` (see "A host's home is `~`").
+them, its home written as `~` (see "A host's home is `~`"). The log of the phase such a leg did not pass is brought back
+as the leg ends (`LegRunService.BroughtBackAsync`): read through the host's copy of the tree, where the host's run keeps
+its records (`LegRecords.PhaseLogInTree`), a piece at a time and put in place only once it reads back whole
+(`ISyncService.BringBackAsync`, the pull's own verified copy), and kept in this run's records as a local leg keeps its own
+(`<leg>/<phase>.log`), named on the leg's line as `logBroughtBack` - so the whole of what that phase printed is one read
+away here, as a leg of this machine's is. One that cannot be brought back is said on the leg's progress, why and from
+which host, and its line names none. Each leg's line in `--json` carries its phases with their times as `phases` (each
+`phase`, `durationSeconds`, `clockStepped`), and the document is read back by one reader, the ledger's
+(`Execution\LedgerDocument.cs`): the line a host answers for its leg, and the ledger a step of an orchestrator run keeps
+in its directory, alike - each line's digest through the digest's own reader.
 
 ## Disk space
 
@@ -10078,14 +10093,17 @@ rendered to the frames inside the tree (the crossing frame on each side, a line 
 held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the
 rest - every printing the four do not say - counted by code and by file, the lines no parser held; each thing said once,
 the first problem's message in its saying alone, and a member that says nothing - a count of none, an empty list, a
-null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`), each place
-inside the tree with the declaration it stands in where the step's run keeps a graph of the tree; and what
-raw lines go beside it is one owner's to say (`ResultDigest.Handed`): where the digest holds an error or a failure it
-says the lines no parser held - the last 50, the nearest the failure, with how many the bound left out - and the entry's
-tail holds none, and where it holds neither the tail goes whole - a red job's failing page as well - and the digest says
-those of its lines no parser held that the tail does not, each tail line read as the digest's were answering for one, so
-every line reaches a model once; and in `log` the log that phase wrote (`FlowStepLegs.LogOf`: the copy the step kept in
-an agent's worktree, else the run's own, none for a leg a host ran). Each diagnostic's log range names the lines as the
+null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`),
+each place inside the tree with the declaration it stands in where the step's run keeps a graph of the tree; and what
+raw lines go beside it is one owner's to say (`ResultDigest.Handed`): where the digest holds an error or a failure and
+the phase's log is one read away it says the lines no parser held - the last 50, the nearest the failure, with how many
+the bound left out - and the entry's tail holds none, and otherwise - it holds neither, or no log of the phase is on this
+machine - the tail goes whole - a red job's failing page as well - and the digest says those of its lines no parser held
+that the tail does not, each tail line read as the digest's were answering for one, so every line reaches a model once
+and none it printed is out of reach; and in `log` the log that phase wrote (`FlowStepLegs.LogOf`, over the line's one
+answer of where its failing log is on this machine, `LedgerLine.FailingLog`: the copy the step kept in an agent's
+worktree, else the run's own - a leg a host ran among them, whose log its run brought back - none only where a host's
+could not be). Each diagnostic's log range names the lines as the
 file a reader opens numbers them, by the one rule of where lines end (`PhaseOutput.NumberedLines` over
 `Text\LineEnds.cs`): counted below the header the harness wrote above the child's lines, a carriage return the child
 printed alone ending a line as it does for the reader, so the range is one read of the named log away

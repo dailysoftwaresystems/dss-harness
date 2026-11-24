@@ -18,6 +18,14 @@ public sealed record LegPlace(string Leg, bool InACopy);
 public interface ILegRunWatch
 {
     /// <summary>
+    /// The run claimed its directory of records, before it placed any leg: where its records are kept as its legs work -
+    /// each phase's log as it is written - from here on.
+    /// </summary>
+    /// <param name="run">The run.</param>
+    /// <param name="runDirectory">Its directory of records.</param>
+    void Began(RunId run, string runDirectory);
+
+    /// <summary>
     /// The legs the run places, once, before any of them reads the tree: every one that will work, and where. A leg the
     /// run turns away before placing it - skipped, unavailable - is never placed, and is told of only as it ends.
     /// </summary>
@@ -31,9 +39,12 @@ public interface ILegRunWatch
     /// <param name="leg">The leg's name.</param>
     void CopyMade(string leg);
 
-    /// <summary><paramref name="leg"/> has ended, its line recorded: whatever of the tree it was to read, it has read.</summary>
-    /// <param name="leg">The leg's name.</param>
-    void Ended(string leg);
+    /// <summary>
+    /// A leg has ended, its line recorded - <paramref name="line"/>, as the ledger keeps it: whatever of the tree it was to
+    /// read, it has read.
+    /// </summary>
+    /// <param name="line">The leg's line.</param>
+    void Ended(LegEntry line);
 
     /// <summary>
     /// <paramref name="asking"/> - <paramref name="leg"/>, or a unit of its work - reached a stage of its admission onto

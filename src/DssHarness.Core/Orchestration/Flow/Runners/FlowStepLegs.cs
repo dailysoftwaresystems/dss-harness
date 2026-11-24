@@ -3,6 +3,7 @@ using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runs;
@@ -15,13 +16,14 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Tree">The tree the legs work in: the worktree of the agent the step works in, or the main checkout.</param>
 /// <param name="StepDirectory">The step's own directory, where the group of what its legs start bound is recorded while anything is in it.</param>
 /// <param name="Records">
-/// Where the ledger is kept, with each red leg's failing log where <paramref name="RedLogs"/> says so: the step's own
-/// directory for a leg step, a measure call's own folder in it (<see cref="Agents.AgentMeasureSupport.RecordsOf"/>) for
-/// a measure.
+/// Where the ledger is kept, as the legs' run goes and whole as it ends, with each red leg's failing log where
+/// <paramref name="RedLogs"/> says so: the step's own directory for a leg step, a measure call's own folder in it
+/// (<see cref="Agents.AgentMeasureSupport.RecordsOf"/>) for a measure.
 /// </param>
 /// <param name="RedLogs">
-/// Whether the log of each red leg's phase that did not pass is kept beside the ledger, whole, where this machine ran the
-/// leg: where the step works in an agent's worktree, which goes, with the run directory in it, when the agent does.
+/// Whether the log of each red leg's phase that did not pass is kept beside the ledger, whole - a leg a host ran among
+/// them, whose log its run brought back to this machine: where the step works in an agent's worktree, which goes, with
+/// the run directory in it, when the agent does.
 /// </param>
 /// <param name="Refused">What an isolation's refusal names: <c>'step'</c>, or the measure call and its step.</param>
 public sealed record FlowStepLegsRequest(HarnessConfig Config, string MainCheckout, string Tree, string StepDirectory, string Records, bool RedLogs, string Refused)
@@ -56,8 +58,10 @@ public sealed record FlowStepLegsRan(LegRunResult? Result, string? Refusal, Json
 /// (<see cref="ExecutionGrounds.OfLeg"/>); the legs run under a process scope whose records are kept in the step's own
 /// directory (<see cref="ChildSessions.For"/>), so what they start bound is apart from the engine's terminal and a killed
 /// engine leaves none of it running unrecorded - the next command over the run, a resume's first among them, ends it; and
-/// the ledger, as <c>--json</c> gives it, kept where the step keeps the run's records, with each red leg's failing log
-/// where the step works in an agent's worktree.
+/// the ledger, as <c>--json</c> gives it, kept where the step keeps the run's records - written as the legs' run begins,
+/// naming the run and its directory of records, again as each leg ends with the lines so far, and whole as it ends, so a
+/// crash while the legs work leaves the step where their run stands (<see cref="LegStepRunner.CutAccountOf"/>) - with each
+/// red leg's failing log where the step works in an agent's worktree.
 /// </summary>
 /// <param name="fileSystem">Keeps the ledger and the red logs.</param>
 /// <param name="children">Records in the step's directory the group of what its legs start bound, while anything is in it.</param>
@@ -65,13 +69,18 @@ public sealed record FlowStepLegsRan(LegRunResult? Result, string? Refusal, Json
 public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation)
 {
     /// <summary>
-    /// Runs a step's legs by <paramref name="legs"/>, handed the isolation each leg this machine runs is held inside: the
-    /// isolation decided first, the legs under the step's process scope, the ledger kept as <paramref name="request"/> says.
+    /// Runs a step's legs by <paramref name="legs"/>, handed the isolation each leg this machine runs is held inside and the
+    /// watch its use case tells of the legs: the isolation decided first, the legs under the step's process scope, the
+    /// ledger kept as <paramref name="request"/> says - as their run goes, and whole as it ends.
     /// </summary>
     /// <param name="request">The step's tree, its directories and how its isolation's refusal names it.</param>
-    /// <param name="legs">Runs the legs through the step's use case, handed the isolation of each leg's work.</param>
+    /// <param name="watch">Told all the legs' use case says of them, as it says it; none where the step hears nothing of them.</param>
+    /// <param name="legs">
+    /// Runs the legs through the step's use case, handed the isolation of each leg's work and the watch the use case is to
+    /// tell - which keeps the ledger as the run goes, and tells <paramref name="watch"/> all it is told.
+    /// </param>
     /// <param name="cancellationToken">Stops the decision of the isolation; the legs are stopped by what <paramref name="legs"/> was given.</param>
-    public async Task<FlowStepLegsRan> RunAsync(FlowStepLegsRequest request, Func<ILegIsolation, Task<LegRunResult>> legs, CancellationToken cancellationToken)
+    public async Task<FlowStepLegsRan> RunAsync(FlowStepLegsRequest request, ILegRunWatch? watch, Func<ILegIsolation, ILegRunWatch, Task<LegRunResult>> legs, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(legs);
@@ -91,7 +100,9 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
         // left is ended by the next command over the run, a resume's first among them.
         using (ProcessScope.Enter(new ProcessScope(() => children.For(request.StepDirectory))))
         {
-            result = await legs(new StepLegIsolation(isolation, request.Config, request.MainCheckout, request.Tree, request.WritesBeside)).ConfigureAwait(false);
+            var kept = new LedgerKept(fileSystem, request.Records, request.Config.Defaults.DurationWarningFactor, watch);
+
+            result = await legs(new StepLegIsolation(isolation, request.Config, request.MainCheckout, request.Tree, request.WritesBeside), kept).ConfigureAwait(false);
         }
 
         result = await DeclaredAsync(result, request.Declarations, cancellationToken).ConfigureAwait(false);
@@ -165,7 +176,8 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
 
     /// <summary>
     /// Keeps what the legs reached in <paramref name="records"/>: the ledger, as <c>--json</c> gives it; and, where
-    /// <paramref name="redLogs"/>, for each red leg this machine ran, the log of its phase that did not pass, whole.
+    /// <paramref name="redLogs"/>, for each red leg, the log of its phase that did not pass, whole, as it is on this machine
+    /// (<see cref="LedgerLine.FailingLog"/>) - a host's brought back by its run.
     /// </summary>
     private void Keep(LegRunResult result, string records, bool redLogs)
     {
@@ -184,7 +196,7 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
 
         foreach (var line in result.Report.Lines.Where(line => FlowLegVerdicts.ClassOf(line.Verdict) == FlowLegClass.Red))
         {
-            if (FailingLogOf(line) is not { } log || !fileSystem.FileExists(log))
+            if (line.FailingLog is not { } log || !fileSystem.FileExists(log))
             {
                 continue;
             }
@@ -195,24 +207,10 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
     }
 
     /// <summary>
-    /// The log of the phase a red leg did not pass, where this machine ran the leg: the one its run's records hold,
-    /// found as every log is named for its phase - a runner's step <c>build (2/2)</c> is kept as <c>build (2-2)</c>; null
-    /// for a leg a host ran, whose log stays on that host, and for a leg with no failing phase or no log of it.
-    /// </summary>
-    /// <param name="line">The red leg's line.</param>
-    public static string? FailingLogOf(LedgerLine line)
-    {
-        ArgumentNullException.ThrowIfNull(line);
-
-        return line.HostRunId is null && line.TailPhase is { } phase
-            ? line.Logs.FirstOrDefault(log => log.Phase == PhaseLogs.NameFor(phase))?.File
-            : null;
-    }
-
-    /// <summary>
     /// Where a red leg's failing log is for a reader of the step, as <paramref name="request"/> kept the step's records:
     /// the copy kept beside the step's ledger where the step keeps one - each attempt's own, which outlives the agent's
-    /// worktree - else the log its run's records hold; null where neither is on this machine (<see cref="FailingLogOf"/>).
+    /// worktree - else the log its run's records hold, a host's brought back among them; null where neither is on this
+    /// machine (<see cref="LedgerLine.FailingLog"/>): a host's whose log could not be brought back.
     /// </summary>
     /// <param name="line">The red leg's line.</param>
     /// <param name="request">Where the step keeps its records, and whether it keeps the red legs' logs beside them.</param>
@@ -221,7 +219,7 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
         ArgumentNullException.ThrowIfNull(line);
         ArgumentNullException.ThrowIfNull(request);
 
-        if (FailingLogOf(line) is not { } log)
+        if (line.FailingLog is not { } log)
         {
             return null;
         }
@@ -231,6 +229,73 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
         return request.RedLogs && fileSystem.FileExists(kept) ? kept
             : fileSystem.FileExists(log) ? log
             : null;
+    }
+
+    /// <summary>
+    /// The ledger a step keeps as its legs' run goes, written where the step keeps its records whenever the run tells
+    /// something it holds: as the run claims its directory of records - the run and that directory named, no leg yet -
+    /// and as each leg ends, with every line so far. Each is the ledger as <c>--json</c> gives it of a run something other
+    /// than its legs ended (<see cref="LedgerReport.ToJson(int, string, string?, Func{string, string}?, RunId?, string?)"/>):
+    /// incomplete, no verdict of its own, saying its legs were still running - what it is where a crash leaves it, the one
+    /// time it is read so (<see cref="LegStepRunner.CutAccountOf"/>); the run's end writes it whole over it. Everything it is
+    /// told goes on to the step's own watch, as it was told.
+    /// </summary>
+    /// <param name="fileSystem">Writes the ledger.</param>
+    /// <param name="records">Where the step keeps the ledger.</param>
+    /// <param name="factor">The configuration's <c>durationWarningFactor</c>, which the ledger's lines are marked by.</param>
+    /// <param name="watch">The step's own watch, told all this is told; none where nothing else is.</param>
+    private sealed class LedgerKept(IFileSystem fileSystem, string records, double factor, ILegRunWatch? watch) : ILegRunWatch
+    {
+        private readonly Lock _gate = new();
+        private readonly List<LegEntry> _ended = [];
+        private RunId? _run;
+        private string? _runDirectory;
+
+        /// <inheritdoc/>
+        public void Began(RunId run, string runDirectory)
+        {
+            lock (_gate)
+            {
+                (_run, _runDirectory) = (run, runDirectory);
+                Write();
+            }
+
+            watch?.Began(run, runDirectory);
+        }
+
+        /// <inheritdoc/>
+        public void Placed(IReadOnlyList<LegPlace> legs) => watch?.Placed(legs);
+
+        /// <inheritdoc/>
+        public void CopyMade(string leg) => watch?.CopyMade(leg);
+
+        /// <inheritdoc/>
+        public void Ended(LegEntry line)
+        {
+            ArgumentNullException.ThrowIfNull(line);
+
+            lock (_gate)
+            {
+                _ended.Add(line);
+                Write();
+            }
+
+            watch?.Ended(line);
+        }
+
+        /// <inheritdoc/>
+        public void Admitting(string leg, string asking, AdmissionTold told) => watch?.Admitting(leg, asking, told);
+
+        /// <summary>The ledger as it stands, written whole and at once over what was there: one writer at a time, under the gate.</summary>
+        private void Write()
+        {
+            fileSystem.CreateDirectory(records);
+            fileSystem.WriteAllTextAtomic(
+                Path.Combine(records, OrchestratorLayout.StepLedgerFileName),
+                LedgerReport.From([.. _ended], factor)
+                    .ToJson(HarnessExit.Incomplete, $"its legs were still running: {ReportText.Counted(_ended.Count, "leg")} had ended", _runDirectory, run: _run)
+                + "\n");
+        }
     }
 
     /// <summary>The isolation of the work of one leg of the step, from the leg's own ground (<see cref="ExecutionGrounds.OfLeg"/>).</summary>

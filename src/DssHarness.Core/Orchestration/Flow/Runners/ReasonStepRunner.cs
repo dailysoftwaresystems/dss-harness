@@ -488,13 +488,15 @@ public sealed class ReasonStepRunner(
         {
             ran = await new FlowStepLegs(fileSystem, children, isolation).RunAsync(
                 new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, stepDirectory, call.Records, RedLogs: workspace.Worktree is not null, $"the measure call '{call.Id}' of '{instance}'"),
-                legIsolation => tests.RunAsync(
+                watch: null,
+                (legIsolation, kept) => tests.RunAsync(
                     new TestLegsRequest
                     {
                         Directory = tree,
                         LegNames = [call.Leg],
                         Filters = call.Filter.Length > 0 ? [call.Filter] : [],
                         LocalCopy = workspace.Worktree is null,
+                        Watch = kept,
                         Isolation = legIsolation,
                     },
                     RunId.New(),

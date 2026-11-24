@@ -744,7 +744,8 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>
     /// The last lines the phase that failed on a host printed travel on the leg's line, with that phase's name, read from
-    /// the very document the host writes: its log stays on that host, and a reader here has nothing else.
+    /// the very document the host writes: what a reader here has of them, even where the log of that phase cannot be
+    /// brought back.
     /// </summary>
     [Fact]
     public async Task TheLastLinesAPhaseThatFailedTherePrinted_AreCarriedOnTheLegsLine()

@@ -91,6 +91,22 @@ public sealed record LegRecords(string RunDirectory, string Leg)
     public string PhaseLog(string phase) => PhaseLogs.In(Directory, phase);
 
     /// <summary>
+    /// The log of <paramref name="phase"/> among <paramref name="leg"/>'s records of run <paramref name="run"/>, relative to
+    /// the tree that ran it, with forward separators - as a copy's transport reads a file of it: a run keeps its records in
+    /// the tree it ran in (<see cref="Repository.HarnessLayout.RunsDirectoryRelative"/>), each leg's in a directory of its
+    /// own, each phase's log named for its phase.
+    /// </summary>
+    /// <param name="run">The run.</param>
+    /// <param name="leg">The leg, as the configuration names it.</param>
+    /// <param name="phase">The phase, as its log is named for it.</param>
+    public static string PhaseLogInTree(RunId run, string leg, string phase)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return $"{Repository.HarnessLayout.RunsDirectoryRelative}/{run.Value}/{leg}/{phase}{PhaseLogs.Extension}";
+    }
+
+    /// <summary>
     /// The phase logs that are in the leg's directory now, each with its phase, in the order of their names: none of
     /// what is kept below it, and none where the leg kept nothing.
     /// </summary>

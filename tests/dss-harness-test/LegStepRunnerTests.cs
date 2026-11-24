@@ -171,12 +171,12 @@ public sealed class LegStepRunnerTests : IDisposable
             {
                 watch.Placed([new LegPlace("native", InACopy: true), new LegPlace("here", InACopy: false)]);
                 watch.CopyMade("native");
-                watch.Ended("here");
+                watch.Ended(new LegEntry { Leg = "here", Verdict = LegVerdict.Passed });
                 watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/other"])));
                 watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Memory));
                 watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Taken));
                 watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Ended));
-                watch.Ended("native");
+                watch.Ended(new LegEntry { Leg = "native", Verdict = LegVerdict.Passed });
             },
         };
         var said = new Said();
@@ -250,8 +250,9 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// A step in an agent's worktree runs its legs there and keeps, whole, the log of each red leg's phase that did not
-    /// pass where this machine ran the leg - not a green leg's, not a phase that passed, not a leg a host ran, whose log
-    /// stays on that host - inside the agent's directory; on the main tree the same legs leave the ledger alone.
+    /// pass as it is on this machine - a leg's this machine ran, and a host's its run brought back - inside the agent's
+    /// directory: not a green leg's, not a phase that passed, not a host's whose log could not be brought back. On the
+    /// main tree the same legs leave the ledger alone.
     /// </summary>
     [Fact]
     public async Task InAnAgentsWorktree_EachRedLegsFailingLog_IsKept()
@@ -282,6 +283,15 @@ public sealed class LegStepRunnerTests : IDisposable
                     },
                     new LegEntry { Leg = "green", Verdict = LegVerdict.Passed, Logs = [new PhaseLogFile("test", Log("green.test", "ok\n"))] },
                     new LegEntry { Leg = "far", Verdict = LegVerdict.Failed, TailPhase = "test", HostRunId = RunId.New(), Logs = [new PhaseLogFile("test", Log("far.test", "on the host\n"))] },
+                    new LegEntry
+                    {
+                        Leg = "brought",
+                        Verdict = LegVerdict.Failed,
+                        TailPhase = "test",
+                        HostRunId = RunId.New(),
+                        Logs = [new PhaseLogFile("test", "~/copies/app/.harness-config/runs/r/brought/test.log")],
+                        LogBroughtBack = Log("brought.test", "a test failed there\n"),
+                    },
                 ],
                 HarnessExit.CommandFailed,
                 "a leg failed"),
@@ -292,16 +302,17 @@ public sealed class LegStepRunnerTests : IDisposable
         var result = await runner.RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.Equal(worktree, legs.Asked.Single().Directory);
-        Assert.Equal(["native", "far"], result.Output!["red"]!.AsArray().Select(red => red!["leg"]!.GetValue<string>()));
+        Assert.Equal(["native", "far", "brought"], result.Output!["red"]!.AsArray().Select(red => red!["leg"]!.GetValue<string>()));
         var kept = Path.Combine(layout.InstanceDirectory("checks", "a1"), OrchestratorLayout.StepLogsDirectoryName);
-        Assert.Equal(["native.test.log"], Directory.EnumerateFiles(kept).Select(Path.GetFileName));
+        Assert.Equal(["brought.test.log", "native.test.log"], Directory.EnumerateFiles(kept).Select(Path.GetFileName).Order(StringComparer.Ordinal));
         Assert.Equal("a test failed\nboom\n", File.ReadAllText(Path.Combine(kept, "native.test.log")));
+        Assert.Equal("a test failed there\n", File.ReadAllText(Path.Combine(kept, "brought.test.log")));
         Assert.True(File.Exists(Path.Combine(layout.InstanceDirectory("checks", "a1"), OrchestratorLayout.StepLedgerFileName)));
 
-        // Each red entry names the log its digest's ranges number, one read away: the copy the step kept, and none for a
-        // leg a host ran, whose log stays there.
+        // Each red entry names the log its digest's ranges number, one read away: the copy the step kept - a host's
+        // brought back among them - and none for a host's whose log could not be brought back.
         Assert.Equal(
-            [Path.Combine(kept, "native.test.log"), null],
+            [Path.Combine(kept, "native.test.log"), null, Path.Combine(kept, "brought.test.log")],
             result.Output!["red"]!.AsArray().Select(red => red!["log"]?.GetValue<string>()));
 
         var onMain = await runner.RunAsync(Run(step with { Name = "main-checks", In = null }, repository.Path), Token);
@@ -379,6 +390,146 @@ public sealed class LegStepRunnerTests : IDisposable
         var kept = ledger["legs"]![0]!["digest"]!;
         Assert.Equal(said, kept["diagnostics"]![0]!["symbol"]!.GetValue<string>());
         Assert.Equal($"App.Store.Load [{said}]", kept["failures"]![0]!["exception"]!["stack"]![0]!["symbol"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A red leg a host ran is as reachable as one this machine ran: its digest holds a ctest failure read from the
+    /// console, which says no more than the test's status, and the assertion the test printed - typed by no parser - is in
+    /// the log its run brought back to this machine, which the entry names as its log; at the line range its first failure
+    /// gives, one read away, so no raw line goes beside the digest.
+    /// </summary>
+    [Fact]
+    public void ARedLegAHostRan_NamesTheLogItsRunBroughtBack_TheAssertionOneReadAway()
+    {
+        using var records = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Assertion = "check.c:9: expected 2 records, found 3";
+        var log = records.WriteFile(
+            "folds/test.log",
+            $"Test project /home/u/copies/app/build\n    Start 3: folds_duplicates\n3/3 Test #3: folds_duplicates .................***Failed    0.01 sec\n{Assertion}\n\n67% tests passed, 1 tests failed out of 3\n");
+        var line = new LegEntry
+        {
+            Leg = "folds",
+            Verdict = LegVerdict.Failed,
+            Detail = "1 test failed",
+            TailPhase = "test",
+            LogTail = ["3/3 Test #3: folds_duplicates .................***Failed    0.01 sec", Assertion, string.Empty, "67% tests passed, 1 tests failed out of 3"],
+            HostRunId = RunId.New(),
+            Records = "~/copies/app/.harness-config/runs/r/folds",
+            Logs = [new PhaseLogFile("test", "~/copies/app/.harness-config/runs/r/folds/test.log")],
+            LogBroughtBack = log,
+            Digest = ResultDigest.Of([], [new TestFailure("ctest", "folds_duplicates", Log: (3, 4))], []),
+        };
+        var legs = new FlowStepLegs(harness.FileSystem, harness.ChildSessions, new TestIsolation());
+        var request = new FlowStepLegsRequest(new HarnessConfig(), records.Path, records.Path, records.Path, records.Path, RedLogs: false, "'checks'");
+
+        var red = LegStepRunner.Output(Result([line], HarnessExit.CommandFailed, "a leg failed"), arms: false, ran => legs.LogOf(ran, request))["red"]!.AsArray().Single()!;
+
+        Assert.Equal(log, red["log"]!.GetValue<string>());
+        Assert.Empty(red["tail"]!.AsArray());
+
+        var range = red["digest"]!["first"]!["log"]!.AsArray().Select(number => number!.GetValue<int>()).ToList();
+
+        Assert.Equal(
+            ["3/3 Test #3: folds_duplicates .................***Failed    0.01 sec", Assertion],
+            File.ReadAllLines(red["log"]!.GetValue<string>())[(range[0] - 1)..range[1]]);
+    }
+
+    /// <summary>
+    /// A leg step keeps its ledger as its legs' run goes - naming the run and its records as the run begins, and every
+    /// line so far as each leg ends - so a crash while the legs work leaves the step where their run stands: the account a
+    /// resume reads holds each leg that had ended, its phases among it, and closes where the run's own records last moved;
+    /// before any leg ended, where the ledger was written. The run's end writes the ledger whole over it.
+    /// </summary>
+    [Fact]
+    public async Task ALegStepsLedger_IsKeptAsItsLegsRun_SoACrashIsReadWhereTheirWorkStopped()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var layout = await LayoutAsync(harness, repository);
+        var records = repository.Combine("legs-run");
+        var moved = new DateTime(2030, 1, 2, 9, 30, 0, DateTimeKind.Utc);
+        var linux = new LegEntry
+        {
+            Leg = "linux",
+            Verdict = LegVerdict.Failed,
+            Duration = TimeSpan.FromSeconds(90),
+            Phases = [new PhaseRecord("configure", TimeSpan.FromSeconds(12), false), new PhaseRecord("build", TimeSpan.FromSeconds(78), false)],
+            TailPhase = "build",
+            Digest = ResultDigest.Of([new Diagnostic("gcc", "error", null, "x undeclared", "src/a.c", 3)], [], []),
+        };
+        var step = new WorkflowStep { Name = "checks", Type = "build" };
+        var run = Run(step, repository.Path);
+        var ledger = Path.Combine(layout.InstanceDirectory("checks", agent: null), OrchestratorLayout.StepLedgerFileName);
+        FlowCutAttempt? begun = null;
+        DateTime? begunWritten = null;
+        FlowCutAttempt? midway = null;
+        var legs = new FakeLegs
+        {
+            Answer = Result([linux, new LegEntry { Leg = "windows", Verdict = LegVerdict.Passed }], HarnessExit.CommandFailed, "a leg failed"),
+            WhileItRuns = watch =>
+            {
+                watch.Began(RunId.New(), records);
+                begun = LegStepRunner.CutAccountOf(harness.FileSystem, layout, run);
+                begunWritten = File.GetLastWriteTimeUtc(ledger);
+
+                watch.Placed([new LegPlace("linux", InACopy: false), new LegPlace("windows", InACopy: false)]);
+                watch.Ended(linux);
+
+                // The other leg works on: its log is written after the first leg's line was kept.
+                var working = Path.Combine(records, "windows", "build.log");
+                Directory.CreateDirectory(Path.GetDirectoryName(working)!);
+                File.WriteAllText(working, "compiling\n");
+                File.SetLastWriteTimeUtc(working, moved);
+                midway = LegStepRunner.CutAccountOf(harness.FileSystem, layout, run);
+            },
+        };
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
+
+        var result = await runner.RunAsync(run, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, result.Exit);
+
+        // As the legs' run began: no leg had ended, and nothing of the run had moved since the ledger named it.
+        Assert.Null(begun!.Account.Legs);
+        Assert.Empty(begun.Turns);
+        Assert.Equal(new DateTimeOffset(begunWritten!.Value, TimeSpan.Zero), begun.EndedAt);
+
+        // While the second leg worked: the first leg's line whole, its phases and its digest's counts, and the attempt
+        // closed where the second leg's log last moved.
+        Assert.Equal(1, midway!.Account.N);
+        Assert.Equal([new FlowStepLeg("linux", "failed", 90.0, null, [new FlowStepPhase("configure", 12.0), new FlowStepPhase("build", 78.0)], 1, 0, 0, 0)], midway.Account.Legs);
+        Assert.Equal(new DateTimeOffset(moved), midway.EndedAt);
+
+        // The run's end writes it whole: every leg's line, and the run's own verdict.
+        var whole = LedgerDocument.Read(File.ReadAllText(ledger))!;
+
+        Assert.Equal(["linux", "windows"], whole.Legs!.Select(leg => leg.Leg));
+        Assert.Equal("failed", whole.Verdict);
+    }
+
+    /// <summary>
+    /// A ledger whose line holds no digest's shape is no account of a cut attempt: a digest that says it left out what its
+    /// counts and what it holds do not make is refused by the digest's own reader, so nothing of the attempt is read from
+    /// it - its counts are never taken as they stand - and the engine closes the attempt as it closes one that kept no
+    /// record of its own.
+    /// </summary>
+    [Fact]
+    public async Task ALedgerWhoseDigestDoesNotRead_IsNoAccountOfTheCutAttempt()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var layout = await LayoutAsync(harness, repository);
+        var directory = layout.InstanceDirectory("checks", agent: null);
+        var report = LedgerReport.From(
+            [new LegEntry { Leg = "linux", Verdict = LegVerdict.Failed, Digest = ResultDigest.Of([new Diagnostic("gcc", "error", null, "x undeclared")], [], []) }],
+            durationWarningFactor: 0);
+        var document = JsonNode.Parse(report.ToJson(cancelled: false, unfinished: []))!;
+
+        // Said to have left out five diagnostics it neither holds nor counts: what no digest is.
+        document["legs"]![0]!["digest"]!["leftOut"]!["diagnostics"] = 5;
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, OrchestratorLayout.StepLedgerFileName), document.ToJsonString() + "\n");
+
+        Assert.Null(LegStepRunner.CutAccountOf(harness.FileSystem, layout, Run(new WorkflowStep { Name = "checks", Type = "build" }, repository.Path)));
     }
 
     /// <summary>
@@ -993,12 +1144,14 @@ public sealed class LegStepRunnerTests : IDisposable
     /// <summary>
     /// A red entry whose leg holds a digest renders it for a model: the first error said whole with its stack rendered
     /// to its frames in the tree, the next distinct to four as one line each, the rest counted by code and by file - and
-    /// every line reaches a model once: the digest holds an error, so it says the lines no parser held and the tail is
-    /// empty, never repeating them.
+    /// every line reaches a model once: the digest holds an error and the phase's log is one read away, so it says the
+    /// lines no parser held and the tail is empty, never repeating them.
     /// </summary>
     [Fact]
     public void ARedEntryHoldingADigest_RendersItForAModel_EachLineOnce()
     {
+        const string Log = "logs/broken.build.log";
+
         var digest = ResultDigest.Of(
             [
                 new Diagnostic(
@@ -1026,9 +1179,12 @@ public sealed class LegStepRunnerTests : IDisposable
 
         var legs = LegStepRunner.Output(
             Result([new LegEntry { Leg = "broken", Verdict = LegVerdict.Failed, Detail = "build failed", TailPhase = "build", LogTail = ["error: x"], Digest = digest }], HarnessExit.CommandFailed, "a leg failed"),
-            arms: false);
+            arms: false,
+            _ => Log);
 
         var red = legs["red"]!.AsArray().Single()!.AsObject();
+
+        Assert.Equal(Log, red["log"]!.GetValue<string>());
 
         Assert.Empty(red["tail"]!.AsArray());
 

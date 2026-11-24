@@ -324,7 +324,7 @@ public sealed class ResultDigestTests
             ],
             []).Declared((file, line) => (file, line) == ("src/Store.cs", 14) ? new EnclosingDeclaration("member", "App.Store.Load", "4f2a9b") : null);
 
-        var handed = ResultDigest.Handed(digest, [], PhaseParsers.AsRead).Digest!;
+        var handed = ResultDigest.Handed(digest, [], PhaseParsers.AsRead, logHere: true).Digest!;
 
         Assert.Equal("member App.Store.Load 4f2a9b", handed["first"]!["symbol"]!.GetValue<string>());
         Assert.Equal(

@@ -1546,6 +1546,137 @@ public sealed class LegRunServiceTests
         }
     }
 
+    /// <summary>
+    /// The log of the phase a leg another host ran did not pass is brought back to this machine as the leg ends - read
+    /// through the host's copy of the tree, where the host's run keeps its records - and kept in this run's records as a
+    /// local leg's own log is, its line naming it: the whole of what the phase printed, which its last lines and its digest
+    /// stand for, one read away here.
+    /// </summary>
+    [Fact]
+    public async Task ARedLegAnotherHostRan_HasItsFailingLogBroughtBack_IntoThisRunsRecords()
+    {
+        using var temp = new TempDirectory();
+        using var there = new TempDirectory();
+        var harness = new HarnessFactory();
+        var run = RunId.New();
+        var hostRun = RunId.New();
+        const string Assertion = "check.c:9: expected 2 records, found 3";
+        var whole = $"    Start 3: folds_duplicates\n3/3 Test #3: folds_duplicates ***Failed\n{Assertion}\n";
+        there.WriteFile($".harness-config/runs/{hostRun.Value}/arm/test.log", whole);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+            hosts: RedOnTheHost(hostRun, Assertion),
+            sync: BringingBack(harness),
+            transports: HostCopyAt(harness, there.Path, run),
+            runId: run);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var arm = document.RootElement.GetProperty("legs").EnumerateArray().Single(leg => leg.GetProperty("leg").GetString() == "arm");
+        var kept = new LegRecords(document.RootElement.GetProperty("runDirectory").GetString()!, "arm").PhaseLog("test");
+
+        Assert.Equal(kept, arm.GetProperty("logBroughtBack").GetString());
+        Assert.Equal(whole, File.ReadAllText(kept));
+
+        // The host's own records are named as the host spelled them, beside the copy kept here.
+        Assert.Equal($"{HostTree}/.harness-config/runs/{hostRun.Value}/arm/test.log", arm.GetProperty("logs")[0].GetProperty("file").GetString());
+    }
+
+    /// <summary>
+    /// A host's log that cannot be brought back - not at its path in the host's copy, or the host stopped answering - is
+    /// said on the leg's progress, why and from which host, and its line names none: the leg's verdict stands, and its last
+    /// lines stay the first thing a reader has.
+    /// </summary>
+    [Fact]
+    public async Task AHostsLogThatCannotBeBroughtBack_IsSaid_AndNamedOnNoLine()
+    {
+        using var temp = new TempDirectory();
+        using var there = new TempDirectory();
+        var harness = new HarnessFactory();
+        var run = RunId.New();
+        var hostRun = RunId.New();
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+            hosts: RedOnTheHost(hostRun, "check.c:9: expected 2 records, found 3"),
+            sync: BringingBack(harness),
+            transports: HostCopyAt(harness, there.Path, run),
+            runId: run);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var arm = document.RootElement.GetProperty("legs").EnumerateArray().Single(leg => leg.GetProperty("leg").GetString() == "arm");
+
+        Assert.False(arm.TryGetProperty("logBroughtBack", out var brought) && brought.ValueKind != JsonValueKind.Null);
+        Assert.Equal(["check.c:9: expected 2 records, found 3"], arm.GetProperty("logTail").EnumerateArray().Select(line => line.GetString()));
+
+        var said = (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Split('\n').Select(line => line.TrimEnd('\r'));
+
+        Assert.Single(said, line => line.StartsWith($"test: arm: its log of test could not be brought back from ssh {HostName}: ", StringComparison.Ordinal)
+            && line.EndsWith("; its last lines stay on its line", StringComparison.Ordinal));
+    }
+
+    /// <summary>A host that runs leg 'arm' under run <paramref name="hostRun"/> and fails its tests, its log of them listed among its records.</summary>
+    private static ScriptedHostCommands RedOnTheHost(RunId hostRun, string assertion)
+    {
+        var records = $"{HostTree}/.harness-config/runs/{hostRun.Value}/arm";
+
+        return new ScriptedHostCommands((_, command) =>
+        {
+            ScriptedHostCommands.Answer(
+                command,
+                $$"""{"verdict": "failed", "runDirectory": "{{HostTree}}/.harness-config/runs/{{hostRun.Value}}", "runId": "{{hostRun.Value}}", "legs": [{"leg": "arm", "verdict": "failed", "detail": "1 test failed", "durationSeconds": 1, "commandSeconds": 1, "records": "{{records}}", "logs": [{"phase": "test", "file": "{{records}}/test.log"}], "tailPhase": "test", "logTail": ["{{assertion}}"]}]}""");
+
+            return HostResults.Finished(command, HarnessExit.CommandFailed);
+        });
+    }
+
+    /// <summary>A sync that reads any tree as a reading that packs nothing, and brings a file back as the sync service does.</summary>
+    private static ISyncService BringingBack(HarnessFactory harness)
+    {
+        var real = SyncKit.Service(harness);
+        var sync = SyncKit.ServiceDouble();
+
+        sync.BringBackAsync(Arg.Any<ISyncTransport>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call => real.BringBackAsync(call.ArgAt<ISyncTransport>(0), call.ArgAt<string>(1), call.ArgAt<string>(2), call.ArgAt<string>(3), call.ArgAt<CancellationToken>(4)));
+
+        return sync;
+    }
+
+    /// <summary>
+    /// Every host's copy as this run's sync leaves it, holding <paramref name="run"/>'s reading, its files read from
+    /// <paramref name="there"/> on this machine wherever the host keeps the copy: what reading a file of a host's copy reaches.
+    /// </summary>
+    private static ISyncTransportFactory HostCopyAt(HarnessFactory harness, string there, RunId run)
+    {
+        var local = SyncKit.Transport(harness);
+        var copy = Substitute.For<ISyncTransport>();
+
+        copy.Host.Returns(HostId.Ssh(HostName));
+        copy.PieceBytes.Returns(local.PieceBytes);
+        copy.InspectAsync(Arg.Any<string>(), Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>())
+            .Returns(new SyncInspectAnswer(true, CopyMark.Complete) { Reading = new CopyReading(run.Value, null, 0) });
+        copy.ReadFileAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call => local.ReadFileAsync(there, call.ArgAt<string>(1), call.ArgAt<long>(2), call.ArgAt<int>(3), call.ArgAt<CancellationToken>(4)));
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+
+        transports.For(Arg.Any<HostReport>()).Returns(copy);
+
+        return transports;
+    }
+
     /// <summary>A run no leg could be placed for made no directory, and names none.</summary>
     [Theory]
     [InlineData(false)]
@@ -5292,9 +5423,10 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
-    /// A run whose request carries a watch tells it each leg it placed and where - in a copy of its own, or the tree
-    /// itself - before any leg reads the tree; that a leg's copy is made, once its sync has ended and before the leg's
-    /// work; and that each leg ended, as its line is kept. A leg in the tree itself has no copy to tell of.
+    /// A run whose request carries a watch tells it the run and its directory of records as it claims them, before any leg
+    /// is placed; each leg it placed and where - in a copy of its own, or the tree itself - before any leg reads the tree;
+    /// that a leg's copy is made, once its sync has ended and before the leg's work; and that each leg ended, with its line
+    /// as it is kept. A leg in the tree itself has no copy to tell of.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -5312,6 +5444,7 @@ public sealed class LegRunServiceTests
 
         var transports = LocalOnlyTransports(harness);
         var said = new SaidWatch();
+        var run = RunId.New();
 
         var outcome = await OutcomeAsync(
             temp,
@@ -5322,6 +5455,7 @@ public sealed class LegRunServiceTests
             sync: SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports),
             transports: transports,
             loader: harness.ContextLoader,
+            runId: run,
             work: work =>
             {
                 said.Add($"{work.Leg.Name} works");
@@ -5331,9 +5465,14 @@ public sealed class LegRunServiceTests
         Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
         Assert.Equal(
             localCopy
-                ? ["placed native in a copy", "copy of native made", "native works", "native ended"]
-                : ["placed native in the tree", "native works", "native ended"],
+                ? [$"run {run.Value} began", "placed native in a copy", "copy of native made", "native works", "native ended"]
+                : [$"run {run.Value} began", "placed native in the tree", "native works", "native ended"],
             said.Said);
+
+        // Each leg's line as the ledger keeps it, told as it ends; and where the run keeps its records, as it claimed them:
+        // the directory of its own id in the tree's runs.
+        Assert.Equal(("native", LegVerdict.Passed), Assert.Single(said.Lines.Select(line => (line.Leg, line.Verdict))));
+        PathAssert.Same((await harness.ContextLoader.LoadAsync(temp.Path, token)).Layout.RunDirectory(run.Value), said.RunDirectory!);
     }
 
     /// <summary>
@@ -5360,6 +5499,7 @@ public sealed class LegRunServiceTests
         failing.SyncAsync(Arg.Any<SyncSource>(), Arg.Any<ISyncTransport>(), Arg.Any<string>(), Arg.Any<SyncOptions>(), Arg.Any<CancellationToken>())
             .Returns<Task<SyncResult>>(_ => throw new IOException("the disk is full"));
         var said = new SaidWatch();
+        var run = RunId.New();
 
         var outcome = await OutcomeAsync(
             temp,
@@ -5370,6 +5510,7 @@ public sealed class LegRunServiceTests
             sync: failing,
             transports: transports,
             loader: harness.ContextLoader,
+            runId: run,
             work: work =>
             {
                 said.Add($"{work.Leg.Name} works");
@@ -5377,7 +5518,7 @@ public sealed class LegRunServiceTests
             });
 
         Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
-        Assert.Equal(["placed native in a copy", "native ended"], said.Said);
+        Assert.Equal([$"run {run.Value} began", "placed native in a copy", "native ended"], said.Said);
     }
 
     /// <summary>One leg this machine runs, in a copy of its own where <paramref name="localCopy"/>, under no limit on its paths.</summary>
@@ -5407,6 +5548,18 @@ public sealed class LegRunServiceTests
             }
         }
 
+        /// <summary>The run's directory of records, as the run told it; null before it did.</summary>
+        public string? RunDirectory { get; private set; }
+
+        /// <summary>Each leg's line as it ended, in order.</summary>
+        public List<LegEntry> Lines { get; } = [];
+
+        public void Began(RunId run, string runDirectory)
+        {
+            RunDirectory = runDirectory;
+            Add($"run {run.Value} began");
+        }
+
         public void Placed(IReadOnlyList<LegPlace> legs)
         {
             foreach (var leg in legs)
@@ -5417,7 +5570,15 @@ public sealed class LegRunServiceTests
 
         public void CopyMade(string leg) => Add($"copy of {leg} made");
 
-        public void Ended(string leg) => Add($"{leg} ended");
+        public void Ended(LegEntry line)
+        {
+            lock (_said)
+            {
+                Lines.Add(line);
+            }
+
+            Add($"{line.Leg} ended");
+        }
 
         public void Admitting(string leg, string asking, AdmissionTold told) => Add($"{asking} of {leg}: {told.Stage}");
 

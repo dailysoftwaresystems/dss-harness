@@ -11,10 +11,11 @@ digested: in `digest`, the first error whole - its stack rendered to the frames 
 lines it was read from, as the entry's own `log` file numbers them - the next distinct errors to four as one line
 each, every test failure of the four with its stack, and the rest - what the four do not say - counted by code and by
 file, a count of none and an empty list left out. Each line reaches you once: where the digest holds an error or a
-failure, its `unparsed` holds the lines no parser held - the last ones, nearest the failure, `unparsedLeftOut` saying
-how many more there were - and the `tail` is empty; where it holds neither, the `tail` holds the phase's last lines and
-`unparsed` those lines no parser held that the `tail` does not. The entry's `log` is the file that phase wrote, null
-for a leg another machine ran.
+failure and the entry names its `log`, its `unparsed` holds the lines no parser held - the last ones, nearest the
+failure, `unparsedLeftOut` saying how many more there were - and the `tail` is empty; otherwise the `tail` holds the
+phase's last lines and `unparsed` those lines no parser held that the `tail` does not. The entry's `log` is the file
+that phase wrote, on this machine - a leg another machine ran has its log brought back here - and null only where it
+could not be brought back.
 
 How the engine runs the tests, leg by leg: {input.orient.tests}
 

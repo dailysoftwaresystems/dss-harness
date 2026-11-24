@@ -669,7 +669,11 @@ public sealed record FlowStepPart(
 /// <param name="Errors">The errors its failing phase's digest counted; null where it holds no digest.</param>
 /// <param name="Warnings">The warnings its digest counted; null where it holds no digest.</param>
 /// <param name="FailedTests">The tests its digest counted failed, errored, timed out or crashed; null where it holds no digest.</param>
-/// <param name="Unparsed">How many lines of its failing phase that look like errors its digest holds unread by every parser; null where it holds no digest.</param>
+/// <param name="Unparsed">
+/// How many lines of its failing phase that look like errors no parser read, over the whole of what it printed - the
+/// digest's count, never the last ones it keeps (<see cref="Results.ResultDigest.UnparsedCount"/>); null where it holds no
+/// digest.
+/// </param>
 public sealed record FlowStepLeg(
     string Leg,
     string Verdict,
@@ -681,7 +685,7 @@ public sealed record FlowStepLeg(
     int? FailedTests = null,
     int? Unparsed = null)
 {
-    /// <summary>What <paramref name="line"/>, a leg's line of its ledger, says the leg did.</summary>
+    /// <summary>What <paramref name="line"/>, a leg's line of its ledger, says the leg did - the one reading of it, live or read back.</summary>
     /// <param name="line">The leg's line.</param>
     public static FlowStepLeg Of(Execution.LedgerLine line)
     {
@@ -698,37 +702,43 @@ public sealed record FlowStepLeg(
             digest?.Errors,
             digest?.Warnings,
             digest is null ? null : digest.Failed + digest.Errored + digest.TimedOut + digest.Crashed,
-            digest is null ? null : digest.Unparsed?.Count ?? 0);
+            digest?.UnparsedCount);
     }
 
-    /// <summary>
-    /// What <paramref name="line"/>, a leg's line of its step's ledger as the step's directory keeps it, says the leg did:
-    /// the same reading as <see cref="Of"/>, of the line's recorded form. The recorded line holds no phase times, so the
-    /// leg's phases are not read back; everything else the measure keeps of a leg is.
-    /// </summary>
-    /// <param name="line">The leg's line, as the ledger document in the step's directory holds it.</param>
-    public static FlowStepLeg Recorded(JsonObject line)
+    /// <summary>Whether <paramref name="other"/> is the same leg's record: every member, its phases in order.</summary>
+    /// <param name="other">The record, or <see langword="null"/>.</param>
+    public bool Equals(FlowStepLeg? other)
+        => other is not null
+            && string.Equals(Leg, other.Leg, StringComparison.Ordinal)
+            && string.Equals(Verdict, other.Verdict, StringComparison.Ordinal)
+            && Seconds == other.Seconds
+            && AdmittedAfter == other.AdmittedAfter
+            && (Phases is null ? other.Phases is null : other.Phases is not null && Phases.SequenceEqual(other.Phases))
+            && Errors == other.Errors
+            && Warnings == other.Warnings
+            && FailedTests == other.FailedTests
+            && Unparsed == other.Unparsed;
+
+    /// <summary>The record's hash, over every member, its phases in order.</summary>
+    public override int GetHashCode()
     {
-        ArgumentNullException.ThrowIfNull(line);
+        var hash = new HashCode();
+        hash.Add(Leg, StringComparer.Ordinal);
+        hash.Add(Verdict, StringComparer.Ordinal);
+        hash.Add(Seconds);
+        hash.Add(AdmittedAfter);
 
-        var digest = line["digest"] as JsonObject;
+        foreach (var phase in Phases ?? [])
+        {
+            hash.Add(phase);
+        }
 
-        return new FlowStepLeg(
-            line["leg"]?.GetValue<string>() ?? string.Empty,
-            line["verdict"]?.GetValue<string>() ?? string.Empty,
-            Seconds(line["durationSeconds"]),
-            (line["admission"] as JsonObject)?["waitedSeconds"] is { } waited ? waited.GetValue<double>() : null,
-            Phases: null,
-            digest is null ? null : Whole(digest, "errors"),
-            digest is null ? null : Whole(digest, "warnings"),
-            digest is null ? null : Whole(digest, "failed") + Whole(digest, "errored") + Whole(digest, "timedOut") + Whole(digest, "crashed"),
-            digest is null ? null : (digest["unparsed"] as JsonArray)?.Count ?? 0);
+        hash.Add(Errors);
+        hash.Add(Warnings);
+        hash.Add(FailedTests);
+        hash.Add(Unparsed);
 
-        static double? Seconds(JsonNode? seconds)
-            => seconds is JsonValue held && held.TryGetValue<double>(out var ran) && ran > 0 ? ran : null;
-
-        static int Whole(JsonObject? digest, string member)
-            => digest?[member] is JsonValue held && held.TryGetValue<int>(out var counted) ? counted : 0;
+        return hash.ToHashCode();
     }
 
     /// <summary>What is wrong with this leg's record; null when nothing is.</summary>

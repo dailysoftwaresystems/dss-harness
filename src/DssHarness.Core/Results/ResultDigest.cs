@@ -576,19 +576,22 @@ public sealed record ResultDigest
 
     /// <summary>
     /// What a red entry hands a model of what its phase printed - a red leg's, a red job's: the digest said for a model and
-    /// the raw lines beside it, the one rule of every entry that carries one, so every line reaches a model once. Where the
-    /// digest holds an error or a failure to start from, the lines no parser held are said in the digest - the last
+    /// the raw lines beside it, the one rule of every entry that carries one, so every line reaches a model once and none
+    /// that was printed is out of its reach. Where the digest holds an error or a failure to start from and the whole log
+    /// is one read away (<paramref name="logHere"/>), the lines no parser held are said in the digest - the last
     /// <see cref="Bound"/>, the nearest the failure, with how many it left out - and no raw line goes beside it: a model
-    /// reads the typed problems and the lines no parser held, never a page that repeats them. Where it holds none -
-    /// warnings and notes alone, or nothing typed - <paramref name="tail"/> goes whole beside it, for the line that says
-    /// why the phase failed is in no diagnostic, and the digest says those of its lines no parser held the tail does not:
-    /// each line of the tail, read as the digest's were (<paramref name="asRead"/>), answers for one of them. Where there
-    /// is no digest, the tail alone.
+    /// reads the typed problems and the lines no parser held, and every other line from the log by the ranges they give,
+    /// never a page that repeats them. Otherwise - the digest holds warnings and notes alone, or nothing typed, or no log
+    /// of the phase is on this machine to read - <paramref name="tail"/> goes whole beside it, for the line that says why
+    /// the phase failed is in no diagnostic, or in nothing a model could read, and the digest says those of its lines no
+    /// parser held the tail does not: each line of the tail, read as the digest's were (<paramref name="asRead"/>), answers
+    /// for one of them. Where there is no digest, the tail alone.
     /// </summary>
     /// <param name="digest">The entry's digest; null where it carries none.</param>
     /// <param name="tail">The raw lines that would go without a digest: the phase's last lines, the job's failing page.</param>
     /// <param name="asRead">A raw line as the digest's reading read it (<see cref="PhaseParsers.AsRead"/> for a phase's log).</param>
-    public static HandedToAModel Handed(ResultDigest? digest, IReadOnlyList<string> tail, Func<string, string> asRead)
+    /// <param name="logHere">Whether the whole log the tail is the end of is one read away on this machine, named beside the entry.</param>
+    public static HandedToAModel Handed(ResultDigest? digest, IReadOnlyList<string> tail, Func<string, string> asRead, bool logHere)
     {
         ArgumentNullException.ThrowIfNull(tail);
         ArgumentNullException.ThrowIfNull(asRead);
@@ -598,7 +601,7 @@ public sealed record ResultDigest
             return new HandedToAModel(null, tail);
         }
 
-        if (digest.HoldsAProblem)
+        if (digest.HoldsAProblem && logHere)
         {
             return new HandedToAModel(digest.ForAModel(digest.Unparsed), []);
         }

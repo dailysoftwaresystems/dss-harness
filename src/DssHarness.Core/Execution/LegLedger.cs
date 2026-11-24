@@ -124,10 +124,18 @@ public sealed record LegEntry
     public IReadOnlyList<PhaseLogFile>? Logs { get; init; }
 
     /// <summary>
+    /// Where another machine ran the leg, the log of its phase that did not pass (<see cref="TailPhase"/>), brought back
+    /// to this machine as the leg ended - read through the host's copy a piece at a time - and kept in this run's records
+    /// as a local leg's own logs are (<see cref="LegRecords.PhaseLog"/>), so the whole of what that phase printed is one
+    /// read away here too. <see langword="null"/> for a leg this machine ran, whose <see cref="Logs"/> hold it, and where
+    /// none was brought back: the host listed no log of that phase, or it could not be read, which the leg's progress said.
+    /// </summary>
+    public string? LogBroughtBack { get; init; }
+
+    /// <summary>
     /// The last lines the leg's last phase that did not pass printed, on either stream in the order they
-    /// came, secrets masked: what a reader who cannot open its log - another host's, which stays on that
-    /// host - needs first. Empty for a leg that passed, and for one whose every phase passed, whatever else
-    /// decided its verdict.
+    /// came, secrets masked: what a reader who cannot open its log needs first. Empty for a leg that passed,
+    /// and for one whose every phase passed, whatever else decided its verdict.
     /// </summary>
     public IReadOnlyList<string> LogTail { get; init; } = [];
 
@@ -459,7 +467,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
         }
 
         // Its line is kept: whatever of its tree the leg was to read, it has read.
-        watch?.Ended(entry.Leg);
+        watch?.Ended(entry);
 
         // The machine that dispatched the leg here says its verdict as it records it from this one's ledger.
         if (_dispatched)

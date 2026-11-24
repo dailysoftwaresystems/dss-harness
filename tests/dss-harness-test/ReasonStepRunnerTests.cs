@@ -178,6 +178,9 @@ public sealed class ReasonStepRunnerTests
         /// <summary>The refusal the run throws, where a test sets one.</summary>
         public HarnessException? Refusal { get; set; }
 
+        /// <summary>What a test does while the run works, given the request and the run, before its line is answered.</summary>
+        public Action<DssHarness.Core.Application.Legs.TestLegsRequest, DssHarness.Core.Execution.RunId>? WhileItRuns { get; set; }
+
         public Task<DssHarness.Core.Runs.LegRunResult> RunAsync(DssHarness.Core.Application.Legs.TestLegsRequest request, DssHarness.Core.Execution.RunId run, CancellationToken cancellationToken = default)
         {
             Asked.Add(request);
@@ -187,6 +190,8 @@ public sealed class ReasonStepRunnerTests
             {
                 throw refusal;
             }
+
+            WhileItRuns?.Invoke(request, run);
 
             var passed = Verdict == DssHarness.Core.Execution.LegVerdict.Passed;
 
@@ -2001,6 +2006,43 @@ public sealed class ReasonStepRunnerTests
         record.Ended();
 
         Assert.False(File.Exists(file));
+    }
+
+    /// <summary>
+    /// A measure call's ledger is kept as its leg runs, as a leg step's is: written in the call's records as the leg's run
+    /// begins, naming that run and its records, so an engine killed while the leg works leaves the measurement's run named
+    /// where the next command over the run reads it; the run's end writes it whole.
+    /// </summary>
+    [Fact]
+    public async Task AMeasureCallsLedger_IsKeptAsItsLegRuns()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        var step = kit.Layout.InstanceDirectory("think", "a9");
+        var records = AgentMeasureSupport.RecordsOf(step, "toolu_1");
+        var ledger = Path.Combine(records, OrchestratorLayout.StepLedgerFileName);
+        DssHarness.Core.Execution.RunId? began = null;
+        DssHarness.Core.Execution.LedgerDocument? asItBegan = null;
+        var tests = new MeasuredTests
+        {
+            WhileItRuns = (request, run) =>
+            {
+                began = run;
+                request.Watch!.Began(run, $"/runs/{run.Value}");
+                asItBegan = DssHarness.Core.Execution.LedgerDocument.Read(File.ReadAllText(ledger));
+            },
+        };
+
+        var result = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        _ = await agents.Asked.Single().Measure!.Measure(new AgentMeasureCall("toolu_1", "windows", "debug", "", "windows", records), Token);
+
+        Assert.Equal((began!.Value, $"/runs/{began.Value}"), (asItBegan!.RunId, asItBegan.RunDirectory));
+        Assert.Empty(asItBegan.Legs ?? []);
+        Assert.Equal(["windows"], DssHarness.Core.Execution.LedgerDocument.Read(File.ReadAllText(ledger))!.Legs!.Select(leg => leg.Leg));
     }
 
     /// <summary>

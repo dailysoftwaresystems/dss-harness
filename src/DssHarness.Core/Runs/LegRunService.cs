@@ -489,8 +489,11 @@ public sealed class LegRunService(
                 runDirectory);
         }
 
-        // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends.
+        // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends,
+        // and so is the caller's watch - a step of an orchestrator run keeps it, so a crash while the legs work is closed
+        // where their records last moved.
         _output.Publish(new RecordWritten("run directory", runDirectory));
+        request.Watch?.Began(runId, runDirectory);
 
         // Before any leg reads its tree - the reading for the copies below among it: a leg in a copy reads the tree only
         // until its copy is made, and one in the tree itself until it ends.
@@ -1601,6 +1604,10 @@ public sealed class LegRunService(
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            // The log of the phase it did not pass, brought back into this run's records, so the whole of what that phase
+            // printed is one read away here as a leg of this machine's is.
+            ended = await BroughtBackAsync(leg, ended, runDirectory, ledger, cancellationToken).ConfigureAwait(false);
+
             // What a WSL leg read and wrote stays in its virtual machine's page cache, which this machine counts as in use
             // until the virtual machine idles for minutes: dropped as the leg ends - before its slot is given back - where
             // this machine admits its heavy legs by the memory. Not waited for: what comes back is the next wait's to read.
@@ -1740,6 +1747,47 @@ public sealed class LegRunService(
         }
 
         return entry;
+    }
+
+    /// <summary>
+    /// <paramref name="line"/>, the line of a leg another machine ran, with the log of the phase it did not pass brought
+    /// back to this machine (<see cref="LegEntry.LogBroughtBack"/>): read through the host's copy of the leg's tree, where
+    /// the host's run keeps its records, a piece at a time (<see cref="ISyncService.BringBackAsync"/>), and kept in this
+    /// run's records as a local leg keeps its own - so the whole of what that phase printed, which the line's digest and
+    /// last lines stand for, is one read away here. The line as it was where it holds no such phase, or its host listed no
+    /// log of it; and where the log could not be brought back - the host stopped answering, the run was stopped - the
+    /// leg's progress says why, and its line keeps its last lines for a reader to start from.
+    /// </summary>
+    private async Task<LegEntry> BroughtBackAsync(PlacedLeg leg, LegEntry line, string runDirectory, LegLedger ledger, CancellationToken cancellationToken)
+    {
+        if (line.TailPhase is not { } phase
+            || line.HostRunId is not { } hostRun
+            || !(line.Logs ?? []).Any(log => log.Phase == PhaseLogs.NameFor(phase)))
+        {
+            return line;
+        }
+
+        var here = new LegRecords(runDirectory, leg.Name).PhaseLog(PhaseLogs.NameFor(phase));
+
+        try
+        {
+            await _syncService
+                .BringBackAsync(_transportFactory.For(leg.Host), leg.HostTreeRoot, LegRecords.PhaseLogInTree(hostRun, leg.Name, PhaseLogs.NameFor(phase)), here, cancellationToken)
+                .ConfigureAwait(false);
+
+            return line with { LogBroughtBack = here };
+        }
+        catch (HarnessException ex)
+        {
+            ledger.Transition(leg.Name, $"its log of {phase} could not be brought back from {leg.Host.Host}: {ex.Message.TrimEnd('.')}; its last lines stay on its line");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The leg's verdict is in hand, and a stop asked for while its log crosses takes nothing of it.
+            ledger.Transition(leg.Name, $"its log of {phase} was not brought back from {leg.Host.Host}: the run was stopped first; its last lines stay on its line");
+        }
+
+        return line;
     }
 
     /// <summary>

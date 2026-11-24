@@ -142,7 +142,7 @@ public sealed class ResultFixturesTests
             var expect = Expectation(fixture);
             var lines = PhaseOutput.Of(File.ReadAllText(Output(fixture))).Lines();
             Func<string, string> asRead = expect["read"]!.AsObject().ContainsKey("ci") ? DssHarness.Core.Ci.CiLog.TextOf : PhaseParsers.AsRead;
-            var handed = ResultDigest.Handed(Placed(fixture, expect, Read(fixture, expect)!), [.. lines.TakeLast(50)], asRead);
+            var handed = ResultDigest.Handed(Placed(fixture, expect, Read(fixture, expect)!), [.. lines.TakeLast(50)], asRead, logHere: true);
             var entry = new JsonObject
             {
                 ["tail"] = new JsonArray([.. handed.Lines.Select(line => (JsonNode?)line)]),

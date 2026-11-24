@@ -124,8 +124,8 @@ public sealed record PhaseResult(
     public string? WorkingDirectory { get; init; }
 
     /// <summary>
-    /// <see cref="LastLines"/> where the phase did not pass; empty where it did. What a reader who cannot
-    /// open the log - another host's, which stays on that host - needs first.
+    /// <see cref="LastLines"/> where the phase did not pass; empty where it did. What a reader needs first,
+    /// before the whole log - this machine's, or another host's once its run brings it back.
     /// </summary>
     public IReadOnlyList<string> Tail => Passed ? [] : LastLines;
 

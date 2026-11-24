@@ -363,10 +363,11 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
-    /// What a red entry hands a model says every line once: where the digest holds an error or a failure, it says the lines
-    /// no parser held and no raw line goes beside it; where it holds warnings alone, the phase's tail goes whole - the line
-    /// saying why the phase failed is in no warning - and the digest says those lines no parser held the tail does not,
-    /// each tail line read as the digest's were answering for one; where there is no digest, the tail alone.
+    /// What a red entry hands a model says every line once: where the digest holds an error or a failure and the log is
+    /// one read away, it says the lines no parser held and no raw line goes beside it; where it holds warnings alone, the
+    /// phase's tail goes whole - the line saying why the phase failed is in no warning - and the digest says those lines no
+    /// parser held the tail does not, each tail line read as the digest's were answering for one; where there is no
+    /// digest, the tail alone.
     /// </summary>
     [Fact]
     public void WhatARedEntryHandsAModel_SaysEveryLineOnce()
@@ -376,23 +377,43 @@ public sealed class ResultDigestRecordTests
         var errors = ResultDigest.Of([new Diagnostic("gcc", "error", null, "x undeclared")], [], ["error: odd"]);
         var failed = ResultDigest.Of([], [new TestFailure("ctest", "t")], ["error: odd"]);
 
-        var beside = ResultDigest.Handed(warnings, tail, PhaseParsers.AsRead);
+        var beside = ResultDigest.Handed(warnings, tail, PhaseParsers.AsRead, logHere: true);
 
         Assert.Same(tail, beside.Lines);
         Assert.Equal(["error: early"], beside.Digest!["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
 
         foreach (var holding in new[] { errors, failed })
         {
-            var handed = ResultDigest.Handed(holding, tail, PhaseParsers.AsRead);
+            var handed = ResultDigest.Handed(holding, tail, PhaseParsers.AsRead, logHere: true);
 
             Assert.Empty(handed.Lines);
             Assert.Equal(["error: odd"], handed.Digest!["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
         }
 
-        var none = ResultDigest.Handed(null, tail, PhaseParsers.AsRead);
+        var none = ResultDigest.Handed(null, tail, PhaseParsers.AsRead, logHere: true);
 
         Assert.Null(none.Digest);
         Assert.Same(tail, none.Lines);
+    }
+
+    /// <summary>
+    /// Where no log of the phase is on this machine to read - a host's that could not be brought back - nothing the phase
+    /// printed is out of a model's reach: a digest holding an error or a failure goes with the phase's tail whole beside
+    /// it, as one holding warnings alone does, and says only those lines no parser held the tail does not - every line
+    /// once still. Handed the digest alone, the line that said why the test failed, which no parser typed, was in nothing
+    /// a model could read.
+    /// </summary>
+    [Fact]
+    public void WhereNoLogIsHere_ARedEntryHandsTheTailBesideADigestHoldingAProblem()
+    {
+        IReadOnlyList<string> tail = ["Start 3: folds_duplicates", "check.c:9: expected 2 records, found 3", "\u001b[31merror: odd\u001b[0m"];
+        var failed = ResultDigest.Of([], [new TestFailure("ctest", "folds_duplicates")], ["error: early", "error: odd"]);
+
+        var handed = ResultDigest.Handed(failed, tail, PhaseParsers.AsRead, logHere: false);
+
+        Assert.Same(tail, handed.Lines);
+        Assert.Equal(["error: early"], handed.Digest!["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+        Assert.Equal("ctest folds_duplicates", handed.Digest["first"]!["said"]!.GetValue<string>());
     }
 
     /// <summary>

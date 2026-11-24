@@ -263,6 +263,10 @@ public sealed class HostAgentServiceTests
         /// <summary>Each stage told, with the leg and what asked.</summary>
         public List<(string Leg, string Asking, AdmissionTold Told)> Told { get; } = [];
 
+        public void Began(RunId run, string runDirectory)
+        {
+        }
+
         public void Placed(IReadOnlyList<LegPlace> legs)
         {
         }
@@ -271,7 +275,7 @@ public sealed class HostAgentServiceTests
         {
         }
 
-        public void Ended(string leg)
+        public void Ended(LegEntry line)
         {
         }
 

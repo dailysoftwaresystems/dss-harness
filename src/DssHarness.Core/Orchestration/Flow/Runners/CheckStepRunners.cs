@@ -574,7 +574,8 @@ public sealed class CiWaitStepRunner(
             var handed = ResultDigest.Handed(
                 CiDigest.Of(masked, check.Annotations, check.Check.Repository, mask.Redact, context.Config.Results.Matchers),
                 failing,
-                entry => CiLog.TextOf(TextPages.Unnumbered(entry)));
+                entry => CiLog.TextOf(TextPages.Unnumbered(entry)),
+                logHere: kept is not null);
 
             red.Add(new JsonObject
             {

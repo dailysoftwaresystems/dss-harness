@@ -56,6 +56,25 @@ public sealed record LedgerLine(
     /// <summary>Each phase log in <see cref="Records"/>, by phase, in the order of their names; empty where none are.</summary>
     public IReadOnlyList<PhaseLogFile> Logs { get; init; } = [];
 
+    /// <summary>The log of the phase a leg another machine ran did not pass, brought back to this one, as <see cref="LegEntry.LogBroughtBack"/> says.</summary>
+    public string? LogBroughtBack { get; init; }
+
+    /// <summary>
+    /// The log of <see cref="TailPhase"/> among the leg's own records, wherever it ran - a host's spelled as the host spells
+    /// it - found as every log is named for its phase (<see cref="PhaseLogs.NameFor"/>): a runner's step
+    /// <c>build (2/2)</c> is kept as <c>build (2-2)</c>; <see langword="null"/> where the leg holds no failing phase, or no
+    /// log of it.
+    /// </summary>
+    public string? TailLog => TailPhase is { } phase ? Logs.FirstOrDefault(log => log.Phase == PhaseLogs.NameFor(phase))?.File : null;
+
+    /// <summary>
+    /// The whole log of the phase the leg did not pass, as it is on this machine - the one place that says where: a leg
+    /// this machine ran keeps it among its own records (<see cref="TailLog"/>), and the one a host ran is brought back
+    /// into this run's (<see cref="LogBroughtBack"/>); <see langword="null"/> where neither is, as of a leg with no failing
+    /// phase, or a host's whose log could not be brought back.
+    /// </summary>
+    public string? FailingLog => HostRunId is null ? TailLog : LogBroughtBack;
+
     /// <summary>Each phase the leg ran, with its own time, as <see cref="LegEntry.Phases"/> says.</summary>
     public IReadOnlyList<PhaseRecord> Phases { get; init; } = [];
 
@@ -407,6 +426,7 @@ public sealed class LedgerReport
                     HostRunId = entry.HostRunId,
                     Records = entry.Records,
                     Logs = entry.Logs ?? [],
+                    LogBroughtBack = entry.LogBroughtBack,
                     Phases = entry.Phases,
                     SkippedSteps = entry.SkippedSteps,
                     RanSteps = entry.RanSteps,
@@ -648,9 +668,9 @@ public sealed class LedgerReport
 
     /// <summary>
     /// The last lines each leg's last phase that did not pass printed - a page of them - as a block below the table: what
-    /// a reader who cannot open the leg's log - another host's, which stays on that host - needs first, and where the
-    /// whole is, the phase's log, read by page, where the leg's records name it. Below rather than in the table, as the
-    /// timings are, so no row is pushed apart.
+    /// a reader needs first, and where the whole is, the phase's log, read by page: on this machine where it is here
+    /// (<see cref="LedgerLine.FailingLog"/>) - a host's brought back - else where the leg's records name it
+    /// (<see cref="LedgerLine.TailLog"/>). Below rather than in the table, as the timings are, so no row is pushed apart.
     /// </summary>
     private IReadOnlyList<string> RenderTails()
     {
@@ -658,7 +678,7 @@ public sealed class LedgerReport
 
         foreach (var line in Lines.Where(line => line.LogTail.Count > 0))
         {
-            var whole = line.Logs.FirstOrDefault(log => string.Equals(log.Phase, line.TailPhase, StringComparison.Ordinal))?.File;
+            var whole = line.FailingLog ?? line.TailLog;
 
             rows.Add(string.Empty);
             rows.Add($"{line.Leg}: the last {ReportText.Counted(line.LogTail.Count, "line")} its phase printed{(whole is null ? string.Empty : $", the whole in '{whole}'")}");
@@ -872,6 +892,15 @@ public sealed class LedgerReport
                 // the host spelled them, its home as ~.
                 Records = line.Records is null ? null : show(line.Records),
                 Logs = line.Logs.Count > 0 ? line.Logs.Select(log => new { log.Phase, File = show(log.File) }) : null,
+
+                // Only for a leg another host ran whose failing phase's log was brought back: where it is kept here.
+                LogBroughtBack = line.LogBroughtBack is { } brought ? show(brought) : null,
+
+                // Each phase the leg ran, with its own time - what a reader of the leg's run, the one that keeps a step's
+                // ledger among them, reads back of how long each phase took, and whether the clock stepped across it.
+                Phases = line.Phases.Count > 0
+                    ? line.Phases.Select(phase => new { phase.Phase, DurationSeconds = Seconds(phase.Duration), phase.ClockStepped })
+                    : null,
 
                 // Only where a step was left out for the leg's operating system.
                 SkippedSteps = line.SkippedSteps.Count > 0 ? line.SkippedSteps : null,
@@ -1105,8 +1134,10 @@ public sealed class LedgerReport
 
     /// <summary>
     /// Which legs have a phase slower than its siblings, and by how much. Phases are compared only
-    /// with the same phase on legs of the same kind: an emulated leg is never compared with a native
-    /// one, because the two have no common scale and every emulated leg would be marked forever.
+    /// with the same phase on legs of the same kind this machine ran: an emulated leg is never compared
+    /// with a native one, because the two have no common scale and every emulated leg would be marked
+    /// forever - and a leg another machine ran is compared on that machine, among the legs it ran, never
+    /// against another machine's clock and speed.
     /// </summary>
     private static Dictionary<string, List<string>> Compare(IReadOnlyList<LegEntry> entries, double factor)
     {
@@ -1119,6 +1150,7 @@ public sealed class LedgerReport
 
         // One kind at a time, and one phase within it, named as configuration keys are.
         var groups = entries
+            .Where(entry => entry.HostRunId is null)
             .SelectMany(entry => entry.Phases.Select(phase => (entry.Leg, entry.Emulated, Phase: phase)))
             .GroupBy(item => item.Emulated)
             .SelectMany(kind => kind.GroupBy(item => item.Phase.Phase, StringComparer.OrdinalIgnoreCase));

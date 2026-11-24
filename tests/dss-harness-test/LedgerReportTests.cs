@@ -1421,6 +1421,62 @@ public sealed class LedgerReportTests
     }
 
     /// <summary>
+    /// Where the whole of a failed phase's log is, the tails block says as the log is kept: a runner's step
+    /// <c>step (2/2)</c> under the name its log is written by, <c>step (2-2)</c>; and a leg another machine ran by the
+    /// log its run brought back to this one - its own records' log, spelled on that host, is not this machine's to read.
+    /// </summary>
+    [Fact]
+    public void TheWholeOfAFailedPhasesLog_IsNamedWhereItIsKeptOnThisMachine()
+    {
+        const string here = "runs/r1/local/step (2-2).log";
+        const string brought = "runs/r1/remote/test.log";
+        var report = LedgerReport.From(
+        [
+            Entry("local", LegVerdict.Failed, TimeSpan.FromSeconds(8), "step (2/2) exited 1") with
+            {
+                LogTail = ["assertion failed"],
+                TailPhase = "step (2/2)",
+                Logs = [new PhaseLogFile("step (2-2)", here)],
+            },
+            Entry("remote", LegVerdict.Failed, TimeSpan.FromSeconds(9), "test exited 8") with
+            {
+                LogTail = ["1 test failed out of 3"],
+                TailPhase = "test",
+                Logs = [new PhaseLogFile("test", "~/repo/.harness-config/runs/r9/remote/test.log")],
+                HostRunId = RunId.Parse("20260101-000000-0a1b2c3d"),
+                LogBroughtBack = brought,
+            },
+        ],
+        durationWarningFactor: 0);
+
+        var rows = report.Render();
+
+        Assert.Contains($"local: the last 1 line(s) its phase printed, the whole in '{here}'", rows);
+        Assert.Contains($"remote: the last 1 line(s) its phase printed, the whole in '{brought}'", rows);
+    }
+
+    /// <summary>
+    /// A leg another machine ran is never compared with the legs this one ran, however its phases' times read: it ran on
+    /// another clock at another speed, and its own machine compared it among the legs it ran.
+    /// </summary>
+    [Fact]
+    public void ALegAnotherMachineRan_IsNeverComparedWithThisMachines()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("a", LegVerdict.Passed, TimeSpan.FromSeconds(60), string.Empty, Phase("build", 60)),
+            Entry("b", LegVerdict.Passed, TimeSpan.FromSeconds(62), string.Empty, Phase("build", 62)),
+            Entry("pi", LegVerdict.Passed, TimeSpan.FromSeconds(900), string.Empty, Phase("build", 900)) with
+            {
+                HostRunId = RunId.Parse("20260101-000000-0a1b2c3d"),
+            },
+        ],
+        durationWarningFactor: 3.0);
+
+        Assert.All(report.Lines, line => Assert.False(line.TimingsSuspect));
+    }
+
+    /// <summary>
     /// The first error of each red leg that holds one is printed under its verdict, as a block below the table, before
     /// the units and the tails - the place a reader starts - and the JSON ledger carries the digest whole: every
     /// diagnostic and failure typed, for a reader that asks. A leg that digested nothing says neither.

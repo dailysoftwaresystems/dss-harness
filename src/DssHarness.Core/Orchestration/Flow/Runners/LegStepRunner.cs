@@ -24,10 +24,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// leg service says them, so the step lets its tree go once no leg reads it; each leg's verdict is read on its own, and
 /// <c>red</c> holds the red legs alone. Its legs are run as every step of the engine runs legs (<see cref="FlowStepLegs"/>,
 /// a reason step's measure calls' owner too): under a process scope recorded in the step's directory, and the ledger kept
-/// there, with - for a step in an agent's worktree - the log of each red leg's phase that did not pass, whole, where this
-/// machine ran it: that worktree, and the run directory in it, go when the agent does. Where its legs run in the tree the
-/// step works in and the run keeps a graph of that tree, each red leg's digest is joined to the declarations the graph
-/// holds at its places before the ledger is kept (<see cref="FlowGraphSyncs.DeclarationsAsync"/>).
+/// there as the legs' run goes, with - for a step in an agent's worktree - the log of each red leg's phase that did not
+/// pass, whole, as it is on this machine, a host's brought back by its run: that worktree, and the run directory in it,
+/// go when the agent does. Where its legs run in the tree the step works in and the run keeps a graph of that tree, each
+/// red leg's digest is joined to the declarations the graph holds at its places before the ledger is kept
+/// (<see cref="FlowGraphSyncs.DeclarationsAsync"/>).
 /// </summary>
 /// <remarks>
 /// What its legs build, test and run is what the run's agents wrote: the work of each leg this machine runs is held inside
@@ -155,7 +156,8 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         };
         var ran = await _legs.RunAsync(
             request,
-            legIsolation => RunLegsAsync(run, context, tree, watch, legIsolation, cancellationToken),
+            watch,
+            (legIsolation, kept) => RunLegsAsync(run, context, tree, kept, legIsolation, cancellationToken),
             cancellationToken).ConfigureAwait(false);
 
         if (ran.Result is not { } result)
@@ -207,9 +209,10 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
     /// <summary>
     /// The account of the attempt <paramref name="run"/> names, where a crash cut the machine step off before the engine
-    /// read its runner's answer: the ledger its legs' run kept in the step's directory, read back as the cut attempt's own
-    /// (<see cref="CutAccountOf"/>) - each line a leg the attempt ran, with its verdict, its time and its digest's counts -
-    /// closed where that ledger was written, the latest time the step's own records give.
+    /// read its runner's answer: the ledger its legs' run kept in the step's directory as it went, read back as the cut
+    /// attempt's own (<see cref="CutAccountOf"/>) - each line a leg the attempt ran to its end, with its verdict, its time,
+    /// its phases and its digest's counts - closed where the legs' work stopped: the latest the step's ledger and the run's
+    /// own records were written.
     /// </summary>
     /// <param name="run">The step, the instance and the attempt the record says was current.</param>
     /// <param name="cancellationToken">Cancels the reading of the repository.</param>
@@ -224,13 +227,15 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
     /// <summary>
     /// The cut attempt's account out of the ledger a step's directory keeps, <see cref="OrchestratorLayout.StepLedgerFileName"/>
-    /// under <paramref name="layout"/>'s directory for the step: each line a leg of the attempt as its measure keeps it
-    /// (<see cref="FlowStepLeg.Recorded"/>), and the attempt closed where the ledger was written - the latest time the
-    /// step's own records give. Null where the directory holds no ledger, or one that does not read: nothing of the
-    /// attempt is taken then, and its run closes where the engine would close it for a step that kept no record of its
-    /// own - the run's last, as the resume reads it.
+    /// under <paramref name="layout"/>'s directory for the step, as its legs' run wrote it as it went (<see cref="FlowStepLegs"/>):
+    /// read by the ledger's own reader (<see cref="LedgerDocument"/>), each line a leg that ended, as its measure keeps it
+    /// (<see cref="FlowStepLeg.Of"/>); and the attempt closed where its legs' work stopped - the latest the ledger was written
+    /// and any record of the run it names was, each phase's log as it was written among them. Null where the directory holds
+    /// no ledger, or one that does not read - a line's digest among it: nothing of the attempt is taken then, and its run
+    /// closes where the engine would close it for a step that kept no record of its own - the run's last, as the resume
+    /// reads it.
     /// </summary>
-    /// <param name="fileSystem">Reads the step's ledger.</param>
+    /// <param name="fileSystem">Reads the step's ledger and the run's records.</param>
     /// <param name="layout">The run's layout, which names the step's directory.</param>
     /// <param name="run">The step, the instance and the attempt the record says was current.</param>
     internal static FlowCutAttempt? CutAccountOf(IFileSystem fileSystem, OrchestratorLayout layout, FlowStepRun run)
@@ -248,26 +253,43 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
         try
         {
-            // The ledger as the step's legs' run wrote it, one write at their run's end; a file another run left there is
-            // told from this attempt's run by when it was written, which the engine reads from the account it is given.
-            var lines = Json.JsonDepth.ParseNode(fileSystem.ReadAllText(ledger)) as JsonObject ?? throw new JsonException("the step's ledger is no JSON object");
+            // The ledger as the step's legs' run kept it: written as the run began, naming it, again as each leg ended, and
+            // whole at its end. A file another attempt's run left there is told from this attempt's by when it was written,
+            // which the engine reads from the account it is given.
+            var document = LedgerDocument.Read(fileSystem.ReadAllText(ledger)) ?? throw new JsonException("the step's ledger is JSON's null");
+            var lines = LedgerReport.From([.. (document.Legs ?? []).Select(line => line.Entry(said => said))], durationWarningFactor: 0).Lines;
+            var written = new DateTimeOffset(fileSystem.LastWriteTimeUtc(ledger), TimeSpan.Zero);
+            var stopped = document.RunDirectory is { } records && LastWrittenUnder(fileSystem, records) is { } moved && moved > written ? moved : written;
 
-            if (lines["legs"] is not JsonArray entries)
-            {
-                return null;
-            }
-
-            return new FlowCutAttempt(
-                new FlowStepAttempt(run.Attempt, Legs: [.. entries.OfType<JsonObject>().Select(FlowStepLeg.Recorded)]),
-                [],
-                new DateTimeOffset(fileSystem.LastWriteTimeUtc(ledger), TimeSpan.Zero));
+            return new FlowCutAttempt(new FlowStepAttempt(run.Attempt, Legs: lines.Count == 0 ? null : [.. lines.Select(FlowStepLeg.Of)]), [], stopped);
         }
-        catch (Exception failed) when (failed is JsonException or InvalidOperationException or IOException)
+        catch (Exception failed) when (failed is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             // A ledger that cannot be read is no account of the attempt: nothing of it is taken, not even its time, and
             // the resume is not stopped by a record the crash tore.
             return null;
         }
+    }
+
+    /// <summary>
+    /// When anything under <paramref name="directory"/> - a run's records - was last written, in one walk; null where it
+    /// holds nothing, or is not there.
+    /// </summary>
+    private static DateTimeOffset? LastWrittenUnder(IFileSystem fileSystem, string directory)
+    {
+        if (!fileSystem.DirectoryExists(directory))
+        {
+            return null;
+        }
+
+        DateTime? last = null;
+
+        foreach (var file in fileSystem.EnumerateWrittenFiles(directory))
+        {
+            last = last is { } held && held >= file.LastWriteTimeUtc ? held : file.LastWriteTimeUtc;
+        }
+
+        return last is { } at ? new DateTimeOffset(DateTime.SpecifyKind(at, DateTimeKind.Utc), TimeSpan.Zero) : null;
     }
 
     /// <summary>Runs the step's legs in <paramref name="tree"/> through its type's use case, telling <paramref name="watch"/> of each.</summary>
@@ -367,8 +389,9 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
         JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm, FailedUnits? failedUnits, ResultDigest? digest, string? log)
         {
-            // What the phase printed, every line once: the digest, and the raw lines it does not say.
-            var handed = ResultDigest.Handed(digest, tail, PhaseParsers.AsRead);
+            // What the phase printed, every line once and none out of reach: the digest, and the raw lines it does not say -
+            // its last lines beside it too where no log of the phase is here to read.
+            var handed = ResultDigest.Handed(digest, tail, PhaseParsers.AsRead, logHere: log is not null);
             var entry = new JsonObject
             {
                 ["leg"] = leg,
@@ -378,7 +401,8 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
                 ["tail"] = new JsonArray([.. handed.Lines.Select(line => (JsonNode?)line)]),
                 ["digest"] = handed.Digest,
 
-                // The log the phase wrote, whose lines the digest's ranges number: one read away from the entry.
+                // The log the phase wrote, whose lines the digest's ranges number - a host's brought back: one read away
+                // from the entry.
                 ["log"] = log,
             };
 
@@ -433,13 +457,21 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         }
 
         /// <inheritdoc/>
+        /// <remarks>Nothing the engine is told: where the legs' run keeps its records is the step's own to keep (<see cref="FlowStepLegs"/>).</remarks>
+        public void Began(RunId run, string runDirectory)
+        {
+        }
+
+        /// <inheritdoc/>
         public void CopyMade(string leg) => events.LegCopyMade(leg);
 
         /// <inheritdoc/>
-        public void Ended(string leg)
+        public void Ended(LegEntry line)
         {
-            Tell(() => _hold.Ended(leg));
-            events.LegEnded(leg);
+            ArgumentNullException.ThrowIfNull(line);
+
+            Tell(() => _hold.Ended(line.Leg));
+            events.LegEnded(line.Leg);
         }
 
         /// <inheritdoc/>
