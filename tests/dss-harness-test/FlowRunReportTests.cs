@@ -270,8 +270,8 @@ public sealed class FlowRunReportTests
 
     /// <summary>
     /// Every failed attempt is an error row of its own (<c>&lt;instance&gt;@&lt;attempt&gt;</c>): its code, why it
-    /// ended, its error, the exception it threw whole - type, message, stack and causes - the first error its legs'
-    /// digests read, what handled it and the question it raised; every form says them.
+    /// ended, its error, the exception it threw whole - type, message, stack and causes, and what the bounds cut of each -
+    /// the first error its legs' digests read, what handled it and the question it raised; every form says them.
     /// </summary>
     [Fact]
     public void EachFailedAttempt_IsAnErrorRow_WithItsCauseItsExceptionAndItsDigestsFirstError()
@@ -300,7 +300,7 @@ public sealed class FlowRunReportTests
                       "exit": 70,
                       "cause": "LockHeld",
                       "error": "it threw",
-                      "exception": {"type": "InvalidOperationException", "message": "the node has a parent", "stack": [{"text": "at Rows.Keep()", "file": "src/Rows.cs", "line": 12, "kind": "call", "inTree": true}], "causedBy": []},
+                      "exception": {"type": "InvalidOperationException", "message": "the node has a parent", "stack": [{"text": "at Rows.Keep()", "file": "src/Rows.cs", "line": 12, "kind": "call", "inTree": true}], "causedBy": [], "stackCut": 0, "causesCut": 0},
                       "firstError": {"code": "CS1002", "file": "src/a.cs", "line": 3},
                       "handledBy": "fix",
                       "question": "q1"
