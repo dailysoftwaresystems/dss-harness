@@ -1861,7 +1861,8 @@ internal sealed class RustPanicParser : IBuiltInParser
 /// the program over - closed by the line it halts with, AddressSanitizer's <c>==pid==ABORTING</c>, MemorySanitizer's
 /// <c>Exiting</c>, the last line of its report - has <c>crashed</c> it; every other - one the program recovered from and ran
 /// on, a warning, a runtime error UBSan printed no halt line for - has <c>errored</c> it. A report that ended the program
-/// inside a test a runner said began is that test's failure (<see cref="ResultSink.AddCrash"/>).
+/// inside a test a runner said began is that test's failure (<see cref="ResultSink.AddCrash"/>), and so is the last one
+/// said inside a test its runner never saw end, for the program died in it (<see cref="ResultSink.Died"/>).
 /// </summary>
 internal sealed class SanitizerParser : IBuiltInParser
 {

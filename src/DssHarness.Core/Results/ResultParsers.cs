@@ -174,9 +174,10 @@ public sealed class ResultSink
     /// (<see cref="Test"/>) and the crash ended its program, the crash is that test's failure: named for the test, its
     /// message the report's own words - its error's type ahead of what it said - its place, stack and log range the
     /// report's, and the test ended and marked as said by it, so the runner that began it says it no second time. A report
-    /// the program recovered from and ran on is said as the report's own, its message naming the test it ran in, and the
-    /// test runs on, for its runner to say as it ends - passed or failed. Where the log is in no test, the crash is said as
-    /// the report's own.
+    /// the program did not end over is said as the report's own, its message naming the test it ran in, and the test runs
+    /// on, for its runner to say as it ends - passed or failed - and kept on the test as the last said while it ran: where
+    /// the runner never sees the test end, the program died in it, and that report becomes its crash (<see cref="Died"/>).
+    /// Where the log is in no test, the crash is said as the report's own.
     /// </summary>
     /// <param name="crash">The crash, as its report's reader read it.</param>
     public void AddCrash(TestFailure crash)
@@ -192,21 +193,50 @@ public sealed class ResultSink
         if (crash.Outcome != "crashed")
         {
             Add(crash with { Message = $"{crash.Message ?? crash.Id} (while the test {test.Id} ran)" });
+            test.Reported = (this, Failures.Count - 1, crash);
             return;
         }
 
         test.Said = true;
         _shared.Test = null;
 
-        Add(crash with
+        Add(TheTestsCrash(crash, test));
+    }
+
+    /// <summary>
+    /// Says that <paramref name="test"/>'s program died inside it: its runner closes it with no end of it said. The test is
+    /// one failure - where a report was said while it ran, the last such ended it, whichever sanitizer printed it and
+    /// whether or not it printed a line to halt with, and becomes the test's crash as <see cref="AddCrash"/> says one, in
+    /// place of the report's own record and never beside it. Answers whether the test is said, by that report or by one
+    /// that said it as it was read, so its runner says it crashed only where none did.
+    /// </summary>
+    /// <param name="test">The test its runner closes with no end of it said.</param>
+    public bool Died(OpenTest test)
+    {
+        ArgumentNullException.ThrowIfNull(test);
+
+        if (!test.Said && test.Reported is { } reported)
+        {
+            reported.Sink.Failures[reported.At] = TheTestsCrash(reported.Crash with { Outcome = "crashed" }, test);
+            test.Said = true;
+        }
+
+        return test.Said;
+    }
+
+    /// <summary>
+    /// A crash said as <paramref name="test"/>'s failure: named for the test, its message the report's own words - its
+    /// error's type ahead of what it said - its place, stack and log range the report's.
+    /// </summary>
+    private static TestFailure TheTestsCrash(TestFailure crash, OpenTest test)
+        => crash with
         {
             Framework = test.Framework,
             Id = test.Id,
             Class = test.Class,
             Method = test.Method,
             Message = crash.Message is not { } said ? crash.Id : crash.Exception is { } thrown ? $"{thrown.Type}: {said}" : said,
-        });
-    }
+        };
 
     /// <summary>
     /// Whether any reading of the log said an error or a failure that begins at a line from <paramref name="from"/> to
@@ -229,7 +259,7 @@ public sealed class ResultSink
 
 /// <summary>
 /// A test a runner said began and has not said ended (<see cref="ResultSink.Test"/>): its identity, which a crash read
-/// while it runs is said under, and whether one was.
+/// while it runs is said under, whether one was, and the last report said while it ran that its program did not end over.
 /// </summary>
 /// <param name="framework">The framework that runs it.</param>
 /// <param name="id">Its id as the runner gives it.</param>
@@ -251,6 +281,12 @@ public sealed class OpenTest(string framework, string id, string? @class, string
 
     /// <summary>Whether a crash that ended its program while it ran was said as its failure.</summary>
     public bool Said { get; internal set; }
+
+    /// <summary>
+    /// The last report said while it ran that its program did not end over (<see cref="ResultSink.AddCrash"/>): the sink it
+    /// was said into, where among that sink's failures, and the report as its reader read it; null where none was.
+    /// </summary>
+    internal (ResultSink Sink, int At, TestFailure Crash)? Reported { get; set; }
 }
 
 /// <summary>What every reading of one log shares.</summary>

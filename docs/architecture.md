@@ -10050,7 +10050,11 @@ a thrown error that errored the test, as its JSON reporter says of it - jest's, 
 is that test's failure, said once - the report's own words its message, its stack and place the
 failure's - and the runner says the test crashed only where no report said it already; a report the
 program recovered from and ran on is the report's own, its message naming the test it ran in, and the
-runner says that test as it ended, passed or failed. An error that ended its program has `crashed` it, on every runtime - .NET's
+runner says that test as it ended, passed or failed. A test its runner never saw end, its program
+having died in it, is one failure too: the last report said while it ran - whichever sanitizer, and
+whether or not it printed a line to halt with, as UBSan's and ThreadSanitizer's halting modes print
+none - becomes its crash in place of the report's own record (`ResultSink.Died`), and the runner says
+it crashed only where no report was said in it. An error that ended its program has `crashed` it, on every runtime - .NET's
 `Unhandled exception.`, the JVM's `Exception in thread`, Node's printed under the header of where it
 was thrown, Python's whose traceback runs through a module's top level where its program ended with a
 code not 0 or how it ended is not known - the phase's own exit, or the one the runner's line that a CI
@@ -10060,8 +10064,9 @@ the program ended 0, a handler at its top level logged the error and it ran on: 
 Go's panic, Rust's on `main` - and one a program caught and printed, the program going on, has
 `errored`, as a sanitizer's report has where the program ran on: crashed only where the line its
 sanitizer halts the program with closed it - AddressSanitizer's `==pid==ABORTING`, MemorySanitizer's
-`Exiting`, the last line of its report - errored where the program recovered and ran on, or where, as UBSan
-and ThreadSanitizer, the sanitizer prints no line to halt with. A frame whose runtime prints only its source file's name - the JVM's,
+`Exiting`, the last line of its report - or where it is the last said inside a test its program died in,
+errored where the program recovered and ran on, or where, as UBSan and ThreadSanitizer, the sanitizer
+prints no line to halt with and no test's end says the program died. A frame whose runtime prints only its source file's name - the JVM's,
 lldb's - names no file, only its line: a base name is no path, and is never read as the tree's.
 
 The parsers a phase's log is read by are chosen by what the phase runs (`Results\PhaseParsers.cs`,

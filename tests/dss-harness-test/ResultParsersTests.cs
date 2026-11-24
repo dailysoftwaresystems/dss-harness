@@ -1154,6 +1154,91 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// A test its program died in is one failure: a sanitizer that halts the program printing no line to halt with -
+    /// UBSan built not to recover, ThreadSanitizer told to halt on its first report - reads its report <c>errored</c>, and
+    /// where GoogleTest never says the test it ran in ended, run directly or under CTest, whose next test's line follows
+    /// it, that report becomes the test's crash: named for the test, the report's words its message, its place and log
+    /// range the report's - never the report's own record beside a bare crash of the test. The reports are g++ 13's UBSan
+    /// and clang 19's ThreadSanitizer, the run's directory written as a runner's; GoogleTest's and CTest's lines are their
+    /// consoles', as each prints them.
+    /// </summary>
+    [Fact]
+    public void ATestItsProgramDiedIn_IsOneFailure_TheReportSaidWhileItRanItsCrash()
+    {
+        const string Overflow = "signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'";
+        string[] gtest =
+        [
+            "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+            "[==========] Running 2 tests from 1 test suite.",
+            "[----------] Global test environment set-up.",
+            "[----------] 2 tests from StoreTest",
+            "[ RUN      ] StoreTest.KeepsItsBounds",
+            "[       OK ] StoreTest.KeepsItsBounds (0 ms)",
+            "[ RUN      ] StoreTest.Loads",
+        ];
+
+        var direct = Digested(
+            [.. gtest, $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}"],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null),
+            1)!;
+
+        var underCTest = Digested(
+            [
+                "Test project /home/runner/work/app/app/build",
+                "    Start 1: store_tests",
+                "1/2 Test #1: store_tests ......................***Failed    0.01 sec",
+                .. gtest,
+                $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}",
+                "    Start 2: parse_tests",
+                "2/2 Test #2: parse_tests ......................   Passed    0.00 sec",
+                string.Empty,
+                "50% tests passed, 1 tests failed out of 2",
+                string.Empty,
+                "Total Test time (real) =   0.03 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - store_tests (Failed)",
+                "Errors while running CTest",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "ctest", null),
+            8)!;
+
+        var threads = Digested(
+            [
+                .. gtest[..6],
+                "[ RUN      ] StoreTest.Shares",
+                "==================",
+                "WARNING: ThreadSanitizer: data race (pid=406)",
+                "  Write of size 4 at 0x5555569e6698 by main thread:",
+                "    #0 main /home/runner/work/app/app/race.c:8:9 (race+0xe64f6) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Previous write of size 4 at 0x5555569e6698 by thread T1:",
+                "    #0 work /home/runner/work/app/app/race.c:4:31 (race+0xe6484) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Location is global 'shared' of size 4 at 0x5555569e6698 (race+0x1492698)",
+                string.Empty,
+                "  Thread T1 (tid=408, finished) created by main thread at:",
+                "    #0 pthread_create <null> (race+0x62c75) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                "    #1 main /home/runner/work/app/app/race.c:7:3 (race+0xe64de) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "SUMMARY: ThreadSanitizer: data race /home/runner/work/app/app/race.c:8:9 in main",
+                "==================",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null),
+            66)!;
+
+        Assert.Equal(
+            [
+                [("gtest", "StoreTest.Loads", "crashed", (string?)$"UndefinedBehaviorSanitizer: {Overflow}", (8, 8))],
+                [("gtest", "StoreTest.Loads", "crashed", $"UndefinedBehaviorSanitizer: {Overflow}", (11, 11))],
+                [("gtest", "StoreTest.Shares", "crashed", "ThreadSanitizer: data race (pid=406)", (9, 22))],
+            ],
+            new[] { direct, underCTest, threads }.Select(digest => digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message, failure.Log!.Value)).ToList()));
+        Assert.Equal(("/home/runner/work/app/app/src/store.cc", 5), (direct.Failures[0].File!, direct.Failures[0].Line!.Value));
+        Assert.Equal((0, 0, 1), (direct.Failed, direct.Errored, direct.Crashed));
+    }
+
+    /// <summary>
     /// A GoogleTest binary's own output, run directly under AddressSanitizer (g++ 13, GoogleTest by CMake's
     /// FetchContent): its two stacks, its <c>SUMMARY:</c> and its <c>ABORTING</c>. The gtest-asan fixture holds the whole
     /// report, shadow bytes and legend included.

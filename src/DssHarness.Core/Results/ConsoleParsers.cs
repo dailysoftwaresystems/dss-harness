@@ -324,8 +324,10 @@ internal sealed class DotNetTestParser : IBuiltInParser
 /// ...</c>. The log is in the test from its <c>[ RUN ]</c> to its end (<see cref="ResultSink.Test"/>), so a crash a report
 /// says ended the program inside it - a sanitizer's, the C runtime's failed assertion - is its failure, and a report the
 /// program ran on from names it and leaves the test to its own end; a test that a <c>[ RUN ]</c> opened
-/// and nothing closed has crashed, and is said so where no such report said it already. The summary repeats the failed
-/// tests, and says one only where its own block did not.
+/// and nothing closed has crashed - its program died in it - and is one failure: the last report said while it ran,
+/// whichever sanitizer and whether or not it printed a line to halt with, becomes its crash in place of the report's own
+/// record, and where none was said, the test is said crashed. The summary repeats the failed tests, and says one only
+/// where its own block did not.
 /// </summary>
 internal sealed class GTestParser : IBuiltInParser
 {
@@ -449,12 +451,12 @@ internal sealed class GTestParser : IBuiltInParser
         }
 
         /// <summary>
-        /// Says the open test, ended as <paramref name="outcome"/> - one that crashed, no end of it said, only where no crash
-        /// a report said inside it was said as its failure already.
+        /// Says the open test, ended as <paramref name="outcome"/> - one that crashed, no end of it said, its program having
+        /// died in it, only where no report said inside it is its failure (<see cref="ResultSink.Died"/>).
         /// </summary>
         private void Close(ResultSink sink, string outcome, double? seconds)
         {
-            if (_id is { } id && !(outcome == "crashed" && _test?.Said == true))
+            if (_id is { } id && !(outcome == "crashed" && _test is { } test && sink.Died(test)))
             {
                 var (type, method, _) = ConsoleText.PartsOf(id);
                 var (expected, actual) = ConsoleText.ValuesOf(_message);
