@@ -471,21 +471,32 @@ public sealed class ResultDigestRecordTests
     /// A test a results file's case was said through - the first failure its own output printed, whose message and place
     /// the case took - is one the files named: the log's printing of that failure is no second failure, and gives the
     /// case its range in the log, so the lines the console printed of it are one read away. Two cases said through
-    /// failures that print alike are each given their own printing, in the order the files met them.
+    /// failures that print alike are each given the printing the log holds under their own test's output, whatever order
+    /// the log printed them in; where the log says no test's output either lies in, neither is given a range, for nothing
+    /// says whose each is - and neither is a second failure.
     /// </summary>
     [Fact]
     public void ATestACaseWasSaidThrough_IsOneTheFilesNamed_GivenItsPrintingsRangeInTheLog()
     {
-        var gathering = new ResultDigest.Gathering();
         var printed = new TestFailure("gtest", "StoreTest.Loads", Message: "Expected equality", File: "test/store_test.cc", Line: 12);
+        var log = new PhaseFindings([], [printed with { Log = (40, 46) }, printed with { Log = (60, 66) }]);
 
-        gathering.Add(new TestFailure("junit", "unit_tests", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
-        gathering.Add(new TestFailure("junit", "more_unit_tests", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
-        gathering.Beside(new PhaseFindings([], [printed with { Log = (40, 46) }, printed with { Log = (60, 66) }]), file => file);
+        IReadOnlyList<(string, (int, int)?)> Gathered(PhaseFindings beside)
+        {
+            var gathering = new ResultDigest.Gathering();
 
+            gathering.Add(new TestFailure("junit", "unit_tests", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
+            gathering.Add(new TestFailure("junit", "more_unit_tests", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
+            gathering.Beside(beside, file => file);
+
+            return [.. gathering.Digest().Failures.Select(failure => (failure.Id, failure.Log))];
+        }
+
+        // The log printed the second case's test first.
         Assert.Equal(
-            [("unit_tests", ((int, int)?)(40, 46)), ("more_unit_tests", (60, 66))],
-            gathering.Digest().Failures.Select(failure => (failure.Id, failure.Log)));
+            [("unit_tests", (60, 66)), ("more_unit_tests", ((int, int)?)(40, 46))],
+            Gathered(log with { Tests = [new PrintedTest("more_unit_tests", 39, 50), new PrintedTest("unit_tests", 59, 70)] }));
+        Assert.Equal([("unit_tests", null), ("more_unit_tests", ((int, int)?)null)], Gathered(log));
     }
 
     /// <summary>

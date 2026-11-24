@@ -328,8 +328,9 @@ public static class PhaseParsers
 
             var diagnostics = InLogOrder(_sinks.Select(sink => (IReadOnlyList<Diagnostic>)sink.Diagnostics), diagnostic => diagnostic.Log);
             var failures = InLogOrder(_sinks.Select(sink => (IReadOnlyList<TestFailure>)sink.Failures), failure => failure.Log);
+            var tests = InLogOrder(_sinks.Select(sink => (IReadOnlyList<PrintedTest>)sink.Tests), test => (test.From, test.Through));
 
-            return new PhaseFindings(diagnostics, failures);
+            return new PhaseFindings(diagnostics, failures) { Tests = tests };
         }
 
         /// <summary>
@@ -442,7 +443,20 @@ public static class PhaseParsers
 /// </summary>
 /// <param name="Diagnostics">The diagnostics, in the order of the lines they begin at, each with its log range as the file numbers its lines.</param>
 /// <param name="Failures">The test failures, in the order of the lines they begin at.</param>
-public sealed record PhaseFindings(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures);
+public sealed record PhaseFindings(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures)
+{
+    /// <summary>
+    /// The tests whose own output a runner printed in the log, each with the lines it printed it at
+    /// (<see cref="ResultSink.Printed"/>), in the order of the log: whose test a failure read from those lines is.
+    /// </summary>
+    public IReadOnlyList<PrintedTest> Tests { get; init; } = [];
+}
+
+/// <summary>A test's own output as its runner printed it in a log (<see cref="ResultSink.Printed"/>).</summary>
+/// <param name="Test">The test, as the runner names it.</param>
+/// <param name="From">The first line of its output, as the log's file numbers it.</param>
+/// <param name="Through">The last line of its output.</param>
+public sealed record PrintedTest(string Test, int From, int Through);
 
 /// <summary>
 /// One configured problem matcher as a parser reads: a line its pattern matches is a diagnostic - its severity a literal,

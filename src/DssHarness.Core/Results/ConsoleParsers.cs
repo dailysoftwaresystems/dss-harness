@@ -510,7 +510,8 @@ internal sealed class GTestParser : IBuiltInParser
 /// (SEGFAULT)</c>. A failed test is said by its own output where that output said why (a gtest's failures, a sanitizer's
 /// report, printed under it by <c>--output-on-failure</c>), and by its status line where nothing did - its log range
 /// running from the status line through that output, so the output is one read away; the failed list and
-/// <c>Errors while running CTest</c> say only what was said, and a test only they name is said from them.
+/// <c>Errors while running CTest</c> say only what was said, and a test only they name is said from them. The lines
+/// under a failed test's status line are said as that test's own output (<see cref="ResultSink.Printed"/>).
 /// </summary>
 internal sealed class CTestParser : IBuiltInParser
 {
@@ -626,6 +627,9 @@ internal sealed class CTestParser : IBuiltInParser
             // the output is one read away.
             foreach (var (name, outcome, status, seconds, at, through) in _failed)
             {
+                // Whose output the lines under its status line are, whatever order the tests ended in.
+                sink.Printed(name, at + 1, through);
+
                 if (!sink.SaidWithin(at + 1, through))
                 {
                     sink.Add(new TestFailure(

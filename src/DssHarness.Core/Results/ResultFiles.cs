@@ -107,7 +107,8 @@ public static class ResultFiles
     /// log's printing of it is no second failure. Where they find no failure, the case takes its place from the first
     /// error they find; where they find neither and the case says only how its test ended, its message is what its test
     /// printed, whole. Every other failure and every diagnostic they find is gathered as its own: what the test printed
-    /// is never set aside.
+    /// is never set aside. Each failure read there is the case's test's printing, so the log's printing of it under that
+    /// test's output is its own, whatever order the console printed the tests in.
     /// </summary>
     private static void JUnitFailures(JUnitCase @case, IReadOnlyList<IResultParser> parsers, ResultDigest.Gathering into)
     {
@@ -152,7 +153,7 @@ public static class ResultFiles
 
         foreach (var other in failures.Skip(1))
         {
-            into.Add(other);
+            into.AddPrintedBy(other, failure.Id);
         }
     }
 

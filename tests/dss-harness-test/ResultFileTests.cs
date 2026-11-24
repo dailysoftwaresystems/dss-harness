@@ -314,6 +314,88 @@ public sealed class ResultFileTests
     }
 
     /// <summary>
+    /// One gtest binary CTest runs twice - once for each backend - fails the same tests both times, and the console prints
+    /// the run that ended first first, in the other order than the JUnit file lists them: each failure the file's cases
+    /// read from their own output - the one each case was said through and every other - is given the range of its own
+    /// printing, the one the console printed under that test's status line, never the other backend's.
+    /// </summary>
+    [Fact]
+    public void OneGTestTestTwoCTestTestsRan_IsGivenTheRangeOfEachOnesOwnOutput_WhicheverEndedFirst()
+    {
+        using var temp = new TempDirectory();
+        var parsers = PhaseParsers.ForTests(new Core.Configuration.HarnessConfig(), "ctest", null);
+        string[] Output(string loads, string saves) =>
+        [
+            "Running main() from gtest_main.cc",
+            "[==========] Running 2 tests from 1 test suite.",
+            "[----------] 2 tests from StoreTest",
+            "[ RUN      ] StoreTest.Loads",
+            "test/store_test.cc:12: Failure",
+            loads,
+            "[  FAILED  ] StoreTest.Loads (1 ms)",
+            "[ RUN      ] StoreTest.Saves",
+            "test/store_test.cc:20: Failure",
+            saves,
+            "[  FAILED  ] StoreTest.Saves (1 ms)",
+            "[----------] 2 tests from StoreTest (2 ms total)",
+            string.Empty,
+            "[==========] 2 tests from 1 test suite ran. (2 ms total)",
+            "[  PASSED  ] 0 tests.",
+            "[  FAILED  ] 2 tests, listed below:",
+            "[  FAILED  ] StoreTest.Loads",
+            "[  FAILED  ] StoreTest.Saves",
+            string.Empty,
+            " 2 FAILED TESTS",
+        ];
+        var sqlite = Output("Expected 2 records, found 3", "Expected the record saved");
+        var pg = Output("connection refused", "connection reset");
+        var report = System.Text.Encoding.UTF8.GetBytes($"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="(empty)" tests="2" failures="2">
+              <testcase name="store_sqlite" classname="store_sqlite" time="0.03" status="fail"><failure message="Failed"/><system-out>{string.Join("&#10;", sqlite)}</system-out></testcase>
+              <testcase name="store_pg" classname="store_pg" time="0.02" status="fail"><failure message="Failed"/><system-out>{string.Join("&#10;", pg)}</system-out></testcase>
+            </testsuite>
+            """);
+
+        // Lines 1-4 CTest's, store_pg's output 5-24, store_sqlite's status line 25 and its output 26-45.
+        var console = string.Join(
+            "\n",
+            [
+                "Test project /home/runner/work/app/app/build",
+                "    Start 1: store_sqlite",
+                "    Start 2: store_pg",
+                "1/2 Test #2: store_pg .........................***Failed    0.02 sec",
+                .. pg,
+                "2/2 Test #1: store_sqlite .....................***Failed    0.03 sec",
+                .. sqlite,
+                string.Empty,
+                "0% tests passed, 2 tests failed out of 2",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - store_sqlite (Failed)",
+                "\t  2 - store_pg (Failed)",
+                "Errors while running CTest",
+                string.Empty,
+            ]);
+
+        var digest = PhaseDigest.Of(
+            Core.Execution.PhaseOutput.Of(console),
+            parsers,
+            new DigestTree(temp.Path, null, new HarnessFactory().FileSystem),
+            into => ResultFiles.Read(() => new MemoryStream(report, writable: false), into, parsers) is null)!;
+
+        Assert.Equal(
+            [
+                ("store_sqlite", "Expected 2 records, found 3", ((int, int)?)(29, 32)),
+                ("StoreTest.Saves", "Expected the record saved", (33, 36)),
+                ("store_pg", "connection refused", (8, 11)),
+                ("StoreTest.Saves", "connection reset", (12, 15)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message!, failure.Log)));
+        Assert.Equal(4, digest.Failed);
+    }
+
+    /// <summary>
     /// A case CTest wrote failed as CTest says it ended - a timeout timed out, a signal, a fault or an abort crashed, a
     /// failure failed - read from the words its console says them in; a case another runner wrote failed, whatever its
     /// assertion said. A case whose class is its own name, as CTest writes every one, is named once - a name holding a

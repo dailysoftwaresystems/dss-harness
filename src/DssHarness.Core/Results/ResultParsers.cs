@@ -79,6 +79,9 @@ public sealed class ResultSink
     /// <summary>The failures the reading said, in the order of the lines they begin at.</summary>
     internal List<TestFailure> Failures { get; } = [];
 
+    /// <summary>The tests whose own output the reading said its runner printed, in the order it said them (<see cref="Printed"/>).</summary>
+    internal List<PrintedTest> Tests { get; } = [];
+
     /// <summary>
     /// The build edge the log is in - the outputs a build tool said it was making where it printed what made them fail
     /// - or null where it is in none. A diagnostic said while it is set, naming no project of its own, names it.
@@ -237,6 +240,25 @@ public sealed class ResultSink
             Method = test.Method,
             Message = crash.Message is not { } said ? crash.Id : crash.Exception is { } thrown ? $"{thrown.Type}: {said}" : said,
         };
+
+    /// <summary>
+    /// Says that a runner of tests printed the own output of <paramref name="test"/>, by the name the runner gives it, at
+    /// the lines <paramref name="from"/> to <paramref name="through"/> - CTest's under the status line of a test that failed
+    /// - so a failure read from those lines is that test's, whatever order the runner printed its tests in
+    /// (<see cref="ResultDigest.Gathering.Beside"/>); nothing where the range holds no line.
+    /// </summary>
+    /// <param name="test">The test, as the runner names it.</param>
+    /// <param name="from">The first line of its output.</param>
+    /// <param name="through">The last line of its output.</param>
+    public void Printed(string test, int from, int through)
+    {
+        ArgumentNullException.ThrowIfNull(test);
+
+        if (from <= through)
+        {
+            Tests.Add(new PrintedTest(test, from, through));
+        }
+    }
 
     /// <summary>
     /// Whether any reading of the log said an error or a failure that begins at a line from <paramref name="from"/> to

@@ -10184,10 +10184,14 @@ and place from the first failure its test printed, or says all it printed where 
 beside them in the same digest all the same, each finding said once (`ResultDigest.Gathering.Beside`): a diagnostic the
 files lack, a crash, a host that died, a test that hung, every failure where the files name none, is added; a test both
 name is the file's, given what the log holds of it and the file lacks, its range in the log among it - and so is the
-console's printing of the first failure a case's test printed, matched as the same reader's failure of the same id that
-ended the same way, each printing to the next case said through it, never by an error's heading alone, so a process
-that died of the error a case's test threw is a crash the files lack, said beside it; and what the files could not give
-is said beside them. Every place is then read against the
+console's printing of a failure a case's test printed, the first, which the case was said through, and every other,
+matched as the same reader's failure of the same id that ended the same way and given to the failure the test read whose
+own output the console printed it under (`PhaseFindings.Tests`, which CTest's reader says of the lines under each failed
+test's status line, `ResultSink.Printed`), never by the order the files met them: one gtest test two CTest tests ran -
+one binary for each of two backends - keeps each its own range whichever ended first, and where the console says no
+test's output a printing lies in it is the one test's that printed it, none where several did. Never by an error's
+heading alone, so a process that died of the error a case's test threw is a crash the files lack, said beside it; and
+what the files could not give is said beside them. Every place is then read against the
 tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed - a diagnostic's file and its
 project's, each frame's, a failure's, each count's by file): a path - relative ones read from the directory the tool
 ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by
