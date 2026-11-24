@@ -194,9 +194,13 @@ legs` lists each generator's way.
 
 What a red leg's phase that did not pass printed is digested, typed: a build's log by the parsers its
 toolchain chose, a test's structured results where its invocation names any and its log by its
-runner's parsers where they gave nothing, with `results.matchers` everywhere. The text ledger says each
-red leg's first error in a block below its table; `--json` carries the whole digest as `digest` - every
-diagnostic and failure with its place, stack, causes and counts, each file inside the tree named
+runner's parsers where they gave nothing, a runner's failing step by every runtime's stack form, with
+`results.matchers` everywhere. The text ledger says each red leg's first error in a block below its
+table; `--json` carries the digest typed as `digest`, its bounds said - the first 50 diagnostics of
+each severity, the first 50 failures and the last 50 lines no parser held kept, the rest counted by
+code and by file over the whole output, each stack held to its first 48 and last 16 frames, each
+cause chain followed 8 deep, every cut counted - every diagnostic and failure with its place, stack,
+causes and counts, each file inside the tree named
 relative to it (a Go test's, which `go test` prints relative to its package, read from the package's
 directory below the `go.mod` that owns its import path; a Dart `package:` frame of the project's own
 package from the `lib` beside the `pubspec.yaml` that names it), each log range numbering the lines of

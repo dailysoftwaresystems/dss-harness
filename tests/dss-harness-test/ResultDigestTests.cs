@@ -279,6 +279,25 @@ public sealed class ResultDigestTests
     }
 
     /// <summary>
+    /// The README says what the ledger's <c>--json</c> keeps and counts of a red leg's digest - the bounds the code
+    /// applies, each cut counted - so a reader expects the bounded digest the ledger answers, not every diagnostic of a
+    /// build that printed hundreds.
+    /// </summary>
+    [Fact]
+    public void TheReadme_SaysWhatTheLedgersJsonKeeps_OfARedLegsDigest()
+    {
+        Assert.Contains(
+            "`--json` carries the digest typed as `digest`, its bounds said - the first "
+                + $"{ResultDigest.Bound.ToString(CultureInfo.InvariantCulture)} diagnostics of each severity, the first "
+                + $"{ResultDigest.Bound.ToString(CultureInfo.InvariantCulture)} failures and the last {ResultDigest.Bound.ToString(CultureInfo.InvariantCulture)} lines no parser held kept, the rest counted by "
+                + $"code and by file over the whole output, each stack held to its first {StackTrace.FirstKept.ToString(CultureInfo.InvariantCulture)} and last "
+                + $"{StackTrace.LastKept.ToString(CultureInfo.InvariantCulture)} frames, each cause chain followed "
+                + $"{ExceptionRecord.CauseBound.ToString(CultureInfo.InvariantCulture)} deep, every cut counted",
+            Prose.Words(Prose.Document("README.md")),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A digest's document reads back as the digest it was written from - every diagnostic, failure, frame, cause and
     /// count, each stack's and each cause chain's cut, the counts by code and by file and what the bounds left out, its
     /// first error the first of its errors - so another machine's ledger, which carries a leg's digest as that machine's
