@@ -44,12 +44,13 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the ledger and the red logs in the step's directory.</param>
+/// <param name="output">Says a write of the step's ledger the file system refused as its legs' run went.</param>
 /// <param name="children">Records in its directory the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
 /// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
-public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation, FlowGraphSyncs graph) : IFlowStepTypeRunner, IFlowHandoffRunner
+public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IHarnessOutput output, ChildSessions children, IAgentIsolation isolation, FlowGraphSyncs graph) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
-    private readonly FlowStepLegs _legs = new(fileSystem, children, isolation);
+    private readonly FlowStepLegs _legs = new(fileSystem, output, children, isolation);
 
     /// <summary>Reads the run's records - the agent a step works in, and the folds and commits its ledger attributes to an item.</summary>
     protected OrchestrationStore Store => store;
@@ -149,7 +150,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         // and each red leg's digest joined to the declarations of the run's graph of the tree, where it keeps one.
         var watch = new StepWatch(run.Events);
         var directory = layout.InstanceDirectory(run.Instance, run.WorksIn);
-        var request = new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, directory, directory, RedLogs: run.WorksIn is not null, $"'{run.Instance}'")
+        var request = new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, directory, directory, RedLogs: run.WorksIn is not null, $"'{run.Instance}'", Type)
         {
             WritesBeside = WritesBeside,
             Declarations = graphed is null ? null : (files, token) => graph.DeclarationsAsync(run, graphed, context, files, token),
@@ -591,12 +592,13 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="output">Says a write of the step's ledger the file system refused as its legs' run went.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="builds">Builds the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
 /// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
-public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IBuildLegs builds, IAgentIsolation isolation, FlowGraphSyncs graph)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
+public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IHarnessOutput output, ChildSessions children, IBuildLegs builds, IAgentIsolation isolation, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, output, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "build";
@@ -619,12 +621,13 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="output">Says a write of the step's ledger the file system refused as its legs' run went.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="tests">Tests the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
 /// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
-public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, ITestLegs tests, IAgentIsolation isolation, FlowGraphSyncs graph)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
+public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IHarnessOutput output, ChildSessions children, ITestLegs tests, IAgentIsolation isolation, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, output, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "test";
@@ -659,12 +662,13 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="output">Says a write of the step's ledger the file system refused as its legs' run went.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="runners">Runs the runner on the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
 /// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
-public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IRunnerLegs runners, IAgentIsolation isolation, FlowGraphSyncs graph)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
+public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IHarnessOutput output, ChildSessions children, IRunnerLegs runners, IAgentIsolation isolation, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, output, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "run";
@@ -706,13 +710,14 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in, and the run's ledger of its folds and commits.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="output">Says a write of the step's ledger the file system refused as its legs' run went.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="mutations">Sweeps the arms on the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
 /// <param name="worktrees">Makes and takes away the copy of the commit the sweep runs on.</param>
 /// <param name="graph">The engine's own reads of the run's codebase graph: the declarations at the places a red leg's digest names.</param>
-public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations, IAgentIsolation isolation, IWorktreeService worktrees, FlowGraphSyncs graph)
-    : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation, graph)
+public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IHarnessOutput output, ChildSessions children, IMutationLegs mutations, IAgentIsolation isolation, IWorktreeService worktrees, FlowGraphSyncs graph)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, output, children, isolation, graph)
 {
     /// <inheritdoc/>
     public override string Type => "check-mutations";

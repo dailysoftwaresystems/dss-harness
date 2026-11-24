@@ -467,7 +467,8 @@ public sealed class LegRunService(
         }
 
         // Every refusal of the whole run is asked above: once taken, the claim is followed at once by the try below that
-        // gives it up, so no run that ended here leaves it held for the next run to call abandoned.
+        // gives it up, so no run that ended here - whatever ended it, what the caller's watch was told among it - leaves it
+        // held for the next run to call abandoned.
         var claim = await _logOwnership.ClaimAsync(runDirectory, runId, request.ForceLock, cancellationToken).ConfigureAwait(false);
 
         if (!claim.Taken)
@@ -489,33 +490,36 @@ public sealed class LegRunService(
                 runDirectory);
         }
 
-        // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends,
-        // and so is the caller's watch - a step of an orchestrator run keeps it, so a crash while the legs work is closed
-        // where their records last moved.
-        _output.Publish(new RecordWritten("run directory", runDirectory));
-        request.Watch?.Began(runId, runDirectory);
-
-        // Before any leg reads its tree - the reading for the copies below among it: a leg in a copy reads the tree only
-        // until its copy is made, and one in the tree itself until it ends.
-        request.Watch?.Placed([.. placed.Select(leg => new LegPlace(leg.Name, leg.Synced))]);
-
-        // A stop another process asks of the run (stop-run) is looked for from here, where the run owns its directory, to
-        // where its legs end, and stops the run as an interrupt does: the run's own token is the one both cancel.
-        var stop = _stops.Watch(runDirectory, commandName, cancellationToken);
-        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Stopping);
-
-        // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
-        // another run holds is, and no end to the legs that do not.
-        var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
-
-        // The hosts' copies of the tree the legs' own copies are kept in, each synced once a run where it is not there yet.
-        var holders = new ConcurrentDictionary<string, Lazy<Task<string?>>>(LegPlan.TreeKeyComparer);
-
-        // Each tree as it was read for its copies, where any leg works in one.
+        // The watch for a stop asked of the run, and the run's own token that both it and an interrupt cancel, once the
+        // watch has begun; and each tree as it was read for its copies, where any leg works in one.
+        RunStopWatch? stop = null;
+        CancellationTokenSource? stopping = null;
         IReadOnlyDictionary<string, Task<SyncSource>>? sources = null;
 
         try
         {
+            // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends,
+            // and so is the caller's watch - a step of an orchestrator run keeps it, so a crash while the legs work is closed
+            // where their records last moved.
+            _output.Publish(new RecordWritten("run directory", runDirectory));
+            request.Watch?.Began(runId, runDirectory);
+
+            // Before any leg reads its tree - the reading for the copies below among it: a leg in a copy reads the tree only
+            // until its copy is made, and one in the tree itself until it ends.
+            request.Watch?.Placed([.. placed.Select(leg => new LegPlace(leg.Name, leg.Synced))]);
+
+            // A stop another process asks of the run (stop-run) is looked for from here, where the run owns its directory, to
+            // where its legs end, and stops the run as an interrupt does: the run's own token is the one both cancel.
+            stop = _stops.Watch(runDirectory, commandName, cancellationToken);
+            stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Stopping);
+
+            // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
+            // another run holds is, and no end to the legs that do not.
+            var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
+
+            // The hosts' copies of the tree the legs' own copies are kept in, each synced once a run where it is not there yet.
+            var holders = new ConcurrentDictionary<string, Lazy<Task<string?>>>(LegPlan.TreeKeyComparer);
+
             // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
             // machine - may have written no verdict, and nothing would ever claim that directory again: said here, once,
             // and let go. Inside this try, so that whatever happens in it, this run's own directory is still given up. A
@@ -597,10 +601,18 @@ public sealed class LegRunService(
             }
 
             // The watch ends, taking back a request it never took, before the directory is given up: a stop asked too late
-            // is never taken by a run that has ended, nor recorded taken among its records.
+            // is never taken by a run that has ended, nor recorded taken among its records. A run that ended before its
+            // watch began gives its directory up all the same.
             Task GiveUp() => _logOwnership.ReleaseAsync(runDirectory, runId, CancellationToken.None);
 
-            await stop.EndThenAsync(GiveUp).ConfigureAwait(false);
+            try
+            {
+                await (stop is null ? GiveUp() : stop.EndThenAsync(GiveUp)).ConfigureAwait(false);
+            }
+            finally
+            {
+                stopping?.Dispose();
+            }
         }
     }
 

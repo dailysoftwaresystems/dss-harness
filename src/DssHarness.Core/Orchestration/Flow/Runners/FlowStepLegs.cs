@@ -26,7 +26,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// the run directory in it, when the agent does.
 /// </param>
 /// <param name="Refused">What an isolation's refusal names: <c>'step'</c>, or the measure call and its step.</param>
-public sealed record FlowStepLegsRequest(HarnessConfig Config, string MainCheckout, string Tree, string StepDirectory, string Records, bool RedLogs, string Refused)
+/// <param name="Command">
+/// What a line the step says of its legs' work is said as: the step's type - a leg step's, or <c>reason</c> for a measure
+/// call its agent makes.
+/// </param>
+public sealed record FlowStepLegsRequest(HarnessConfig Config, string MainCheckout, string Tree, string StepDirectory, string Records, bool RedLogs, string Refused, string Command)
 {
     /// <summary>
     /// What a leg's work writes inside the tool's state beside its tree and its records, by the tree the leg works in -
@@ -61,12 +65,15 @@ public sealed record FlowStepLegsRan(LegRunResult? Result, string? Refusal, Json
 /// the ledger, as <c>--json</c> gives it, kept where the step keeps the run's records - written as the legs' run begins,
 /// naming the run and its directory of records, again as each leg ends with the lines so far, and whole as it ends, so a
 /// crash while the legs work leaves the step where their run stands (<see cref="LegStepRunner.CutAccountOf"/>) - with each
-/// red leg's failing log where the step works in an agent's worktree.
+/// red leg's failing log where the step works in an agent's worktree. Each write as the run goes is a record of its
+/// progress, never a reason to lose it: one the file system refuses is said once and the legs work on; the write at the
+/// run's end is the one that must succeed.
 /// </summary>
 /// <param name="fileSystem">Keeps the ledger and the red logs.</param>
+/// <param name="output">Says a write of the ledger the file system refused as the legs' run went.</param>
 /// <param name="children">Records in the step's directory the group of what its legs start bound, while anything is in it.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
-public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation)
+public sealed class FlowStepLegs(IFileSystem fileSystem, IHarnessOutput output, ChildSessions children, IAgentIsolation isolation)
 {
     /// <summary>
     /// Runs a step's legs by <paramref name="legs"/>, handed the isolation each leg this machine runs is held inside and the
@@ -100,7 +107,7 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
         // left is ended by the next command over the run, a resume's first among them.
         using (ProcessScope.Enter(new ProcessScope(() => children.For(request.StepDirectory))))
         {
-            var kept = new LedgerKept(fileSystem, request.Records, request.Config.Defaults.DurationWarningFactor, watch);
+            var kept = new LedgerKept(fileSystem, output, request, watch);
 
             result = await legs(new StepLegIsolation(isolation, request.Config, request.MainCheckout, request.Tree, request.WritesBeside), kept).ConfigureAwait(false);
         }
@@ -241,15 +248,16 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
     /// told goes on to the step's own watch, as it was told.
     /// </summary>
     /// <param name="fileSystem">Writes the ledger.</param>
-    /// <param name="records">Where the step keeps the ledger.</param>
-    /// <param name="factor">The configuration's <c>durationWarningFactor</c>, which the ledger's lines are marked by.</param>
+    /// <param name="output">Says, once, that the file system refused a write of the ledger.</param>
+    /// <param name="request">Where the step keeps the ledger, the <c>durationWarningFactor</c> its lines are marked by, and what the step's lines are said as.</param>
     /// <param name="watch">The step's own watch, told all this is told; none where nothing else is.</param>
-    private sealed class LedgerKept(IFileSystem fileSystem, string records, double factor, ILegRunWatch? watch) : ILegRunWatch
+    private sealed class LedgerKept(IFileSystem fileSystem, IHarnessOutput output, FlowStepLegsRequest request, ILegRunWatch? watch) : ILegRunWatch
     {
         private readonly Lock _gate = new();
         private readonly List<LegEntry> _ended = [];
         private RunId? _run;
         private string? _runDirectory;
+        private bool _refusalSaid;
 
         /// <inheritdoc/>
         public void Began(RunId run, string runDirectory)
@@ -286,15 +294,37 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, ChildSessions children,
         /// <inheritdoc/>
         public void Admitting(string leg, string asking, AdmissionTold told) => watch?.Admitting(leg, asking, told);
 
-        /// <summary>The ledger as it stands, written whole and at once over what was there: one writer at a time, under the gate.</summary>
+        /// <summary>
+        /// The ledger as it stands, written whole and at once over what was there: one writer at a time, under the gate. A
+        /// write the file system refuses - the disk full, access to the step's directory refused - is a record of the run's
+        /// progress that was not kept, never a reason to lose the run, whose end writes the ledger whole: said once, however
+        /// many writes meet it, and the legs work on. Another program's hold on the file is no refusal: the write waits it
+        /// out (<see cref="IFileSystem.WriteAtomic"/>).
+        /// </summary>
         private void Write()
         {
-            fileSystem.CreateDirectory(records);
-            fileSystem.WriteAllTextAtomic(
-                Path.Combine(records, OrchestratorLayout.StepLedgerFileName),
-                LedgerReport.From([.. _ended], factor)
-                    .ToJson(HarnessExit.Incomplete, $"its legs were still running: {ReportText.Counted(_ended.Count, "leg")} had ended", _runDirectory, run: _run)
-                + "\n");
+            var ledger = Path.Combine(request.Records, OrchestratorLayout.StepLedgerFileName);
+
+            try
+            {
+                fileSystem.CreateDirectory(request.Records);
+                fileSystem.WriteAllTextAtomic(
+                    ledger,
+                    LedgerReport.From([.. _ended], request.Config.Defaults.DurationWarningFactor)
+                        .ToJson(HarnessExit.Incomplete, $"its legs were still running: {ReportText.Counted(_ended.Count, "leg")} had ended", _runDirectory, run: _run)
+                    + "\n");
+            }
+            catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
+            {
+                if (!_refusalSaid)
+                {
+                    _refusalSaid = true;
+                    output.Warn(
+                        request.Command,
+                        $"the ledger '{ledger}' was not written as the legs' run went: {refused.Message.TrimEnd('.')}. The legs work on; a crash "
+                        + "before their run ends finds it as it last stood, and their run's end writes it whole.");
+                }
+            }
         }
     }
 

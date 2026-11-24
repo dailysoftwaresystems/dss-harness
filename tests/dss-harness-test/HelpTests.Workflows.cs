@@ -676,7 +676,9 @@ public sealed partial class HelpTests
                 + "leg it placed left with no line ends the step with the run's own code; one its legs ended - none could run, another "
                 + "run owns its records - is read by their verdicts. The step keeps the ledger in its directory "
                 + $"({OrchestratorLayout.StepLedgerFileName}) - written as its legs' run begins, naming the run and its records, and "
-                + "again as each leg ends, so a crash while they work is read where their work stopped - and, in an agent's worktree, "
+                + "again as each leg ends, so a crash while they work is read where their work stopped (a write of it the file system "
+                + "refuses while they work is said once, and they work on: the write as their run ends is the one that must succeed) - "
+                + "and, in an agent's worktree, "
                 + "the log of each red leg's phase that did not pass, whole, as it is on this machine "
                 + $"({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, the phase named as its log is), "
                 + "each attempt's own.",

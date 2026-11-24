@@ -2331,7 +2331,8 @@ else the run's own, a leg's a host ran brought back by its run as the leg ended 
 brought back), and for `build`, `test` and `run` the units its build
 failed as `failedUnits` (null where its own tool failed no build of it), a sweep's arm with its arm - a leg in a copy letting the
 tree go once its copy is made, and keep the ledger - written as the legs' run begins and as each leg ends, so a crash
-while they work is read where their work stopped - and in an agent's worktree each red leg's failing log, in the step's
+while they work is read where their work stopped (a write of it the file system refuses while they work is said once, and
+they work on: the write as their run ends is the one that must succeed) - and in an agent's worktree each red leg's failing log, in the step's
 directory, the work of each leg this machine runs held inside the isolation of the agents' work and answered as
 `isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `class-closure`, which judges
 an item's closing record before its fold with no model, as the class-closure paragraph above says; `route-findings`, which

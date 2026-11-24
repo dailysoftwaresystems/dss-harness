@@ -36,7 +36,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">The file system the step's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="gh">Runs <c>gh</c>, for a web-search source the machine's login reads.</param>
-/// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
+/// <param name="harnessOutput">Writes output the copies of a continuation record name, and says a write of a measure call's ledger the file system refused as its legs' run went.</param>
 /// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
@@ -486,8 +486,8 @@ public sealed class ReasonStepRunner(
 
         try
         {
-            ran = await new FlowStepLegs(fileSystem, children, isolation).RunAsync(
-                new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, stepDirectory, call.Records, RedLogs: workspace.Worktree is not null, $"the measure call '{call.Id}' of '{instance}'"),
+            ran = await new FlowStepLegs(fileSystem, harnessOutput, children, isolation).RunAsync(
+                new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, stepDirectory, call.Records, RedLogs: workspace.Worktree is not null, $"the measure call '{call.Id}' of '{instance}'", Type),
                 watch: null,
                 (legIsolation, kept) => tests.RunAsync(
                     new TestLegsRequest

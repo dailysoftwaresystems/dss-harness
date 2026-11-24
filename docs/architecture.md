@@ -3889,7 +3889,10 @@ where its stream did, and a stream that does not read whole, or cannot be priced
 reason. A machine step keeps no stream: its cut attempt is completed from the ledger its legs' run keeps in its step
 directory as it goes (`FlowStepLegs`: written as the run claims its directory of records, naming the run and that
 directory, again as each leg ends with every line so far, and whole at the run's end - `ILegRunWatch.Began` and
-`ILegRunWatch.Ended`, which carries the leg's line), read by the ledger's own reader (`LegStepRunner.CutAccountOf`, read
+`ILegRunWatch.Ended`, which carries the leg's line; each write as the legs work is a record of their progress, never a
+reason to lose their run, so one the file system refuses - a full disk, access refused, where another program's hold on
+the file is waited out by the atomic write itself - is said once, as a warning, and the legs work on, the write at
+the run's end being the one that must succeed), read by the ledger's own reader (`LegStepRunner.CutAccountOf`, read
 through the same account every cut step is completed by) - each line a leg of the attempt that ended, as its measure keeps
 it (`FlowStepLeg.Of`, the live ending's own reading, its phases with their times and its digest's counts among it), and
 the attempt closed where its legs' work stopped: the latest the ledger and any record of the run it names were written,
@@ -8160,6 +8163,9 @@ reads the folded tree.
 - A lock, or a log path, that cannot be given up once its work is done is a warning naming it,
   and the work's verdict stands. The entry names a process that has ended, and is reclaimed as
   a dead holder's is.
+- A run gives its log path up however it ends: the claim is followed at once by what gives it up
+  (`LegRunService`), so a failure in anything the run does once it holds the path - what its
+  caller's watch is told as it begins among it - leaves no claim for the next run to call abandoned.
 - A run killed, or stopped with its machine, before it finished writes no verdict and gives up
   nothing, and nothing would ever claim its log path again, every run having its own. So a run,
   once it owns its own path, releases every path beside it that a run on this machine holds

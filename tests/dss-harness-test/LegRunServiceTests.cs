@@ -13,6 +13,8 @@ using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
@@ -1927,6 +1929,150 @@ public sealed class LegRunServiceTests
                 temp, harness, OneLeg(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy }, logs: logs));
 
         Assert.Empty(Directory.GetFiles(runs, "*" + LogOwnership.OwnerSuffix));
+    }
+
+    /// <summary>
+    /// The claim on a run's directory is followed at once by what gives it up: a failure in what the caller's watch is told
+    /// as the run begins - that it claimed its directory, or where its legs are placed - leaves no claim behind for the
+    /// next run to call abandoned.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARun_GivesUpItsDirectory_ThoughItsWatchFailedAsItBegan(bool asItClaimed)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var runs = temp.Combine(".harness-config", "runs");
+
+        var failed = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => OutcomeAsync(
+                temp,
+                harness,
+                OneLeg(harness),
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy, Watch = new FailingAsItBegins(asItClaimed) }));
+
+        Assert.Equal(FailingAsItBegins.Why, failed.Message);
+        Assert.Empty(Directory.GetFiles(runs, "*" + LogOwnership.OwnerSuffix));
+    }
+
+    /// <summary>A watch that fails as the run tells it that it claimed its directory, or else as it places its legs.</summary>
+    private sealed class FailingAsItBegins(bool asItClaimed) : ILegRunWatch
+    {
+        /// <summary>Why it fails, as its failure says.</summary>
+        public const string Why = "a watch that failed as the run began";
+
+        public void Began(RunId run, string runDirectory)
+        {
+            if (asItClaimed)
+            {
+                throw new InvalidOperationException(Why);
+            }
+        }
+
+        public void Placed(IReadOnlyList<LegPlace> legs) => throw new InvalidOperationException(Why);
+
+        public void CopyMade(string leg)
+        {
+        }
+
+        public void Ended(LegEntry line)
+        {
+        }
+
+        public void Admitting(string leg, string asking, AdmissionTold told)
+        {
+        }
+    }
+
+    /// <summary>
+    /// A step's ledger written as its legs' run goes is a record of the run's progress, never a reason to lose the run:
+    /// where the file system refuses each of those writes - as the run claims its directory and as each leg ends - the
+    /// legs work on, every leg's verdict is kept, the claim on the run's directory is given up, the refusal is said once on
+    /// the run's output however many writes met it, and the run's end writes the ledger whole.
+    /// </summary>
+    [Fact]
+    public async Task AStepsLedgerRefusedAsItsLegsRun_LosesNothingOfTheRun_AndIsSaidOnce()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration(), ["release"] = new BuildConfiguration() },
+            Legs =
+            {
+                ["native"] = HostDoubles.Leg(harness.Platform.PlatformKey, harness.Platform.Processor),
+                ["other"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "release" },
+            },
+        };
+        var step = temp.Combine("step");
+        var ledger = Path.Combine(step, OrchestratorLayout.StepLedgerFileName);
+        var refusing = new LedgerRefusedAsTheRunGoes(harness.FileSystem, ledger);
+
+        var ran = await new FlowStepLegs(refusing, harness.Output, harness.ChildSessions, new TestIsolation()).RunAsync(
+            new FlowStepLegsRequest(config, temp.Path, temp.Path, step, step, RedLogs: false, "'checks'", "test"),
+            watch: null,
+            async (_, kept) =>
+            {
+                LegRunResult? reached = null;
+
+                await OutcomeAsync(
+                    temp,
+                    harness,
+                    config,
+                    SshAndLocal(harness),
+                    new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy, Watch = kept },
+                    work: leg => new LegEntry { Leg = leg.Leg.Name, Verdict = leg.Leg.Name == "other" ? LegVerdict.Failed : LegVerdict.Passed },
+                    reached: result => reached = result);
+
+                return reached!;
+            },
+            TestContext.Current.CancellationToken);
+
+        var result = ran.Result!;
+
+        Assert.Equal(
+            [("native", LegVerdict.Passed), ("other", LegVerdict.Failed)],
+            result.Report.Lines.Select(line => (line.Leg, line.Verdict)).OrderBy(line => line.Leg, StringComparer.Ordinal));
+
+        // Every write as the run went was made, and refused: as the run claimed its directory, and as each leg ended.
+        Assert.Equal(3, refusing.Refused);
+
+        var whole = LedgerDocument.Read(File.ReadAllText(ledger))!;
+
+        Assert.Equal(["native", "other"], whole.Legs!.Select(leg => leg.Leg).Order(StringComparer.Ordinal));
+        Assert.Equal("failed", whole.Verdict);
+        Assert.False(File.Exists(LogOwnership.OwnerFile(result.RunDirectory!)), "the run's claim was left behind it");
+        Assert.Equal(
+            [$"test: WARN - the ledger '{ledger}' was not written as the legs' run went: {LedgerRefusedAsTheRunGoes.Why.TrimEnd('.')}. The legs work on; a crash before their run ends finds it as it last stood, and their run's end writes it whole."],
+            harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Contains("was not written as the legs' run went", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// The file system, save that it refuses, as a full disk refuses it, each write of <paramref name="ledger"/> made as the
+    /// legs' run goes - the ledger saying its legs were still running - counting them; the write at the run's end passes.
+    /// </summary>
+    private sealed class LedgerRefusedAsTheRunGoes(IFileSystem inner, string ledger) : PassThroughFileSystem(inner)
+    {
+        /// <summary>Why a write is refused, as the refusal says.</summary>
+        public const string Why = "There is not enough space on the disk.";
+
+        /// <summary>How many writes were refused.</summary>
+        public int Refused { get; private set; }
+
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            var (text, again) = WrittenText(write);
+
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(ledger), StringComparison.Ordinal) && text.Contains("its legs were still running", StringComparison.Ordinal))
+            {
+                Refused++;
+                throw new IOException(Why);
+            }
+
+            base.WriteAtomic(path, again);
+        }
     }
 
     /// <summary>
@@ -6108,8 +6254,9 @@ public sealed class LegRunServiceTests
 
     /// <summary>
     /// Runs the command over <paramref name="config"/>, a leg on this machine passing unless
-    /// <paramref name="work"/> says otherwise, and returns how it ended. The tree is the repository's
-    /// root unless <paramref name="tree"/> names a worktree of it, and the run is <paramref name="runId"/> where one is given.
+    /// <paramref name="work"/> says otherwise, and returns how it ended - handing <paramref name="reached"/>, where one is
+    /// given, what the run reached as a use case answers it. The tree is the repository's root unless
+    /// <paramref name="tree"/> names a worktree of it, and the run is <paramref name="runId"/> where one is given.
     /// </summary>
     private static async Task<CommandOutcome> OutcomeAsync(
         TempDirectory temp,
@@ -6140,7 +6287,8 @@ public sealed class LegRunServiceTests
         IProcessRunner? versionProbes = null,
         IHarnessOutput? output = null,
         RunStops? stops = null,
-        MachineSettingsFile? machineSettings = null)
+        MachineSettingsFile? machineSettings = null,
+        Action<LegRunResult>? reached = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
@@ -6177,7 +6325,8 @@ public sealed class LegRunServiceTests
             origin,
             setUps);
 
-        return await service.RunAsync(
+        // What the run reached, as a use case answers it, and the outcome the command makes of it.
+        var result = await service.ExecuteAsync(
             "test",
             run,
             request,
@@ -6188,6 +6337,10 @@ public sealed class LegRunServiceTests
                     ?? Task.FromResult(work?.Invoke(leg) ?? new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed });
             },
             cancellationToken ?? TestContext.Current.CancellationToken);
+
+        reached?.Invoke(result);
+
+        return result.ToOutcome(request.Json, (output ?? harness.Output).Shown);
     }
 
     /// <summary>A front end's sink of events, keeping each as it is given.</summary>
