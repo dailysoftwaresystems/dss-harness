@@ -131,7 +131,7 @@ public sealed record FlowAnalysis(
 /// <param name="Severity">How much it matters: the review's levels - critical, high, medium, low.</param>
 /// <param name="Where">The steps it names, by the ids of the report's step rows.</param>
 /// <param name="Evidence">The report's own numbers it rests on, each cited by its section, row and member.</param>
-/// <param name="Impact">The time and dollars it cost, every number of it one of its citations' - written bare as the citation holds it, or joined to its unit and converted exactly into the unit the cited member is in (<see cref="FlowAnalysisEvidence"/>).</param>
+/// <param name="Impact">The time and dollars it cost, every number of it one of its citations' - written bare as the citation holds it, or joined to its unit and converted exactly into the unit the cited member is in, numbers joined to units of one kind as their sum (<see cref="FlowAnalysisEvidence"/>).</param>
 /// <param name="Cause">What the records show of why.</param>
 /// <param name="Recommendation">The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key.</param>
 public sealed record FlowPainPoint(
@@ -168,12 +168,16 @@ public sealed record FlowNoted(string What, string Why);
 /// word for word. Each step a pain point names is a row of the report's steps, and every number its impact says is one
 /// of its own citations' values, read in the unit the report holds it in (<see cref="FlowRunReport.Units"/>): a number
 /// written bare is held where a citation's value is that number as written; a number joined to its unit (<c>3600s</c>,
-/// <c>1.5h</c>, <c>12k tokens</c>, <c>$0.02</c>, <c>28%</c>) where a citation of a member of that unit's kind holds it,
-/// converted exactly into the member's unit - 1.5h is a budget's 90 minutes, and 60 hours is no wait's 60 seconds - and
-/// one of a kind no member of the report is (<c>2x</c>, a size, another currency) never; and a word that starts as a
-/// number and reads as no one number (a date, a range, <c>1h30m</c>) is refused as such. A number is read whatever
-/// wraps it - Markdown, a comparison, a currency's sign - for every character at a word's ends that is neither a letter
-/// nor a digit is read off it first, a sign directly before a digit kept. An analysis cannot invent a measurement.
+/// <c>1.5h</c>, <c>12k tokens</c>, <c>$0.02</c>, <c>US$0.02</c>, <c>28%</c>) where a citation of a member of that unit's
+/// kind holds it, converted exactly into the member's unit - 1.5h is a budget's 90 minutes, and 60 hours is no wait's 60
+/// seconds - and one of a kind no member of the report is (<c>2x</c>, a size, another currency, by its sign, its ISO
+/// 4217 code or its name: <c>€0.02</c>, <c>R$0.02</c>, <c>0.02 EUR</c>, <c>0.02 euros</c>) never; numbers joined to
+/// units of one kind from the largest to the smallest (<c>1h 30m</c>, <c>1h30m</c>, <c>2 min 5 s</c>) are one value, held
+/// as their sum; and a word that starts as a number and reads as no one number (a date, a range) is refused as such. A
+/// number is read whatever wraps it or joins it to a word - Markdown, a comparison, an arrow, a dash, <c>=</c>, a slash,
+/// a currency's sign (<c>queue—3600s—before</c>, <c>wait=3600s</c>, <c>US$0.40</c>) - for a word ends at every
+/// character no id holds, and every character at a word's ends that is neither a letter nor a digit is read off it, a
+/// sign or a point directly before a digit kept. An analysis cannot invent a measurement.
 /// </summary>
 public static class FlowAnalysisEvidence
 {
@@ -337,89 +341,238 @@ public static class FlowAnalysisEvidence
         };
 
     /// <summary>
-    /// Each number <paramref name="text"/> says: every word that starts as one once what wraps it is read off (<see cref="Word"/>)
-    /// - a sign, then a digit - read for its numeric head (digits, thousands grouped, one fraction, an exponent) and its
-    /// unit: a sign against it (<c>$0.02</c>, <c>28%</c>), a word joined to it, glued (<c>3600s</c>, <c>2x</c>) or after
-    /// one hyphen (<c>40-minute</c>), a scale joined to it multiplying it (<c>12k</c>); a number with no unit of its own
-    /// takes the words after it that name one - a scale, then a unit (<c>30 s</c>, <c>1 hour</c>, <c>1.2 million
-    /// tokens</c>), or a sign alone (<c>28 %</c>). A word the check does not know as a unit leaves the number bare, and a
-    /// number with no unit is in <paramref name="bare"/>. A word that starts as a number and holds more than one number
-    /// and its unit - a date, a time of day, a range, <c>1h30m</c>, a currency's amount in minutes - reads as no one
-    /// number. A digit inside an id is never read: an id starts with a letter.
+    /// Each number <paramref name="text"/> says. The text is read as words (<see cref="WordsOf"/>): a word ends at every
+    /// character no id holds - space, a dash but the hyphen inside an id, <c>=</c>, a comparison, an arrow, a slash, a
+    /// sentence's brackets, Markdown's marks, quotes - so <c>queue—3600s—before</c> and <c>wait=3600s</c> each say a
+    /// number of their own, and a currency's sign inside a word starts one (<c>cost:$0.40</c>, <c>US$0.40</c>). Every word
+    /// that starts as a number once what wraps it is read off (<see cref="Word"/>) - a sign or a point directly before a
+    /// digit, or a digit - is read for its numeric head (digits, thousands grouped in threes, one fraction, an exponent)
+    /// and its unit: a sign against it (<c>$0.02</c>, <c>US$0.40</c>, <c>R$0.40</c>, <c>28%</c>), a word joined to it,
+    /// glued (<c>3600s</c>, <c>2x</c>) or after one hyphen (<c>40-minute</c>), a scale joined to it multiplying it
+    /// (<c>12k</c>); a number with no unit of its own takes the words after it that name one - a scale, then a unit
+    /// (<c>30 s</c>, <c>1 hour</c>, <c>1.2 million tokens</c>, <c>0.02 EUR</c>, <c>0.02 euros</c>), or a sign alone
+    /// (<c>28 %</c>) - else a currency's code or sign written just before it (<c>EUR 0.02</c>, <c>R$ 0.40</c>). A word the
+    /// check does not know as a unit leaves the number bare, and a number with no unit is in <paramref name="bare"/>.
+    /// Numbers each joined to a unit of one kind, from the largest unit to the smallest, glued (<c>1h30m</c>) or with
+    /// nothing but space between them (<c>1h 30m</c>, <c>2 min 5 s</c>), are one value, their sum. A word that starts as a
+    /// number and holds more than one number and its unit otherwise - a date, a time of day, a range, a currency's amount
+    /// in minutes - reads as no one number. A digit inside an id is never read: an id starts with a letter, and the
+    /// characters it is made of (<c>. - _ @ # [ ] : +</c>) stay in its word.
     /// </summary>
     /// <param name="text">The text.</param>
     /// <param name="bare">The unit of a number written with none of its own: a cited member's; null in an impact, whose bare number is held as written.</param>
     private static IEnumerable<SaidNumber> NumbersIn(string text, FlowUnit? bare)
     {
-        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Select(Word.Of).ToList();
+        var words = WordsOf(text);
+        var read = new List<Reading>();
 
         for (var at = 0; at < words.Count; at++)
         {
-            var word = words[at];
-            var head = HeadOf(word.Core);
+            var head = HeadOf(words[at].Core, 0, words[at].Core.Length);
 
             if (head == 0)
             {
                 continue;
             }
 
-            var glued = word.Core[head..];
+            var number = ReadingOf(words, at, head, read.Count > 0 ? read[^1].Last : -1, bare);
 
-            if (glued.Length > 1 && glued[0] == '-' && glued.Skip(1).All(char.IsLetter))
+            if (read.Count > 0 && read[^1].Continued(number, words) is { } whole)
             {
-                glued = glued[1..];
+                read[^1] = whole;
+            }
+            else
+            {
+                read.Add(number);
             }
 
-            if (!glued.All(char.IsLetter))
+            at = number.Last;
+        }
+
+        return read.Select(one => one.Number);
+    }
+
+    /// <summary>
+    /// The number the word at <paramref name="at"/> starts, whose numeric head is <paramref name="head"/> characters
+    /// long, read with its unit (<see cref="NumbersIn"/>); a currency's word before it taken only where no number before it
+    /// took that word, the words up to <paramref name="taken"/> being theirs.
+    /// </summary>
+    private static Reading ReadingOf(IReadOnlyList<Word> words, int at, int head, int taken, FlowUnit? bare)
+    {
+        var word = words[at];
+        var signed = word.Core[0] is '-' or '+' or Minus;
+        var negative = word.Core[0] is '-' or Minus;
+        var glued = word.Core[head..];
+
+        if (glued.Length > 1 && glued[0] == '-' && glued.Skip(1).All(char.IsLetter))
+        {
+            glued = glued[1..];
+        }
+
+        if (!glued.All(char.IsLetter))
+        {
+            return SumOf(word, at, head, negative) ?? new Reading(new SaidNumber(word.Said, Reads: false, null, null), at, at, null, 0m, null, signed, negative, Led: false);
+        }
+
+        var scale = glued.Length > 0 ? FlowUnit.ScaleOf(glued) : null;
+        var units = new List<FlowUnit>(word.Signs);
+        var said = word.Said;
+        var first = at;
+        var last = at;
+
+        if (glued.Length > 0 && scale is null && FlowUnit.Named(glued) is { } joined)
+        {
+            units.Add(joined);
+        }
+
+        // A number joined to no word, or to its scale alone, takes the words after it that scale it and name its unit,
+        // else the currency a word just before it names - each written beside it, nothing but space between them; a
+        // number joined to any other word is that word's.
+        if (glued.Length == 0 || scale is not null)
+        {
+            var next = at + 1;
+
+            if (scale is null && next < words.Count && words[next].Joined && FlowUnit.ScaleOf(words[next].Core) is { } spoken)
             {
-                yield return new SaidNumber(word.Said, Reads: false, null, null);
-                continue;
+                scale = spoken;
+                said = $"{said} {words[next].Core}";
+                last = next++;
             }
 
-            var scale = glued.Length > 0 ? FlowUnit.ScaleOf(glued) : null;
-            var units = new List<FlowUnit>(word.Signs);
-            var said = word.Said;
-
-            if (glued.Length > 0 && scale is null && FlowUnit.Named(glued) is { } joined)
+            if (units.Count == 0 && next < words.Count && words[next].Joined && words[next].Unit is { } after)
             {
-                units.Add(joined);
+                units.Add(after);
+                said = $"{said} {words[next].Said}";
+                last = next;
             }
 
-            // A number joined to no word, or to its scale alone, takes the words after it that scale it and name its unit;
-            // a number joined to any other word is that word's.
-            if (glued.Length == 0 || scale is not null)
+            if (units.Count == 0 && at - 1 > taken && word.Joined && words[at - 1].Currency is { } before)
             {
-                var next = at + 1;
+                units.Add(before);
+                said = $"{words[at - 1].Said} {said}";
+                first = at - 1;
+            }
+        }
 
-                if (scale is null && next < words.Count && FlowUnit.ScaleOf(words[next].Core) is { } spoken)
-                {
-                    scale = spoken;
-                    said = $"{said} {words[next].Core}";
-                    next++;
-                }
+        if (units.Distinct().Count() > 1)
+        {
+            return new Reading(new SaidNumber(said, Reads: false, null, null), first, last, null, 0m, null, signed, negative, Led: first < at);
+        }
 
-                if (units.Count == 0 && next < words.Count && words[next].Unit is { } after)
-                {
-                    units.Add(after);
-                    said = $"{said} {words[next].Said}";
-                }
+        // Past what a decimal holds, so no citation can hold it: said as a number none of them holds.
+        var value = ValueOf(word.Core[..head], scale);
+        var unit = units.Count > 0 ? units[0] : null;
+
+        return new Reading(
+            new SaidNumber(said, Reads: true, value, unit ?? bare),
+            first,
+            last,
+            unit?.Kind,
+            unit?.Base ?? 0m,
+            unit is null ? null : InBase(value, unit),
+            signed,
+            negative,
+            Led: first < at);
+    }
+
+    /// <summary>
+    /// The one value the word at <paramref name="at"/> says where it glues numbers each to a unit of one kind, from the
+    /// largest unit to the smallest, with no sign around them (<c>1h30m</c>, <c>2m5s</c>) - their sum, in the base of
+    /// their kind, a minus before the first the whole's; null where it says anything else.
+    /// </summary>
+    private static Reading? SumOf(Word word, int at, int head, bool negative)
+    {
+        if (word.Signs.Count > 0)
+        {
+            return null;
+        }
+
+        var core = word.Core;
+        var number = core[..head];
+        var position = head;
+        FlowUnit? previous = null;
+        decimal? whole = 0m;
+
+        while (true)
+        {
+            var letters = position;
+
+            while (position < core.Length && char.IsLetter(core[position]))
+            {
+                position++;
             }
 
-            if (units.Distinct().Count() > 1)
+            if (position == letters
+                || FlowUnit.Named(core[letters..position]) is not { } unit
+                || (previous is not null && (!string.Equals(unit.Kind, previous.Kind, StringComparison.Ordinal) || unit.Base >= previous.Base)))
             {
-                yield return new SaidNumber(said, Reads: false, null, null);
-                continue;
+                return null;
             }
 
-            // Past what a decimal holds, so no citation can hold it: said as a number none of them holds.
-            yield return new SaidNumber(said, Reads: true, ValueOf(word.Core[..head], scale), units.Count > 0 ? units[0] : bare);
+            whole = Plus(whole, InBase(ValueOf(number, null), unit), negative && previous is not null);
+            previous = unit;
+
+            if (position == core.Length)
+            {
+                break;
+            }
+
+            var digits = char.IsAsciiDigit(core[position]) ? HeadOf(core, position, core.Length) : 0;
+
+            if (digits == 0)
+            {
+                return null;
+            }
+
+            number = core[position..(position + digits)];
+            position += digits;
+        }
+
+        return new Reading(
+            new SaidNumber(word.Said, Reads: true, whole, new FlowUnit(previous.Kind, 1m), Summed: true),
+            at,
+            at,
+            previous.Kind,
+            previous.Base,
+            whole,
+            core[0] is '-' or '+' or Minus,
+            negative,
+            Led: false);
+    }
+
+    /// <summary>A value in its unit as a value of its kind's base; null where it is none, or past what a decimal holds.</summary>
+    private static decimal? InBase(decimal? value, FlowUnit unit)
+    {
+        try
+        {
+            return value * unit.Base;
+        }
+        catch (OverflowException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="whole"/> with <paramref name="part"/> added - taken away where the whole is said with a minus, so
+    /// <c>-1h 30m</c> is an hour and a half before; null where either is none, or past what a decimal holds.
+    /// </summary>
+    private static decimal? Plus(decimal? whole, decimal? part, bool negative)
+    {
+        try
+        {
+            return whole + (negative ? -part : part);
+        }
+        catch (OverflowException)
+        {
+            return null;
         }
     }
 
     /// <summary>The value of a numeric head, multiplied by its scale where it has one; null past what a decimal holds.</summary>
     private static decimal? ValueOf(string head, decimal? scale)
     {
-        if (!decimal.TryParse(head, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value))
+        if (!decimal.TryParse(head.Replace(Minus, '-'), NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value))
         {
             return null;
         }
@@ -434,31 +587,167 @@ public static class FlowAnalysisEvidence
         }
     }
 
+    /// <summary>The minus sign, written before a number as the hyphen is.</summary>
+    private const char Minus = '−';
+
+    /// <summary>
+    /// The words of <paramref name="text"/>: every run of the characters a word holds (<see cref="Joins"/>), a currency's
+    /// sign inside one that starts a number - with the capitals directly before it, which say whose it is - starting a
+    /// word of its own (<c>cost:$0.40</c>, <c>US$0.40</c>); each read off what wraps it, and joined to the word before
+    /// where nothing but space stands between them.
+    /// </summary>
+    private static List<Word> WordsOf(string text)
+    {
+        var words = new List<Word>();
+        var ended = -1;
+
+        for (var at = 0; at < text.Length;)
+        {
+            if (!Joins(text, at))
+            {
+                at++;
+                continue;
+            }
+
+            var start = at;
+
+            while (at < text.Length && Joins(text, at))
+            {
+                at++;
+            }
+
+            var from = start;
+
+            for (var sign = start; sign < at; sign++)
+            {
+                if (!FlowUnit.IsCurrencySign(text[sign]) || !StartsNumber(text, sign + 1, at))
+                {
+                    continue;
+                }
+
+                var capitals = sign;
+
+                while (capitals > from && char.IsAsciiLetterUpper(text[capitals - 1]))
+                {
+                    capitals--;
+                }
+
+                if (capitals > from)
+                {
+                    Add(from, capitals);
+                    from = capitals;
+                }
+            }
+
+            Add(from, at);
+        }
+
+        return words;
+
+        void Add(int from, int to)
+        {
+            var word = Word.Of(text, from, to);
+
+            words.Add(word with { Joined = ended >= 0 && text.AsSpan(ended, word.Start - ended).IsWhiteSpace() });
+            ended = word.End;
+        }
+    }
+
+    /// <summary>
+    /// Whether the character at <paramref name="at"/> of <paramref name="text"/> stays in a word: a letter, a digit or a
+    /// mark; a character an id is made of - <c>. _ @ # [ ] : +</c>, and a hyphen but two or more in a row, which are a dash
+    /// - or an apostrophe; a comma between two digits, grouping thousands; a sign a number is written with - <c>%</c>,
+    /// <c>×</c>, a currency's - and the minus sign that starts one. Any other ends a word.
+    /// </summary>
+    private static bool Joins(string text, int at)
+        => text[at] switch
+        {
+            '-' => !(at > 0 && text[at - 1] == '-') && !(at + 1 < text.Length && text[at + 1] == '-'),
+            ',' => at > 0 && at + 1 < text.Length && char.IsAsciiDigit(text[at - 1]) && char.IsAsciiDigit(text[at + 1]),
+            Minus => (at == 0 || !char.IsLetterOrDigit(text[at - 1])) && StartsNumber(text, at, text.Length),
+            '.' or '_' or '@' or '#' or '[' or ']' or ':' or '+' or '\'' or '’' or '%' or '×' => true,
+            var character => char.IsLetterOrDigit(character)
+                || FlowUnit.IsCurrencySign(character)
+                || char.GetUnicodeCategory(character) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark or UnicodeCategory.ConnectorPunctuation,
+        };
+
+    /// <summary>Whether a number starts at <paramref name="at"/> of <paramref name="text"/>, before <paramref name="to"/>: a digit, or a sign or a point directly before one.</summary>
+    private static bool StartsNumber(string text, int at, int to)
+    {
+        var digit = at < to && text[at] is '-' or '+' or Minus ? at + 1 : at;
+
+        if (digit < to && text[digit] == '.')
+        {
+            digit++;
+        }
+
+        return digit < to && char.IsAsciiDigit(text[digit]);
+    }
+
     /// <summary>
     /// One word of a text, read off what wraps it: every character at either end that is neither a letter nor a digit -
-    /// Markdown's marks, quotes, brackets, a comparison, punctuation - a sign directly before a digit kept as the number's;
-    /// with the units the signs read off name, a currency's or a multiple's before it and a percent's, a multiple's or a
-    /// currency's after it.
+    /// Markdown's marks, brackets, punctuation - a sign or a point directly before a digit kept as the number's; with the
+    /// units the signs read off name, a currency's (after the capitals that say whose it is: <c>US$</c>, <c>R$</c>) or a
+    /// multiple's before it and a percent's, a multiple's or a currency's after it.
     /// </summary>
     /// <param name="Core">What is left of the word: its letters and digits and what stands between them.</param>
     /// <param name="Signs">The units the signs read off its ends name, in the order they stood.</param>
     /// <param name="Said">The word as an answer says it back: its core, with the signs read as its unit around it.</param>
-    private readonly record struct Word(string Core, IReadOnlyList<FlowUnit> Signs, string Said)
+    /// <param name="Trail">The sign read off its end, where one names a unit.</param>
+    /// <param name="Start">Where what it says starts in the text - its core and the signs read as its unit; where the word does, for a word of signs alone.</param>
+    /// <param name="End">Where what it says ends in the text; where the word does, for a word of signs alone.</param>
+    /// <param name="Joined">Whether nothing but space stands between it and the word before it.</param>
+    private readonly record struct Word(string Core, IReadOnlyList<FlowUnit> Signs, string Said, char? Trail, int Start, int End, bool Joined)
     {
-        /// <summary>The unit the word names where it stands after a number of no unit of its own: a unit's name, or a unit's sign alone; null where it names none.</summary>
-        public FlowUnit? Unit => Core.Length > 0 ? FlowUnit.Named(Core) : Signs.Count == 1 ? Signs[0] : null;
+        /// <summary>
+        /// The unit the word names where it stands after a number of no unit of its own: a unit's name or a currency's code,
+        /// a currency's sign after its capitals (<c>R$</c>), or a unit's sign alone; null where it names none.
+        /// </summary>
+        public FlowUnit? Unit => Core.Length == 0 ? (Signs.Count == 1 ? Signs[0] : null) : FlowUnit.Named(Core) ?? Prefixed;
 
-        /// <summary>The word <paramref name="text"/>, read off what wraps it.</summary>
-        public static Word Of(string text)
+        /// <summary>
+        /// The currency the word names where it stands just before a number of no unit of its own: its code (<c>EUR</c>),
+        /// or its sign, alone or after its capitals (<c>€</c>, <c>R$</c>); null where it names none.
+        /// </summary>
+        public FlowUnit? Currency => Core.Length == 0 ? (Signs is [{ IsCurrency: true } sign] ? sign : null) : FlowUnit.OfCode(Core) ?? Prefixed;
+
+        /// <summary>The currency a word of capitals ending in a currency's sign names (<c>R$</c>, <c>US$</c>); null for any other word.</summary>
+        private FlowUnit? Prefixed => Signs.Count == 1 && Trail is { } sign ? FlowUnit.OfSign(sign, Core) : null;
+
+        /// <summary>The word that stands in <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/>, read off what wraps it.</summary>
+        public static Word Of(string text, int from, int to)
         {
-            var start = 0;
+            var start = from;
+            string? lead = null;
+            var leads = from;
 
-            while (start < text.Length && !char.IsLetterOrDigit(text[start]) && !(text[start] is '-' or '+' && start + 1 < text.Length && char.IsAsciiDigit(text[start + 1])))
+            while (start < to && !char.IsLetterOrDigit(text[start]) && !StartsNumber(text, start, to))
             {
+                if (FlowUnit.OfSign(text[start]) is { Kind: not "percent" })
+                {
+                    lead = text[start].ToString();
+                    leads = start;
+                }
+
                 start++;
             }
 
-            var end = text.Length;
+            // Capitals directly before a currency's sign that starts a number say whose currency it is: US$0.40, R$0.40.
+            var capitals = start;
+
+            while (capitals < to && char.IsAsciiLetterUpper(text[capitals]))
+            {
+                capitals++;
+            }
+
+            if (capitals > start && capitals < to && FlowUnit.IsCurrencySign(text[capitals]) && StartsNumber(text, capitals + 1, to))
+            {
+                lead = text[start..(capitals + 1)];
+                leads = start;
+                start = capitals + 1;
+            }
+
+            var end = to;
 
             while (end > start && !char.IsLetterOrDigit(text[end - 1]))
             {
@@ -468,84 +757,135 @@ public static class FlowAnalysisEvidence
             // A word of signs alone - the % after a number, written apart - is the one sign of it that names a unit.
             if (start == end)
             {
-                var signs = text.Where(sign => FlowUnit.OfSign(sign) is not null).ToList();
-                return signs.Count == 1 ? new Word(string.Empty, [FlowUnit.OfSign(signs[0])!], signs[0].ToString()) : new Word(string.Empty, [], string.Empty);
+                var signs = text[from..to].Where(sign => FlowUnit.OfSign(sign) is not null).ToList();
+
+                return signs.Count == 1
+                    ? new Word(string.Empty, [FlowUnit.OfSign(signs[0])!], signs[0].ToString(), null, from, to, Joined: false)
+                    : new Word(string.Empty, [], string.Empty, null, from, to, Joined: false);
             }
 
             // Before a number a currency's sign or a multiple's names its unit, after it the sign that ends it: a
             // percent's, a multiple's or a currency's.
-            var before = text[..start].Where(sign => FlowUnit.OfSign(sign) is { Kind: not "percent" }).Select(sign => (char?)sign).LastOrDefault();
-            var after = end < text.Length && FlowUnit.OfSign(text[end]) is not null ? text[end] : (char?)null;
+            var trail = end < to && FlowUnit.OfSign(text[end]) is not null ? text[end] : (char?)null;
             var core = text[start..end];
+            var before = lead is null ? null : FlowUnit.OfSign(lead[^1], lead[..^1]);
 
             return new Word(
                 core,
-                [.. new[] { before, after }.OfType<char>().Select(sign => FlowUnit.OfSign(sign)!)],
-                $"{before}{core}{after}");
+                [.. new[] { before, trail is { } after ? FlowUnit.OfSign(after) : null }.OfType<FlowUnit>()],
+                $"{lead}{core}{trail}",
+                trail,
+                lead is null ? start : leads,
+                trail is null ? end : end + 1,
+                Joined: false);
         }
     }
 
     /// <summary>
-    /// How many characters of <paramref name="word"/> its numeric head is: a sign, digits - thousands grouped by commas
-    /// between digits - one fraction and an exponent; 0 where the word does not start as a number (a sign alone, or a
-    /// letter - an id).
+    /// How many characters of <paramref name="word"/> from <paramref name="from"/> to <paramref name="to"/> its numeric
+    /// head is: a sign, digits - thousands grouped by commas, three digits each after a first group of one to three - one
+    /// fraction, its point first where no digit comes before it (<c>.5</c>), and an exponent; 0 where it does not start as
+    /// a number (a sign alone, or a letter - an id).
     /// </summary>
-    private static int HeadOf(string word)
+    private static int HeadOf(string word, int from, int to)
     {
-        var at = word.Length > 0 && word[0] is '-' or '+' ? 1 : 0;
+        var at = from < to && word[from] is '-' or '+' or Minus ? from + 1 : from;
+        var digits = at;
 
-        if (at >= word.Length || !char.IsAsciiDigit(word[at]))
-        {
-            return 0;
-        }
-
-        while (at < word.Length && (char.IsAsciiDigit(word[at]) || (word[at] == ',' && at + 1 < word.Length && char.IsAsciiDigit(word[at + 1]))))
+        while (at < to && char.IsAsciiDigit(word[at]))
         {
             at++;
         }
 
-        if (at + 1 < word.Length && word[at] == '.' && char.IsAsciiDigit(word[at + 1]))
+        if (at - digits is >= 1 and <= 3)
+        {
+            while (at + 3 < to && word[at] == ',' && char.IsAsciiDigit(word[at + 1]) && char.IsAsciiDigit(word[at + 2]) && char.IsAsciiDigit(word[at + 3]) && (at + 4 == to || !char.IsAsciiDigit(word[at + 4])))
+            {
+                at += 4;
+            }
+        }
+
+        var whole = at > digits;
+
+        if (at + 1 < to && word[at] == '.' && char.IsAsciiDigit(word[at + 1]))
         {
             at++;
 
-            while (at < word.Length && char.IsAsciiDigit(word[at]))
+            while (at < to && char.IsAsciiDigit(word[at]))
             {
                 at++;
             }
         }
-
-        if (at + 1 < word.Length && word[at] is 'e' or 'E')
+        else if (!whole)
         {
-            var digits = word[at + 1] is '-' or '+' ? at + 2 : at + 1;
+            return 0;
+        }
 
-            if (digits < word.Length && char.IsAsciiDigit(word[digits]))
+        if (at + 1 < to && word[at] is 'e' or 'E')
+        {
+            var exponent = word[at + 1] is '-' or '+' ? at + 2 : at + 1;
+
+            if (exponent < to && char.IsAsciiDigit(word[exponent]))
             {
-                at = digits;
+                at = exponent;
 
-                while (at < word.Length && char.IsAsciiDigit(word[at]))
+                while (at < to && char.IsAsciiDigit(word[at]))
                 {
                     at++;
                 }
             }
         }
 
-        return at;
+        return at - from;
+    }
+
+    /// <summary>
+    /// One number a text says as it is read: the number; the words it takes, from its first to its last; the kind of the
+    /// unit written against it, the base of the smallest unit it is said in and its value in its kind's base - none where
+    /// no unit is written; whether it is written with a sign, and with a minus; and whether it takes a currency's word
+    /// before it.
+    /// </summary>
+    private readonly record struct Reading(SaidNumber Number, int First, int Last, string? Kind, decimal Smallest, decimal? Whole, bool Signed, bool Negative, bool Led)
+    {
+        /// <summary>
+        /// This number and <paramref name="next"/> as one value, their sum, where next continues it: a number joined to a
+        /// smaller unit of its kind, with no sign and no currency's word before it, written directly after it with nothing
+        /// but space between (<c>1h 30m</c>, <c>2 min 5 s</c>); null where it does not.
+        /// </summary>
+        public Reading? Continued(Reading next, IReadOnlyList<Word> words)
+        {
+            if (!Number.Reads || !next.Number.Reads || Kind is not { } kind || !string.Equals(next.Kind, kind, StringComparison.Ordinal)
+                || next.Smallest >= Smallest || next.Signed || next.Led || next.First != Last + 1 || !words[next.First].Joined)
+            {
+                return null;
+            }
+
+            var whole = Plus(Whole, next.Whole, Negative);
+
+            return this with
+            {
+                Number = new SaidNumber($"{Number.Text} {next.Number.Text}", Reads: true, whole, new FlowUnit(kind, 1m), Summed: true),
+                Last = next.Last,
+                Smallest = next.Smallest,
+                Whole = whole,
+            };
+        }
     }
 
     /// <summary>
     /// One number a text says: the words it is said in; whether it reads as one number with its unit; its value - null
     /// where it reads as none, or past what a decimal holds, so no citation could hold it - and its unit, null for a
-    /// number held as written.
+    /// number held as written; and whether it is a sum of numbers said each in its unit, which no number written bare is.
     /// </summary>
-    private readonly record struct SaidNumber(string Text, bool Reads, decimal? Value, FlowUnit? Unit)
+    private readonly record struct SaidNumber(string Text, bool Reads, decimal? Value, FlowUnit? Unit, bool Summed = false)
     {
         /// <summary>
         /// Whether <paramref name="cited"/>, a number a citation holds, holds this one: written bare, its value as
-        /// written; joined to its unit, a value of a unit of its kind, the two the same once converted exactly.
+        /// written, never a sum; joined to its unit, a value of a unit of its kind, the two the same once converted exactly.
         /// </summary>
         public bool IsHeldBy(SaidNumber cited)
             => Value is { } value && cited.Value is { } held
-                && (Unit is not { } unit ? value == held : cited.Unit is { } its && unit.Holds(value, its, held));
+                && (Unit is not { } unit ? !cited.Summed && value == held : cited.Unit is { } its && unit.Holds(value, its, held));
     }
 
     /// <summary>A text member's text; empty where it is none.</summary>

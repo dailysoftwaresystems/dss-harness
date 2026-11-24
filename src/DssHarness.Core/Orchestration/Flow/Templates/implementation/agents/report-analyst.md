@@ -24,10 +24,12 @@ comes from it.
   unit the report holds that member in: a time in seconds (the budget's reasoning in minutes), a cost in dollars, a
   cache share in percent, the rest a count. Write it bare as the report writes it (`412.3`), or joined to its unit -
   its own (`412.3 s`, `412.3s`, `$0.02`, `28%`) or another of the same kind that is exactly that value (a wait of
-  `3600` seconds as `1h`, a budget of `90` minutes as `1.5h`, `180000` tokens as `180k tokens`). A unit of another kind
-  than its citation's is refused - `60 hours` is no wait of 60 seconds - and so is a multiple (`2x`), a size or
-  another currency, which no member of the report is. Bold, backticks or a sign around a number change nothing: it is
-  read and checked all the same. A number you work out from the report - a sum, a ratio, a share - is not the
+  `3600` seconds as `1h`, a budget of `90` minutes as `1.5h` or `1h 30m`, `180000` tokens as `180k tokens`). A unit of
+  another kind than its citation's is refused - `60 hours` is no wait of 60 seconds - and so is a multiple (`2x`), a
+  size or another currency, which no member of the report is, by its sign, its code or its name alike (`€0.02`,
+  `0.02 EUR`, `0.02 euros`): a currency's code in capitals beside a number makes it an amount in that currency. Bold,
+  backticks, a sign around a number, or a dash, `=` or a slash joining it to a word change nothing: it is read and
+  checked all the same. A number you work out from the report - a sum, a ratio, a share - is not the
   report's: cite where the report holds it, or leave it out. Write no date, range or other run of numbers in it.
 - Order the pain points by what they cost: time and dollars, from the report. What you cannot put a number on goes
   under `noted`, with why you could not confirm it.

@@ -417,9 +417,9 @@ public sealed class AnalyzeReportTests
     /// Every number an impact says is held to its citations, one joined to its unit too: read for its numeric head and
     /// its unit, it is held where a cited member of its unit's kind holds it, converted exactly into that member's unit -
     /// a wait of 60 seconds said as 60s, 1min or a 1-minute wait - so a wait of 3600s, 1.5h or 12k tokens no citation
-    /// holds is refused as a bare number is, a multiple is refused for no member of the report is one, and a word that
-    /// starts as a number and reads as no one number - a date, a compound duration - is refused as such: an analyst
-    /// writes no measurement past the check by gluing it to its unit.
+    /// holds is refused as a bare number is, a compound duration no citation holds as its sum too, a multiple is refused
+    /// for no member of the report is one, and a word that starts as a number and reads as no one number - a date, a
+    /// range - is refused as such: an analyst writes no measurement past the check by gluing it to its unit.
     /// </summary>
     [Fact]
     public void ANumberJoinedToItsUnit_IsHeldToTheCitations_AsWrittenOrConvertedExactly()
@@ -448,10 +448,11 @@ public sealed class AnalyzeReportTests
                 "painPoints[0].impact: says 2x, a multiple, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
                 $"painPoints[0].impact: says 61s, a time {NoneHolds}",
                 "painPoints[0].impact: says 2026-11-24, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
-                "painPoints[0].impact: says 1h30m, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
+                $"painPoints[0].impact: says 1h30m, a time {NoneHolds}",
+                "painPoints[0].impact: says 3-5, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
             ],
             FlowAnalysisEvidence.Problems(
-                Analysis(evidence, "the gate waited 3600s, 1.5h and 12k tokens, cost 2x the build and 61s more since 2026-11-24, 1h30m in all"),
+                Analysis(evidence, "the gate waited 3600s, 1.5h and 12k tokens, cost 2x the build and 61s more since 2026-11-24, 1h30m in all, 3-5 times"),
                 report));
     }
 
@@ -524,6 +525,140 @@ public sealed class AnalyzeReportTests
             FlowAnalysisEvidence.Problems(
                 AnalysisOf(evidence, "q1 waited 60 hours, the budget 90 s; b cost 2x the build, 28 s, 0.02 hours or €0.02 - and 3 tokens."),
                 report));
+    }
+
+    /// <summary>
+    /// A word ends at every character no id holds - a dash but the hyphen inside an id, two hyphens, <c>=</c>, a
+    /// comparison, an arrow, a slash - and a currency's sign inside a word starts a number, with the capitals before it
+    /// that say whose currency it is: so a number joined to a word that starts with a letter is read and held to the
+    /// citations as any other, refused where none holds it and held where one does, US$ the report's dollars and R$ or
+    /// CA$ a currency of its own; and the characters an id is made of keep it whole, its digits unread.
+    /// </summary>
+    [Fact]
+    public void ANumberJoinedToAWordByACharacterNoIdHolds_IsReadAndHeldToTheCitations()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = string.Join(
+            ",",
+            Cited("people", "q1", "waitedSeconds", "60"),
+            Cited("totals", "model-y", "usd", "0.02"));
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "q1 sat in the queue—60s—before its answer (wait=60s, wait>1min, wait≥60 s, wait/60s, wait--60s, queue–60s, then→60s) and cost US$0.02, cost:$0.02 and 2 cents; b@2, rounds#2.items[0].fix+2 and items:x:c-rate are ids."),
+            report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says US$0.40, an amount in USD {NoneHolds}",
+                $"painPoints[0].impact: says $0.40, an amount in USD {NoneHolds}",
+                "painPoints[0].impact: says R$0.02, an amount in R$, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                "painPoints[0].impact: says CA$0.02, an amount in CA$, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                "painPoints[0].impact: says 7, which none of its citations holds - cite where the report holds it, or leave it out",
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "the gate sat in the queue—3600s—before it ran: wait=3600s, wait/3600s, wait--3600s, then→3600s; it cost US$0.40 (cost:$0.40), R$0.02 and CA$0.02, c@1 went x=7 - b@2 is no number."),
+                report));
+    }
+
+    /// <summary>
+    /// A currency written as its ISO 4217 code, in capitals before or after a number, or as its name after it, is a
+    /// currency of its own, as its sign is: an amount in euros, pounds or reais is refused against a cost the report holds
+    /// in dollars - no member of the report is one - however it is written, and the report's own dollars are held written
+    /// as USD, US$, $ or dollars, before the number or after it; the same letters in small ones are a sentence's words.
+    /// </summary>
+    [Fact]
+    public void ACurrencyWrittenAsItsCodeOrItsName_IsACurrencyOfItsOwn()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = Cited("totals", "model-y", "usd", "0.02");
+        static string Other(string said, string kind)
+            => $"painPoints[0].impact: says {said}, an amount in {kind}, and no member of the report is one - write the report's own numbers, each cited, or leave it out";
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "model-y cost 0.02 USD, USD 0.02, 0.02 usd, US$ 0.02, $ 0.02 and 0.02 dollars - 0.02 all told."),
+            report));
+        Assert.Equal(
+            [
+                Other("0.02 EUR", "EUR"),
+                Other("0.02 euros", "euros"),
+                Other("GBP 0.02", "GBP"),
+                Other("0.02 pounds", "pounds"),
+                Other("R$ 0.02", "R$"),
+                Other("€ 0.02", "€"),
+                Other("0.02 reais", "reais"),
+                Other("BRL 0.02", "BRL"),
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "the cold cache cost 0.02 EUR on model-y, 0.02 euros, GBP 0.02, 0.02 pounds, R$ 0.02, € 0.02, 0.02 reais and BRL 0.02."),
+                report));
+    }
+
+    /// <summary>
+    /// Numbers each joined to a unit of one kind, from the largest unit to the smallest, are one value - glued or with
+    /// nothing but space between them - held as their sum, converted exactly into the cited member's unit: an hour and
+    /// thirty minutes is a budget of 90 minutes, never one of 80, and a minute and forty seconds a wall time of 100
+    /// seconds; numbers set apart by a comma, or said from the smallest unit up, are each a value of their own.
+    /// </summary>
+    [Fact]
+    public void ACompoundDuration_IsOneValue_HeldAsItsSumExactly()
+    {
+        var source = FlowRunReportTests.Source();
+        JsonNode ReportOf(double minutes)
+            => FlowRunReport.Of(source with { Flow = source.Flow with { Spent = source.Flow.Spent with { Minutes = minutes } } });
+        const string Said = "the run reasoned 1h 30m - 1h30m, 1 hour 30 minutes, 1 h 30 min - in 1 min 40 s, 1m40s of wall time.";
+        var evidence = string.Join(
+            ",",
+            Cited("theRun", string.Empty, "budget.minutes", "90"),
+            Cited("theRun", string.Empty, "wallSeconds", "100.0"));
+
+        Assert.Equal(100.0, ReportOf(90)["theRun"]!["wallSeconds"]!.GetValue<double>());
+        Assert.Empty(FlowAnalysisEvidence.Problems(AnalysisOf(evidence, Said), ReportOf(90)));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 1h 30m, a time {NoneHolds}",
+                $"painPoints[0].impact: says 1h30m, a time {NoneHolds}",
+                $"painPoints[0].impact: says 1 hour 30 minutes, a time {NoneHolds}",
+                $"painPoints[0].impact: says 1 h 30 min, a time {NoneHolds}",
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence.Replace("\"90\"", "\"80\"", StringComparison.Ordinal), Said), ReportOf(80)));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 1h, a time {NoneHolds}",
+                $"painPoints[0].impact: says 30m, a time {NoneHolds}",
+                $"painPoints[0].impact: says 30m, a time {NoneHolds}",
+                $"painPoints[0].impact: says 1h, a time {NoneHolds}",
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "the run reasoned 1h, 30m - or 30m 1h."), ReportOf(90)));
+    }
+
+    /// <summary>
+    /// A number is read as it is written: a point before its first digit is its fraction's (.5h is half an hour, not five),
+    /// the minus sign before it its sign (−20 is no exit of 20), and commas group its thousands in threes alone - so 1,2
+    /// reads as no one number, never as twelve.
+    /// </summary>
+    [Fact]
+    public void ANumberWithAPointFirstAMinusSignOrACommaInside_IsReadAsWritten()
+    {
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with { Flow = source.Flow with { Spent = source.Flow.Spent with { Minutes = 30, Tokens = 12 } } });
+        var evidence = string.Join(
+            ",",
+            Cited("theRun", string.Empty, "budget.minutes", "30"),
+            Cited("theRun", string.Empty, "budget.tokens", "12"),
+            Cited("errors", "c@1", "exit", "20"));
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "it reasoned .5h of its budget and 12 tokens; c@1 exited 20."), report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 5h, a time {NoneHolds}",
+                "painPoints[0].impact: says −20, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 1,2, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "it reasoned 5h, c@1 exited −20 and spent 1,2 tokens."), report));
     }
 
     /// <summary>What every refusal of a number joined to its unit says after its unit's kind, where the report has members of that kind.</summary>

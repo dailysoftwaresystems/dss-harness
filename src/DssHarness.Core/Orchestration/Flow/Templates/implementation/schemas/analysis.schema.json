@@ -100,7 +100,7 @@
           "impact": {
             "type": "string",
             "pattern": "\\S",
-            "description": "The time and dollars it cost: every number written here is the value of one of this point's citations, in the unit the report holds the cited member in - written bare as the citation holds it, or joined to its unit (3600s, 1.5h, 12k tokens, $0.02, 28%) and converted exactly into the cited member's unit (1.5h for a budget of 90 minutes, never 60 hours for a wait of 60 seconds). A number of a kind no member of the report is (2x, a size, another currency), a number none of them holds, or a word that reads as no one number (a date, a range), is refused and you are asked again - whatever wraps it, Markdown or a sign."
+            "description": "The time and dollars it cost: every number written here is the value of one of this point's citations, in the unit the report holds the cited member in - written bare as the citation holds it, or joined to its unit (3600s, 1.5h, 12k tokens, $0.02, 28%) and converted exactly into the cited member's unit (1.5h for a budget of 90 minutes, never 60 hours for a wait of 60 seconds); numbers joined to units of one kind from the largest to the smallest (1h 30m, 2 min 5 s) are one value, their sum. A number of a kind no member of the report is (2x, a size, another currency - by its sign, its ISO 4217 code or its name: €0.02, R$0.02, 0.02 EUR, 0.02 euros), a number none of them holds, or a word that reads as no one number (a date, a range), is refused and you are asked again - whatever wraps it or joins it to a word: Markdown, a sign, a dash, =, a slash."
           },
           "cause": {
             "type": "string",

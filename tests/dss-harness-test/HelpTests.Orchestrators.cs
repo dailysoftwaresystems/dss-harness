@@ -386,8 +386,9 @@ public sealed partial class HelpTests
     /// <summary>
     /// The orchestrators topic says what an analysis's impact is held to: every number it says one of its citations',
     /// read in the unit the report holds the cited member in - bare as written, joined to its unit converted exactly into
-    /// the member's, a kind no member is never - whatever wraps it, and a word that reads as no one number refused, as the
-    /// evidence check holds it.
+    /// the member's, a compound duration as its sum, a kind no member is never, another currency by its sign, its code or
+    /// its name - whatever wraps it or joins it to a word, and a word that reads as no one number refused, as the evidence
+    /// check holds it.
     /// </summary>
     [Fact]
     public void OrchestratorsTopic_SaysEveryNumberAnImpactSays_WithItsUnitOrNot_IsACitationsValue()
@@ -396,11 +397,15 @@ public sealed partial class HelpTests
             "and every number its impact says is one of its citations', read in the unit the report holds the cited member in (a "
                 + "time in seconds, the budget's reasoning in minutes, a cost in dollars, a cache share in percent, the rest a "
                 + "count): a number written bare is the cited value as written, one joined to its unit (3600s, 1.5h, 12k tokens, "
-                + "$0.02, 28%) is held where a cited member of its unit's kind holds it, converted exactly into that member's "
-                + "unit - 1.5h is a budget's 90 minutes, and 60 hours no wait's 60 seconds - and one of a kind no member is (2x, "
-                + "a size, another currency) never; a number is read whatever wraps it (Markdown, a comparison, a currency's "
-                + "sign), and a word that starts as a number and reads as no one number (a date, a range) is refused. An "
-                + "analysis cannot invent a measurement.",
+                + "$0.02, US$0.02, 28%) is held where a cited member of its unit's kind holds it, converted exactly into that "
+                + "member's unit - 1.5h is a budget's 90 minutes, and 60 hours no wait's 60 seconds - numbers joined to units of "
+                + "one kind from the largest to the smallest (1h 30m, 1h30m, 2 min 5 s) are one value, their sum, and one of a "
+                + "kind no member is (2x, a size, another currency, by its sign, its ISO 4217 code in capitals or its name: "
+                + "€0.02, R$0.02, 0.02 EUR, 0.02 euros) never; a number is read whatever wraps it or joins it to a word "
+                + "(Markdown, a comparison, an arrow, a dash, =, a slash, a currency's sign: queue—3600s—before, wait=3600s, "
+                + "US$0.40), for a word ends at every character no id holds and an id's digits are never read, and a word that "
+                + "starts as a number and reads as no one number (a date, a range) is refused. An analysis cannot invent a "
+                + "measurement.",
             Prose.Words(HelpText.Of("orchestrators").StandardOutput),
             StringComparison.Ordinal);
     }

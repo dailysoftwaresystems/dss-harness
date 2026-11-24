@@ -6,10 +6,13 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// numbers are one measure only where their kinds are one, the one converted exactly into the other's unit
 /// (<see cref="Holds"/>); a number of one kind is never read as a number of another.
 /// </summary>
-/// <param name="Kind">What it measures: <c>time</c>, <c>count</c>, <c>percent</c>, <c>multiple</c>, <c>size</c>, or a currency - <c>USD</c> the report's dollars, any other by its own sign.</param>
-/// <param name="Base">How many of its kind's base one of it is: seconds for a time, ones for a count, a percent and a multiple, dollars for <c>USD</c>, bytes for a size.</param>
+/// <param name="Kind">What it measures: <c>time</c>, <c>count</c>, <c>percent</c>, <c>multiple</c>, <c>size</c>, or a currency - <c>USD</c> the report's dollars, any other by the ISO 4217 code (<c>EUR</c>), the name (<c>euros</c>) or the sign (<c>€</c>, <c>R$</c>) it is written in.</param>
+/// <param name="Base">How many of its kind's base one of it is: seconds for a time, ones for a count, a percent and a multiple, a currency's whole unit, bytes for a size.</param>
 public sealed record FlowUnit(string Kind, decimal Base)
 {
+    /// <summary>The kinds that measure something other than money: a unit of any other kind is a currency's.</summary>
+    private static readonly HashSet<string> Measures = new(StringComparer.Ordinal) { "time", "count", "percent", "multiple", "size" };
+
     /// <summary>A time in seconds: the report's every duration but its budget's minutes.</summary>
     public static FlowUnit Seconds { get; } = new("time", 1m);
 
@@ -27,6 +30,9 @@ public sealed record FlowUnit(string Kind, decimal Base)
 
     /// <summary>A multiple of another number: <c>2x</c>.</summary>
     public static FlowUnit Multiple { get; } = new("multiple", 1m);
+
+    /// <summary>Whether it is a currency's: the report's dollars, or any other.</summary>
+    public bool IsCurrency => !Measures.Contains(Kind);
 
     /// <summary>The kind said in a sentence: <c>a time</c>, <c>an amount in USD</c>.</summary>
     public string KindSaid => Kind switch
@@ -68,15 +74,29 @@ public sealed record FlowUnit(string Kind, decimal Base)
 
     /// <summary>
     /// The unit a word written beside a number names - <c>s</c>, <c>min</c>, <c>hours</c>, <c>tokens</c>, <c>USD</c>,
-    /// <c>KB</c>, <c>x</c> - read as written where it is one letter, for <c>m</c> and <c>M</c> are not one unit, and in
-    /// any case where it is longer; null for a word that names none. A scale names no unit (<see cref="ScaleOf"/>).
+    /// <c>KB</c>, <c>x</c>, a currency's name (<c>euros</c>, <c>pounds</c>, <c>reais</c>) or its code (<see cref="OfCode"/>)
+    /// - read as written where it is one letter, for <c>m</c> and <c>M</c> are not one unit, or a code, and in any case
+    /// where it is a longer word; null for a word that names none. A scale names no unit (<see cref="ScaleOf"/>).
     /// </summary>
     /// <param name="word">The word, without what wraps it.</param>
     public static FlowUnit? Named(string word)
     {
         ArgumentNullException.ThrowIfNull(word);
 
-        return word.Length == 1 ? Letters.GetValueOrDefault(word) : Words.GetValueOrDefault(word);
+        return word.Length == 1 ? Letters.GetValueOrDefault(word) : Words.GetValueOrDefault(word) ?? OfCode(word);
+    }
+
+    /// <summary>
+    /// The currency a code names: one of ISO 4217's, written in capitals as the standard writes it - <c>USD</c> the
+    /// report's dollars, any other its own (<c>EUR</c>, <c>GBP</c>, <c>BRL</c>); null for any other word, a code in small
+    /// letters included, for <c>all</c>, <c>top</c> and <c>try</c> are a sentence's words.
+    /// </summary>
+    /// <param name="word">The word, without what wraps it.</param>
+    public static FlowUnit? OfCode(string word)
+    {
+        ArgumentNullException.ThrowIfNull(word);
+
+        return !Codes.Contains(word) ? null : word == "USD" ? Dollars : new(word, 1m);
     }
 
     /// <summary>
@@ -94,18 +114,57 @@ public sealed record FlowUnit(string Kind, decimal Base)
 
     /// <summary>
     /// The unit a sign written against a number names: <c>%</c> a share in percent, <c>×</c> a multiple, <c>$</c>
-    /// dollars and any other currency's sign that currency; null for a sign that names none.
+    /// dollars and any other currency's sign that currency - written after capitals that say whose it is, the currency
+    /// they say: <c>US$</c> dollars, and any other its own as written (<c>R$</c>, <c>CA$</c>); null for a sign that names
+    /// none, or capitals before a sign that is no currency's.
     /// </summary>
     /// <param name="sign">The sign.</param>
-    public static FlowUnit? OfSign(char sign)
-        => sign switch
+    /// <param name="capitals">The capitals written directly before it; empty where none are.</param>
+    public static FlowUnit? OfSign(char sign, string capitals = "")
+    {
+        ArgumentNullException.ThrowIfNull(capitals);
+
+        if (capitals.Length > 0)
+        {
+            return !IsCurrencySign(sign) || !capitals.All(char.IsAsciiLetterUpper) ? null
+                : capitals == "US" && sign == '$' ? Dollars
+                : new($"{capitals}{sign}", 1m);
+        }
+
+        return sign switch
         {
             '%' => Percent,
             '×' => Multiple,
             '$' => Dollars,
-            _ when char.GetUnicodeCategory(sign) == System.Globalization.UnicodeCategory.CurrencySymbol => new(sign.ToString(), 1m),
+            _ when IsCurrencySign(sign) => new(sign.ToString(), 1m),
             _ => null,
         };
+    }
+
+    /// <summary>Whether <paramref name="sign"/> is a currency's sign, as Unicode says one is.</summary>
+    /// <param name="sign">The character.</param>
+    public static bool IsCurrencySign(char sign)
+        => char.GetUnicodeCategory(sign) == System.Globalization.UnicodeCategory.CurrencySymbol;
+
+    /// <summary>
+    /// The currency codes ISO 4217 lists - its funds, metals and units of account among them, and the codes it lately
+    /// withdrew that are still written - but its code of a test and its code of no currency.
+    /// </summary>
+    private static readonly HashSet<string> Codes = new(StringComparer.Ordinal)
+    {
+        "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN", "BAM", "BBD", "BDT", "BGN", "BHD", "BIF",
+        "BMD", "BND", "BOB", "BOV", "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF", "CHE", "CHF", "CHW", "CLF",
+        "CLP", "CNY", "COP", "COU", "CRC", "CUC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", "ERN", "ETB",
+        "EUR", "FJD", "FKP", "GBP", "GEL", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF",
+        "IDR", "ILS", "INR", "IQD", "IRR", "ISK", "JMD", "JOD", "JPY", "KES", "KGS", "KHR", "KMF", "KPW", "KRW", "KWD",
+        "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU",
+        "MUR", "MVR", "MWK", "MXN", "MXV", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN",
+        "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD",
+        "SHP", "SLE", "SLL", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY",
+        "TTD", "TWD", "TZS", "UAH", "UGX", "USD", "USN", "UYI", "UYU", "UYW", "UZS", "VED", "VES", "VND", "VUV", "WST",
+        "XAF", "XAG", "XAU", "XBA", "XBB", "XBC", "XBD", "XCD", "XCG", "XDR", "XOF", "XPD", "XPF", "XPT", "XSU", "XUA",
+        "YER", "ZAR", "ZMW", "ZWG", "ZWL",
+    };
 
     /// <summary>The units written as one letter, each read as written.</summary>
     private static readonly Dictionary<string, FlowUnit> Letters = new(StringComparer.Ordinal)
@@ -119,7 +178,12 @@ public sealed record FlowUnit(string Kind, decimal Base)
         ["B"] = new("size", 1m),
     };
 
-    /// <summary>The units written as a longer word, each read in any case.</summary>
+    /// <summary>
+    /// The units written as a longer word, each read in any case: a currency's name among them, its kind the name in the
+    /// plural - so the pesos of several countries are one kind, as no member of the report is any - but not
+    /// <c>real</c>, which after a number is far more often a sentence's word (<c>2 real failures</c>) than one real; its
+    /// plural <c>reais</c>, its code and its sign are read.
+    /// </summary>
     private static readonly Dictionary<string, FlowUnit> Words = new(StringComparer.OrdinalIgnoreCase)
     {
         ["ns"] = new("time", 0.000000001m),
@@ -161,6 +225,53 @@ public sealed record FlowUnit(string Kind, decimal Base)
         ["dollars"] = Dollars,
         ["cent"] = new("USD", 0.01m),
         ["cents"] = new("USD", 0.01m),
+        ["euro"] = new("euros", 1m),
+        ["euros"] = new("euros", 1m),
+        ["pound"] = new("pounds", 1m),
+        ["pounds"] = new("pounds", 1m),
+        ["sterling"] = new("pounds", 1m),
+        ["yen"] = new("yen", 1m),
+        ["yuan"] = new("yuan", 1m),
+        ["renminbi"] = new("yuan", 1m),
+        ["reais"] = new("reais", 1m),
+        ["rupee"] = new("rupees", 1m),
+        ["rupees"] = new("rupees", 1m),
+        ["rupiah"] = new("rupiah", 1m),
+        ["franc"] = new("francs", 1m),
+        ["francs"] = new("francs", 1m),
+        ["peso"] = new("pesos", 1m),
+        ["pesos"] = new("pesos", 1m),
+        ["ruble"] = new("rubles", 1m),
+        ["rubles"] = new("rubles", 1m),
+        ["rouble"] = new("rubles", 1m),
+        ["roubles"] = new("rubles", 1m),
+        ["lira"] = new("lira", 1m),
+        ["lire"] = new("lira", 1m),
+        ["krona"] = new("kronor", 1m),
+        ["kronor"] = new("kronor", 1m),
+        ["krone"] = new("kroner", 1m),
+        ["kroner"] = new("kroner", 1m),
+        ["zloty"] = new("zloty", 1m),
+        ["zlotys"] = new("zloty", 1m),
+        ["forint"] = new("forints", 1m),
+        ["forints"] = new("forints", 1m),
+        ["baht"] = new("baht", 1m),
+        ["ringgit"] = new("ringgit", 1m),
+        ["won"] = new("won", 1m),
+        ["shekel"] = new("shekels", 1m),
+        ["shekels"] = new("shekels", 1m),
+        ["dinar"] = new("dinars", 1m),
+        ["dinars"] = new("dinars", 1m),
+        ["dirham"] = new("dirhams", 1m),
+        ["dirhams"] = new("dirhams", 1m),
+        ["riyal"] = new("riyals", 1m),
+        ["riyals"] = new("riyals", 1m),
+        ["rial"] = new("rials", 1m),
+        ["rials"] = new("rials", 1m),
+        ["rand"] = new("rand", 1m),
+        ["naira"] = new("naira", 1m),
+        ["hryvnia"] = new("hryvnias", 1m),
+        ["hryvnias"] = new("hryvnias", 1m),
         ["fold"] = Multiple,
         ["byte"] = new("size", 1m),
         ["bytes"] = new("size", 1m),
