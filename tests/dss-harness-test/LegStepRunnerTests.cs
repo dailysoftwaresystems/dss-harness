@@ -559,6 +559,40 @@ public sealed class LegStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A red leg a host ran whose log could not be brought back has no log on this machine to read: the entry names none,
+    /// and its digest - a ctest failure that says no more than the test's status - goes with the phase's last lines whole
+    /// beside it, so the assertion the test printed, which no parser typed, is in what a model is handed, once.
+    /// </summary>
+    [Fact]
+    public void ARedLegAHostRanWhoseLogWasNotBroughtBack_HandsItsLastLinesBesideTheDigest()
+    {
+        using var records = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Assertion = "check.c:9: expected 2 records, found 3";
+        IReadOnlyList<string> tail = ["3/3 Test #3: folds_duplicates .................***Failed    0.01 sec", Assertion, string.Empty, "67% tests passed, 1 tests failed out of 3"];
+        var line = new LegEntry
+        {
+            Leg = "folds",
+            Verdict = LegVerdict.Failed,
+            Detail = "1 test failed",
+            TailPhase = "test",
+            LogTail = tail,
+            HostRunId = RunId.New(),
+            Records = "~/copies/app/.harness-config/runs/r/folds",
+            Logs = [new PhaseLogFile("test", "~/copies/app/.harness-config/runs/r/folds/test.log")],
+            Digest = ResultDigest.Of([], [new TestFailure("ctest", "folds_duplicates", Log: (3, 4))], []),
+        };
+        var legs = new FlowStepLegs(harness.FileSystem, harness.Output, harness.ChildSessions, new TestIsolation());
+        var request = new FlowStepLegsRequest(new HarnessConfig(), records.Path, records.Path, records.Path, records.Path, RedLogs: false, "'checks'", "build");
+
+        var red = LegStepRunner.Output(Result([line], HarnessExit.CommandFailed, "a leg failed"), arms: false, ran => legs.LogOf(ran, request))["red"]!.AsArray().Single()!;
+
+        Assert.Null(red["log"]);
+        Assert.Equal(tail, red["tail"]!.AsArray().Select(said => said!.GetValue<string>()));
+        Assert.Equal("ctest folds_duplicates", red["digest"]!["first"]!["said"]!.GetValue<string>());
+    }
+
+    /// <summary>
     /// A leg step keeps its ledger as its legs' run goes - naming the run and its records as the run begins, and every
     /// line so far as each leg ends - so a crash while the legs work leaves the step where their run stands: the account a
     /// resume reads holds each leg that had ended, its phases among it, and closes where the run's own records last moved;
