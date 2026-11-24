@@ -97,6 +97,7 @@ internal sealed class PythonReading
         FunctionValue = "function-value",
         ComputedExports = "computed-exports",
         Unclosed = "unclosed",
+        RefusedEscape = "refused-escape",
         UnreadHead = "unread-head";
 
     /// <summary>
@@ -243,6 +244,9 @@ internal sealed class PythonReading
     /// statement on the header's own line begins after, as no other colon at a statement's depth - an annotation's - is (<see cref="StatementHead"/>).
     /// </summary>
     private readonly HashSet<int> _headerColons = [];
+
+    /// <summary>Each line an escape of a string Python refuses stands on, marked dynamic once (<see cref="MarkRefused(int)"/>).</summary>
+    private readonly HashSet<int> _refused = [];
 
     /// <summary>
     /// The reading of each declaration's head and body, in the order the text writes the declarations - each before those it holds -
@@ -416,6 +420,36 @@ internal sealed class PythonReading
             {
                 _extract.Dynamic(_scan[at].Line, bracket ? "a bracket that never closes: what follows it is read as held in it" : "a string that never closes: what follows its quote is read as its text", Unclosed);
             }
+        }
+    }
+
+    /// <summary>
+    /// Marks dynamic, once each, every line an escape of a string Python refuses stands on - text Python does not compile, which a
+    /// file being edited may hold: a character's name Unicode has not, a <c>\N</c> with no name in braces, a <c>\x</c>, a <c>\u</c> or
+    /// <c>\U</c> short of its digits, a <c>\U</c> past every character. The escape is kept as written in its literal's value, so the
+    /// literal still says what it reads; each mark is of the kind that tells the limit it shows (<see cref="RefusedEscape"/>).
+    /// </summary>
+    /// <param name="line">The line the escape stands on.</param>
+    private void MarkRefused(int line)
+    {
+        if (_refused.Add(line))
+        {
+            _extract.Dynamic(line, "an escape Python refuses - a character's name Unicode has not, a \\N with no name in braces, a \\x, \\u or \\U short of its digits, a \\U past every character: kept as written", RefusedEscape);
+        }
+    }
+
+    /// <summary>
+    /// Marks each line the part's refused escapes stand on (<see cref="MarkRefused(int)"/>): in the file's own text, the line each
+    /// escape is on; in a string's text - a string annotation's - the file line the escape's line of that text is, the line the
+    /// string begins on and the escape's own less one, the text's lines being the string's.
+    /// </summary>
+    /// <param name="value">The part, decoded.</param>
+    /// <param name="line">The line of the file the string's text the part is written in begins on; <see langword="null"/> where the part is the file's own.</param>
+    private void MarkRefusedIn(ScanLiteralValue value, int? line)
+    {
+        foreach (var refused in value.RefusedLines)
+        {
+            MarkRefused(line is { } written ? written + refused - 1 : refused);
         }
     }
 
@@ -3151,10 +3185,11 @@ internal sealed class PythonReading
 
         if (token.Kind == ScanTokenKind.Text)
         {
-            // The literal's constant parts - an f-string's fields are code, read as code - are its data.
-            foreach (var (value, part) in scan.LiteralParts(token))
+            // The literal's constant parts - an f-string's fields are code, read as code - are its data; a line an escape Python refuses stands on is marked.
+            foreach (var value in scan.LiteralValues(token))
             {
-                _extract.Literal(value, part, key);
+                _extract.Literal(value.Value, value.Line, key);
+                MarkRefusedIn(value, null);
             }
 
             if (text.Interpolations.TryGetValue(token.Start, out var spans))
@@ -3707,10 +3742,11 @@ internal sealed class PythonReading
             {
                 if (text[at].Kind == ScanTokenKind.Text)
                 {
-                    foreach (var (value, part) in text.LiteralParts(text[at]))
+                    foreach (var value in text.LiteralValues(text[at]))
                     {
-                        var inner = PythonLexer.Scan(value).Scan;
-                        texts.Push((inner, 0, inner.Count, line ?? part));
+                        var inner = PythonLexer.Scan(value.Value).Scan;
+                        texts.Push((inner, 0, inner.Count, line is { } outer ? outer + value.Line - 1 : value.Line));
+                        MarkRefusedIn(value, line);
                     }
 
                     at = text.Next(at);
@@ -3784,9 +3820,10 @@ internal sealed class PythonReading
         {
             if (scan[at].Kind == ScanTokenKind.Text)
             {
-                foreach (var (value, part) in scan.LiteralParts(scan[at]))
+                foreach (var value in scan.LiteralValues(scan[at]))
                 {
-                    _extract.Literal(value, line ?? part, key);
+                    _extract.Literal(value.Value, line ?? value.Line, key);
+                    MarkRefusedIn(value, line);
                 }
             }
         }

@@ -247,9 +247,9 @@ public sealed class CodebaseGraphServingTests
                 ("config", "MaxItems", 51.9),
                 ("config", "freeOverCents", 59.9),
                 ("config", "rules", 49.3),
-                ("python", "largest", 38.1),
-                ("python", "describe", 33.2),
-                ("python", "Shape.name", 36.0),
+                ("python", "largest", 38.4),
+                ("python", "describe", 33.5),
+                ("python", "Shape.name", 36.3),
             ],
             ratios);
     }

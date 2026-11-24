@@ -420,7 +420,7 @@ public sealed partial class CodebaseGraphToolTests
                 "csharp also does not see ('help codebase-graph-languages' says each): preprocessor-branches, local-functions, dynamic-calls, untyped-reads, generated-sources, same-named-types, assembly-attributes, deep-nesting, huge-files.",
                 "markdown also does not see ('help codebase-graph-languages' says each): fenced-headings, html-headings.",
                 $"python does not see {Says("computed attribute access")} - shown by 1 file(s) read.",
-                "python also does not see ('help codebase-graph-languages' says each): dynamic-imports, unseen-roots, ambiguous-imports, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unclosed, unreadable-heads, module-getattr, unbound-names, outside-fixtures, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
+                "python also does not see ('help codebase-graph-languages' says each): dynamic-imports, unseen-roots, ambiguous-imports, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unclosed, refused-escapes, unreadable-heads, module-getattr, unbound-names, outside-fixtures, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
             ],
             Tail(computed));
         Assert.All(
@@ -434,7 +434,7 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal([CodeGraphLimit.Candidates, PythonReading.FunctionValue], Assert.Single(limits, limit => limit.Says.StartsWith("a duck-typed receiver", StringComparison.Ordinal)).Signs);
 
         // Every limit whose sign the code can give: the two above, and the others the reader marks or the linker finds.
-        Assert.Equal(11, limits.Count(limit => limit.Signs.Count > 0));
+        Assert.Equal(12, limits.Count(limit => limit.Signs.Count > 0));
 
         // A file whose bracket never closes; one whose call reaches through an import that names no file of the tree; one whose
         // call names what nothing the file says binds; a test given a fixture no conftest.py provides; a script whose bare import
@@ -473,7 +473,7 @@ public sealed partial class CodebaseGraphToolTests
                 $"python does not see {Says("never closes")} - shown by 1 file(s) read.",
                 $"python does not see {Says("neither declares nor imports")} - shown by 1 file(s) read.",
                 $"python does not see {Says("no conftest.py")} - shown by 1 file(s) read.",
-                "python also does not see ('help codebase-graph-languages' says each): computed-attributes, dynamic-imports, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, unreadable-heads, module-getattr, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
+                "python also does not see ('help codebase-graph-languages' says each): computed-attributes, dynamic-imports, monkey-patching, exec-eval, duck-typing, capital-functions, computed-all, refused-escapes, unreadable-heads, module-getattr, lambdas, test-helpers, lowercase-annotations, outside-attributes, manifests.",
             ],
             shown);
         Assert.Contains($"html does not see {Assert.Single(CodeGraphExtractors.OfThisBuild.Find("html")!.Help.DoesNotSee, limit => limit.Signs.Contains(HtmlExtractor.OtherEngine)).Says} - shown by 1 file(s) read.", shown);
@@ -487,6 +487,7 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal(["ambiguous-imports"], Named(CodeGraphLimit.CandidateImports));
         Assert.Equal(["duck-typing"], Named(CodeGraphLimit.Candidates));
         Assert.Equal(["unclosed"], Named(PythonReading.Unclosed));
+        Assert.Equal(["refused-escapes"], Named(PythonReading.RefusedEscape));
     }
 
     /// <summary>The words of the one limit of <paramref name="language"/> - Python's where none is named - whose clause holds <paramref name="names"/>, as its help says them.</summary>

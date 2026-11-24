@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
+using DssHarness.Core.Codebase.Languages.Scanning;
 using DssHarness.Core.FileSystem;
 
 namespace DssHarness.Tests;
@@ -132,6 +133,17 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
 
         cart = Cart(owner="window")
         print(cart.count)
+        """;
+
+    /// <summary>
+    /// A character's name in each form of a string: decoded in a plain one and in an f-string's, by an alias in lower case too; kept as
+    /// written in a raw one, as Python keeps it; and an unknown name, which Python refuses.
+    /// </summary>
+    internal const string Names = """
+        DASH = "\N{EM DASH}"
+        BOM = f"\N{bom}{DASH}"
+        RAW = r"\N{EM DASH}"
+        BAD = "\N{NO SUCH NAME}"
         """;
 
     internal const string Tests = """
@@ -472,6 +484,13 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
                 new CodeEdge("python:pkg.forms.Basket.put", "python:pkg.forms.weigh", CodeEdgeKinds.Calls, 54, CodeConfidences.Exact),
                 new CodeEdge("python:pkg.forms.Basket.kind", "python:pkg.forms.Basket.items", CodeEdgeKinds.Uses, 65, CodeConfidences.Exact),
                 new CodeEdge("python:pkg.forms.crawl", "python:pkg.forms.crawl.fetch", CodeEdgeKinds.Calls, 76, CodeConfidences.Exact),
+            ],
+        },
+        new("pkg/names.py", Names)
+        {
+            Nodes =
+            [
+                new("python:pkg.names", CodeNodeKinds.Namespace, (1, 4)),
             ],
         },
     ];
@@ -963,9 +982,11 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
     /// each decoded by its prefix's escapes - and the names its fields read as code. A prefix in any case and of two letters, <c>u</c>
     /// and <c>t</c> among them; three single quotes; doubled braces a brace; a field's code to its closer through <c>!=</c>, through a
     /// colon a group or a dictionary holds and through a nested string, and to a debugging <c>=</c>, a conversion or a format, whose
-    /// own fields are code; a backslash before a field's brace, and <c>\N{...}</c> no field; Python's escapes - a character's name kept
-    /// as written, a code past every character's the replacement character, a line break a backslash joins dropped, one Python does not
-    /// know kept with its backslash, a bytes string's its own - and a raw string's escaped quote, which closes nothing.
+    /// own fields are code; a backslash before a field's brace, and <c>\N{...}</c> no field; Python's escapes - a character's name its
+    /// character, by Unicode's names and aliases as CPython 3.15 reads them, a lone surrogate kept, a line break a backslash joins dropped,
+    /// one Python does not know kept with its backslash, a bytes string's its own - and a raw string's escaped quote, which closes
+    /// nothing. No row holds an escape Python refuses, so no line is marked; a lone surrogate the decoder gives is the
+    /// replacement character in the graph, as every one a literal's value holds is (<see cref="ExtractText.Whole"/>).
     /// </summary>
     [Theory]
     [MemberData(nameof(LexedStrings))]
@@ -976,7 +997,7 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         Assert.Equal(values, (extract.Literals ?? []).Select(literal => literal.Value));
         Assert.Equal(references, References(extract, "python:pkg.lex.X").Select(reference => $"{reference.Kind} {reference.Name}"));
 
-        // Every string of a row closes, so no line is marked as one that never does.
+        // Every string of a row closes and holds no refused escape, so no line is marked.
         Assert.Empty(extract.Dynamic);
     }
 
@@ -1004,10 +1025,14 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         { """X = f"{A + B=!r:>{W}}" """, ["A + B="], ["uses A", "uses B", "uses W"] },
         { """X = t"Hello {USER}" """, ["Hello "], ["uses USER"] },
         { """X = Rt"\d{USER}" """, ["\\d"], ["uses USER"] },
-        { """X = f"\N{EM DASH} {TITLE}" """, ["\\N{EM DASH} "], ["uses TITLE"] },
+        { """X = f"\N{EM DASH} {TITLE}" """, ["\u2014 "], ["uses TITLE"] },
         { """X = f"\{NAME}" """, ["\\"], ["uses NAME"] },
-        { """X = "\x41\u0042\U00000043\101\N{EM DASH}" """, ["ABCA\\N{EM DASH}"], [] },
-        { """X = "\U00110000" """, ["\uFFFD"], [] },
+        { """X = "\x41\u0042\U00000043\101\N{EM DASH}" """, ["ABCA\u2014"], [] },
+        { """X = u"\N{latin small letter e with acute}" """, ["\u00E9"], [] },
+        { """X = t"\N{EM DASH}{USER}" """, ["\u2014"], ["uses USER"] },
+        { """X = r"\N{EM DASH}" """, ["\\N{EM DASH}"], [] },
+        { """X = "\U0000D800" """, ["\uFFFD"], [] },
+        { """X = "\uD800" """, ["\uFFFD"], [] },
         { "X = \"ab\\\ncd\"\n", ["abcd"], [] },
         { """X = "\d+\." """, ["\\d+\\."], [] },
         { """X = "\\ \' \"" """, ["\\ ' \""], [] },
@@ -1018,6 +1043,198 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         { """X = r'[\'"]' """, ["[\\'\"]"], [] },
         { """X = rf"\"{NAME}" """, ["\\\""], ["uses NAME"] },
     };
+
+    /// <summary>
+    /// A character's name in braces is the character it names, in each form of a string Python decodes one: a plain string, a
+    /// <c>u</c> one, an f-string's and a t-string's constant parts, by the names and aliases of Unicode 17.0.0 as CPython 3.15 reads them - an
+    /// alias in lower case, a computed name of a CJK unified ideograph and of a Hangul syllable among them. A bytes string and a raw
+    /// one keep it as written, as Python does, and no line is marked.
+    /// </summary>
+    [Fact]
+    public void ACharactersName_IsDecodedAsCPythonDecodesIt_InEachFormOfString()
+    {
+        var extract = Read("pkg/named.py", """
+            A = "\N{EM DASH}\N{BOM}\N{CJK UNIFIED IDEOGRAPH-4E00}\N{HANGUL SYLLABLE GA}"
+            B = f"{A}\N{LF}"
+            C = b"\N{EM DASH}"
+            D = rb"\N{EM DASH}"
+            """);
+
+        // A value is kept once with every place it is written: the bytes string's and the raw one's are alike.
+        Assert.Equal(["\u2014\uFEFF\u4E00\uAC00", "\n", "\\N{EM DASH}"], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal(
+            [("python:pkg.named.A", 1), ("python:pkg.named.B", 2), ("python:pkg.named.C", 3), ("python:pkg.named.D", 4)],
+            (extract.Literals ?? []).SelectMany(literal => literal.Places, (literal, place) => (place.Node?.Whole(), place.Line)));
+        Assert.Equal([("A", CodeEdgeKinds.Uses, 2)], References(extract, "python:pkg.named.B").Select(reference => (reference.Name, reference.Kind, reference.Line)));
+        Assert.Empty(extract.Dynamic);
+    }
+
+    /// <summary>
+    /// A name CPython computes is the character it names in a literal in any case, as 3.15 reads it and 3.14 did not: an ideograph's
+    /// from its prefix and the code in lower-case digits, a Tangut ideograph's, a Nushu character's, a Hangul syllable's from lower-case
+    /// jamo - in a plain string and in an f-string's constant parts. The same prefix and a leading zero is one Python refuses: kept as
+    /// written, its line marked, the file being one Python does not compile.
+    /// </summary>
+    [Fact]
+    public void ANameCPythonComputes_IsTheCharacterInAnyCase_InALiteral()
+    {
+        var extract = Read("pkg/computed.py", """
+            A = "\N{cjk unified ideograph-4e00}\N{TANGUT IDEOGRAPH-17000}\N{hangul syllable ga}"
+            B = f"\N{nushu character-1b170}{A}\N{tangut ideograph-18d1e}"
+            C = "\N{CJK UNIFIED IDEOGRAPH-04E00}"
+            """);
+
+        // An f-string's constant parts are a literal each: the field between them is code.
+        Assert.Equal(["\u4E00\U00017000\uAC00", "\U0001B170", "\U00018D1E", "\\N{CJK UNIFIED IDEOGRAPH-04E00}"], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal([("A", CodeEdgeKinds.Uses, 2)], References(extract, "python:pkg.computed.B").Select(reference => (reference.Name, reference.Kind, reference.Line)));
+        Assert.Equal([new ExtractDynamic(3, Refused, PythonReading.RefusedEscape)], extract.Dynamic);
+    }
+
+    /// <summary>
+    /// Each refused escape of a part is said once, by the line it stands on: two on one line give that line twice, and it is the reader
+    /// that marks a line once (<see cref="AnEscapePythonRefuses_IsKeptAsWritten_AndMarksItsLine"/>). Read on the lexer's literal, where
+    /// the decoder's answer is seen whole.
+    /// </summary>
+    [Fact]
+    public void EachRefusedEscapeOfAPart_IsSaidByItsLine_OneAnEscape()
+    {
+        var text = PythonLexer.Scan(CodeText.Of("X = \"\\x4\\u12\"\nY = \"\\N{BAD}\\U1234\""));
+        var first = Assert.Single(text.Scan.LiteralValues(text.Scan[2]));
+        var second = Assert.Single(text.Scan.LiteralValues(text.Scan[5]));
+
+        Assert.Equal(("\\x4\\u12", 1), (first.Value, first.Line));
+        Assert.Equal([1, 1], first.RefusedLines);
+        Assert.Equal(("\\N{BAD}\\U1234", 2), (second.Value, second.Line));
+        Assert.Equal([2, 2], second.RefusedLines);
+    }
+
+    /// <summary>
+    /// A <c>\U</c> naming a lone surrogate is no escape Python refuses: the decoder gives the surrogate as a <c>\u</c>'s does, and no
+    /// line is marked - where one naming a code past every character is kept as written and refused. Read on the lexer's literal, where
+    /// the value is the decoder's: the graph keeps a lone surrogate as the replacement character, as it keeps every one a value holds.
+    /// </summary>
+    [Fact]
+    public void AUniversalEscapeNamingALoneSurrogate_IsTheSurrogate_NotRefused()
+    {
+        static (string Value, int Line, IReadOnlyList<int> RefusedLines) Decoded(string source)
+        {
+            var text = PythonLexer.Scan(CodeText.Of(source));
+            var literal = text.Scan[2];
+
+            Assert.Equal(ScanTokenKind.Text, literal.Kind);
+            var value = Assert.Single(text.Scan.LiteralValues(literal));
+            return (value.Value, value.Line, value.RefusedLines);
+        }
+
+        foreach (var source in new[] { "X = \"\\U0000D800\"", "X = \"\\uD800\"" })
+        {
+            var (value, line, refused) = Decoded(source);
+            Assert.Equal("\uD800", value);
+            Assert.Equal(1, line);
+            Assert.Empty(refused);
+        }
+
+        var (kept, keptLine, refusedLines) = Decoded("X = \"\\U00110000\"");
+        Assert.Equal("\\U00110000", kept);
+        Assert.Equal(1, keptLine);
+        Assert.Equal([1], refusedLines);
+    }
+
+    /// <summary>The sentence of every mark of a refused escape, as <see cref="PythonReading"/> writes it.</summary>
+    private const string Refused = "an escape Python refuses - a character's name Unicode has not, a \\N with no name in braces, a \\x, \\u or \\U short of its digits, a \\U past every character: kept as written";
+
+    /// <summary>
+    /// An escape Python refuses is kept as written in its literal's value, and the line it stands on is marked dynamic with the sentence
+    /// of its limit: an unknown name; a computed name with a leading zero; a <c>\N</c> with no name in braces, empty or never closed - one read over a line break to its
+    /// brace is still one unknown name; a <c>\x</c>, <c>\u</c> or <c>\U</c> short of its digits, in bytes too; a <c>\U</c> past every
+    /// character; in an f-string's constant text and in a string its field holds. Two refusals on one line make one mark, and on two
+    /// lines two; in a string over lines the line of the escape is marked, not the one the string begins on.
+    /// </summary>
+    /// <param name="source">A module's source.</param>
+    /// <param name="values">Its literals' values, as kept.</param>
+    /// <param name="lines">The lines marked, in their order.</param>
+    [Theory]
+    [MemberData(nameof(RefusedEscapes))]
+    public void AnEscapePythonRefuses_IsKeptAsWritten_AndMarksItsLine(string source, string[] values, int[] lines)
+    {
+        var extract = Read("pkg/refused.py", source);
+
+        Assert.Equal(values, (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal(lines.Select(line => new ExtractDynamic(line, Refused, PythonReading.RefusedEscape)), extract.Dynamic);
+    }
+
+    /// <summary>The rows of <see cref="AnEscapePythonRefuses_IsKeptAsWritten_AndMarksItsLine"/>: a module's source, its literals' values as kept, and the lines marked.</summary>
+    public static TheoryData<string, string[], int[]> RefusedEscapes() => new()
+    {
+        { """X = "\N{NO SUCH NAME}" """, ["\\N{NO SUCH NAME}"], [1] },
+        { """X = "\N{em-dash}" """, ["\\N{em-dash}"], [1] },
+        { """X = "\N{}" """, ["\\N{}"], [1] },
+        { """X = "\N{EM DASH" """, ["\\N{EM DASH"], [1] },
+        { """X = "\N" """, ["\\N"], [1] },
+        { """X = "\x4" """, ["\\x4"], [1] },
+        { """X = "\u12" """, ["\\u12"], [1] },
+        { """X = "\U1234" """, ["\\U1234"], [1] },
+        { """X = "\U00110000" """, ["\\U00110000"], [1] },
+        { """X = b"\x4" """, ["\\x4"], [1] },
+        { """X = f"\N{BAD NAME}" """, ["\\N{BAD NAME}"], [1] },
+        { """X = f"{'\N{BAD NAME}'}" """, ["\\N{BAD NAME}"], [1] },
+
+        // A name CPython computes, written with a leading zero: 3.14 read it a character, 3.15 refuses it.
+        { """X = "\N{CJK UNIFIED IDEOGRAPH-04E00}" """, ["\\N{CJK UNIFIED IDEOGRAPH-04E00}"], [1] },
+
+        // Two on one line make one mark, and two lines make two.
+        { """X = "\N{ONE}\N{TWO}" """, ["\\N{ONE}\\N{TWO}"], [1] },
+        { "X = \"\\N{ONE}\"\nY = \"\\x4\"\n", ["\\N{ONE}", "\\x4"], [1, 2] },
+
+        // A string over lines: the line the escape stands on is marked, not the one the string begins on.
+        { "X = \"\"\"\nok\n\\N{BAD}\n\"\"\"\n", ["\nok\n\\N{BAD}\n"], [3] },
+        { "X = \"\"\"\nok\n\\N{BAD}\n\nok\n\\u12\n\"\"\"\n", ["\nok\n\\N{BAD}\n\nok\n\\u12\n"], [3, 6] },
+
+        // A name read to the first closing brace over a line break is still one unknown name, on the line it begins.
+        { "X = \"\"\"\\N{EM\nDASH}\"\"\"\n", ["\\N{EM\nDASH}"], [1] },
+    };
+
+    /// <summary>
+    /// Every literal the reading decodes marks the line its refused escape stands on, wherever the literal is read: at the module's top,
+    /// in an <c>__all__</c>, in a decorator's argument, in a docstring, in a function's body and in a string its f-string's field holds;
+    /// and in a string annotation, which is read as a type expression and kept as no literal of the graph, the line is marked just the
+    /// same - in the annotation's own text, and in a literal that text holds: on the file line of the escape, where the annotation is
+    /// written over lines and the escape is on the second. The kind is the sign of the one limit of the help that says it.
+    /// </summary>
+    [Fact]
+    public void ARefusedEscape_MarksItsLine_WhereverTheLiteralIsRead()
+    {
+        var extract = Read("pkg/places.py", """"
+            __all__ = ["\N{BAD ONE}"]
+            MARKED: "\N{BAD TWO}" = 1
+
+
+            @mark.parametrize("x", ["\N{BAD THREE}"])
+            def decorated(x):
+                """A docstring.
+
+
+                Its refusal is two lines down: \N{BAD FOUR}.
+                """
+                return f"{'\N{BAD FIVE}'}"
+
+
+            def annotated(value: "\N{BAD SIX}") -> "\N{BAD SEVEN}":
+                return value
+
+
+            ALIAS: r'Literal["\N{BAD EIGHT}"]' = None
+
+
+            OVER: r"""Literal[
+                "\N{BAD NINE}",
+                ]""" = None
+            """");
+
+        Assert.Equal([1, 2, 5, 10, 12, 15, 19, 23], extract.Dynamic.Select(mark => mark.Line).Order());
+        Assert.All(extract.Dynamic, mark => Assert.Equal(new ExtractDynamic(mark.Line, Refused, PythonReading.RefusedEscape), mark));
+        Assert.Equal(["refused-escapes"], new PythonExtractor().Help.DoesNotSee.Where(limit => limit.Signs.Contains(PythonReading.RefusedEscape)).Select(limit => limit.Name));
+    }
 
     /// <summary>
     /// A debugging field's text, to its <c>=</c> and the blanks after it, is a constant part of the string's value as written - never

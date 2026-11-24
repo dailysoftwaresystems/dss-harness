@@ -59,6 +59,14 @@ internal sealed class ScannedText
         => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Values(Source) : [];
 
     /// <summary>
+    /// The constant parts of the string literal <paramref name="token"/> is, each decoded with the line it begins on and the lines its
+    /// refused escapes stand on (<see cref="ScanLiteralValue"/>) - what a reader that marks a refusal, as Python's does, reads a
+    /// literal by; none of a token that is no string.
+    /// </summary>
+    public IEnumerable<ScanLiteralValue> LiteralValues(ScanToken token)
+        => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Reads(Source) : [];
+
+    /// <summary>
     /// Each string the markup <paramref name="token"/> holds - a JSX element's attribute values - decoded, with the name of the
     /// attribute it is the value of as its lexer read the tag (<see cref="ScanLiteral.Names"/>, written as the text writes it -
     /// <c>className</c>, <c>data-id</c> - and empty where no name and <c>=</c> stand before it), where the string is written,

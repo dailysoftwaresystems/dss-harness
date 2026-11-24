@@ -11,8 +11,8 @@
 
 ## 1. Projects
 
-[`DssHarness.slnx`](../../../../DssHarness.slnx) holds three projects, plus the workflows, the package-check action and
-the version program as solution items.
+[`DssHarness.slnx`](../../../../DssHarness.slnx) holds three projects, plus the workflows, the package-check action, the version program and the Unicode
+names generator as solution items.
 
 | Project | What it is |
 |---|---|
