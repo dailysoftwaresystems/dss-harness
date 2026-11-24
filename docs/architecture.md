@@ -3841,8 +3841,8 @@ the run's own pause or a crash (`paused`). The open wait is kept in the record w
 closed where the session before wrote its last record (`FlowResumeState.LastRecordAt`), and the time from there is its
 pause. One entry per attempt (`attempts[]`), opened as the attempt starts, holds its own times and outcome, each run of
 it (`runs[]`: an asking closes one and its answer's continuation opens the next, as the machine holding its legs and
-letting one start does), what served it - the provider, the model, the effort, where a fallback moved it from and why
-- its tokens by kind and dollars, each part of them by the model that served it at the price copied as its cost was
+letting one start does), what served it - the provider, the model, the effort, where a fallback moved it from and
+why - its tokens by kind and dollars, each part of them by the model that served it at the price copied as its cost was
 counted (`parts[]`: a price changed in the configuration later never changes what a past turn cost), the uncounted
 reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns, the tool calls
 by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, and
@@ -3859,9 +3859,11 @@ events of the attempt the record says it was on, replayed through the engine's o
 priced as it was reported): only the turns past what its entry was charged (`reports`) are charged now, its run ends
 where its stream did, and a stream that does not read whole, or cannot be priced, says so as the part's uncounted
 reason. The machine a step's legs run on tells its holds as each wait of a leg's admission begins and ends
-(`AdmissionRequest.Told`, `ILegRunWatch.Admitting`; an ssh host's by a note its dispatcher reads), and the step is held
-- its run stopped, its wait on those causes open - while every leg it placed that has not ended waits there and none
-holds a slot (`LegStepRunner.StepHold`).
+(`AdmissionRequest.Told`, `ILegRunWatch.Admitting`; an ssh host's by a note its dispatcher reads) - a wait for a slot in
+the dispatch queue's fair order, for the memory and for the room, then taken as the queue grants the leg its slot and
+ended as the slot is given back or the leg is refused or stopped as it waits, so the measure sees every wait the queue
+makes - and the step is held - its run stopped, its wait on those causes open - while every leg it placed that has not
+ended waits there and none holds a slot (`LegStepRunner.StepHold`).
 
 The report of a run is built from its records alone by their one owner (`FlowRunReport`, from `flow.json`,
 `questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition, read for
@@ -9935,8 +9937,8 @@ match (`Configuration\DefaultConfigFactory.cs`).
 Where a digest goes (`LegStepRunner.Output`, `Execution\LedgerReport.cs`, `Orchestration\Flow\FlowChecks.cs`): every
 red entry of a leg step's output carries one, in `digest`, said for a model - the first error whole with its stack
 rendered to the frames inside the tree (the crossing frame on each side, a line for each run left out, which module
-held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the rest
-- every printing the four do not say - counted by code and by file, the lines no parser held; each thing said once,
+held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the
+rest - every printing the four do not say - counted by code and by file, the lines no parser held; each thing said once,
 the first problem's message in its saying alone, and a member that says nothing - a count of none, an empty list, a
 null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`) - and where the
 digest holds an error or a failure the entry's
@@ -10372,8 +10374,8 @@ their own tell through `ProgramWait.Told`.
 
 A build's probes have none: the compiler asked its version, `ninja -t deps` and the dry run of
 `ninja -t cleandead` are each waited for to their end, told every five minutes while they last,
-and ended only by the build's own token, which its step's bound and a stop cancel (`BuildProbes`)
-- a compiler on a cold disk, or ninja reading the records of forty thousand objects, is slow, not
+and ended only by the build's own token, which its step's bound and a stop cancel (`BuildProbes`) -
+a compiler on a cold disk, or ninja reading the records of forty thousand objects, is slow, not
 hung.
 
 A mutation arm's run is the one whole-duration bound a phase gets, and it is not a guess: a
