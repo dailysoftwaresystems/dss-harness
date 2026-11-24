@@ -1845,6 +1845,602 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// An AddressSanitizer's report runs over every line its runtime prints as its own to the line it halts with, and reads
+    /// <c>crashed</c> there: a heap report whose threads its program named (<c>freed by thread T2 (io-worker) here:</c>,
+    /// <c>previously allocated by thread T1 (io-reader) here:</c>, <c>Thread T2 (io-worker) created by T0 here:</c>),
+    /// container-overflow's hint and the line under it, an ODR violation's globals and where each was registered, never a
+    /// line of them ending the report as <c>errored</c> with its summary, shadow bytes and halt line left to no reading.
+    /// The reports are clang 19's own - the vector's annotations libstdc++'s, built with <c>_GLIBCXX_SANITIZE_VECTOR</c> -
+    /// each from a program a runner step ran, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void AnAddressSanitizersReport_RunsOverEveryLineItsRuntimePrints_ToTheLineItHaltsWith()
+    {
+        var named = Digested(
+            [
+                "=================================================================",
+                "==454==ERROR: AddressSanitizer: heap-use-after-free on address 0x503000001870 at pc 0x64c18f1a98c7 bp 0x7ffdf2005570 sp 0x7ffdf2005568",
+                "READ of size 4 at 0x503000001870 thread T0",
+                "    #0 0x64c18f1a98c6 in main /home/runner/work/app/app/named.c:28:23",
+                "    #1 0x719cdc02a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x719cdc02a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x64c18f0c8344 in _start (/home/runner/work/app/app/named+0x2c344) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                string.Empty,
+                "0x503000001870 is located 0 bytes inside of 32-byte region [0x503000001870,0x503000001890)",
+                "freed by thread T2 (io-worker) here:",
+                "    #0 0x64c18f167eda in free (/home/runner/work/app/app/named+0xcbeda) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a99ea in worker /home/runner/work/app/app/named.c:18:3",
+                "    #2 0x64c18f165aca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                string.Empty,
+                "previously allocated by thread T1 (io-reader) here:",
+                "    #0 0x64c18f168173 in malloc (/home/runner/work/app/app/named+0xcc173) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a9968 in reader /home/runner/work/app/app/named.c:11:12",
+                "    #2 0x64c18f165aca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                string.Empty,
+                "Thread T2 (io-worker) created by T0 here:",
+                "    #0 0x64c18f14d685 in pthread_create (/home/runner/work/app/app/named+0xb1685) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a987d in main /home/runner/work/app/app/named.c:26:3",
+                "    #2 0x719cdc02a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x719cdc02a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x64c18f0c8344 in _start (/home/runner/work/app/app/named+0x2c344) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                string.Empty,
+                "Thread T1 (io-reader) created by T0 here:",
+                "    #0 0x64c18f14d685 in pthread_create (/home/runner/work/app/app/named+0xb1685) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a9855 in main /home/runner/work/app/app/named.c:24:3",
+                "    #2 0x719cdc02a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x719cdc02a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x64c18f0c8344 in _start (/home/runner/work/app/app/named+0x2c344) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: heap-use-after-free /home/runner/work/app/app/named.c:28:23 in main",
+                "Shadow bytes around the buggy address:",
+                "  0x503000001580: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001600: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001680: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001700: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001780: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "=>0x503000001800: fa fa fd fd fd fd fa fa fd fd fd fd fa fa[fd]fd",
+                "  0x503000001880: fd fd fa fa fd fd fd fd fa fa fd fd fd fd fa fa",
+                "  0x503000001900: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001980: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001a00: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001a80: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                .. AddressSanitizersLegend,
+                "==454==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var container = Digested(
+            [
+                "=================================================================",
+                "==496==ERROR: AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x5c5b33c61e70 bp 0x7ffee97e55f0 sp 0x7ffee97e55e8",
+                "READ of size 4 at 0x503000000054 thread T0",
+                "    #0 0x5c5b33c61e6f in main /home/runner/work/app/app/container.cc:10:23",
+                "    #1 0x753e6da2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x753e6da2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x5c5b33b7e3a4 in _start (/home/runner/work/app/app/container+0x2c3a4) (BuildId: f4f81d7db1a043e560471efcefb31aefef8a89c6)",
+                string.Empty,
+                "0x503000000054 is located 20 bytes inside of 32-byte region [0x503000000040,0x503000000060)",
+                "allocated by thread T0 here:",
+                "    #0 0x5c5b33c5f851 in operator new(unsigned long) (/home/runner/work/app/app/container+0x10d851) (BuildId: f4f81d7db1a043e560471efcefb31aefef8a89c6)",
+                "    #1 0x5c5b33c62fcf in std::__new_allocator<int>::allocate(unsigned long, void const*) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/new_allocator.h:151:27",
+                "    #2 0x5c5b33c62b1f in std::allocator_traits<std::allocator<int>>::allocate(std::allocator<int>&, unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/alloc_traits.h:482:20",
+                "    #3 0x5c5b33c62b1f in std::_Vector_base<int, std::allocator<int>>::_M_allocate(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/stl_vector.h:381:20",
+                "    #4 0x5c5b33c6216c in std::vector<int, std::allocator<int>>::reserve(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/vector.tcc:79:22",
+                "    #5 0x5c5b33c61ddb in main /home/runner/work/app/app/container.cc:6:10",
+                "    #6 0x753e6da2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #7 0x753e6da2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #8 0x5c5b33b7e3a4 in _start (/home/runner/work/app/app/container+0x2c3a4) (BuildId: f4f81d7db1a043e560471efcefb31aefef8a89c6)",
+                string.Empty,
+                "HINT: if you don't care about these errors you may set ASAN_OPTIONS=detect_container_overflow=0.",
+                "If you suspect a false positive see also: https://github.com/google/sanitizers/wiki/AddressSanitizerContainerOverflow.",
+                "SUMMARY: AddressSanitizer: container-overflow /home/runner/work/app/app/container.cc:10:23 in main",
+                "Shadow bytes around the buggy address:",
+                "  0x502ffffffd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x503000000000: fa fa 00 00 00 fa fa fa 00 fc[fc]fc fa fa fa fa",
+                "  0x503000000080: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                .. AddressSanitizersLegend,
+                "==496==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var odr = Digested(
+            [
+                "=================================================================",
+                "==509==ERROR: AddressSanitizer: odr-violation (0x70748a6c00a0):",
+                "  [1] size=40 'table' /home/runner/work/app/app/odr_a.c:1 in /home/runner/work/app/app/libodr_a.so",
+                "  [2] size=80 'table' /home/runner/work/app/app/odr_b.c:1 in /home/runner/work/app/app/libodr_b.so",
+                "These globals were registered at these points:",
+                "  [1]:",
+                "    #0 0x5c1286c05a38 in __asan_register_globals (/home/runner/work/app/app/odr+0x41a38) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #1 0x5c1286c06b1d in __asan_register_elf_globals (/home/runner/work/app/app/odr+0x42b1d) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #2 0x70748a6d071e in call_init elf/dl-init.c:74:3",
+                "    #3 0x70748a6d0823 in call_init elf/dl-init.c:120:14",
+                "    #4 0x70748a6d0823 in _dl_init elf/dl-init.c:121:5",
+                "    #5 0x70748a6ea58f  (/lib64/ld-linux-x86-64.so.2+0x1f58f) (BuildId: 231ab65dd867a89dce29cb958fd5ca50abb1aa34)",
+                string.Empty,
+                "  [2]:",
+                "    #0 0x5c1286c05a38 in __asan_register_globals (/home/runner/work/app/app/odr+0x41a38) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #1 0x5c1286c06b1d in __asan_register_elf_globals (/home/runner/work/app/app/odr+0x42b1d) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #2 0x70748a6d071e in call_init elf/dl-init.c:74:3",
+                "    #3 0x70748a6d0823 in call_init elf/dl-init.c:120:14",
+                "    #4 0x70748a6d0823 in _dl_init elf/dl-init.c:121:5",
+                "    #5 0x70748a6ea58f  (/lib64/ld-linux-x86-64.so.2+0x1f58f) (BuildId: 231ab65dd867a89dce29cb958fd5ca50abb1aa34)",
+                string.Empty,
+                "==509==HINT: if you don't care about these errors you may set ASAN_OPTIONS=detect_odr_violation=0",
+                "SUMMARY: AddressSanitizer: odr-violation: global 'table' at /home/runner/work/app/app/odr_a.c:1 in /home/runner/work/app/app/libodr_a.so",
+                "==509==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                [("AddressSanitizer: heap-use-after-free on address 0x503000001870 at pc 0x64c18f1a98c7 bp 0x7ffdf2005570 sp 0x7ffdf2005568", "crashed", (2, 66))],
+                [("AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x5c5b33c61e70 bp 0x7ffee97e55f0 sp 0x7ffee97e55e8", "crashed", (2, 55))],
+                [("AddressSanitizer: odr-violation (0x70748a6c00a0):", "crashed", (2, 24))],
+            ],
+            new[] { named, container, odr }.Select(digest => digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)).ToList()));
+        Assert.Equal([4, 4, 6], new[] { named, container, odr }.Select(digest => digest.Failures[0].Exception!.Stack.Count));
+        Assert.All(new[] { named, container, odr }, digest => Assert.Empty(digest.Unparsed ?? []));
+    }
+
+    /// <summary>
+    /// A LeakSanitizer's report runs over every line it prints as its own to its summary: its suppressions' block between
+    /// its dashed rules, the top leaks it kept, the objects it leaked and the leaks it left out - its program ended by the
+    /// report's exit code, printing no line to halt with, so the report has <c>errored</c> it - never ending at a line of
+    /// them with its summary left to no reading. The reports are clang 19's own (a suppressions file naming one of two
+    /// leaks; <c>report_objects=1:max_leaks=1</c>), each from a program a runner step ran, the run's directory written as a
+    /// runner's.
+    /// </summary>
+    [Fact]
+    public void ALeakSanitizersReport_RunsOverItsSuppressionsAndTheLeaksItLeftOut_ToItsSummary()
+    {
+        var suppressed = Digested(
+            [
+                string.Empty,
+                "=================================================================",
+                "==538==ERROR: LeakSanitizer: detected memory leaks",
+                string.Empty,
+                "Direct leak of 24 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5e3508ea4173 in malloc (/home/runner/work/app/app/leak+0xcc173) (BuildId: f4ac781b263709277ef6fd826e34b2a6f3c7d630)",
+                "    #1 0x5e3508ee57ad in leak_reported /home/runner/work/app/app/leak.c:6:61",
+                "    #2 0x5e3508ee57e8 in main /home/runner/work/app/app/leak.c:10:3",
+                "    #3 0x777839c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x777839c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5e3508e04344 in _start (/home/runner/work/app/app/leak+0x2c344) (BuildId: f4ac781b263709277ef6fd826e34b2a6f3c7d630)",
+                string.Empty,
+                "-----------------------------------------------------",
+                "Suppressions used:",
+                "  count      bytes template",
+                "      1         16 leak_suppressed",
+                "-----------------------------------------------------",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: 24 byte(s) leaked in 1 allocation(s).",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var counted = Digested(
+            [
+                string.Empty,
+                "=================================================================",
+                "==471==ERROR: LeakSanitizer: detected memory leaks",
+                string.Empty,
+                "The 1 top leak(s):",
+                "Direct leak of 24 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5b2ccc1f4173 in malloc (/home/runner/work/app/app/leaks+0xcc173) (BuildId: 2b1cbe715b9d821ecafd7c619f7cce4bbacf94c8)",
+                "    #1 0x5b2ccc2357ad in leak_two /home/runner/work/app/app/leaks.c:6:56",
+                "    #2 0x5b2ccc2357e8 in main /home/runner/work/app/app/leaks.c:10:3",
+                "    #3 0x7933b082a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x7933b082a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5b2ccc154344 in _start (/home/runner/work/app/app/leaks+0x2c344) (BuildId: 2b1cbe715b9d821ecafd7c619f7cce4bbacf94c8)",
+                string.Empty,
+                "Objects leaked above:",
+                "0x503000000040 (24 bytes)",
+                string.Empty,
+                "Omitting 1 more leak(s).",
+                "SUMMARY: AddressSanitizer: 40 byte(s) leaked in 2 allocation(s).",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                [("LeakSanitizer: detected memory leaks", "errored", (3, 19))],
+                [("LeakSanitizer: detected memory leaks", "errored", (3, 18))],
+            ],
+            new[] { suppressed, counted }.Select(digest => digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)).ToList()));
+        Assert.All(new[] { suppressed, counted }, digest => Assert.Empty(digest.Unparsed ?? []));
+    }
+
+    /// <summary>
+    /// An UndefinedBehaviorSanitizer's runtime error runs over the notes it prints under it - at an address or at a source
+    /// place - with the memory a note shows: its bytes, the marks under them and the line naming the range they mark; then
+    /// its stack, which is the report's, and its summary. A runtime error a note ended would hold no stack and leave its
+    /// summary to no reading. The reports are clang 19's own - a downcast its program was built not to recover from, with
+    /// its stack asked for (<c>print_stacktrace=1</c>), and a null passed where a nonnull attribute forbids it, recovered
+    /// from, with the errors and the SEGV that followed - each from a program a runner step ran, the run's directory
+    /// written as a runner's.
+    /// </summary>
+    [Fact]
+    public void AnUndefinedBehaviorSanitizersRuntimeError_RunsOverItsNotesAndTheMemoryEachShows_ToItsSummary()
+    {
+        var downcast = Digested(
+            [
+                "ub.cc:19:12: runtime error: downcast of address 0x5e6179b1d2e0 which does not point to an object of type 'B'",
+                "0x5e6179b1d2e0: note: object is of type 'A'",
+                " 00 00 00 00  e8 1c aa 5f 61 5e 00 00  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  11 20 01 00",
+                "              ^~~~~~~~~~~~~~~~~~~~~~~",
+                "              vptr for 'A'",
+                "    #0 0x5e615fa8bdb8 in main /home/runner/work/app/app/ub.cc:19:12",
+                "    #1 0x71fbdc42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x71fbdc42a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x5e615fa5e434 in _start (/home/runner/work/app/app/ub-halt+0x5434) (BuildId: 1e78447ea2372fce1746998d97d4e8fd63f5dd36)",
+                string.Empty,
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior ub.cc:19:12 ",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var nonnull = Digested(
+            [
+                "more.c:39:26: runtime error: null pointer passed as argument 1, which is declared to never be null",
+                "more.c:20:16: note: nonnull attribute specified here",
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior more.c:39:26 ",
+                "more.c:20:58: runtime error: applying zero offset to null pointer",
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior more.c:20:58 ",
+                "more.c:20:58: runtime error: load of null pointer of type 'int'",
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior more.c:20:58 ",
+                "UndefinedBehaviorSanitizer:DEADLYSIGNAL",
+                "==437==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x000000000000 (pc 0x5fde9137eb1f bp 0x7ffe91f71e60 sp 0x7ffe91f71e40 T437)",
+                "==437==The signal is caused by a READ memory access.",
+                "==437==Hint: address points to the zero page.",
+                "    #0 0x5fde9137eb1f in first /home/runner/work/app/app/more.c:20:58",
+                "    #1 0x5fde9137ed49 in main /home/runner/work/app/app/more.c:39:20",
+                "    #2 0x7366b842a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7366b842a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5fde91352454 in _start (/home/runner/work/app/app/more-ubsan+0x5454) (BuildId: 4f7f0d37d4aab56e423e10dcb7b45ebb0009de0a)",
+                string.Empty,
+                "==437==Register values:",
+                "rax = 0x0000000000000000  rbx = 0x00007ffe91f72048  rcx = 0x0000000000000000  rdx = 0x0000000000000000  ",
+                "rdi = 0x00007ffe91f71198  rsi = 0x0000000000000000  rbp = 0x00007ffe91f71e60  rsp = 0x00007ffe91f71e40  ",
+                " r8 = 0x000000000000007c   r9 = 0x0000000000000000  r10 = 0x00000000ffffff00  r11 = 0x0000000000000246  ",
+                "r12 = 0x0000000000000002  r13 = 0x0000000000000000  r14 = 0x00005fde91393678  r15 = 0x00007366b8849000  ",
+                "UndefinedBehaviorSanitizer can not provide additional info.",
+                "SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/runner/work/app/app/more.c:20:58 in first",
+                "==437==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                ("UndefinedBehaviorSanitizer: downcast of address 0x5e6179b1d2e0 which does not point to an object of type 'B'", "errored", (1, 11)),
+                ("UndefinedBehaviorSanitizer: null pointer passed as argument 1, which is declared to never be null", "errored", (1, 3)),
+                ("UndefinedBehaviorSanitizer: applying zero offset to null pointer", "errored", (4, 5)),
+                ("UndefinedBehaviorSanitizer: load of null pointer of type 'int'", "errored", (6, 7)),
+                ("UndefinedBehaviorSanitizer: SEGV on unknown address 0x000000000000 (pc 0x5fde9137eb1f bp 0x7ffe91f71e60 sp 0x7ffe91f71e40 T437)", "crashed", (9, 25)),
+            ],
+            downcast.Failures.Concat(nonnull.Failures).Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)));
+
+        var stack = downcast.Failures[0].Exception!.Stack;
+
+        Assert.Equal((4, "/home/runner/work/app/app/ub.cc", 19), (stack.Count, stack[0].File, stack[0].Line));
+        Assert.Equal(("ub.cc", 19), (downcast.Failures[0].File!, downcast.Failures[0].Line!.Value));
+        Assert.Empty(downcast.Unparsed ?? []);
+        Assert.Empty(nonnull.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A sanitizer's report runs on after its summary over the lines its runtime prints there as its own, to the line it
+    /// halts with: the creation stack of the thread the error was in, which AddressSanitizer announces after the summary
+    /// where the report has not - a SEGV in a worker its program named, a global-buffer-overflow in a worker - the hint an
+    /// alloc-dealloc or new-delete type mismatch prints under its summary, and the allocator's stats and the command line
+    /// where they were asked for (<c>print_stats=1:print_cmdline=1</c>); each reads <c>crashed</c> at
+    /// <c>==pid==ABORTING</c>, and the frames after the summary are never the report's stack. The reports are clang 19's own
+    /// and g++ 13's (the type mismatch), each from a program a runner step ran, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void ASanitizersReport_RunsOnAfterItsSummary_OverTheLinesItsRuntimePrintsThere_ToItsHaltLine()
+    {
+        var segv = Digested(
+            [
+                "AddressSanitizer:DEADLYSIGNAL",
+                "=================================================================",
+                "==463==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000 (pc 0x564ddde939ee bp 0x78601b9fedd0 sp 0x78601b9fed80 T1)",
+                "==463==The signal is caused by a WRITE memory access.",
+                "==463==Hint: address points to the zero page.",
+                "    #0 0x564ddde939ee in worker /home/runner/work/app/app/segv.c:18:12",
+                "    #1 0x564ddde4faca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                "    #2 0x78601e89cb63 in start_thread nptl/pthread_create.c:447:8",
+                "    #3 0x78601e929e8b in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78",
+                string.Empty,
+                "==463==Register values:",
+                "rax = 0x0000000000000000  rbx = 0x000078601b9ff6c0  rcx = 0x000010007df809f6  rdx = 0x000010007df809f6  ",
+                "rdi = 0x00007fffefc44fb5  rsi = 0x00000ffffdf889f6  rbp = 0x000078601b9fedd0  rsp = 0x000078601b9fed80  ",
+                " r8 = 0x00000ffffdf889f6   r9 = 0x000010007df809f0  r10 = 0x0000000000000000  r11 = 0x00000aca3bbccda8  ",
+                "r12 = 0x00007fffefc44fb0  r13 = 0x000078601b9fede0  r14 = 0x000078601ea73000  r15 = 0x0000564ddde938f0  ",
+                "AddressSanitizer can not provide additional info.",
+                "SUMMARY: AddressSanitizer: SEGV /home/runner/work/app/app/segv.c:18:12 in worker",
+                "Thread T1 (io-worker) created by T0 here:",
+                "    #0 0x564ddde37685 in pthread_create (/home/runner/work/app/app/segv+0xb1685) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                "    #1 0x564ddde93889 in main /home/runner/work/app/app/segv.c:24:3",
+                "    #2 0x78601e82a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x78601e82a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x564ddddb2344 in _start (/home/runner/work/app/app/segv+0x2c344) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                string.Empty,
+                "==463==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var global = Digested(
+            [
+                "=================================================================",
+                "==479==ERROR: AddressSanitizer: global-buffer-overflow on address 0x5af2fc35db70 at pc 0x5af2fb9ce990 bp 0x7c39bbdfed70 sp 0x7c39bbdfed68",
+                "READ of size 4 at 0x5af2fc35db70 thread T1",
+                "    #0 0x5af2fb9ce98f in worker /home/runner/work/app/app/segv.c:15:26",
+                "    #1 0x5af2fb98aaca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                "    #2 0x7c39bec9cb63 in start_thread nptl/pthread_create.c:447:8",
+                "    #3 0x7c39bed29e8b in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78",
+                string.Empty,
+                "0x5af2fc35db70 is located 0 bytes after global variable 'table' defined in '/home/runner/work/app/app/segv.c:7' (0x5af2fc35db60) of size 16",
+                "SUMMARY: AddressSanitizer: global-buffer-overflow /home/runner/work/app/app/segv.c:15:26 in worker",
+                "Shadow bytes around the buggy address:",
+                "  0x5af2fc35d880: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35d900: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35d980: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35da00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35da80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x5af2fc35db00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00[f9]f9",
+                "  0x5af2fc35db80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dc00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dc80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dd00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                .. AddressSanitizersLegend,
+                "Thread T1 created by T0 here:",
+                "    #0 0x5af2fb972685 in pthread_create (/home/runner/work/app/app/segv+0xb1685) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                "    #1 0x5af2fb9ce889 in main /home/runner/work/app/app/segv.c:24:3",
+                "    #2 0x7c39bec2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7c39bec2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5af2fb8ed344 in _start (/home/runner/work/app/app/segv+0x2c344) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                string.Empty,
+                "Stats: 0M malloced (0M for red zones) by 6 calls",
+                "Stats: 0M realloced by 0 calls",
+                "Stats: 0M freed by 3 calls",
+                "Stats: 0M really freed by 0 calls",
+                "Stats: 2M (2M-0M) mmaped; 11 maps, 0 unmaps",
+                "  mallocs by size class: 3:3; 4:1; 14:1; 18:1; ",
+                "Stats: malloc large: 0",
+                "Stats: StackDepot: 8 ids; 9M allocated",
+                "Stats: SizeClassAllocator64: 1M mapped (0M rss) in 648 allocations; remains 648",
+                "  03 (    48): mapped:    256K allocs:     256 frees:       0 inuse:    256 num_freed_chunks    5205 avail:   5461 rss:      8K releases:      0 last released:      0K region: 0x503000000000",
+                "  04 (    64): mapped:    256K allocs:     128 frees:       0 inuse:    128 num_freed_chunks    3968 avail:   4096 rss:      4K releases:      0 last released:      0K region: 0x504000000000",
+                "  14 (   224): mapped:    256K allocs:     128 frees:       0 inuse:    128 num_freed_chunks    1042 avail:   1170 rss:      4K releases:      0 last released:      0K region: 0x50e000000000",
+                "  18 (   384): mapped:    256K allocs:     128 frees:       0 inuse:    128 num_freed_chunks     554 avail:    682 rss:      4K releases:      0 last released:      0K region: 0x512000000000",
+                "  36 (  8192): mapped:    256K allocs:       8 frees:       0 inuse:      8 num_freed_chunks      24 avail:     32 rss:      4K releases:      0 last released:      0K region: 0x524000000000",
+                "Stats: LargeMmapAllocator: allocated 0 times, remains 0 (0 K) max 0 M; by size logs: ",
+                "Quarantine limits: global: 256Mb; thread local: 1024Kb",
+                "Global quarantine stats: batches: 0; bytes: 0 (user: 0); chunks: 0 (capacity: 0); 0% chunks used; 0% memory overhead",
+                string.Empty,
+                "Command: ./segv global ",
+                string.Empty,
+                "==479==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var allocation = Digested(
+            [
+                "=================================================================",
+                "==469==ERROR: AddressSanitizer: alloc-dealloc-mismatch (malloc vs operator delete) on 0x502000000010",
+                "    #0 0x5fc71e23c476 in operator delete(void*, unsigned long) (/home/runner/work/app/app/mismatch+0x10e476) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                "    #1 0x5fc71e23dd0e in main /home/runner/work/app/app/mismatch.cc:11:5",
+                "    #2 0x76b87082a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x76b87082a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5fc71e15a344 in _start (/home/runner/work/app/app/mismatch+0x2c344) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                string.Empty,
+                "0x502000000010 is located 0 bytes inside of 16-byte region [0x502000000010,0x502000000020)",
+                "allocated by thread T0 here:",
+                "    #0 0x5fc71e1fa173 in malloc (/home/runner/work/app/app/mismatch+0xcc173) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                "    #1 0x5fc71e23dcee in main /home/runner/work/app/app/mismatch.cc:10:38",
+                "    #2 0x76b87082a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x76b87082a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5fc71e15a344 in _start (/home/runner/work/app/app/mismatch+0x2c344) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: alloc-dealloc-mismatch (/home/runner/work/app/app/mismatch+0x10e476) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563) in operator delete(void*, unsigned long)",
+                "==469==HINT: if you don't care about these errors you may set ASAN_OPTIONS=alloc_dealloc_mismatch=0",
+                "==469==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var type = Digested(
+            [
+                "=================================================================",
+                "==484==ERROR: AddressSanitizer: new-delete-type-mismatch on 0x504000000010 in thread T0:",
+                "  object passed to delete has wrong type:",
+                "  size of the allocated type:   44 bytes;",
+                "  size of the deallocated type: 4 bytes.",
+                "    #0 0x7205d8eff5e8 in operator delete(void*, unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:164",
+                "    #1 0x5c30861b6375 in main /home/runner/work/app/app/mismatch.cc:19",
+                "    #2 0x7205d862a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58",
+                "    #3 0x7205d862a28a in __libc_start_main_impl ../csu/libc-start.c:360",
+                "    #4 0x5c30861b61a4 in _start (/home/runner/work/app/app/mismatch-gcc+0x11a4) (BuildId: 2b8d2d424af852dc902e0acaf16a9d849206fdf4)",
+                string.Empty,
+                "0x504000000010 is located 0 bytes inside of 44-byte region [0x504000000010,0x50400000003c)",
+                "allocated by thread T0 here:",
+                "    #0 0x7205d8efe548 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:95",
+                "    #1 0x5c30861b635b in main /home/runner/work/app/app/mismatch.cc:18",
+                "    #2 0x7205d862a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58",
+                "    #3 0x7205d862a28a in __libc_start_main_impl ../csu/libc-start.c:360",
+                "    #4 0x5c30861b61a4 in _start (/home/runner/work/app/app/mismatch-gcc+0x11a4) (BuildId: 2b8d2d424af852dc902e0acaf16a9d849206fdf4)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: new-delete-type-mismatch ../../../../src/libsanitizer/asan/asan_new_delete.cpp:164 in operator delete(void*, unsigned long)",
+                "==484==HINT: if you don't care about these errors you may set ASAN_OPTIONS=new_delete_type_mismatch=0",
+                "==484==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                [("AddressSanitizer: SEGV on unknown address 0x000000000000 (pc 0x564ddde939ee bp 0x78601b9fedd0 sp 0x78601b9fed80 T1)", "crashed", (3, 25))],
+                [("AddressSanitizer: global-buffer-overflow on address 0x5af2fc35db70 at pc 0x5af2fb9ce990 bp 0x7c39bbdfed70 sp 0x7c39bbdfed68", "crashed", (2, 69))],
+                [("AddressSanitizer: alloc-dealloc-mismatch (malloc vs operator delete) on 0x502000000010", "crashed", (2, 19))],
+                [("AddressSanitizer: new-delete-type-mismatch on 0x504000000010 in thread T0:", "crashed", (2, 22))],
+            ],
+            new[] { segv, global, allocation, type }.Select(digest => digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)).ToList()));
+
+        var stack = segv.Failures[0].Exception!.Stack;
+
+        Assert.Equal((4, "/home/runner/work/app/app/segv.c", 18), (stack.Count, stack[0].File, stack[0].Line));
+        Assert.Equal([4, 4, 5, 5], new[] { segv, global, allocation, type }.Select(digest => digest.Failures[0].Exception!.Stack.Count));
+        Assert.All(new[] { segv, global, allocation, type }, digest => Assert.Empty(digest.Unparsed ?? []));
+    }
+
+    /// <summary>
+    /// Under CTest, a sanitizer's report ends at the next line CTest itself prints, never holding it - a LeakSanitizer's
+    /// report, printing no halt line, runs over its blank line to CTest's indented <c>Start 2:</c> and no further - and a
+    /// test AddressSanitizer aborted reads <c>crashed</c>: its container-overflow report runs over its hint and the line
+    /// under it to <c>==pid==ABORTING</c>, so CTest says neither failed test again. The console is CTest 4.3's
+    /// <c>--output-on-failure</c> over three plain test programs clang 19 built under AddressSanitizer, the vector's
+    /// annotations libstdc++'s, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void UnderCTest_AReportEndsAtTheLineCTestPrints_AndATestAddressSanitizerAbortedHasCrashed()
+    {
+        var digest = Digested(
+            [
+                "Test project /home/runner/work/app/app/build",
+                "    Start 1: leak_test",
+                "1/3 Test #1: leak_test ........................***Failed    0.85 sec",
+                string.Empty,
+                "=================================================================",
+                "==549==ERROR: LeakSanitizer: detected memory leaks",
+                string.Empty,
+                "Direct leak of 24 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5e535e44f173 in malloc (/home/runner/work/app/app/build/leak_test+0xcc173) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                "    #1 0x5e535e4907ad in leak_reported /home/runner/work/app/app/leak.c:6:61",
+                "    #2 0x5e535e4907e8 in main /home/runner/work/app/app/leak.c:10:3",
+                "    #3 0x7b0837a2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x7b0837a2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5e535e3af344 in _start (/home/runner/work/app/app/build/leak_test+0x2c344) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                string.Empty,
+                "Direct leak of 16 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5e535e44f173 in malloc (/home/runner/work/app/app/build/leak_test+0xcc173) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                "    #1 0x5e535e49077d in leak_suppressed /home/runner/work/app/app/leak.c:5:63",
+                "    #2 0x5e535e4907e3 in main /home/runner/work/app/app/leak.c:9:3",
+                "    #3 0x7b0837a2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x7b0837a2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5e535e3af344 in _start (/home/runner/work/app/app/build/leak_test+0x2c344) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: 40 byte(s) leaked in 2 allocation(s).",
+                string.Empty,
+                "    Start 2: vec_test",
+                "2/3 Test #2: vec_test .........................***Failed    0.83 sec",
+                "=================================================================",
+                "==553==ERROR: AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x55e3a760be70 bp 0x7ffc2560f590 sp 0x7ffc2560f588",
+                "READ of size 4 at 0x503000000054 thread T0",
+                "    #0 0x55e3a760be6f in main /home/runner/work/app/app/container.cc:10:23",
+                "    #1 0x78861f22a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x78861f22a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x55e3a75283a4 in _start (/home/runner/work/app/app/build/vec_test+0x2c3a4) (BuildId: 4d172923b75e905e0837b37fcf73a7bba3987b2b)",
+                string.Empty,
+                "0x503000000054 is located 20 bytes inside of 32-byte region [0x503000000040,0x503000000060)",
+                "allocated by thread T0 here:",
+                "    #0 0x55e3a7609851 in operator new(unsigned long) (/home/runner/work/app/app/build/vec_test+0x10d851) (BuildId: 4d172923b75e905e0837b37fcf73a7bba3987b2b)",
+                "    #1 0x55e3a760cfcf in std::__new_allocator<int>::allocate(unsigned long, void const*) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/new_allocator.h:151:27",
+                "    #2 0x55e3a760cb1f in std::allocator_traits<std::allocator<int>>::allocate(std::allocator<int>&, unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/alloc_traits.h:482:20",
+                "    #3 0x55e3a760cb1f in std::_Vector_base<int, std::allocator<int>>::_M_allocate(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/stl_vector.h:381:20",
+                "    #4 0x55e3a760c16c in std::vector<int, std::allocator<int>>::reserve(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/vector.tcc:79:22",
+                "    #5 0x55e3a760bddb in main /home/runner/work/app/app/container.cc:6:10",
+                "    #6 0x78861f22a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #7 0x78861f22a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #8 0x55e3a75283a4 in _start (/home/runner/work/app/app/build/vec_test+0x2c3a4) (BuildId: 4d172923b75e905e0837b37fcf73a7bba3987b2b)",
+                string.Empty,
+                "HINT: if you don't care about these errors you may set ASAN_OPTIONS=detect_container_overflow=0.",
+                "If you suspect a false positive see also: https://github.com/google/sanitizers/wiki/AddressSanitizerContainerOverflow.",
+                "SUMMARY: AddressSanitizer: container-overflow /home/runner/work/app/app/container.cc:10:23 in main",
+                "Shadow bytes around the buggy address:",
+                "  0x502ffffffd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x503000000000: fa fa 00 00 00 fa fa fa 00 fc[fc]fc fa fa fa fa",
+                "  0x503000000080: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                .. AddressSanitizersLegend,
+                "==553==ABORTING",
+                string.Empty,
+                "    Start 3: after_test",
+                "3/3 Test #3: after_test .......................   Passed    0.01 sec",
+                string.Empty,
+                "33% tests passed, 2 tests failed out of 3",
+                string.Empty,
+                "Total Test time (real) =   1.69 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - leak_test (Failed)",
+                "\t  2 - vec_test (Failed)",
+                "Errors while running CTest",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "ctest", null),
+            8)!;
+
+        Assert.Equal(
+            [
+                ("sanitizer", "LeakSanitizer: detected memory leaks", "errored", (6, 25)),
+                ("sanitizer", "AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x55e3a760be70 bp 0x7ffc2560f590 sp 0x7ffc2560f588", "crashed", (29, 82)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Log!.Value)));
+        Assert.Equal((0, 1, 1), (digest.Failed, digest.Errored, digest.Crashed));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// The shadow bytes' legend AddressSanitizer prints under the shadow bytes around the address its report names, line
+    /// for line the same in clang 19's reports and g++ 13's.
+    /// </summary>
+    private static readonly string[] AddressSanitizersLegend =
+    [
+        "Shadow byte legend (one shadow byte represents 8 application bytes):",
+        "  Addressable:           00",
+        "  Partially addressable: 01 02 03 04 05 06 07 ",
+        "  Heap left redzone:       fa",
+        "  Freed heap region:       fd",
+        "  Stack left redzone:      f1",
+        "  Stack mid redzone:       f2",
+        "  Stack right redzone:     f3",
+        "  Stack after return:      f5",
+        "  Stack use after scope:   f8",
+        "  Global redzone:          f9",
+        "  Global init order:       f6",
+        "  Poisoned by user:        f7",
+        "  Container overflow:      fc",
+        "  Array cookie:            ac",
+        "  Intra object redzone:    bb",
+        "  ASan internal:           fe",
+        "  Left alloca redzone:     ca",
+        "  Right alloca redzone:    cb",
+    ];
+
+    /// <summary>
     /// Ninja's <c>FAILED:</c> line is read by the one owner of it (<see cref="DssHarness.Core.Build.Ninja"/>), as the
     /// build's own reading of its failed units reads it: the exit code ninja writes between <c>FAILED:</c> and the step's
     /// outputs - a negative one, a Windows crash's - taken off, so the edge whose build failed is the outputs alone,

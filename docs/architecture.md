@@ -10049,10 +10049,14 @@ whenever it comes and holding for the line under it, a compiler's line a diagnos
 whose head was the last, its `[build failed]` result, printed later in the packages' order, said
 only where that package's own block said nothing, so neither another package's block nor its
 failing tests silence it, Rust's panic and `cargo test`'s, the sanitizers' reports - each read over
-its own lines alone, its frames, blank and indented lines, the sentences between its stacks, its
-summary and shadow bytes, to the line its sanitizer halts with or the first line that is none of
-them, which is offered again to the others, so a report printed with no summary and no halt line
-holds nothing the program printed after it - a native crash as gdb
+its own lines alone, before its summary and after it alike: its frames, blank and indented lines,
+the runtime's `==pid==` lines, every sentence compiler-rt's runtimes print (a thread named where its
+program named it, `freed by thread T2 (io-worker) here:`, the creation stack of the thread the error
+was in, printed after the summary, LeakSanitizer's suppressions, container-overflow's and the ODR
+violation's lines, the hints after the summary), its summary and shadow bytes, and UBSan's notes
+with the memory each shows - to the line its sanitizer halts with or the first line that is none of
+them, which is offered again to the others, so a report printed with no halt line holds nothing the
+program printed after it, a line CTest prints among them - a native crash as gdb
 or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
 failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
 test`'s - a failure whose top frame is the test framework's own an expectation that failed, any other
