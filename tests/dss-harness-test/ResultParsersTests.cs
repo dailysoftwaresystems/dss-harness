@@ -1697,7 +1697,8 @@ public sealed class ResultParsersTests
     /// <summary>
     /// A sanitizer's report ends at the first line that is none of its own - its frames, its blank and indented lines, its
     /// sentences between stacks, its shadow bytes - and that line is offered again to every other reading, so a report the
-    /// program ran on from, printed with no summary and no halt line, holds nothing the program printed after it: inside a
+    /// program ran on from, printed with no summary and no halt line, holds no line the program printed after it but a blank
+    /// or indented one: inside a
     /// GoogleTest test, MemorySanitizer's report is its own and both failing tests are said by GoogleTest; AddressSanitizer's
     /// and ThreadSanitizer's end at their last line, before the program's next. The reports are clang 19's own, its
     /// runtimes told to recover and print no summary (<c>halt_on_error=0:print_summary=0</c>), the run's directory written as
