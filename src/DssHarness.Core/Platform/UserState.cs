@@ -6,22 +6,79 @@ namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// Where this tool keeps what is one per user of a machine, whichever repositories and worktrees reach it: the hold
-/// that keeps the machine awake between commands, the heavy legs admitted onto it, the set-ups its legs hold.
+/// that keeps the machine awake between commands, the heavy legs admitted onto it, the set-ups its legs hold - and the
+/// isolation's own directory, which holds the caches and the temporary directories of what runs inside it.
 /// </summary>
 /// <remarks>
 /// Among this user's own application data, never in a directory other users can write: whoever could write there
 /// could hold a machine awake, or keep every other user's legs waiting. A process that can name no such directory -
 /// given no home, as a program started under an id no account has - keeps nothing there, and is told why, rather than
-/// being sent to the directory every user shares.
+/// being sent to the directory every user shares. <see cref="Variable"/> moves all of it at once to a directory the user
+/// names, and reads as nothing but this tool's: the home, the user data and the user cache are every program's, and
+/// moving one of them to move this tool's state would move what every other program keeps there with it.
 /// </remarks>
 public static class UserState
 {
     /// <summary>
-    /// This user's own directory for this tool, below the home directory this process was given: every file and folder
-    /// below it that a command of this tool keeps is <see cref="File"/>'s to name, and this names the place they share.
+    /// The variable of this tool's own that names the directory it keeps its per-user state in, as a fully qualified path,
+    /// in place of the system's default: read first, on every system, by <see cref="Directory"/> and
+    /// <see cref="IsolationDirectory"/> alike. Set to anything else, it names no directory, and is refused for it rather
+    /// than read as the default, which is the very place its setter meant to leave.
+    /// </summary>
+    public const string Variable = "DSSHARNESS_USER_STATE";
+
+    /// <summary>The name of the isolation's own directory, under the directory <see cref="Variable"/> names or the user's cache directory.</summary>
+    public const string IsolationDirectoryName = "dssharness-isolation";
+
+    /// <summary>
+    /// This user's own directory for this tool: the directory <see cref="Variable"/> names, where it names one, else below
+    /// the home directory this process was given. Every file and folder below it that a command of this tool keeps is
+    /// <see cref="File"/>'s to name, and this names the place they share.
     /// </summary>
     /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
-    public static string Directory => Path.Combine(ApplicationData(), ToolPackage.Command);
+    public static string Directory => DirectoryOf(Environment.GetEnvironmentVariable);
+
+    /// <summary>
+    /// This user's own directory for this tool, <see cref="Variable"/> read from <paramref name="environment"/>: the
+    /// directory it names, where it names one, else below the home directory this process was given.
+    /// </summary>
+    /// <param name="environment">Reads the variable.</param>
+    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    internal static string DirectoryOf(Func<string, string?> environment)
+        => Given(environment) ?? Path.Combine(ApplicationData(), ToolPackage.Command);
+
+    /// <summary>
+    /// The isolation's own directory on this machine, which holds the caches of what runs inside it, each launch's
+    /// temporary directory and the directories a leg's work starts what runs outside it from: under the directory
+    /// <see cref="Variable"/> names, where it names one, on every system; else under the user's cache directory - on
+    /// Windows <c>LOCALAPPDATA</c> where it names one whole, else <c>AppData\Local</c> in the home; elsewhere
+    /// <c>XDG_CACHE_HOME</c> where it names one whole, else the home's own cache directory, macOS's the Library's.
+    /// </summary>
+    /// <param name="home">The user's home.</param>
+    /// <param name="platform">This machine's system.</param>
+    /// <param name="environment">Reads this process's environment.</param>
+    /// <exception cref="DirectoryNotFoundException"><see cref="Variable"/> names no directory.</exception>
+    public static string IsolationDirectory(string home, PlatformId platform, Func<string, string?> environment)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(home);
+        ArgumentNullException.ThrowIfNull(environment);
+
+        if (Given(environment) is { } given)
+        {
+            return Path.Combine(given, IsolationDirectoryName);
+        }
+
+        string? Named(string variable) => environment(variable) is { Length: > 0 } named && Path.IsPathFullyQualified(named) ? named : null;
+
+        var cache = platform switch
+        {
+            PlatformId.Windows => Named("LOCALAPPDATA") ?? Path.Combine(home, "AppData", "Local"),
+            PlatformId.MacOs => Named("XDG_CACHE_HOME") ?? Path.Combine(home, "Library", "Caches"),
+            _ => Named("XDG_CACHE_HOME") ?? Path.Combine(home, ".cache"),
+        };
+
+        return Path.Combine(cache, IsolationDirectoryName);
+    }
 
     /// <summary>The file <paramref name="name"/> in this user's own directory for this tool.</summary>
     /// <param name="name">The file's name.</param>
@@ -68,13 +125,26 @@ public static class UserState
     /// <param name="machineId">What tells the machine from every other.</param>
     public static string MachineFileName(string prefix, string machineId) => $"{prefix}-{FileNames.SafeFor(machineId)}.json";
 
+    /// <summary>
+    /// The directory <see cref="Variable"/> names in <paramref name="environment"/>; null where it is not set, or set to
+    /// nothing.
+    /// </summary>
+    /// <param name="environment">Reads the variable.</param>
+    /// <exception cref="DirectoryNotFoundException">It is set to a path that is not fully qualified.</exception>
+    private static string? Given(Func<string, string?> environment)
+        => environment(Variable) switch
+        {
+            null or "" => null,
+            var given when Path.IsPathFullyQualified(given) => given,
+            var given => throw new DirectoryNotFoundException($"{Variable} names '{given}', which is no fully qualified path"),
+        };
+
     /// <summary>This user's own application data directory, below the home directory this process was given.</summary>
     /// <remarks>
     /// macOS's lookup of it asks the system for the account's home rather than reading <c>HOME</c>, which every
-    /// other path a process there derives honors - and which a process given another home, as a test gives it,
-    /// then does not reach. Its place below that home is the same. Windows's lookup asks the system for the
-    /// account's folder, which no environment moves, so the <c>LOCALAPPDATA</c> the process was given comes first:
-    /// it names that same folder unless the process was given another.
+    /// other path a process there derives honors; its place below that home is the same. Windows's lookup asks the
+    /// system for the account's folder, which no environment moves, so the <c>LOCALAPPDATA</c> the process was given comes
+    /// first: it names that same folder unless the process was given another.
     /// </remarks>
     private static string ApplicationData()
     {

@@ -699,8 +699,7 @@ public sealed class CommandPipelineTests : IDisposable
         var error = new StringWriter();
         var options = new SessionOptions { Command = HostAgentProtocol.CommandName, Prompting = false, Origin = CommandOrigin.Agent };
         var host = new DssHarnessHost(
-            (_, operation) => new ServiceCollection()
-                .AddDssHarness(options, operation, output: provider => new ConsoleHarnessOutput(output, error, verbose: false, provider.GetRequiredService<HomeShorthand>()))
+            (_, operation) => TestRegistrations.Of(options, operation, output: provider => new ConsoleHarnessOutput(output, error, verbose: false, provider.GetRequiredService<HomeShorthand>()))
                 .AddSingleton<IHostPlatform>(_ => throw new PlatformNotSupportedException("DssHarness supports Windows, Linux and macOS only."))
                 .BuildServiceProvider());
 

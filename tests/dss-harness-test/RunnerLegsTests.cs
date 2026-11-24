@@ -1,7 +1,6 @@
 using DssHarness.Core.Application;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -212,57 +211,35 @@ public sealed class RunnerLegsTests
     }
 
     /// <summary>
-    /// A settings file raising the machine's heavy legs, where the machine's own would be, is no scene of a test to read:
-    /// written for the moment of the test where the machine's user keeps none - one they keep is theirs, and nothing of
-    /// theirs is overwritten - it leaves the registrations a test builds reading the test process's own user data, which
-    /// declares nothing, so the repository's rule (heavyLegs 1, its one slot held by another run) is the one in force and
-    /// the leg waits and is not admitted, on any machine; read instead, it would raise the slots and the leg would run.
+    /// The registrations a test builds keep this machine's settings file and its dispatch queue in the test process's own
+    /// state, below the suite's temporary root, never in the machine user's - whose settings file may raise the machine's
+    /// heavy legs past the one slot this scene's repository declares, and would have its leg admitted and its step run:
+    /// the file they read declares nothing, so the repository's rule is the one in force and the leg waits and is not
+    /// admitted, on any machine, whatever its user keeps.
     /// </summary>
     [Fact]
-    public async Task ASettingsFileRaisingTheMachinesSlots_IsNoSceneOfATestToRead()
+    public async Task TheRegistrationsATestBuilds_KeepTheMachinesSettingsAndQueueInTheTestProcesssOwnState()
     {
-        Assert.SkipWhen(TestHost.MachineUserState is null, "this process was given no user data of the machine's own to displace");
-
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var (inspector, record) = await CompilingAsync(temp, harness);
 
-        var machine = Path.Combine(TestHost.MachineUserState!, MachineSettingsFile.FileNameFor(harness.Platform.MachineId.Id));
-        var written = false;
+        await using var services = Services(harness, inspector, record);
+        var settings = services.GetRequiredService<MachineSettingsFile>();
+        var queue = services.GetRequiredService<MachineDispatchQueue>();
+        var machine = harness.Platform.MachineId.Id;
 
-        if (!File.Exists(machine))
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(machine)!);
-            File.WriteAllText(machine, """{ "admission": { "heavyLegs": 4 } }""");
-            written = true;
-        }
+        Assert.Equal(
+            (Path.Combine(TestHost.UserStateDirectory, MachineSettingsFile.FileNameFor(machine)), Path.Combine(TestHost.UserStateDirectory, MachineDispatchQueue.FileNameFor(machine))),
+            (settings.Location, queue.Location));
+        TestHost.IsKeptInTheProcesssOwnState(settings.Location!);
+        TestHost.IsKeptInTheProcesssOwnState(queue.Location);
+        Assert.Null(settings.Read().Admission);
 
-        try
-        {
-            await using var services = Services(harness, inspector, record);
-            var settings = services.GetRequiredService<MachineSettingsFile>();
+        var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 32), RunId.New(), Token);
 
-            // The settings file the registrations read is the test process's own, and it declares nothing: where the
-            // machine's own were read, both assertions fail before any leg is placed or any step could start.
-            Assert.Equal(
-                Path.Combine(CliRunner.UserStateDirectory, MachineSettingsFile.FileNameFor(harness.Platform.MachineId.Id)),
-                settings.Location);
-            Assert.Null(settings.Read().Admission);
-
-            var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 32), RunId.New(), Token);
-
-            Assert.Equal(LegExit.NotAdmitted, result.ExitCode);
-            Assert.Equal(LegVerdict.NotAdmitted, Assert.Single(result.Report.Lines).Verdict);
-            Assert.Equal([HostId.Local], inspector.Inspected);
-            Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
-        }
-        finally
-        {
-            if (written)
-            {
-                File.Delete(machine);
-            }
-        }
+        Assert.Equal(LegExit.NotAdmitted, result.ExitCode);
+        Assert.Equal(LegVerdict.NotAdmitted, Assert.Single(result.Report.Lines).Verdict);
     }
 
     /// <summary>
@@ -600,14 +577,14 @@ public sealed class RunnerLegsTests
     }
 
     /// <summary>
-    /// run's use case as the tool's own registrations build it, save that this machine is measured by
-    /// <paramref name="inspector"/> and its heavy-leg slots are kept at <paramref name="record"/> under a clock every wait
-    /// moves: a run that goes on reaches only what the test holds.
+    /// run's use case as the tool's own registrations build it in a test (<see cref="TestRegistrations"/>), save that this
+    /// machine is measured by <paramref name="inspector"/> and its heavy-leg slots are kept at <paramref name="record"/>
+    /// under a clock every wait moves: a run that goes on reaches only what the test holds, and a leg admitted by mistake
+    /// runs its step through the built CLI and fails the test's assertion rather than hanging it.
     /// </summary>
     private static ServiceProvider Services(HarnessFactory harness, RecordingInspector inspector, string record)
     {
-        var services = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = RunnerRunService.CommandName, Prompting = false }, OperationId.New(), output: _ => harness.Output);
+        var services = TestRegistrations.Of(new SessionOptions { Command = RunnerRunService.CommandName, Prompting = false }, OperationId.New(), output: _ => harness.Output);
 
         services.AddSingleton<IHostInspector>(inspector);
         services.AddSingleton(AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
@@ -622,10 +599,6 @@ public sealed class RunnerLegsTests
         return await Assert.ThrowsAsync<HarnessException>(() => services.GetRequiredService<IRunnerLegs>().RunAsync(request, RunId.New(), Token));
     }
 
-    /// <summary>
-    /// A repository with a leg this machine runs in a copy of its own, a leg pinned to a host, a runner that writes the
-    /// tree and one that does not - which a run check of the writing one checks, where asked.
-    /// </summary>
     /// <summary>
     /// A run check's runner that carries checks of its own runs them at the leg, to any depth - three deep here, each
     /// check's runner run inside the one before it, on the leg, as built as the leg's own run left it - and a chain that
@@ -702,6 +675,10 @@ public sealed class RunnerLegsTests
             => throw new NotSupportedException("a check's run is never vetted before admission");
     }
 
+    /// <summary>
+    /// A repository with a leg this machine runs in a copy of its own, a leg pinned to a host, a runner that writes the
+    /// tree and one that does not - which a run check of the writing one checks, where asked.
+    /// </summary>
     private static HarnessConfig Config(HarnessFactory harness, bool checkedByFormat = false)
     {
         var platform = harness.Platform;

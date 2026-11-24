@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 
@@ -14,9 +15,9 @@ internal static class TestHost
     internal const string ChildModeVariable = "DSSHARNESS_TEST_CHILD";
 
     /// <summary>
-    /// The directory this tool keeps its own state in as the machine gave the process its user data, captured before
-    /// <see cref="IsolateUserData"/> gave the process a directory of its own: where the machine user's settings file and
-    /// records stand, which a test writes beside only where they keep none of their own.
+    /// The directory this tool keeps its per-user state in as the machine gives it to the process, read as a path alone
+    /// before <see cref="IsolateUserState"/> names the process a directory of its own: where the machine user's settings
+    /// file and records are, which no test reads or writes. Null where the machine names none - a process given no home.
     /// </summary>
     internal static string? MachineUserState { get; private set; }
 
@@ -32,6 +33,15 @@ internal static class TestHost
     /// Being short, it also helps the Windows path budget.
     /// </remarks>
     internal static string TemporaryRoot { get; } = CreateTemporaryRoot();
+
+    /// <summary>
+    /// The directory this test process keeps this tool's per-user state in, below <see cref="TemporaryRoot"/> and of this
+    /// process's own: the one <see cref="UserState.Variable"/> names to the process and every child it starts
+    /// (<see cref="IsolateUserState"/>), so every registration a test builds in process and every CLI a test starts keep
+    /// this machine's settings file, its dispatch queue, its other records and the isolation's caches here - unless a test
+    /// names a directory of its own to a CLI it starts (<see cref="CliRunner.OwnUserState"/>).
+    /// </summary>
+    internal static string UserStateDirectory { get; } = Path.Combine(TemporaryRoot, $"u{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}");
 
     /// <summary>The dotnet host running this suite, so children use the same runtime.</summary>
     internal static string DotnetExecutable { get; } = ResolveDotnet();
@@ -94,7 +104,7 @@ internal static class TestHost
         }
 
         IsolateGitConfiguration();
-        IsolateUserData();
+        IsolateUserState();
 
         // Threads at once for the work the suite's many tests hand the pool, so a test that blocks one - a double that
         // sleeps, a sync wait - never leaves a timer's callback queued behind the pool's slow growth: on a busy runner
@@ -161,14 +171,33 @@ internal static class TestHost
     }
 
     /// <summary>
-    /// Gives this process a user's data of its own, in the one variable each system reads that data from - LOCALAPPDATA
-    /// on Windows, HOME on macOS, XDG_DATA_HOME on Linux - which <see cref="DssHarness.Core.Platform.UserState"/> reads
-    /// and every child inherits: the registrations a test builds in process and every CLI a test starts keep this tool's
-    /// state in a directory of this process's own below the temporary root, never the machine user's, whose settings file
-    /// declares what no test may speak for and whose records every command of theirs shares - unless a test names a home
-    /// or a user's data of its own for a CLI it starts, which stands as it was given. Removed as the process ends.
+    /// That <paramref name="place"/> - a file or directory of this tool's per-user state, as a registration a test built
+    /// or a CLI a test started named it - is in the test process's own state (<see cref="UserStateDirectory"/>), strictly
+    /// below <see cref="TemporaryRoot"/>, and nowhere in the machine user's (<see cref="MachineUserState"/>).
     /// </summary>
-    private static void IsolateUserData()
+    /// <param name="place">Where the tool keeps it.</param>
+    internal static void IsKeptInTheProcesssOwnState(string place)
+    {
+        var comparison = new HostPlatform().PathComparison;
+
+        Assert.True(
+            PathContainment.IsStrictlyInside(TemporaryRoot, place, comparison) && PathContainment.IsInsideOrSame(UserStateDirectory, place, comparison),
+            $"'{place}' is not in this test process's own state, '{UserStateDirectory}'.");
+        Assert.False(
+            MachineUserState is { } machine && PathContainment.IsInsideOrSame(machine, place, comparison),
+            $"'{place}' is in the machine user's own state, '{MachineUserState}'.");
+    }
+
+    /// <summary>
+    /// Gives this process a directory of its own for this tool's per-user state (<see cref="UserStateDirectory"/>), in the
+    /// variable of the tool's own that names it (<see cref="UserState.Variable"/>), which every child inherits: the
+    /// registrations a test builds in process and every CLI a test starts keep the tool's state there, never in the
+    /// machine user's, whose settings file declares what no test may speak for and whose records every command of theirs
+    /// shares - unless a test names a directory of its own to a CLI it starts. The home, the user data and the user cache
+    /// stay the machine's, so every reader of <c>~</c> and every other program's data are as the machine has them.
+    /// Removed as the process ends.
+    /// </summary>
+    private static void IsolateUserState()
     {
         try
         {
@@ -176,17 +205,15 @@ internal static class TestHost
         }
         catch (DirectoryNotFoundException)
         {
-            // A process given no home of its own has none to keep: nothing of the machine user's is read either way.
+            // A process given no home names no state of the machine user's: nothing of theirs is read either way.
         }
 
-        var root = Path.Combine(TemporaryRoot, $"u{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}");
-
-        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(UserStateDirectory);
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             try
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(UserStateDirectory, recursive: true);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -194,9 +221,7 @@ internal static class TestHost
             }
         };
 
-        Environment.SetEnvironmentVariable(
-            OperatingSystem.IsWindows() ? "LOCALAPPDATA" : OperatingSystem.IsMacOS() ? "HOME" : "XDG_DATA_HOME",
-            root);
+        Environment.SetEnvironmentVariable(UserState.Variable, UserStateDirectory);
     }
 
     /// <summary>

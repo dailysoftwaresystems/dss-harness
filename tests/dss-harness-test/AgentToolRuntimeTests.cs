@@ -6,7 +6,6 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
 using DssHarness.Core.Codebase;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
@@ -2049,8 +2048,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
     [Fact]
     public void TheHostAndTheFetch_AreRegistered_InAddDssHarness()
     {
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         Assert.Same(provider.GetRequiredService<HarnessFetch>(), provider.GetRequiredService<AgentToolHost>().Fetch);

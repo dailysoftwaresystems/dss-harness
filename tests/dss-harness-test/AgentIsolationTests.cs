@@ -652,6 +652,34 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
+    /// The tool's own variable for its per-user state naming no fully qualified path leaves the launch with no isolation,
+    /// saying the isolation's caches have nowhere to be kept and why, and naming the remedy: the caches never fall back to
+    /// the user's own cache directory, the very place the variable was set to leave, and nothing is made there.
+    /// </summary>
+    [Fact]
+    public async Task AStateVariableNamingNoFullyQualifiedPath_LeavesTheLaunchWithNoIsolation_AndMakesNothingInTheUsersCache()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var harness = new HarnessFactory();
+        var main = Directory.CreateDirectory(Path.Combine(temp.Path, "main")).FullName;
+        await harness.InitializeGitRepositoryAsync(main, Token);
+
+        var config = new HarnessConfig();
+        var layout = new HarnessLayout(main, main);
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), harness.GitClient, harness.FileSystem, new HomedPlatform(home.Path), name => name == UserState.Variable ? "state" : null);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+
+        using var isolated = await isolation.ForLaunchAsync(config, ground, main, SideTaskLayout.Of(layout, "one").Directory, Token);
+
+        Assert.Equal(
+            (true,
+                $"'side-task' is refused: agentPolicy.isolation is \"required\" and the isolation's caches have nowhere to be kept: {UserState.Variable} names 'state', which is no fully qualified path, so no agent that may run a command starts here; name a fully qualified directory in {UserState.Variable}, or leave it unset"),
+            (isolated.Refused, isolated.Refusal("'side-task'")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(home.Path));
+    }
+
+    /// <summary>
     /// A worktree added while a launch ran - beside a step in another worktree, or beside a side-task in the main checkout,
     /// by the tool or by a person - fails nothing once it has: the work writes no worktree's git directory but its own, so
     /// nothing made there can be its; and every linked worktree's .git file standing inside a place the work writes is held.
@@ -1372,7 +1400,7 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>The isolation's own directory under a test's home, as this machine places it.</summary>
-    private static string IsolationRoot(string home) => IsolationCaches.Root(home, new HostPlatform().Current, _ => null);
+    private static string IsolationRoot(string home) => UserState.IsolationDirectory(home, new HostPlatform().Current, _ => null);
 
     /// <summary>A mechanism that hands the program its own words and one more.</summary>
     private sealed class AddingMechanism : IIsolationMechanism

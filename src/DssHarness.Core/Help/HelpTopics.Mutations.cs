@@ -469,8 +469,9 @@ public static partial class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName}, "
-            + "only where it differs. Its workers are kept in the leg's own tree, as a sweep's are, in a family of "
+            $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName} - "
+            + $"{MutationFixture.DirectoryName} in the directory {UserState.Variable} names, where it names one - only where it differs. "
+            + "Its workers are kept in the leg's own tree, as a sweep's are, in a family of "
             + $"their own - <tree>/{HarnessLayout.MutationsDirectoryName}/<key>{WorkerFamily.SelfTestMark}-<n>, a few megabytes each - so they are "
             + "that repository's: counted by its room, built by its toolchain, and removed by a clean of the leg, and "
             + "with its worktree or its host's copy. A self-test is placed by no room a build of the leg's tree needs, "

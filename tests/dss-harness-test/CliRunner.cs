@@ -23,17 +23,20 @@ public static class CliRunner
     private static readonly Lazy<string> CliAssembly = new(LocateCliAssembly, LazyThreadSafetyMode.PublicationOnly);
 
     /// <summary>
-    /// The directory every CLI a test starts and every registration a test builds in process keeps this tool's own state
-    /// in (<see cref="UserState.Directory"/>) - this machine's settings file, its dispatch queue and the other records it
-    /// keeps for its user - unless a test names a home or a user's data of its own for a CLI it starts: a directory of
-    /// this process's own, below the suite's temporary root, which the suite's start gives this process in the one
-    /// variable each system reads that data from and a CLI inherits (<see cref="TestHost"/>). The machine's own user
-    /// keeps a settings file and records every command of theirs shares, and they are no test's: read, the count of heavy
-    /// legs a developer's machine admits would put every test's legs in one queue, beside the developer's own runs, and
-    /// write each test repository's history into the developer's records - where a machine with no settings file admits
-    /// every test's legs at once.
+    /// The variables that give a CLI <paramref name="directory"/> for this tool's per-user state, in place of the test
+    /// process's own it inherits (<see cref="TestHost.UserStateDirectory"/>): for a test that reads or holds what the CLI
+    /// keeps there - a hold, a record, a cache - as its own, apart from every other test's. The machine's own user keeps a
+    /// settings file and records every command of theirs shares, and they are no test's: read, the count of heavy legs a
+    /// developer's machine admits would put every test's legs in one queue, beside the developer's own runs, and write
+    /// each test repository's history into the developer's records.
     /// </summary>
-    public static string UserStateDirectory => UserState.Directory;
+    /// <param name="directory">The directory the CLI keeps the tool's per-user state in.</param>
+    public static Dictionary<string, string?> OwnUserState(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        return new(StringComparer.Ordinal) { [UserState.Variable] = directory };
+    }
 
     /// <summary>The CLI assembly the tests run: the build a host's DssHarness is compared with.</summary>
     public static string CliAssemblyPath => CliAssembly.Value;
@@ -50,9 +53,9 @@ public static class CliRunner
     /// <param name="workingDirectory">The directory the CLI starts in, or the test's own.</param>
     /// <param name="standardInput">Text the CLI reads on standard input, as a host's DssHarness reads a request.</param>
     /// <param name="environment">
-    /// Variables to set for the CLI, or to remove where the value is null, over the environment it inherits - the user's
-    /// data of this process's own among it (<see cref="UserStateDirectory"/>), which a test that names a home or a user's
-    /// data of its own replaces as it names it.
+    /// Variables to set for the CLI, or to remove where the value is null, over the environment it inherits - the tool's
+    /// per-user state of this process's own among it (<see cref="TestHost.UserStateDirectory"/>), which a test that names
+    /// a directory of its own replaces (<see cref="OwnUserState"/>).
     /// </param>
     public static async Task<ProcessResult> RunAsync(
         string[] arguments,

@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
@@ -1069,7 +1068,7 @@ public sealed class ChildSessionsTests
         var error = new StringWriter();
         var host = new DssHarnessHost((options, operation) =>
         {
-            var services = new ServiceCollection().AddDssHarness(options, operation, output: _ => new ConsoleHarnessOutput(output, error, verbose: false, home: null));
+            var services = TestRegistrations.Of(options, operation, output: _ => new ConsoleHarnessOutput(output, error, verbose: false, home: null));
             replace?.Invoke(services);
             return services.BuildServiceProvider();
         });

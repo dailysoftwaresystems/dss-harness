@@ -49,7 +49,7 @@ public sealed class ExecutionIsolationTests
         var isolated = await isolation.ForExecutionAsync(config, ground, kit.Main, Token);
 
         // The copy's own caches: the workers it writes inside it are the copy's, and change nothing of its scope.
-        var caches = Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory, IsolationCaches.ScopeName([copy], []));
+        var caches = Path.Combine(UserState.IsolationDirectory(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory, IsolationCaches.ScopeName([copy], []));
         IReadOnlyList<IsolatedWrite> writes =
         [
             new(copy, Directory: true, Writable: true),
@@ -83,7 +83,7 @@ public sealed class ExecutionIsolationTests
         Assert.True(Directory.Exists(isolated.Profile.Temp));
 
         // The empty directory its set-ups' lines run from, outside every tree, beside the isolation's caches - written by no child.
-        Assert.Equal(Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.OutsideDirectory), Path.GetDirectoryName(isolated.Outside));
+        Assert.Equal(Path.Combine(UserState.IsolationDirectory(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.OutsideDirectory), Path.GetDirectoryName(isolated.Outside));
         Assert.Empty(Directory.EnumerateFileSystemEntries(isolated.Outside!));
         Assert.False(isolated.Profile.Writable(isolated.Outside!));
 
@@ -191,7 +191,7 @@ public sealed class ExecutionIsolationTests
         var legsOfAnotherRun = await ExecutionCachesAsync(ExecutionGrounds.OfLeg(config, kit.Main, first, first, [Path.Combine(first, HarnessLayout.ActionBuildRelative("corpus", "r2", "native"))]));
         var hooks = await ExecutionCachesAsync(ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false));
 
-        var cachesRoot = Path.Combine(IsolationCaches.Root(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory);
+        var cachesRoot = Path.Combine(UserState.IsolationDirectory(home.Path, new HostPlatform().Current, _ => null), IsolationCaches.Directory);
 
         Assert.Equal(agent, again);
         Assert.True(File.Exists(Path.Combine(again, "planted.targets")));

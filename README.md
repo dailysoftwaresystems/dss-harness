@@ -254,7 +254,10 @@ nothing.
 What a machine can hold is the machine's, while `config.json` is tracked and each worktree holds the
 copy of its last commit: so the machine's own settings file,
 `<user data>/dssharness/settings-<machine id>.json` - the user data being `LOCALAPPDATA` on Windows,
-`~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on Linux - holds
+`~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on Linux, and
+`<user data>/dssharness` the directory `DSSHARNESS_USER_STATE` names in its place, on every system,
+where it names one: a fully qualified path, the tool's own, so moving it moves nothing another program
+keeps in the home or the user data, and anything else is refused, never read as the default - holds
 `{ "admission": { ... } }` in the same keys, read as strictly as `config.json`, and each field it
 declares wins over what any tree's `config.json` says for that machine, `hosts.<machine>.admission`
 and `defaults.admission` staying the rule for each field it leaves out. A count it declares is every
@@ -1243,8 +1246,9 @@ away when the launch ends, for a side-task's - named by `TMPDIR` - on Linux the 
 process keeps there is reached, on Windows MXC's own; and the declared tool caches, each pointed by
 its variable into the cache directory of the child's write scope - the places it writes and the Unix
 sockets outside it reaches (`IsolationCaches.ScopeName`) - under the isolation's own
-(`dssharness-isolation/caches` under `XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS -
-and under `LOCALAPPDATA` on Windows, each scope's directory beside a `.scope` file naming its places),
+(`dssharness-isolation/caches` under the directory `DSSHARNESS_USER_STATE` names, where it names one,
+else under `XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS - and under `LOCALAPPDATA`
+on Windows; each scope's directory beside a `.scope` file naming its places),
 so a package one child plants is run only by a child that writes everything it writes - the next
 launch of the agent, the next run of the leg - never by one that writes another tree or the main
 checkout, a commit's or a push's hooks among them, or reaches the user's SSH agent, and a scope's

@@ -3,7 +3,6 @@ using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Output;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -57,8 +56,7 @@ public sealed class ClaudeCodeClientLiveTests
         var work = Directory.CreateDirectory(temp.Combine("work")).FullName;
         var slot = temp.WriteFile(Path.Combine("slot", "keys.env"), "NOT_FOR_THE_AGENT=1\n");
         File.WriteAllText(Path.Combine(tree, "a.txt"), "alpha\n");
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider();
         var client = new ClaudeCodeClient(harness.ProcessRunner, harness.FileSystem, harness.Platform, harness.ChildSessions, TimeProvider.System, tools: provider.GetRequiredService<AgentToolHost>());
         var runner = new AgentRunner([client], harness.FileSystem, harness.Platform, TimeProvider.System);

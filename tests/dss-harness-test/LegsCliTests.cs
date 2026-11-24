@@ -166,8 +166,16 @@ public sealed class LegsCliTests
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains("verify-git: OK", result.StandardOutput, StringComparison.Ordinal);
 
-        // Named as a host names a path to another machine: from its home, as ~, where it is under the home.
-        var shown = HomeShorthand.Of(new HostPlatform(), new PhysicalFileSystem(FilePermissionsFactory.Create())).Shown(temp.Path);
+        // Named as a host names a path to another machine: from its home, as ~, where it is under the home - the home the
+        // test process and the CLI it started both read, so wherever the suite's directories are under it, as on the
+        // hosted Linux and macOS runners, the ~ form is what the CLI wrote.
+        var platform = new HostPlatform();
+        var files = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var shown = HomeShorthand.Of(platform, files).Shown(temp.Path);
+        var underTheHome = new[] { platform.HomeDirectory, files.ResolveLinks(platform.HomeDirectory) }
+            .Any(home => PathContainment.IsStrictlyInside(home, temp.Path, platform.PathComparison));
+
+        Assert.Equal(underTheHome, shown.StartsWith('~'));
         Assert.Contains(shown, result.StandardOutput, StringComparison.OrdinalIgnoreCase);
 
         // The last line says how the command finished; the machine that asked reads its exit code from there.

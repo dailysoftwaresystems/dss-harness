@@ -3,7 +3,6 @@ using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
@@ -43,7 +42,7 @@ internal sealed class LiveApiRun : IDisposable
         Wire = Directory.CreateDirectory(_temp.Combine("wire")).FullName;
         File.WriteAllText(Path.Combine(_tree, "a.txt"), "alpha\n");
 
-        _services = new ServiceCollection().AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New()).BuildServiceProvider();
+        _services = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New()).BuildServiceProvider();
         var connection = new ApiConnection(TimeProvider.System, new WireRecording(ApiConnection.Connecting(), Wire));
         _runner = new AgentRunner([build(harness, _services.GetRequiredService<AgentToolHost>(), connection)], harness.FileSystem, harness.Platform, TimeProvider.System);
     }

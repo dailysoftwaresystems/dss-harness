@@ -3501,7 +3501,7 @@ reflogs; the push step sends the commit the run's
 commit steps recorded, never what the branch names later - the launch's own temporary directory, kept in the
 run's temp (`OrchestratorLayout.TempDirectory`, `temp/` under the run's directory: one directory a launch,
 named by the hash of the launch's directory, held for the run's life and taken away with the run's directory)
-where the launch belongs to a run, and under the isolation's own (`IsolationCaches.Root`, then `tmp/`, taken
+where the launch belongs to a run, and under the isolation's own (`UserState.IsolationDirectory`, then `tmp/`, taken
 away when the launch ends) for a side-task's; none where the mechanism gives one, `OwnTemp`) and the declared
 tool caches (`IsolationCaches.Declared`, each variable
 pointed into the directory of the child's write scope under `caches/`, `IsolationCaches.Prepared`: one for each set of
@@ -7130,10 +7130,12 @@ taken, waits for the machine to take it:
    runs there, given in the dispatch queue's fair order (*The dispatch queue*). The slots are kept in
    `<user data>/dssharness/admission-<machine id>.json` - the user data being `LOCALAPPDATA` on
    Windows, `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on
-   Linux - beside the hold that keeps the machine awake: one per user of the machine, whichever
-   repository asks, never in a directory other users can write, and never anywhere else when no
-   such directory can be named. The record is named by the identifier the system keeps for the
-   machine (Windows's `MachineGuid`, Linux's `machine-id`, the Mac's hardware UUID), never by its
+   Linux, and `<user data>/dssharness` the directory `DSSHARNESS_USER_STATE` names in its place
+   where it names one (*Where the tool keeps its per-user state* below) - beside the hold that keeps
+   the machine awake: one per user of the machine, whichever repository asks, never in a directory
+   other users can write, and never anywhere else when no such directory can be named. The record
+   is named by the identifier the system keeps for the machine (Windows's `MachineGuid`, Linux's
+   `machine-id`, the Mac's hardware UUID), never by its
    name, which a Mac takes from each network it joins: read by name, the legs still running under
    the old one would be another machine's to every command started under the new, and their slots
    free. Where the system keeps none - a container its image gave no `machine-id` - the record is
@@ -7208,6 +7210,23 @@ home written `~`, and `--json` gives each host's `settingsFile`, its `admission`
 `processes`, its own logical processors - is said as that (`AdmissionSettings.MachinesProcessors`), never
 as the count of the machine reading the rule, and the rule carries no count for it; the machine decides
 it as it admits.
+
+**Where the tool keeps its per-user state.** One owner names it (`UserState`): the slots' record, the
+settings file, the hold that keeps the machine awake, the set-ups' holds, the search sources' paces,
+the workflow cache and the mutation fixture all live in `UserState.Directory`, and the isolation's
+caches and temporary directories in `UserState.IsolationDirectory`. `DSSHARNESS_USER_STATE`
+(`UserState.Variable`), read first on every system, names a directory that holds the state in place of
+`<user data>/dssharness`, with the isolation's own directory, `dssharness-isolation`, below it; where it
+names none, the state is in the user data and the isolation's directory in the user's cache directory
+(`XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS - and `LOCALAPPDATA` on Windows). The
+variable is the tool's own: the home, the user data and the user cache are every program's, and moving
+one of them to move the tool's state would move with it every reader of `~` - the host's home written
+`~`, the agent policy's, ssh's keys - and every other program's caches, NuGet's and npm's among them. A
+value that is not a fully qualified path names no directory: it is refused, never read as the default
+the variable was set to leave - a heavy leg's slot has nowhere to be kept, and an isolation has nowhere
+for its caches, each said naming the variable. The test suite gives its own process a directory below
+its temporary root through it, which every child it starts inherits, so no test reads or writes what
+the machine's user keeps, and every reader of `~` still reads the machine's home.
 
 A waiting leg says where it stands as it starts each wait - who holds the slots, the memory in use, or
 the room and who claims it - again whenever the holders or the claimants change, and again, as it reads

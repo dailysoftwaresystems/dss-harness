@@ -260,6 +260,14 @@ public static partial class HelpTopics
         builder.AppendLine("by its name, which a Mac takes from each network it joins. Where the system keeps none");
         builder.AppendLine("- a container its image gave no machine-id - each is named by the machine's name, and");
         builder.AppendLine("the first heavy leg says so. Another user's legs are counted in that user's own.");
+        builder.AppendLine($"Where {UserState.Variable} names a directory - a fully qualified path, read first on");
+        builder.AppendLine("every system - that directory holds them in place of <user data>/dssharness, with");
+        builder.AppendLine($"every other file this tool keeps for its user and, in {UserState.IsolationDirectoryName}");
+        builder.AppendLine("below it, the isolation's caches. The variable is the tool's own, so moving it moves");
+        builder.AppendLine("nothing another program keeps in the home or the user data. Set to anything that is");
+        builder.AppendLine("not a fully qualified path, it names no directory: nothing is read from or kept in");
+        builder.AppendLine("the default in its place, and a heavy leg, whose slot is kept there, is refused,");
+        builder.AppendLine("naming it.");
 
         return builder.ToString();
     }

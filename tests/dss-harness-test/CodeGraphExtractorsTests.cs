@@ -1,7 +1,6 @@
 using DssHarness.Core.Application;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,8 +18,7 @@ public sealed class CodeGraphExtractorsTests
     [Fact]
     public void TheContainersRegistry_HoldsEveryImplementationOfTheCore()
     {
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         var registry = provider.GetRequiredService<CodeGraphExtractors>();

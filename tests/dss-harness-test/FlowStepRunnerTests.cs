@@ -1,6 +1,5 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
@@ -301,8 +300,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.StartsWith("no runner serves a step of type 'build' yet", build.Error, StringComparison.Ordinal);
         Assert.Throws<ArgumentException>(() => new FlowStepRunners([Orient(harness), Orient(harness)], harness.GraphSyncs));
 
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
         Assert.Equal(FlowStepRunners.Served, provider.GetServices<IFlowStepTypeRunner>().Select(runner => runner.Type));
         Assert.Contains(

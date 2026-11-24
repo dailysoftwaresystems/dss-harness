@@ -134,6 +134,32 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// Where the help names this tool's per-user directory - the admission topic's records, the mutations topic's fixture -
+    /// it names the variable of the tool's own that moves it, read first on every system, the isolation's caches below it,
+    /// and the refusal of a value that names no directory; each name read from the code.
+    /// </summary>
+    [Fact]
+    public async Task TheHelp_NamesTheToolsOwnVariable_WhereverItNamesTheToolsPerUserDirectory()
+    {
+        var admission = Prose.Words((HelpText.Of("admission")).StandardOutput);
+        var mutations = Prose.Words((HelpText.Of("mutations")).StandardOutput);
+
+        Assert.Contains(
+            $"Where {UserState.Variable} names a directory - a fully qualified path, read first on every system - that directory holds them in "
+                + "place of <user data>/dssharness, with every other file this tool keeps for its user and, in "
+                + $"{UserState.IsolationDirectoryName} below it, the isolation's caches. The variable is the tool's own, so moving it moves nothing "
+                + "another program keeps in the home or the user data. Set to anything that is not a fully qualified path, it names no directory: "
+                + "nothing is read from or kept in the default in its place, and a heavy leg, whose slot is kept there, is refused, naming it.",
+            admission,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName} - "
+                + $"{MutationFixture.DirectoryName} in the directory {UserState.Variable} names, where it names one - only where it differs.",
+            mutations,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The admission topic says a heavy leg's build is held to minFreeGiB - read every few seconds, the seconds read from
     /// the code, and again as a build or a write of its fails - and stopped under it, writing nothing where it starts under
     /// it; that WSL's page cache is dropped before a wait on the

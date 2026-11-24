@@ -18,7 +18,7 @@ public sealed class WorkflowCacheCommandTests
     public async Task Prune_WithoutItsDays_IsAUsageError()
     {
         using var temp = new TempDirectory();
-        var (environment, _) = OwnUserData(temp);
+        var (environment, _) = OwnUserState(temp);
 
         var result = await CliRunner.RunAsync(["workflow-cache", "prune"], Token, temp.Path, environment: environment);
 
@@ -36,7 +36,7 @@ public sealed class WorkflowCacheCommandTests
     {
         const string days = "-1";
         using var temp = new TempDirectory();
-        var (environment, cache) = OwnUserData(temp);
+        var (environment, cache) = OwnUserState(temp);
         var blob = Path.Combine(cache, "blobs", "aa", new string('a', 38));
         Directory.CreateDirectory(Path.GetDirectoryName(blob)!);
         await File.WriteAllTextAsync(blob, "kept\n", Token);
@@ -65,7 +65,7 @@ public sealed class WorkflowCacheCommandTests
     public async Task PruneUnusedDaysOfAHundredThousand_PrunesEveryUnused(string days)
     {
         using var temp = new TempDirectory();
-        var (environment, cache) = OwnUserData(temp);
+        var (environment, cache) = OwnUserState(temp);
         var blob = Path.Combine(cache, "blobs", "aa", new string('a', 38));
         Directory.CreateDirectory(Path.GetDirectoryName(blob)!);
         await File.WriteAllTextAsync(blob, "held by no entry\n", Token);
@@ -85,7 +85,7 @@ public sealed class WorkflowCacheCommandTests
     public async Task List_NamesTheCachesDirectory_InTextAndInJson()
     {
         using var temp = new TempDirectory();
-        var (environment, cache) = OwnUserData(temp);
+        var (environment, cache) = OwnUserState(temp);
 
         var text = await CliRunner.RunAsync(["workflow-cache", "list"], Token, temp.Path, environment: environment);
         var json = await CliRunner.RunAsync(["workflow-cache", "list", "--json"], Token, temp.Path, environment: environment);
@@ -106,44 +106,32 @@ public sealed class WorkflowCacheCommandTests
     }
 
     /// <summary>
-    /// The CLI a test starts naming no home of its own keeps this tool's state in the test process's own user data, never
-    /// in the machine's own user's: the cache it names is there, beside this machine's settings file and its dispatch queue -
-    /// so no developer's count of heavy legs, and no queue their own commands share, reaches a test.
+    /// The CLI a test starts naming no directory of its own keeps this tool's state in the test process's own, below the
+    /// suite's temporary root, never in the machine's own user's: the cache it names is there, beside this machine's
+    /// settings file and its dispatch queue - so no developer's count of heavy legs, and no queue their own commands share,
+    /// reaches a test.
     /// </summary>
     [Fact]
-    public async Task TheCliATestStarts_KeepsItsStateInTheTestProcesssOwnUserData_NeverTheMachineUsersOwn()
+    public async Task TheCliATestStarts_KeepsItsStateInTheTestProcesssOwn_NeverTheMachineUsersOwn()
     {
         using var temp = new TempDirectory();
 
         var json = await CliRunner.RunAsync(["workflow-cache", "list", "--json"], Token, temp.Path);
+        var cache = JsonNode.Parse(json.StandardOutput)!["cache"]!.GetValue<string>();
 
-        Assert.Equal(
-            (HarnessExit.Success, Path.Combine(CliRunner.UserStateDirectory, WorkflowCache.DirectoryName)),
-            (json.ExitCode, JsonNode.Parse(json.StandardOutput)!["cache"]!.GetValue<string>()));
+        Assert.Equal((HarnessExit.Success, Path.Combine(TestHost.UserStateDirectory, WorkflowCache.DirectoryName)), (json.ExitCode, cache));
+        TestHost.IsKeptInTheProcesssOwnState(cache);
     }
 
     /// <summary>
-    /// An environment giving the CLI a user's data of its own, below <paramref name="temp"/>, and the workflow cache's
-    /// directory it then names: a test never reaches the cache of the machine's own user.
+    /// An environment giving the CLI a directory of its own for this tool's state, below <paramref name="temp"/>, and the
+    /// workflow cache's directory it then names: a test never reaches the cache of the machine's own user, nor another
+    /// test's.
     /// </summary>
-    private static (Dictionary<string, string?> Environment, string Cache) OwnUserData(TempDirectory temp)
+    private static (Dictionary<string, string?> Environment, string Cache) OwnUserState(TempDirectory temp)
     {
-        var home = temp.Combine("home");
-        var local = Path.Combine(home, "AppData", "Local");
-        var share = Path.Combine(home, ".local", "share");
-        Directory.CreateDirectory(home);
+        var state = temp.Combine("state");
 
-        var data = OperatingSystem.IsMacOS() ? Path.Combine(home, "Library", "Application Support")
-            : OperatingSystem.IsWindows() ? local
-            : share;
-
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
-        {
-            ["HOME"] = home,
-            ["XDG_DATA_HOME"] = share,
-            ["LOCALAPPDATA"] = local,
-        };
-
-        return (environment, Path.Combine(data, "dssharness", WorkflowCache.DirectoryName));
+        return (CliRunner.OwnUserState(state), Path.Combine(state, WorkflowCache.DirectoryName));
     }
 }

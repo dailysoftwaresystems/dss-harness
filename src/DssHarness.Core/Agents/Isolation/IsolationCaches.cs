@@ -30,11 +30,8 @@ namespace DssHarness.Core.Agents.Isolation;
 /// </remarks>
 public static class IsolationCaches
 {
-    /// <summary>The isolation's own directory under the user's cache directory, which holds the caches and every launch's temporary directory.</summary>
-    public const string RootName = "dssharness-isolation";
-
     /// <summary>
-    /// The directory under the isolation's own that holds the tool caches: one directory for each write scope
+    /// The directory under the isolation's own (<see cref="UserState.IsolationDirectory"/>) that holds the tool caches: one directory for each write scope
     /// (<see cref="ScopeName"/>), and beside it the record of the places that scope writes (<see cref="ScopeRecordExtension"/>).
     /// </summary>
     public const string Directory = "caches";
@@ -106,31 +103,6 @@ public static class IsolationCaches
         var browsers = Path.Combine(cache, "ms-playwright");
 
         return exists(browsers) ? [new(PlaywrightBrowsersVariable, browsers)] : [];
-    }
-
-    /// <summary>
-    /// The isolation's own directory on this machine: on Windows under <c>LOCALAPPDATA</c> where it names one whole, else
-    /// <c>AppData\Local</c> in the home; elsewhere under <c>XDG_CACHE_HOME</c> where it names one whole, else the home's
-    /// own cache directory - macOS's the Library's.
-    /// </summary>
-    /// <param name="home">The user's home.</param>
-    /// <param name="platform">This machine's system.</param>
-    /// <param name="environment">Reads this process's environment.</param>
-    public static string Root(string home, PlatformId platform, Func<string, string?> environment)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(home);
-        ArgumentNullException.ThrowIfNull(environment);
-
-        string? Named(string variable) => environment(variable) is { Length: > 0 } named && Path.IsPathFullyQualified(named) ? named : null;
-
-        var cache = platform switch
-        {
-            PlatformId.Windows => Named("LOCALAPPDATA") ?? Path.Combine(home, "AppData", "Local"),
-            PlatformId.MacOs => Named("XDG_CACHE_HOME") ?? Path.Combine(home, "Library", "Caches"),
-            _ => Named("XDG_CACHE_HOME") ?? Path.Combine(home, ".cache"),
-        };
-
-        return Path.Combine(cache, RootName);
     }
 
     /// <summary>

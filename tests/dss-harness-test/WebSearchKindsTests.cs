@@ -1,5 +1,4 @@
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
@@ -21,8 +20,7 @@ public sealed class WebSearchKindsTests
     [Fact]
     public void TheContainer_HoldsEveryKind()
     {
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         var kinds = provider.GetRequiredService<WebSearchKinds>();
