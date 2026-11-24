@@ -932,6 +932,95 @@ public sealed class ResultParsersTests
         Assert.Empty(digest.Unparsed ?? []);
     }
 
+    /// <summary>
+    /// A crash a report says inside a test a runner said began is that test's failure, said once: a GoogleTest test that
+    /// crashed under AddressSanitizer is the test's own crash - the report's words its message, its first stack the
+    /// failure's - and one the C runtime's failed assertion killed is the test's own too, the assertion's words its
+    /// message and its place the failure's, never a second failure the runner says beside them. The lines are each
+    /// tool's own output, a test binary run directly as a leg runs it.
+    /// </summary>
+    [Fact]
+    public void ACrashAReportSaysInsideATestABegan_IsThatTestsFailure_SaidOnce()
+    {
+        var asan = PhaseParsers.DigestOf(AsanDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+
+        var crashed = Assert.Single(asan.Failures);
+
+        Assert.Equal(("gtest", "StoreTest.Loads", "crashed"), (crashed.Framework, crashed.Id, crashed.Outcome));
+        Assert.Equal("AddressSanitizer: heap-buffer-overflow on address 0x502000000258 at pc 0x58ddc2a1101e bp 0x7fff5a29c580 sp 0x7fff5a29c570", crashed.Message);
+        Assert.Equal(("AddressSanitizer", 12), (crashed.Exception!.Type, crashed.Exception.Stack.Count));
+        Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 7), (crashed.Exception.Stack[0].File, crashed.Exception.Stack[0].Line));
+        Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 22), (crashed.Exception.Stack[1].File, crashed.Exception.Stack[1].Line));
+        Assert.Empty(asan.Unparsed ?? []);
+
+        var assertion = PhaseParsers.DigestOf(AssertDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+
+        var killed = Assert.Single(assertion.Failures);
+
+        Assert.Equal(("gtest", "StoreTest.Loads", "crashed"), (killed.Framework, killed.Id, killed.Outcome));
+        Assert.Equal("virtual void StoreTest_Loads_Test::TestBody(): Assertion `count == 2' failed.", killed.Message);
+        Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 18), (killed.File, killed.Line));
+        Assert.Empty(assertion.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A GoogleTest binary's own output, run directly under AddressSanitizer (g++ 13, GoogleTest by CMake's
+    /// FetchContent): its two stacks, its <c>SUMMARY:</c> and its <c>ABORTING</c>. The gtest-asan fixture holds the whole
+    /// report, shadow bytes and legend included.
+    /// </summary>
+    private static readonly string[] AsanDirectRun =
+    [
+        "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+        "[==========] Running 2 tests from 1 test suite.",
+        "[----------] Global test environment set-up.",
+        "[----------] 2 tests from StoreTest",
+        "[ RUN      ] StoreTest.KeepsItsBounds",
+        "[       OK ] StoreTest.KeepsItsBounds (0 ms)",
+        "[ RUN      ] StoreTest.Loads",
+        "=================================================================",
+        "==473==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x502000000258 at pc 0x58ddc2a1101e bp 0x7fff5a29c580 sp 0x7fff5a29c570",
+        "READ of size 4 at 0x502000000258 thread T0",
+        "    #0 0x58ddc2a1101d in store::read(std::vector<int, std::allocator<int> > const&, int) /home/runner/work/app/app/tests/store_test.cc:7",
+        "    #1 0x58ddc2a11897 in StoreTest_Loads_Test::TestBody() /home/runner/work/app/app/tests/store_test.cc:22",
+        "    #2 0x58ddc2a52740 in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/runner/work/app/app/build/store_tests+0x51740) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #3 0x58ddc2a407d9 in testing::Test::Run() [clone .part.0] (/home/runner/work/app/app/build/store_tests+0x3f7d9) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #4 0x58ddc2a40ba9 in testing::TestInfo::Run() (/home/runner/work/app/app/build/store_tests+0x3fba9) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #5 0x58ddc2a410e8 in testing::TestSuite::Run() [clone .part.0] (/home/runner/work/app/app/build/store_tests+0x400e8) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #6 0x58ddc2a48c1e in testing::internal::UnitTestImpl::RunAllTests() (/home/runner/work/app/app/build/store_tests+0x47c1e) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #7 0x58ddc2a4127b in testing::UnitTest::Run() (/home/runner/work/app/app/build/store_tests+0x4027b) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #8 0x58ddc2a10b63 in main (/home/runner/work/app/app/build/store_tests+0xfb63) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #9 0x75b886e2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58",
+        "    #10 0x75b886e2a28a in __libc_start_main_impl ../csu/libc-start.c:360",
+        "    #11 0x58ddc2a10ef4 in _start (/home/runner/work/app/app/build/store_tests+0xfef4) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        string.Empty,
+        "0x502000000258 is located 0 bytes after 8-byte region [0x502000000250,0x502000000258)",
+        "allocated by thread T0 here:",
+        "    #0 0x75b8876fe548 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:95",
+        "    #1 0x58ddc2a14c93 in std::__new_allocator<int>::allocate(unsigned long, void const*) /usr/include/c++/13/bits/new_allocator.h:151",
+        "    #2 0x58ddc2a143a0 in std::allocator_traits<std::allocator<int> >::allocate(std::allocator<int>&, unsigned long) /usr/include/c++/13/bits/alloc_traits.h:482",
+        "    #3 0x58ddc2a143a0 in std::_Vector_base<int, std::allocator<int> >::_M_allocate(unsigned long) /usr/include/c++/13/bits/stl_vector.h:381",
+        "    #4 0x58ddc2a13d7d in void std::vector<int, std::allocator<int> >::_M_range_initialize<int const*>(int const*, int const*, std::forward_iterator_tag) /usr/include/c++/13/bits/stl_vector.h:1692",
+        "    #5 0x58ddc2a132f2 in std::vector<int, std::allocator<int> >::vector(std::initializer_list<int>, std::allocator<int> const&) /usr/include/c++/13/bits/stl_vector.h:682",
+        "    #6 0x58ddc2a117ca in StoreTest_Loads_Test::TestBody() /home/runner/work/app/app/tests/store_test.cc:20",
+        "    #7 0x58ddc2a52740 in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/runner/work/app/app/build/store_tests+0x51740) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        string.Empty,
+        "SUMMARY: AddressSanitizer: heap-buffer-overflow /home/runner/work/app/app/tests/store_test.cc:7 in store::read(std::vector<int, std::allocator<int> > const&, int)",
+        "==473==ABORTING",
+    ];
+
+    /// <summary>A GoogleTest binary's own output, run directly, its test killed by the C runtime's failed assertion (glibc, g++ 13).</summary>
+    private static readonly string[] AssertDirectRun =
+    [
+        "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+        "[==========] Running 2 tests from 1 test suite.",
+        "[----------] Global test environment set-up.",
+        "[----------] 2 tests from StoreTest",
+        "[ RUN      ] StoreTest.KeepsItsBounds",
+        "[       OK ] StoreTest.KeepsItsBounds (0 ms)",
+        "[ RUN      ] StoreTest.Loads",
+        "store_tests: /home/runner/work/app/app/tests/store_test.cc:18: virtual void StoreTest_Loads_Test::TestBody(): Assertion `count == 2' failed.",
+    ];
+
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
     private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
     {

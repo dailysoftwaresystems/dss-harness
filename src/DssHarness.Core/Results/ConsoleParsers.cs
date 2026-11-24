@@ -499,15 +499,16 @@ internal sealed class GTestParser : IBuiltInParser
 
 /// <summary>
 /// CTest's console: each test's status line, <c>3/5 Test #3: name ....***Failed  0.01 sec</c> - <c>Failed</c> a failure,
-/// <c>Timeout</c> one timed out, <c>Not Run</c> one errored, a signal or an abort (<c>Exception: SegFault</c>,
-/// <c>SEGFAULT</c>, <c>Subprocess aborted</c>, <c>Child aborted</c>) one crashed - and its failed list, <c>3 - name
+/// <c>Timeout</c> one timed out, <c>Not Run</c> one errored, a signal or an abort (<c>***Exception: SegFault</c>,
+/// <c>***SIGABRT***Exception:</c>, <c>Subprocess aborted***Exception:</c> as the CTest of a subprocess's death arranges
+/// it, <c>SEGFAULT</c>, <c>Child aborted</c>) one crashed - and its failed list, <c>3 - name
 /// (SEGFAULT)</c>. A failed test is said by its own output where that output said why (a gtest's failures, a sanitizer's
 /// report, printed under it by <c>--output-on-failure</c>), and by its status line where nothing did; the failed list and
 /// <c>Errors while running CTest</c> say only what was said, and a test only they name is said from them.
 /// </summary>
 internal sealed class CTestParser : IBuiltInParser
 {
-    private static readonly Regex Status = LinearRegex.Compile(@"^\s*\d+/\d+ +Test +#\d+: (?<name>.+?) \.*(?:\*\*\*| +)(?<status>[A-Za-z][^*]*?) +(?<seconds>\d+(?:\.\d+)?) sec$");
+    private static readonly Regex Status = LinearRegex.Compile(@"^\s*\d+/\d+ +Test +#\d+: (?<name>.+?) \.*(?:\*\*\*| +)?(?<status>[A-Za-z][^*]*?)(?:\*\*\*)?(?:[^\s*]*:)? +(?<seconds>\d+(?:\.\d+)?) sec$");
 
     private static readonly Regex Start = LinearRegex.Compile(@"^\s*Start +\d+: .+$");
 
