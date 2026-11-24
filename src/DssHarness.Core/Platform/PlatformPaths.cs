@@ -127,19 +127,23 @@ public static class PlatformPaths
     }
 
     /// <summary>
-    /// Whether <paramref name="path"/>, read in the form its own text is written in, names a place strictly inside
-    /// <paramref name="root"/>, read the same way: the answer every machine gives for the same two texts, whichever form
-    /// either is written in and whichever machine reads them - so a path a tool wrote on one system and read on another
-    /// is never placed by the reader's own rules.
+    /// Where <paramref name="path"/>, read in the form its own text is written in, is strictly inside
+    /// <paramref name="root"/>, read the same way: its parts below the root's, <c>.</c> and <c>..</c> resolved, joined by
+    /// <c>/</c> - the one spelling of a place in the tree on every machine - or <see langword="null"/> where it is not
+    /// strictly inside. The answer every machine gives for the same texts, whichever form each is written in and whichever
+    /// machine reads them, so a path a tool wrote on one system and read on another is never placed by the reader's own
+    /// rules. A relative path is read against <paramref name="from"/>, the directory the tool that wrote it ran in, where
+    /// one is given - so <c>../../src/a.c</c> a compiler wrote in the build directory is the tree's <c>src/a.c</c> - and
+    /// against the root where none is.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A relative path is read against <paramref name="root"/>, inside it unless its parts climb out. A rooted one is
-    /// inside only where it is of the root's own form - Windows' (a drive and a separator, or a share; either slash
-    /// separates, and names are compared ignoring case, as Windows compares them) or the POSIX form (a leading <c>/</c>;
-    /// <c>/</c> alone separates, and names are compared exactly) - and its parts, once <c>.</c> and <c>..</c> are
-    /// resolved, begin with every part of the root's and go on. Two forms name no place in common: a Windows path is
-    /// never inside a POSIX root, nor the other way.
+    /// A relative path read against the root is inside it unless its parts climb out. A rooted one is inside only where it
+    /// is of the root's own form - Windows' (a drive and a separator, or a share; either slash separates, and names are
+    /// compared ignoring case, as Windows compares them) or the POSIX form (a leading <c>/</c>; <c>/</c> alone separates,
+    /// and names are compared exactly) - and its parts, once <c>.</c> and <c>..</c> are resolved, begin with every part of
+    /// the root's and go on. Two forms name no place in common: a Windows path is never inside a POSIX root, nor the other
+    /// way.
     /// </para>
     /// <para>
     /// A <c>file:</c> URI is read as the path it names, its escapes decoded; a URI of any other scheme - <c>dart:core</c>,
@@ -148,23 +152,6 @@ public static class PlatformPaths
     /// inside: what cannot be told is never said to be.
     /// </para>
     /// </remarks>
-    /// <param name="root">The directory, as the machine that holds it writes it.</param>
-    /// <param name="path">The path, as whatever wrote it wrote it.</param>
-    public static bool IsInsideAsWritten(string root, string path)
-    {
-        ArgumentNullException.ThrowIfNull(root);
-
-        return RelativeAsWritten(root, path) is not null;
-    }
-
-    /// <summary>
-    /// Where <paramref name="path"/> is inside <paramref name="root"/>, read as <see cref="IsInsideAsWritten"/> reads the
-    /// two: its parts below the root's, <c>.</c> and <c>..</c> resolved, joined by <c>/</c> - the one spelling of a place
-    /// in the tree on every machine - or <see langword="null"/> where it is not strictly inside. A relative path is read
-    /// against <paramref name="from"/>, the directory the tool that wrote it ran in, where one is given - so
-    /// <c>../../src/a.c</c> a compiler wrote in the build directory is the tree's <c>src/a.c</c> - and against the root
-    /// where none is.
-    /// </summary>
     /// <param name="root">The directory, as the machine that holds it writes it; null where no rooted place is known to be the tree's, so only a relative path read against the root is inside it.</param>
     /// <param name="path">The path, as whatever wrote it wrote it.</param>
     /// <param name="from">The directory a relative path is read from, as the machine that holds it writes it; <see langword="null"/> for the root.</param>

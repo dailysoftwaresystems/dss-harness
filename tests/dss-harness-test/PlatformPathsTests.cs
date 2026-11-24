@@ -99,7 +99,7 @@ public sealed class PlatformPathsTests
     [InlineData(@"C:\work\tree", @"src\..\..\a.cs", false)]
     [InlineData("/home/u/tree", "./", false)]
     public void APathAToolWrote_IsInsideATree_ByItsOwnForm_OnEveryMachine(string root, string path, bool inside)
-        => Assert.Equal(inside, PlatformPaths.IsInsideAsWritten(root, path));
+        => Assert.Equal(inside, PlatformPaths.RelativeAsWritten(root, path) is not null);
 
     /// <summary>
     /// A path inside a tree is named below its root by '/' on every machine, whichever form and separators it was written
