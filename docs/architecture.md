@@ -3868,8 +3868,10 @@ counted (`parts[]`: a price changed in the configuration later never changes wha
 reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns, the tool calls
 by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, what
 it asked of the codebase graph in pages past the first (`graphPages`: how many, and the deepest page one answer
-reached, with the operation that asked it - a page refused counts nothing, for it read nothing, and an ask is counted
-as its call ends well, so a resume replays the same count from the stream), and
+reached, with the operation that asked it and how many pages were asked of that answer - an answer its operation and
+its inputs less the page, keyed as a kept result is - whichever client called the tool, by the one reading of a
+stream's tool names (`AgentStreamCalls.ToolOf`); a page refused counts nothing, for it read nothing, and an ask is
+counted as its call ends well, so a resume replays the same count from the stream), and
 for a machine step what each leg did (`legs[]`: its verdict, its time, how long its machine held it before it let it
 start, each phase's time and its digest's counts), the first error its digests read as it ended and the question raised
 of the step while it was its own - kept after the question is answered, so each attempt says its own and never the

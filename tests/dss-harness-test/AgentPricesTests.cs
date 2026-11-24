@@ -352,10 +352,12 @@ public sealed class AgentRunSpendTests
     }
 
     /// <summary>
-    /// The run's account counts the pages past the first its <c>graph</c> calls asked for, each as its call ends well:
-    /// how many in all, by operation, and the deepest page one operation reached. A call that named no page past the
-    /// first, a call of another tool, and a call answered with a usage line - a page past an answer's last - count
-    /// nothing.
+    /// The run's account counts the pages past the first its <c>graph</c> calls asked for, each as its call ends well,
+    /// whichever client called the tool - the API clients by the runtime's name, Claude Code by its served name: how many
+    /// in all, and the deepest page one answer reached with how many pages were asked of that answer - an answer its
+    /// operation and its inputs less the page, whatever order they were written in, so another query of the same
+    /// operation is another answer. A call that named no page past the first, a call of another tool, and a call answered
+    /// with a usage line - a page past an answer's last - count nothing.
     /// </summary>
     [Fact]
     public async Task TheRunsAccount_CountsTheGraphPagesItsCallsAskedForPastTheFirst()
@@ -383,21 +385,29 @@ public sealed class AgentRunSpendTests
 
         var spend = new AgentRunSpend(providers!, "glm-5.3");
 
-        async Task Asked(string id, string input, bool ok = true)
+        async Task Asked(string id, string input, bool ok = true, string tool = AgentGraphSupport.ToolName)
         {
-            await spend.EmitAsync(new ToolCallStarted(id, AgentGraphSupport.ToolName, AgentToolRunner.Harness));
+            await spend.EmitAsync(new ToolCallStarted(id, tool, AgentToolRunner.Harness));
             await spend.EmitAsync(new ToolCallFinished(id, Ok: ok, TimeSpan.Zero, input, ok ? "a page" : "a usage line"));
         }
 
+        // Claude Code calls the engine's tools by the names its tool server serves them under.
+        var served = DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServedName(AgentGraphSupport.ToolName);
+
         await Asked("g1", """{"op":"find","query":"Total","page":2}""");
-        await Asked("g2", """{"op":"find","query":"Total","page":4}""");
+        await Asked("g2", """{"op":"find","query":"Total","page":6}""", tool: served);
         await Asked("g3", """{"op":"find","query":"Total"}""");
         await Asked("g4", """{"op":"body","symbols":["Total"],"page":3}""");
         await Asked("g5", """{"op":"find","query":"Total","page":9}""", ok: false);
+        await Asked("g6", """{"page":3,"query":"Total","op":"find"}""");
+        await Asked("g7", """{"op":"find","query":"Rate","page":2}""");
+        await Asked("g8", """{"op":"find","query":"Tax","page":5}""", tool: served);
         await spend.EmitAsync(new ToolCallStarted("v1", AgentTools.ViewFile, AgentToolRunner.Harness));
         await spend.EmitAsync(new ToolCallFinished("v1", Ok: true, TimeSpan.Zero, """{"path":"a.txt"}""", "the file"));
 
-        Assert.Equal(new FlowStepGraphPages(3, new FlowStepGraphAsk("find", 2, 4)), spend.Account().GraphPages);
+        // Six pages past the first in all; the deepest answer is find Total's, three of them asked of it.
+        Assert.NotEqual(AgentGraphSupport.ToolName, served);
+        Assert.Equal(new FlowStepGraphPages(6, new FlowStepGraphAsk("find", 3, 6)), spend.Account().GraphPages);
     }
 
     /// <summary>

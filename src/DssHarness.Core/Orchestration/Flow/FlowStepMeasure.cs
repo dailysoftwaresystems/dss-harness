@@ -303,7 +303,7 @@ public sealed record FlowStepMeasure(
 /// <summary>
 /// What one attempt of a step asked of the codebase graph in pages past the first: how many pages it asked for in
 /// all, over every answer it asked of, and the deepest page one answer reached - which operation asked it, how many
-/// pages past the first were asked of that operation, and the page it reached. Counted from the <c>graph</c> calls the
+/// pages past the first were asked of that answer, and the page it reached. Counted from the <c>graph</c> calls the
 /// attempt's run answered, each naming the page it asked for; an ask refused - a page past an answer's last - counts
 /// nothing, for it read nothing.
 /// </summary>
@@ -331,10 +331,10 @@ public sealed record FlowStepGraphPages(int Asked, FlowStepGraphAsk? Deepest = n
             : new(held.Asked + more.Asked, more.Deepest?.Page > held.Deepest?.Page ? more.Deepest : held.Deepest);
 }
 
-/// <summary>The deepest page one answer of an attempt reached: the operation that asked it, how many pages past the first were asked of that operation, and the page.</summary>
+/// <summary>The deepest page one answer of an attempt reached: the operation that asked it, how many pages past the first were asked of that answer, and the page.</summary>
 /// <param name="Op">The operation, as the call named it.</param>
-/// <param name="Asked">How many pages past the first were asked of that operation.</param>
-/// <param name="Page">The deepest page one answer of it reached.</param>
+/// <param name="Asked">How many pages past the first were asked of that answer - its operation and its inputs less the page.</param>
+/// <param name="Page">The deepest page the answer reached.</param>
 public sealed record FlowStepGraphAsk(string Op, int Asked, int Page)
 {
     /// <summary>What is wrong with this ask; null when nothing is.</summary>

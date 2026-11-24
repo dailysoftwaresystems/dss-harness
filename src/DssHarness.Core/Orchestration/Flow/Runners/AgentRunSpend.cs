@@ -32,10 +32,12 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
     private readonly List<FlowTurnSpend> _turns = [];
 
     /// <summary>
-    /// The pages past the first the run's <c>graph</c> calls asked for, by operation: how many asks, and the deepest
-    /// page one operation's answer reached. One entry an operation, in the order the run first asked of it.
+    /// The pages past the first the run's <c>graph</c> calls asked for, by answer - its operation and its inputs less the
+    /// page, keyed as a kept result is (<see cref="Codebase.GraphPageStore.KeyOf"/>): the operation, how many pages past
+    /// the first were asked of that answer, and the deepest page it reached. One entry an answer, in the order the run
+    /// first asked of it.
     /// </summary>
-    private readonly Dictionary<string, (int Asked, int Page)> _graphPages = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string Op, int Asked, int Page)> _graphPages = new(StringComparer.Ordinal);
 
     /// <summary>Every token the run's turns used, of every kind.</summary>
     public long Tokens { get; private set; }
@@ -149,8 +151,9 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
                     }
 
                     // A page of the graph the call asked for and was answered counts here, past the first: the one
-                    // measure of what a step reached for in pages, read from the call's own input.
-                    if (finished.Ok && string.Equals(tool, AgentGraphSupport.ToolName, StringComparison.Ordinal))
+                    // measure of what a step reached for in pages, read from the call's own input - the graph tool by
+                    // the runtime's name whichever client called it, by the one reading of a stream's tool names.
+                    if (finished.Ok && string.Equals(AgentStreamCalls.ToolOf(tool), AgentGraphSupport.ToolName, StringComparison.Ordinal))
                     {
                         CountGraphPages(finished.Input);
                     }
@@ -209,14 +212,15 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
             GraphPages: _graphPages.Count > 0
                 ? new(
                     _graphPages.Values.Sum(each => each.Asked),
-                    _graphPages.OrderByDescending(each => each.Value.Page).Select(each => new FlowStepGraphAsk(each.Key, each.Value.Asked, each.Value.Page)).First())
+                    _graphPages.Values.OrderByDescending(each => each.Page).Select(each => new FlowStepGraphAsk(each.Op, each.Asked, each.Page)).First())
                 : null);
 
     /// <summary>
-    /// One answered <c>graph</c> call's ask of a page past the first, counted by the operation that asked it: the
-    /// operation's asks grow and its deepest page reaches where the call asked. An input that does not read as a call
-    /// with an operation and a page past the first counts nothing - a misused call is answered with a usage line, not
-    /// a page.
+    /// One answered <c>graph</c> call's ask of a page past the first, counted by the answer it is a page of - its
+    /// operation and its inputs less the page, keyed as a kept result is, so every page of one answer is counted
+    /// together whatever order its members were written in: the answer's asks grow and its deepest page reaches where
+    /// the call asked. An input that does not read as a call with an operation and a page past the first counts
+    /// nothing - a misused call is answered with a usage line, not a page.
     /// </summary>
     /// <param name="input">The call's input, as its stream holds it.</param>
     private void CountGraphPages(string input)
@@ -224,12 +228,23 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
         try
         {
             if (Json.JsonDepth.ParseNode(input) is JsonObject { } call
-                && call["op"] is JsonValue op && op.TryGetValue<string>(out var named)
+                && call["op"] is JsonValue op && op.TryGetValue<string>(out var named) && !string.IsNullOrWhiteSpace(named)
                 && call["page"] is JsonValue page && page.TryGetValue<int>(out var asked)
                 && asked > 1)
             {
-                var held = _graphPages.GetValueOrDefault(named);
-                _graphPages[named] = (held.Asked + 1, Math.Max(held.Page, asked));
+                var inputs = new JsonObject();
+
+                foreach (var (name, value) in call)
+                {
+                    if (name is not ("op" or "page"))
+                    {
+                        inputs[name] = value?.DeepClone();
+                    }
+                }
+
+                var answer = Codebase.GraphPageStore.KeyOf(named, inputs);
+                var held = _graphPages.GetValueOrDefault(answer, (Op: named, Asked: 0, Page: 0));
+                _graphPages[answer] = (named, held.Asked + 1, Math.Max(held.Page, asked));
             }
         }
         catch (JsonException)
