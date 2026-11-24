@@ -5938,8 +5938,9 @@ gone through and its neighbours are ranked down, never cut; a
 node the step may not read is neither listed, named nor gone through, only counted. It is laid in
 pages of the step's tokens
 (`GraphTextPages`, `EstimatedTokens`), best first, a page's task lines by file, generated code
-last in each section, the pages laid once whole (`GraphTextPages.Whole`) when the pack is made:
-page 1 is given, and its last line says nothing is left out or which page of how many and how to
+last in each section, the pages laid whole when the pack is made - every line laid before any page
+is written, so every page knows the total and the count of nodes the read rule left out of the whole
+walk: page 1 is given, and its last line says nothing is left out or which page of how many and how to
 ask graph's `pack` with page for the next, the total exact on every page and the last saying it
 is; a step whose graph is not tools is told, in the same place, that the rest is on the pages
 after it, which a step whose graph is tools asks the graph for; a
@@ -5988,11 +5989,15 @@ the run's steps share, from the base as it stands when the first graphed reason 
 prompt, raised for the run's task, holding no declaration of a file its steps may not read: a header line, the
 projects and top directories with their counts, then the most central declarations one line each. It is paged at
 whole lines under `codebaseGraph.mapTokens` by the one owner of a given text's pages (`GraphTextPages`, in its
-exact-room form: page 1 holds byte for byte what the map's cap always held, but the last line it now ends with), and
-no line is dropped - the pages after the first are kept with it (`OrchestratorLayout.GraphMapPageFileOf`:
-`map.2.md` and on, `map-<reads>.2.md` and on where read rules narrow), written by `OrchestrationStore.MapOnce` in the
-map's own cross-process section, what it was made from first (`map.json`, saying how many pages), then the pages after
-the first, then the first itself last, so a `map.md` that is there says its pages are. Every step of the ground reads
+exact-room form: page 1 holds the header and the whole lines whose joined text fits the size, then its last line where
+more pages follow), and no line is dropped - the pages after the first are kept with it
+(`OrchestratorLayout.GraphMapPageFileOf`: `map.2.md` and on, `map-<reads>.2.md` and on where read rules narrow),
+written by `OrchestrationStore.MapOnce` in the map's own cross-process section, what it was made from first
+(`map.json`), then the pages after the first, then the first itself last, so a `map.md` that is there says its pages
+are. A kept map's count is read from its first page's own last line (`CodebaseRepositoryMap.PagesOf`), the line every
+step of the ground is told, so a step is offered every page it is told there is, whatever became of the map's other records; a
+page is read back by the one reader beside the writer (`OrchestrationStore.MapPage`), for a run's steps and a
+side-task alike, a page the disk will not give back said with why. Every step of the ground reads
 the same first page - the prefix a client caches never moves - and a step given the tool asks the rest of it as
 `graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
 it: it says the rest is on the pages after it, which a step whose graph is tools asks the graph for, never how this

@@ -5,8 +5,8 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The repository map's ranking: a declaration's centrality is how many files other than its own and a test's hold a
 /// reference that binds to it, raised by how its name matches the task as find weighs a name's words - whole words,
-/// never a piece of one, so a task's small words raise nothing - and no declaration of a test's file is ranked; a cap of
-/// 0 gives no map at all.
+/// never a piece of one, so a task's small words raise nothing - and no declaration of a test's file is ranked; a size of
+/// 0 gives no map at all. The map is pages, none of its lines dropped, and a kept map's count is read from its first page.
 /// </summary>
 public sealed class CodebaseRepositoryMapTests
 {
@@ -98,9 +98,9 @@ public sealed class CodebaseRepositoryMapTests
                 .ThenBy(card => card.Name, StringComparer.Ordinal));
     }
 
-    /// <summary>A cap of 0 gives no map: no pages at all, not even a header, and its meta says so.</summary>
+    /// <summary>A size of 0 gives no map: no pages at all, not even a header, and its meta says so.</summary>
     [Fact]
-    public async Task ACapOfNothing_GivesNoMap()
+    public async Task ASizeOfNothing_GivesNoMap()
     {
         using var tree = await TreeAsync();
         var view = await QueriesAsync(tree);
@@ -113,12 +113,13 @@ public sealed class CodebaseRepositoryMapTests
     }
 
     /// <summary>
-    /// The map is pages, and no line of it is dropped: page 1 holds the whole lines that fit its tokens - byte for byte
-    /// what the map's cap always kept, but the last line it now ends with - and the pages after it hold the rest, the
-    /// same size each, every line on one page, once. Red with the map cut at its cap, the lines past it dropped.
+    /// The map is pages, and no line of it is dropped: page 1 holds its header and the whole lines whose joined text fits
+    /// its tokens, then its last line - which page of how many, and where the rest is - and the pages after it hold the
+    /// rest, the same size each, every line on one page, once. Red with the map cut at its size, the lines past it
+    /// dropped.
     /// </summary>
     [Fact]
-    public async Task TheMap_IsPages_PageOneByteForByteWhatTheCapKept_ButItsLastLine()
+    public async Task TheMap_IsPages_PageOneTheWholeLinesThatFitItsTokens_ThenItsLastLine()
     {
         using var tree = await TreeAsync();
         var view = await QueriesAsync(tree);
@@ -166,21 +167,42 @@ public sealed class CodebaseRepositoryMapTests
         Assert.Equal(lines, given);
     }
 
-    /// <summary>
-    /// A map that fits its page is one page: its text is the lines the cap kept with nothing added - no last line, as
-    /// none was ever added - and its meta says one page.
-    /// </summary>
+    /// <summary>A map that fits its page is one page: its lines with nothing added, no last line, and its count one.</summary>
     [Fact]
-    public async Task AMapThatFitsItsPage_IsOnePage_ByteForByteAsItAlwaysWas()
+    public async Task AMapThatFitsItsPage_IsOnePage_WithNoLastLine()
     {
         using var tree = await TreeAsync();
         var view = await QueriesAsync(tree);
 
-        var (pages, meta) = CodebaseRepositoryMap.Make(view, "total", 2_000);
+        var (pages, _) = CodebaseRepositoryMap.Make(view, "total", 2_000);
 
         Assert.Single(pages);
         Assert.StartsWith("at commit ", pages[0], StringComparison.Ordinal);
         Assert.DoesNotContain("map page ", pages[0], StringComparison.Ordinal);
+        Assert.Equal(1, CodebaseRepositoryMap.PagesOf(pages[0]));
+    }
+
+    /// <summary>
+    /// A kept map's count is read from its first page's own last line, the line every step of its ground is told: the
+    /// pages the map was made in, where it goes on; one where it does not; and one where the page's last line is anything
+    /// but, word for word, the line the map gives a first page - another page's, or a line that only begins as one does.
+    /// </summary>
+    [Fact]
+    public async Task AKeptMapsCount_IsReadFromItsFirstPagesOwnLastLine()
+    {
+        using var tree = await TreeAsync();
+        var view = await QueriesAsync(tree);
+        var (pages, _) = CodebaseRepositoryMap.Make(view, "the total of the shapes", 80);
+        var head = pages[0][..pages[0].LastIndexOf('\n')];
+
+        Assert.True(pages.Count > 1, string.Join('\n', pages));
+        Assert.Equal(pages.Count, CodebaseRepositoryMap.PagesOf(pages[0]));
+        Assert.Equal(1, CodebaseRepositoryMap.PagesOf(head));
+        Assert.Equal(1, CodebaseRepositoryMap.PagesOf(pages[^1]));
+        Assert.Equal(1, CodebaseRepositoryMap.PagesOf(head + "\nmap page 1 of 3 · the last"));
+        Assert.Equal(1, CodebaseRepositoryMap.PagesOf(head + "\nmap page 1 of 03 · the rest is on the pages after it, which a step whose graph is tools asks the graph for"));
+        Assert.Equal(1, CodebaseRepositoryMap.PagesOf(head + "\nmap page 1 of 3 · the rest is on the pages after it, which a step whose graph is tools asks the graph for, and more"));
+        Assert.Equal(1, CodebaseRepositoryMap.PagesOf(string.Empty));
     }
 
     /// <summary>

@@ -2210,7 +2210,7 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(asked.Map);
         Assert.Contains("the graph tool answers for the tree as it is now", asked.Map, StringComparison.Ordinal);
         Assert.True(File.Exists(kit.Layout.GraphMapFile), "the map was not kept");
-        Assert.True(File.Exists(kit.Layout.GraphMapMetaFile), "what the map was made from was not kept");
+        Assert.True(File.Exists(kit.Layout.GraphMapMetaFileOf(reads: null)), "what the map was made from was not kept");
         Assert.True(first.Graph!["mapTokens"]!.GetValue<int>() > 0, "the map's tokens are not in the step's figures");
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
@@ -2229,6 +2229,52 @@ public sealed class ReasonStepRunnerTests
 
         Assert.Equal(asked.Map, agents.Asked[^1].Map);
         Assert.Equal(kept, File.ReadAllText(kit.Layout.GraphMapFile));
+    }
+
+    /// <summary>
+    /// A run's map of several pages is made once and kept whole: every step of its ground is given its first page as it
+    /// was kept - the bytes a client caches, the same after the base moved - the pages after it are kept beside it, and
+    /// a step whose graph is tools is offered the graph's <c>map</c>, whose page 2 is the kept page 2, the step after the
+    /// first reading the count from the kept first page as the first was given it. Red where a step is given a map made
+    /// again, the pages after the first are not kept, or <c>map</c> is not offered.
+    /// </summary>
+    [Fact]
+    public async Task AMapOfSeveralPages_IsGivenEveryStepAsKept_ItsLaterPagesAskedOfTheGraphsMap()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Alpha.cs"), "namespace Demo;\n\npublic sealed class Alpha\n{\n}\n"), (Path.Combine("src", "Beta.cs"), "namespace Demo;\n\npublic sealed class Beta\n{\n}\n"));
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
+        var run = Graphing(kit, Graphed(head: "codebaseGraph:\n  mapTokens: 30\n"));
+
+        var first = await runner.RunAsync(run, Token);
+
+        // The base moves - a fold lands - and the map does not: a map made again would count the file the fold added.
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Other.cs"), "namespace Demo;\n\npublic sealed class Other\n{\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "more code", Token);
+        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+
+        var second = await runner.RunAsync(run with { Visit = 2 }, Token);
+
+        Assert.True(first.Passed, first.Error);
+        Assert.True(second.Passed, second.Error);
+
+        // Every page of the map is kept, page 1 in map.md naming how many there are.
+        var kept = File.ReadAllText(kit.Layout.GraphMapFile);
+        var files = Directory.EnumerateFiles(kit.Layout.GraphDirectory, "map*.md").ToList();
+        var pages = files.Count;
+
+        Assert.True(pages > 1, kept);
+        Assert.Equal(Enumerable.Range(1, pages).Select(page => kit.Layout.GraphMapPageFileOf(reads: null, page)).Order(StringComparer.Ordinal), files.Order(StringComparer.Ordinal));
+        Assert.EndsWith($"\nmap page 1 of {pages} · the rest is on the pages after it, which a step whose graph is tools asks the graph for", kept, StringComparison.Ordinal);
+        Assert.Equal([kept, kept], agents.Asked.Select(asked => asked.Map));
+        Assert.All(agents.Asked, asked => Assert.Contains(GraphOp.Map, asked.Graph!.Operations!));
+
+        var later = agents.Asked[^1].Graph!;
+        var answer = await later.Tool!.RunAsync(new JsonObject { ["op"] = "map", ["page"] = 2 }, later.Operations!, Token);
+
+        Assert.Equal((GraphToolOutcome.Answered, File.ReadAllText(kit.Layout.GraphMapPageFileOf(reads: null, 2))), (answer.Outcome, answer.Text));
+        Assert.StartsWith("repository map page 2\n", answer.Text, StringComparison.Ordinal);
     }
 
     /// <summary>

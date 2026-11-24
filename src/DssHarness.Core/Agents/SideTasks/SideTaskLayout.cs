@@ -66,16 +66,6 @@ public sealed record SideTaskLayout(string Root, string Name)
     /// <summary>The side-task's repository map, made once at its opening and read as it is by every message after.</summary>
     public string MapFile => AsGraph.GraphMapFile;
 
-    /// <summary>The file page <paramref name="page"/> of the side-task's repository map is kept in, beside its first.</summary>
-    /// <param name="page">The page, from 1.</param>
-    public string MapPageFileOf(int page) => AsGraph.GraphMapPageFileOf(reads: null, page);
-
-    /// <summary>
-    /// What the side-task's repository map was made from: the commit the base stood at, how many files the graph holds,
-    /// how many central declarations the map names, and its estimated tokens.
-    /// </summary>
-    public string MapMetaFile => AsGraph.GraphMapMetaFile;
-
     /// <summary>The side-task's layout as the graph service holds it: the one shape every graph's records take.</summary>
     public Orchestration.OrchestratorLayout AsGraph => new(Name, Directory);
 }

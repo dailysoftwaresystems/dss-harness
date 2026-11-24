@@ -908,8 +908,8 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// <c>pack</c> gives a page of the step's context pack as the pack laid it - page 1, the first message's, and each
-    /// later one laid as it is asked - a page past the last refused with how many there are; <c>changes</c> gives a page of
+    /// <c>pack</c> gives a page of the step's context pack as the pack laid it, whole, when it was made - page 1 the first
+    /// message's - a page past the last refused with how many there are; <c>changes</c> gives a page of
     /// the codebase changes the step was told, and says where it was told none; each needs its page, and neither is given
     /// a step whose operations do not hold it.
     /// </summary>
@@ -944,40 +944,41 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// <c>map</c> gives a page of the repository map the run keeps, from where it is kept: page 1 the message's, each
-    /// page after it the map's own; a page past the last refused with how many there are; a run given no map said; and
-    /// the operation is not given a step whose operations do not hold it.
+    /// <c>map</c> gives a page of the repository map the run keeps, from where the store kept it: page 1 the message's,
+    /// each page after it the map's own; a page past the last refused with how many there are; a page the disk will not
+    /// give back said with why; a run given no map said; and the operation is not given a step whose operations do not
+    /// hold it.
     /// </summary>
     [Fact]
     public async Task TheMapOp_GivesTheRunsMapPages_AndRefusesAPagePastTheLast()
     {
         using var tree = await TreeAsync();
         var layout = OrchestratorLayout.Of(new HarnessLayout(tree.Tree, tree.Tree), "run");
-        var (pages, _) = CodebaseRepositoryMap.Make(await QueriesAsync(tree), "the pack of the shapes", 80);
+        var store = tree.Harness.OrchestrationStore;
+        var (pages, meta) = CodebaseRepositoryMap.Make(await QueriesAsync(tree), "the pack of the shapes", 80);
 
         Assert.True(pages.Count > 1, string.Join('\n', pages));
 
-        tree.Harness.FileSystem.WriteAllTextAtomic(layout.GraphMapMetaFileOf(reads: null), $$"""{"pages":{{pages.Count}}}""");
-
-        for (var page = 1; page <= pages.Count; page++)
-        {
-            tree.Harness.FileSystem.WriteAllTextAtomic(layout.GraphMapPageFileOf(reads: null, page), pages[page - 1]);
-        }
-
-        GraphMapPage Read(int page)
-            => page > pages.Count ? new GraphMapPage(pages.Count, null) : new GraphMapPage(pages.Count, tree.Harness.FileSystem.ReadAllText(layout.GraphMapPageFileOf(reads: null, page)));
-
-        var tool = Tool(tree, await QueriesAsync(tree), map: Read);
+        var (_, kept) = store.MapOnce(layout, reads: null, () => (pages, meta), TestContext.Current.CancellationToken);
+        var tool = Tool(tree, await QueriesAsync(tree), map: page => store.MapPage(layout, reads: null, kept, page));
+        var given = Tool(tree, await QueriesAsync(tree), map: null);
         var ops = CodebaseGraphTool.Operations(write: false, narrow: false, map: true);
 
         var second = await AskAsync(tool, """{"op":"map","page":2}""", ops);
         var first = await AskAsync(tool, """{"op":"map","page":1}""", ops);
         var past = await AskAsync(tool, $$"""{"op":"map","page":{{pages.Count + 1}}}""", ops);
+        var none = await AskAsync(given, """{"op":"map","page":2}""", ops);
         var ungiven = await AskAsync(tool, """{"op":"map","page":2}""", CodebaseGraphTool.Operations(write: false, narrow: false));
+        File.Delete(layout.GraphMapPageFileOf(reads: null, pages.Count));
+        var lost = await AskAsync(tool, $$"""{"op":"map","page":{{pages.Count}}}""", ops);
 
+        Assert.Equal(pages.Count, kept);
         Assert.Equal((GraphToolOutcome.Answered, pages[1]), (second.Outcome, second.Text));
         Assert.Equal(pages[0], first.Text);
         Assert.Equal((GraphToolOutcome.Usage, $"page {pages.Count + 1} of 'map': it has {pages.Count} pages (1 to {pages.Count})"), (past.Outcome, past.Text));
+        Assert.Equal((GraphToolOutcome.Usage, "this run was given no repository map to page"), (none.Outcome, none.Text));
+        Assert.Equal(GraphToolOutcome.Usage, lost.Outcome);
+        Assert.StartsWith($"the repository map's page {pages.Count} could not be read: ", lost.Text, StringComparison.Ordinal);
         Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
         Assert.StartsWith("op 'map' is not one this step may use: find, node, related, outline, body", ungiven.Text, StringComparison.Ordinal);
         Assert.Contains("map - a page of the repository map your first message began", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);

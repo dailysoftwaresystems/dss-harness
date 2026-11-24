@@ -164,7 +164,7 @@ public sealed class CodebaseConversationChangesTests
         Assert.EndsWith($"codebase changes page {pages.Count} of {pages.Count} · the last", pages[^1].Text, StringComparison.Ordinal);
         Assert.All(pages, page => Assert.True(page.Tokens <= CodebaseContextPack.DefaultTokens, page.Text));
         Assert.Equal(declared.Order(StringComparer.Ordinal), lines.Order(StringComparer.Ordinal));
-        Assert.Equal((int?)pages.Count, told.Known);
+        Assert.Equal(pages.Count, told.Count);
     }
 
     /// <summary>

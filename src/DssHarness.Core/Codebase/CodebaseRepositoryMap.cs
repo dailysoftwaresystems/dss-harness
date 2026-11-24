@@ -14,13 +14,13 @@ namespace DssHarness.Core.Codebase;
 public static class CodebaseRepositoryMap
 {
     /// <summary>
-    /// The map of <paramref name="queries"/>'s view as pages (<see cref="GraphTextPages.Whole"/>): a header line, the
+    /// The map of <paramref name="queries"/>'s view as pages (<see cref="GraphTextPages"/>, laid whole): a header line, the
     /// projects and top directories with their counts, then the most central declarations one line each as
     /// <see cref="GraphLines"/> writes a node - ranked by <see cref="CodebaseGraphQueries.Central"/>, no test and nothing
     /// generated, raised where their names hold <paramref name="terms"/>' words - every line on one page or another, none
-    /// dropped: page 1 holds the whole lines that fit <paramref name="tokens"/> as the map's cap always kept them, byte
-    /// for byte but the last line it now ends with, and the pages after it hold the rest, the same size each. A cap of 0
-    /// gives no map: no pages, and the meta saying 0 tokens.
+    /// dropped: page 1 holds the header and the whole lines that fit <paramref name="tokens"/>, then its last line where
+    /// more pages follow, and the pages after it hold the rest, the same size each. A size of 0 gives no map: no pages,
+    /// and the meta saying 0 tokens.
     /// </summary>
     /// <param name="queries">The view, as the run's or the side-task's sync left it.</param>
     /// <param name="terms">The task the map is made for - a run's inputs and the issue it triages - or empty for none, as a side-task's is.</param>
@@ -50,24 +50,47 @@ public static class CodebaseRepositoryMap
             .. central.Select(card => new GraphTextLine(null, GraphLines.Of(card))),
         ];
 
-        // The map's page is its tokens' bytes, and its header - page 1's first line - always kept, as the cap always kept
-        // it. A page's room is counted a line's end each, a text joined once between its lines: one byte more than the
-        // tokens holds what the join held, so page 1 keeps the lines the cap kept, byte for byte.
+        // The map's page is its tokens' bytes, and its header - page 1's first line - is held whatever the size. A page's
+        // room is counted a line's end each, a text joined once between its lines: one byte more than the tokens holds
+        // the lines whose joined text is within them, so a page's lines, joined, are within its tokens.
         var room = Math.Max((long)tokens * EstimatedTokens.BytesPerToken + 1, Encoding.UTF8.GetByteCount(header) + 1);
-        var whole = new GraphTextPages(lines, room, lastLineRoom: 0, number => number == 1 ? header : $"repository map page {Number(number)}", Last).Whole();
+        var pages = new GraphTextPages(lines, room, lastLineRoom: 0, number => number == 1 ? header : $"repository map page {Number(number)}", Last).All;
 
-        return ([.. whole.Select(page => page.Text)], Meta(queries, central.Count, whole[0].Text));
+        return ([.. pages.Select(page => page.Text)], Meta(queries, central.Count, pages[0].Text));
     }
 
     /// <summary>
-    /// A page's last line: none where the map is one page, as it always was; else which page of how many, and - one map
-    /// serving the steps of its ground of reads whatever their graph - where the rest is, in the words a step without the
-    /// tool reads as plainly as one with it.
+    /// A page's last line: none where the map is one page; else which page of how many, and - one map serving the steps of
+    /// its ground of reads whatever their graph - where the rest is, in the words a step without the tool reads as plainly
+    /// as one with it.
     /// </summary>
     private static string? Last(GraphTextPageEnd end)
         => end is { Last: true, Page: 1 } ? null
-        : end.Last ? $"map page {Number(end.Page)} of {Number(end.Pages!.Value)} · the last"
-        : $"map page {Number(end.Page)} of {Number(end.Pages!.Value)} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
+        : end.Last ? $"map page {Number(end.Page)} of {Number(end.Pages)} · the last"
+        : $"map page {Number(end.Page)} of {Number(end.Pages)} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
+
+    /// <summary>
+    /// How many pages the map whose first page is <paramref name="first"/> holds, as that page's own last line says it -
+    /// the one count of a kept map, read from the page every step of its ground is given, so what a step is told goes on
+    /// is what it may ask for: 1 where the page ends with no such line, a map of one page.
+    /// </summary>
+    /// <param name="first">The map's first page, whole, as it was kept.</param>
+    public static int PagesOf(string first)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+
+        const string Opening = "map page 1 of ";
+        var line = first[(first.LastIndexOf('\n') + 1)..];
+        var digits = line.StartsWith(Opening, StringComparison.Ordinal) ? line[Opening.Length..].TakeWhile(char.IsAsciiDigit).Count() : 0;
+
+        // The line is read back only where it is, word for word, the last line this map gives a first page of that many.
+        return digits > 0
+            && int.TryParse(line.AsSpan(Opening.Length, digits), NumberStyles.None, CultureInfo.InvariantCulture, out var pages)
+            && pages > 1
+            && string.Equals(Last(new GraphTextPageEnd(1, [], pages, 0)), line, StringComparison.Ordinal)
+                ? pages
+                : 1;
+    }
 
     private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
 

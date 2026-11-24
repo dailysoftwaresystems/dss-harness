@@ -298,7 +298,7 @@ public sealed class FlowStepGraph
                 mask: mask,
                 pack: () => served.Pack?.Paged,
                 changes: () => served.told,
-                map: page => MapPageOf(fileSystem, layout, reads, mapPages, page));
+                map: page => store.MapPage(layout, reads, mapPages, page));
 
             served.support = new AgentGraphSupport(
                 tool,
@@ -826,29 +826,6 @@ public sealed class FlowStepGraph
         {
             output.Warn("reason", $"the repository map of run '{layout.Name}' was not made or read for '{run.Instance}': {ex.Message.TrimEnd('.')}. The step goes on without it; the next step tries again.");
             return (null, 0);
-        }
-    }
-
-    /// <summary>
-    /// Page <paramref name="page"/> of the run's repository map of the step's ground of reads, as the graph tool serves
-    /// it: read whole from where it is kept, with how many pages the map holds - which a page past the last is refused
-    /// by - and a page that cannot be read said with why, never thrown, for the map is a cache and no read of it fails
-    /// the step's call.
-    /// </summary>
-    /// <param name="fileSystem">The file system the map is kept on.</param>
-    /// <param name="layout">The run's own paths.</param>
-    /// <param name="reads">The digest of the step's read rules, which names its map; null for steps no read rule narrows.</param>
-    /// <param name="pages">How many pages the map holds, as its making read it.</param>
-    /// <param name="page">The page asked, from 1.</param>
-    private static GraphMapPage MapPageOf(IFileSystem fileSystem, OrchestratorLayout layout, string? reads, int pages, int page)
-    {
-        try
-        {
-            return new GraphMapPage(pages, page > pages ? null : fileSystem.ReadAllText(layout.GraphMapPageFileOf(reads, page)));
-        }
-        catch (Exception ex) when (Unkept(ex))
-        {
-            return new GraphMapPage(0, null, ex.Message.TrimEnd('.'));
         }
     }
 

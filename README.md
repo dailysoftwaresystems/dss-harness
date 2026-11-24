@@ -648,8 +648,8 @@ steps, which write the run's records, ask none of it (`dssharness help codebase-
 keeps the tool, its default, as it was: the measurement found it costlier with the graph and did not
 move it. What a graphed step is given never cuts: the repository map of its ground of reads is paged
 whole under `codebaseGraph.mapTokens`, made once and read as it is by every step of the ground - page 1
-byte for byte what that size always held but the last line it ends with, which says where the rest is
-and is asked of the tool's `map` where it goes on past it - and the pack is paged the same way under
+the header and the whole lines that fit that size, and, where more pages follow, a last line naming
+which page of how many and where the rest is, asked of the tool's `map` - and the pack is paged the same way under
 `graphPromptTokens`, every page's last line naming the total, the later pages asked of the tool's
 `pack` and `changes`.
 

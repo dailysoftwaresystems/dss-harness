@@ -98,7 +98,7 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
 /// <param name="Nodes">The nodes page 1 lists, by id, each once, in the order it lists them.</param>
 /// <param name="Lines">Each line page 1 lists a node or a declaration taken out by, in order, as it writes it: what a delta gives of the pack a conversation was not given.</param>
 /// <param name="Tokens">Page 1's estimated tokens (<see cref="EstimatedTokens"/>).</param>
-/// <param name="Refused">How many nodes the step's read rule left out of the walk that page 1 was laid from.</param>
+/// <param name="Refused">How many nodes the step's read rule left out of the walk the pack was laid from, whole.</param>
 /// <param name="Near">How near each node is to the step's work, which the <c>graph</c> tool's <c>find</c> breaks a tie by.</param>
 public sealed record ContextPack(string Text, IReadOnlyList<ContextPackSeed> Seeds, IReadOnlyList<string> Nodes, IReadOnlyList<ContextPackLine> Lines, int Tokens, int Refused, GraphNearness Near)
 {
@@ -115,8 +115,8 @@ public sealed record ContextPack(string Text, IReadOnlyList<ContextPackSeed> See
     /// <param name="page">The page asked, from 1.</param>
     public GraphTextPage? Page(int page) => Paged?.Page(page);
 
-    /// <summary>How many pages the pack holds, where every one is laid; null while it may go on past those laid.</summary>
-    public int? Pages => Paged?.Known;
+    /// <summary>How many pages the pack holds; null where it has none.</summary>
+    public int? Pages => Paged?.Count;
 }
 
 /// <summary>One line of a pack that lists a node, or a declaration taken out.</summary>
@@ -319,12 +319,10 @@ public static partial class CodebaseContextPack
             _taskCaption = changed is { Lines.Count: > 0 } ? "the task:" : null;
 
             List<ContextPackSeed> seeds = [.. _seeded.Values.OrderBy(seed => seed.Order).Select(seed => new ContextPackSeed(seed.Id, seed.Why))];
+
+            // The pack is laid whole as it is made: every page's last line names the total, exact on every page and not
+            // only the last, and no later ask lays anything again.
             var page = request.Tokens == 0 ? null : new GraphTextPages(Lines(uncompared, changed), request.Tokens, number => number == 1 ? first : $"codebase graph: context pack page {Number(number)}", Last, ByFile);
-
-            // The pack is laid once, whole: every page's last line names the total, exact on every page and not only the
-            // last, and no later ask lays anything again.
-            _ = page?.Whole();
-
             var one = page?.Page(1);
             List<string> nodes = [.. (one?.Lines ?? []).Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
             var near = new GraphNearness(
@@ -852,21 +850,20 @@ public static partial class CodebaseContextPack
         /// <summary>
         /// A page's last line: how many nodes it lists and its tokens of the page's size, and where the pack goes on - nothing
         /// left out where it is one page; else which page of how many, and how to ask for the next, or that it is the last -
-        /// and how many nodes the read rule left out of the walk so far, or in all on the last.
+        /// and how many nodes the read rule left out of the walk, its whole count on every page, for every line is laid
+        /// before any page is written.
         /// </summary>
         private string Last(GraphTextPageEnd end)
         {
             var nodes = end.Lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal).Count();
-            var of = $"context pack page {Number(end.Page)} of {Number(end.Pages!.Value)}";
+            var of = $"context pack page {Number(end.Page)} of {Number(end.Pages)}";
             var where = end is { Last: true, Page: 1 } ? "nothing left out"
                 : end.Last ? $"{of} · the last"
                 : request.Asks ? $"{of} · ask graph for pack with page: {Number(end.Page + 1)} for the next"
                 : $"{of} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
             var line = $"{ReportText.Counted(nodes, "node")}, ~{Number(end.Tokens)} of {Number(request.Tokens)} tokens; {where}";
 
-            return _refused.Count == 0 ? line
-                : end.Last ? $"{line}; {Number(_refused.Count)} in files the step may not read left out"
-                : $"{line}; {Number(_refused.Count)} so far in files the step may not read left out";
+            return _refused.Count == 0 ? line : $"{line}; {Number(_refused.Count)} in files the step may not read left out";
         }
 
         /// <summary>Whether the step may read <paramref name="card"/>'s file, a node it may not counted as left out.</summary>

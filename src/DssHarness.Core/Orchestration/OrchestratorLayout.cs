@@ -589,9 +589,6 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The run's repository map of the steps no read rule narrows, made once and read as it is by every one after.</summary>
     public string GraphMapFile => GraphMapFileOf(reads: null);
 
-    /// <summary>What that map was made from, kept beside it.</summary>
-    public string GraphMapMetaFile => GraphMapMetaFileOf(reads: null);
-
     /// <summary>
     /// The run's repository map of the steps whose read rules <paramref name="reads"/> names - their digest - made once
     /// and read as it is by every step of those rules: <see cref="GraphMapFileName"/> where it names none.

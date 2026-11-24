@@ -545,9 +545,9 @@ public sealed class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// <c>pack</c> and <c>changes</c>: page <paramref name="page"/> of a text the step's message began, as it was laid -
-    /// each later page laid as it is first asked, by going on with what laid the one before - its first and last lines with
-    /// it; a page past the last refused with how many there are, as any answer's is, and a text the step was not given said.
+    /// <c>pack</c> and <c>changes</c>: page <paramref name="page"/> of a text the step's message began, as it was laid whole
+    /// when it was made, its first and last lines with it; a page past the last refused with how many there are, as any
+    /// answer's is, and a text the step was not given said.
     /// </summary>
     private static GraphToolAnswer TextPage(GraphTextPages? text, string asked, string what, int page)
     {
@@ -561,7 +561,7 @@ public sealed class CodebaseGraphTool(
             return new GraphToolAnswer(given.Text, GraphToolOutcome.Answered);
         }
 
-        return Usage(Paging.PastTheLastSaid(page, text.Known!.Value, asked, note: null));
+        return Usage(Paging.PastTheLastSaid(page, text.Count, asked, note: null));
     }
 
     /// <summary>

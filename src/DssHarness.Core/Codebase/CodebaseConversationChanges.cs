@@ -47,9 +47,9 @@ public static class CodebaseConversationChanges
     /// The pages the changes of <paramref name="view"/> are told in: the declarations the conversation holds that moved,
     /// changed or were removed - each with its new range and hash where it stands - and the nodes of
     /// <paramref name="pack"/> it was not told of, added - every one, in pages of <paramref name="tokens"/> estimated tokens
-    /// each, laid once whole (<see cref="GraphTextPages.Whole"/>), so every page's last line names the total. Page 1 is the
-    /// message's; where it holds them all it ends with its lines, as a
-    /// delta of one page always did, and otherwise its last line says how to ask for the next, as each later page's does.
+    /// each, laid whole (<see cref="GraphTextPages"/>), so every page's last line names the total. Page 1 is the message's;
+    /// where it holds them all it ends with its lines, and otherwise its last line says how to ask for the next, as each
+    /// later page's does.
     /// A page is never less than what holds its own first and last lines and a line's room beside them - a size too small
     /// for that would tell nothing - so every change is told, however small the step's size.
     /// </summary>
@@ -117,12 +117,7 @@ public static class CodebaseConversationChanges
         var head = Math.Max(System.Text.Encoding.UTF8.GetByteCount(first) + 1, GraphTextPages.LastLineRoom);
         var size = Math.Max(tokens, EstimatedTokens.OfBytes(head + (2L * GraphTextPages.LastLineRoom)));
 
-        var pages = new GraphTextPages(lines, size, page => page == 1 ? first : $"codebase changes page {Number(page)}:", end => Last(end, asks));
-
-        // Laid once, whole: every page's last line names the total, exact on every page and not only the last.
-        _ = pages.Whole();
-
-        return pages;
+        return new GraphTextPages(lines, size, page => page == 1 ? first : $"codebase changes page {Number(page)}:", end => Last(end, asks));
     }
 
     /// <summary>
@@ -131,9 +126,9 @@ public static class CodebaseConversationChanges
     /// </summary>
     private static string? Last(GraphTextPageEnd end, bool asks)
         => end is { Last: true, Page: 1 } ? null
-            : end.Last ? $"codebase changes page {Number(end.Page)} of {Number(end.Pages!.Value)} · the last"
-            : asks ? $"codebase changes page {Number(end.Page)} of {Number(end.Pages!.Value)} · ask graph for changes with page: {Number(end.Page + 1)} for the next"
-            : $"codebase changes page {Number(end.Page)} of {Number(end.Pages!.Value)} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
+            : end.Last ? $"codebase changes page {Number(end.Page)} of {Number(end.Pages)} · the last"
+            : asks ? $"codebase changes page {Number(end.Page)} of {Number(end.Pages)} · ask graph for changes with page: {Number(end.Page + 1)} for the next"
+            : $"codebase changes page {Number(end.Page)} of {Number(end.Pages)} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
 
     private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
 

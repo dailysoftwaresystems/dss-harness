@@ -203,24 +203,6 @@ public sealed class SideTaskGraph
             pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads),
             mask: mask,
             pack: () => pack?.Paged,
-            map: ReadMapPage);
-    }
-
-    /// <summary>
-    /// Page <paramref name="page"/> of the side-task's repository map, as the graph tool serves it: read whole from where
-    /// it is kept, with how many pages the map holds - which a page past the last is refused by - and a page that cannot
-    /// be read said with why, never thrown, for the map is a cache and no read of it fails the side-task's call.
-    /// </summary>
-    /// <param name="page">The page asked, from 1.</param>
-    private GraphMapPage ReadMapPage(int page)
-    {
-        try
-        {
-            return new(mapPages, page > mapPages ? null : files.ReadAllText(layout.MapPageFileOf(page)));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            return new(0, null, ex.Message.TrimEnd('.'));
-        }
+            map: page => store.MapPage(layout.AsGraph, reads: null, mapPages, page));
     }
 }
