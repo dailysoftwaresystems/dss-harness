@@ -286,6 +286,10 @@ internal sealed class DotNetTestParser : IBuiltInParser
                 var (type, method, name) = ConsoleText.PartsOf(id);
                 var (expected, actual) = ConsoleText.ValuesOf(_message);
 
+                // A thrown error holds the stack, each inner one's frames under it; an assertion's stack is its own - one
+                // place for a failure's stack, never two.
+                var thrown = StackForms.DotNetThrownOf(_message, _stack);
+
                 sink.Add(new TestFailure(
                     "dotnet",
                     id,
@@ -295,8 +299,8 @@ internal sealed class DotNetTestParser : IBuiltInParser
                     ParsedText.Joined(_message),
                     expected,
                     actual,
-                    Exception: StackForms.DotNetThrownOf(_message, _stack),
-                    Stack: StackForms.DotNetFramesOf(_stack),
+                    Exception: thrown,
+                    Stack: thrown is null ? StackForms.DotNetFramesOf(_stack) : [],
                     Duration: _duration is { } duration ? ConsoleText.SecondsOf(duration) : null,
                     Log: (_from, _to)));
             }
@@ -843,7 +847,7 @@ internal sealed class JestParser : IBuiltInParser
                     Expected: expected,
                     Actual: actual,
                     Exception: thrown is null || message is null ? null : new ExceptionRecord(thrown.Groups["type"].Value, message[(message.IndexOf(": ", StringComparison.Ordinal) + 2)..], [.. _frames], []),
-                    Stack: [.. _frames],
+                    Stack: thrown is null || message is null ? [.. _frames] : [],
                     Log: (_from, _to)));
             }
 
@@ -989,7 +993,7 @@ internal sealed class VitestParser : IBuiltInParser
                     Expected: expected,
                     Actual: actual,
                     Exception: thrown is null || thrown.Groups["type"].Value == "AssertionError" ? null : new ExceptionRecord(thrown.Groups["type"].Value, thrown.Groups["message"].Value, [.. _frames], []),
-                    Stack: [.. _frames],
+                    Stack: thrown is null || thrown.Groups["type"].Value == "AssertionError" ? [.. _frames] : [],
                     Outcome: open.Name is null ? "errored" : "failed",
                     Log: (_from, _to)));
                 _said.Add($"{open.File}\n{open.Name}");

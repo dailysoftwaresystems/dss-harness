@@ -128,8 +128,11 @@ public static class ResultFiles
 
     /// <summary>
     /// A TRX's results, one <c>UnitTestResult</c> held at a time: each that failed - <c>Failed</c>, <c>Error</c>,
-    /// <c>Timeout</c>, <c>Aborted</c> or <c>Disconnected</c> - with its message and its stack; one with inner results (a
-    /// data-driven test's rows) read by each row. A test not run - <c>NotExecuted</c>, a skip - is no failure.
+    /// <c>Timeout</c>, <c>Aborted</c> or <c>Disconnected</c> - with its message and its stack, read by the one owner of the
+    /// .NET forms (<see cref="StackForms"/>): where the message is a thrown error's, as a test framework writes one with
+    /// its inner exceptions under it, that error's record holds the stack, each inner one's frames under it; an
+    /// assertion's stack is its own. One with inner results (a data-driven test's rows) is read by each row. A test not
+    /// run - <c>NotExecuted</c>, a skip - is no failure.
     /// </summary>
     private static void Trx(XmlReader reader, ResultDigest.Gathering into)
     {
@@ -185,6 +188,7 @@ public static class ResultFiles
         var said = error?.Elements().FirstOrDefault(element => element.Name.LocalName == "Message")?.Value.Trim();
         var stack = error?.Elements().FirstOrDefault(element => element.Name.LocalName == "StackTrace")?.Value;
         var split = id.LastIndexOf('.');
+        var thrown = said is null ? null : StackForms.DotNetThrownOf(LinesOf(said), stack is null ? [] : LinesOf(stack));
 
         yield return new TestFailure(
             "trx",
@@ -192,7 +196,8 @@ public static class ResultFiles
             Name: split > 0 ? id[(split + 1)..] : null,
             Class: split > 0 ? id[..split] : null,
             Message: said is { Length: > 0 } message ? message : null,
-            Stack: stack is null ? [] : StackForms.DotNetFramesOf(LinesOf(stack)),
+            Exception: thrown,
+            Stack: thrown is null && stack is not null ? StackForms.DotNetFramesOf(LinesOf(stack)) : [],
             Duration: TimeSpan.TryParse((string?)result.Attribute("duration"), CultureInfo.InvariantCulture, out var took) && took >= TimeSpan.Zero ? took.TotalSeconds : null,
             Outcome: outcome);
     }
