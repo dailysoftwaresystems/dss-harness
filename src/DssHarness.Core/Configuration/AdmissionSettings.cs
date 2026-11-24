@@ -143,9 +143,10 @@ public sealed class AdmissionSettings
 
     /// <summary>
     /// Minutes a waiting unit's tenant's share of the dispatch queue holds before it doubles, doubling again each such
-    /// period after, so no weight setting starves a tenant (<see cref="Execution.DispatchOrder.ShareOf"/>): from 0, under
-    /// which the share is past any cost and each tenant's units go one a round, in the order they asked, to the most a
-    /// span of time holds (<see cref="MostAgeAfterMinutes"/>).
+    /// period after, so no weight setting starves a tenant and a debt its tenant carries is repaid the faster
+    /// (<see cref="Execution.DispatchOrder.ShareOf"/>): from 0, under which the share is past any cost - a tenant's debt is
+    /// gone in one round, though no round credits it past its weight times its priority - and each tenant's units go in
+    /// the order they asked, to the most a span of time holds (<see cref="MostAgeAfterMinutes"/>).
     /// </summary>
     public double? AgeAfterMinutes { get; init; }
 

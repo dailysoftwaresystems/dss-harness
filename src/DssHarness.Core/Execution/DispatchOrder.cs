@@ -31,8 +31,10 @@ public sealed record QueuedUnit(SlotEntry Holder, string Tenant, int Priority, d
 /// </summary>
 /// <param name="Tenant">The tenant.</param>
 /// <param name="Deficit">
-/// Its credit, in minutes of cost. A debt is kept after the tenant's last unit has gone and paid back by its share each
-/// round; a credit is kept only while the tenant has a unit waiting, and is spent on the next unit it starts.
+/// Its credit, in minutes of cost. A debt is kept after the tenant's last unit has gone, paid back each round at
+/// <paramref name="Share"/> while the tenant has no unit waiting and, once one waits, at that unit's share, aged as it
+/// waits (<see cref="DispatchOrder.ShareOf"/>); a credit is kept only while the tenant has a unit waiting, and is spent on
+/// the next unit it starts.
 /// </param>
 /// <param name="Share">
 /// The unaged share (<see cref="DispatchOrder.UnagedShareOf"/>) a debt is paid back at while the tenant has no unit
@@ -56,11 +58,14 @@ public sealed record DispatchRecord(IReadOnlyList<QueuedUnit> Units, IReadOnlyLi
 /// its run's priority, doubled for each whole period of the unit's aging bound it has waited - and a unit starts once its
 /// tenant owes nothing, charged its estimated cost as it starts: so a tenant with a burst of short units and a tenant
 /// with one long unit each get the machine in proportion, and a long unit - a WSL sweep, sent whole - leaves its tenant
-/// that much behind before its next, the debt paid back by its share each round. The rounds are counted, never stepped: a
-/// tenant's turn comes after as many rounds as its debt is short of nothing, over its share, and never fewer than one -
-/// a share past any cost, an aging bound of no minutes, still takes the one round, so its tenant's units go one a round
-/// and no tenant's setting starves another. Ties go to the unit that asked first; within a tenant, its units are served
-/// in the order they asked.
+/// that much in debt before its next. The debt is paid back each round at the unaged share of the unit it last started
+/// while the tenant has nothing waiting, and at the share of its next unit once one waits - doubled for each period that
+/// unit has waited, so aging repays a carried debt the faster and no unit waits behind its tenant's debt for ever - but
+/// no credit is ever carried past what the unaged share gives. The rounds are counted, never stepped: a tenant's turn
+/// comes after as many rounds as its debt is short of nothing, over its share, and never fewer than one - a share past
+/// any cost, an aging bound of no minutes, still takes the one round, so a debt is gone in a round and never in none, and
+/// no tenant's setting starves another. Ties go to the unit that asked first; within a tenant, its units are served in
+/// the order they asked.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -373,7 +378,7 @@ internal static class DispatchOrder
             => new(Tenant, Waiting ? DeficitAt(round) : Math.Min(0, DeficitAt(round)), _owedAt);
 
         // How many rounds a tenant is in debt for, at a share a round: none where it owes nothing, and never fewer than
-        // one - a share past any cost takes the one round, so its tenant's units go one a round.
+        // one - a share past any cost takes the one round, so its debt is gone in a round and never in none.
         private static double RoundsShort(double deficit, double share)
             => deficit >= 0 ? 0 : Math.Max(1, Math.Ceiling(-deficit / share));
     }

@@ -1149,23 +1149,27 @@ rounds are counted, never stepped: a tenant's turn comes after as many rounds as
 its share, and never fewer than one, so one decision is linear in the units waiting whatever their costs. Within a
 tenant its units go in the order they asked; a tie between tenants goes to the unit that asked first. A tenant's debt
 is kept in the record after its last unit has gone - paid back, for each round another tenant is served, at the
-unaged share of the unit it last started (`TenantDeficit.Share`) - and a credit is kept only while it has a unit
-waiting, never carried past what the unaged share gives. An `ageAfterMinutes` of 0 counts every period at once - a
-share past any cost - and so serves each tenant's units one a round, the tenants in turn; a wait of more doublings
-than a number holds is the same.
+unaged share of the unit it last started (`TenantDeficit.Share`) - and, once its next unit waits, at that unit's share,
+doubled for each period it has waited: aging is what repays a carried debt the faster, so no unit waits behind its
+tenant's debt for ever. A credit is kept only while the tenant has a unit waiting, never carried past what the unaged
+share gives. An `ageAfterMinutes` of 0 counts every period at once - a share past any cost - so a tenant's debt is
+gone in one round, though no round credits it past its unaged share, and its units go in the order they asked, the
+tenants in turn; a wait of more doublings than a number holds is the same.
 
 **The cost.** A unit's cost is the median of the newest ten times a unit of its name held its slot on this machine, in
 minutes, by when each ended, and one quantum (a minute) where none is kept (`UnitDurations`): the queue measures each
 unit itself, from when it was let start to when it gave its slot back, on the monotonic clock, and keeps one history a
 name - its repository, its command and its unit (the leg, or a sweep's worker or arm) - in a file of its own named by a
 digest of that name, read whole at one ask, never a scan. A history that cannot be read is said, and charges one
-quantum. A WSL sweep, sent whole as one unit, is measured whole, so it is charged its whole time and its tenant waits
-that much before its next.
+quantum. A WSL sweep, sent whole as one unit, is measured whole, so it is charged its whole time and its tenant owes
+that much before its next unit starts - a debt that unit's share repays the faster once it has waited past its aging
+bound, as the order says.
 
 **The records.** The slots' record (`admission-<machine id>.json`) keeps exactly the members an older build reads, and
-what the queue keeps of each unit - its tenant, weight, priority, cost, aging bound and grant - and each waiting
-tenant's deficit is kept beside it in `admission-<machine id>.queue.json`, read and written only inside the slots'
-record's own machine-wide step, joined to the live entries; a row whose entry has gone counts for nothing and leaves
+what the queue keeps of each unit - its tenant, weight, priority, cost, aging bound and grant - and each tenant's
+deficit, a debt whether or not the tenant has a unit waiting and a credit only while it has, is kept beside it in
+`admission-<machine id>.queue.json`, read and written only inside the slots' record's own machine-wide step, joined
+to the live entries; a row whose entry has gone counts for nothing and leaves
 with the next write. An entry with no row is an older build's, which admits its own leg while the leg is fewer from
 the front of the line than every count up to it allows: it is counted holding exactly where that build holds it, and
 while one waits no unit behind it is granted a slot - that build counts every unit ahead of its own, so a unit granted
@@ -1183,12 +1187,14 @@ constant time where the records would be scanned at every ask. A unit is charged
 06's "a unit starts when its tenant's deficit covers its estimated cost", for that is the reading under which the same
 part's WSL sentence holds - a sweep charged whole leaves its tenant owing what it cost, where credit earned before a
 start would leave a tenant that runs alone owing nothing; and a tenant's debt is thereby bounded by what its last unit
-cost. Aging repays a debt at the doubled share but never carries a credit past the unaged share, and no debt clears in
-fewer than one round. The rule that the first unit of the order that does not
-fit holds back the units behind it, the older builds' rule, and an aging bound of 0 serving each tenant's units one a
-round, in the order they asked, are this build's, which part 06 does not say. A server holding the queue in memory, the
-process and agent classes' askers and an environment's weight arrive with their parts. A machine shared by several
-users is not seen whole: each user's queue is their own.
+cost. Aging repays a debt at the doubled share, part 06's aging read over its WSL sentence: a sweep's tenant owes its
+whole time, but once its next unit has waited past the bound the debt is repaid the faster, since a debt repaid only
+at the unaged share would hold that unit behind it for as long as the debt, however long it waited. Aging never
+carries a credit past the unaged share, and no debt clears in fewer than one round. The rule that the first unit of the
+order that does not fit holds back the units behind it, the older builds' rule, and an aging bound of 0 clearing a
+debt in one round, each tenant's units in the order they asked, are this build's, which part 06 does not say. A server
+holding the queue in memory, the process and agent classes' askers and an environment's weight arrive with their parts.
+A machine shared by several users is not seen whole: each user's queue is their own.
 
 ## Orchestrators and agents
 

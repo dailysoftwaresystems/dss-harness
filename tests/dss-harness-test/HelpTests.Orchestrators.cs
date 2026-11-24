@@ -331,6 +331,28 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic says a step's wait on the machine's dispatch queue keeps the class of it and each tenant
+    /// waited behind - in the step's measure and in the report's row of it - so a reader knows a wait behind another
+    /// repository's units can be told from one behind its own run's.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysAQueueWaitKeepsItsClassAndTheTenantsWaitedBehind()
+    {
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        foreach (var said in new[]
+        {
+            "its waits by cause whole across sessions - the machine holding every leg of it still to run among them, a wait on its dispatch queue keeping the class of it "
+                + "and each tenant waited behind - its run time",
+            "one row per step instance, in the order the run made them, with its state, its attempts, its waits by cause - a wait on the machine's dispatch queue naming the "
+                + "class of it and each tenant waited behind, so a reader can tell its own run's units from another repository's - its run time,",
+        })
+        {
+            Assert.Contains(said, orchestrators, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The orchestrators topic says the error rows of a run's report read each failed attempt's own first error and the
     /// question its ending raised, from its measure entry - never the last attempt's error nor the step's newest
     /// question - so a reader knows an attempt before the last keeps what it broke on and asked.

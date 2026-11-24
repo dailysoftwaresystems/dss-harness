@@ -263,8 +263,9 @@ public sealed record DispatchUnit(SlotEntry Entry, QueuedUnit? Queued, TimeSpan?
 /// share each round and a unit started once its tenant owes nothing, charged its estimated cost as it starts, so
 /// a tenant with a burst of short arms and a tenant with one long build each get the machine in proportion, and neither
 /// waits for the other's whole burst - a long unit leaves its tenant owing what it cost, paid back by its share each
-/// round. The unit the fair order puts first and that does not fit beside the holders holds
-/// back every unit behind it, so no unit is passed for ever. Each slot is given back when its unit's work ends.
+/// round, the faster once its next unit has waited past its aging bound. The unit the fair order puts first and that does
+/// not fit beside the holders holds back every unit behind it, so no unit is passed for ever. Each slot is given back when
+/// its unit's work ends.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -432,8 +433,9 @@ public sealed class MachineDispatchQueue(
 
     /// <summary>
     /// The record of what the dispatch queue keeps of each unit beyond its entry in the slots' record at
-    /// <paramref name="slots"/> - its tenant, weight, priority, cost, aging bound and hold mark - and of each waiting
-    /// tenant's deficit: one of its own beside it, which a build before it never reads.
+    /// <paramref name="slots"/> - its tenant, weight, priority, cost, aging bound and hold mark - and of each tenant's
+    /// deficit, a debt whether or not the tenant has a unit waiting: one of its own beside it, which a build before it
+    /// never reads.
     /// </summary>
     /// <param name="slots">The slots' record.</param>
     public static string QueuePathFor(string slots) => Path.ChangeExtension(slots, ".queue.json");

@@ -70,9 +70,11 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The admission topic says the dispatch queue's whole rule, its numbers read from the code: slots granted in its fair
-    /// order and held to their end, the round-robin's share, the cost from the newest runs a name kept and one quantum
-    /// where none is, the first unit that does not fit holding back those behind it, the aging bound's range and its 0,
-    /// and the records the queue keeps beside the slots.
+    /// order and held to their end, the round-robin's share, a unit started once its tenant owes nothing and charged as it
+    /// starts, a debt kept past its unit and repaid the faster as the next unit ages, a credit kept only while a unit waits
+    /// and never past the undoubled share, the cost from the newest runs a name kept and one quantum where none is, a WSL
+    /// sweep's whole charge, the first unit that does not fit holding back those behind it, the aging bound's range and
+    /// what its 0 does, and the records the queue keeps beside the slots - and none of the rules the order does not run.
     /// </summary>
     [Fact]
     public void TheAdmissionTopic_SaysTheDispatchQueuesRule_FromTheCode()
@@ -85,15 +87,20 @@ public sealed partial class HelpTests
             "A unit holds a slot once the queue grants it one - written in the same change of the record that grants it - and holds it to its end: nothing is pre-empted.",
             string.Create(
                 CultureInfo.InvariantCulture,
-                $"Each round, a tenant with a unit waiting is credited its share: its weight ({DispatchOrder.LocalWeight}) times its run's priority (a workflow's priority key, {DispatchOrder.LeastPriority} where none), doubled for each whole period of ageAfterMinutes its unit has waited"),
+                $"Each round, a tenant with a unit waiting is credited its share: its weight ({DispatchOrder.LocalWeight}) times its run's priority (a workflow's priority key, {DispatchOrder.LeastPriority} where none), doubled for each whole period of ageAfterMinutes its unit has waited, so no weight setting starves a tenant;"),
+            "a unit starts once its tenant owes nothing, charged its cost as it starts. A debt is kept after the tenant's last unit has gone, paid back each round by the share of "
+                + "the unit it last started, undoubled, and once its next unit waits by that unit's share - doubled as it waits, so aging repays a debt the faster and no unit "
+                + "waits behind its tenant's debt for ever. A credit is kept only while the tenant has a unit waiting, and never carried past what its share would give undoubled.",
             string.Create(
                 CultureInfo.InvariantCulture,
                 $"A unit's cost is the median of the newest {UnitDurations.Kept} times a unit of its name - its repository, its command and its leg, or a sweep's worker or arm - held its slot on this machine, in minutes, and {UnitDurations.Quantum} where none is kept"),
+            "and a WSL sweep, sent whole as one unit, is charged its whole time, its tenant owing that much before its next unit starts - repaid the faster once that unit has "
+                + "waited past ageAfterMinutes.",
             "The unit the order puts first that does not fit - its own count allows fewer legs at once than hold slots - holds back every unit behind it until it fits, so none is passed for ever.",
             string.Create(
                 CultureInfo.InvariantCulture,
-                $"from 0, where the share is past any cost and each tenant's units go one a round, in the order they asked, to the most minutes a span of time holds, {AdmissionSettings.MostAgeAfterMinutes} ({AdmissionSettings.DefaultAgeAfterMinutes})"),
-            "admission-<machine id>.queue.json, the times units of each name held their slots in admission-<machine id>.durations",
+                $"from 0, where the share is past any cost - a tenant's debt is gone in one round, though no round credits it past its weight times its priority - and each tenant's units go in the order they asked, to the most minutes a span of time holds, {AdmissionSettings.MostAgeAfterMinutes} ({AdmissionSettings.DefaultAgeAfterMinutes})"),
+            "what the queue weighs each unit by and each tenant's deficit in admission-<machine id>.queue.json, the times units of each name held their slots in admission-<machine id>.durations",
             $"once, at least 1 ({AdmissionSettings.MachinesProcessors}); shown by queue, asked by no step yet",
             $"once, at least 1 ({AdmissionSettings.DefaultAgents}); shown by queue, asked by no agent yet",
         })
@@ -101,7 +108,13 @@ public sealed partial class HelpTests
             Assert.Contains(expected, said, StringComparison.Ordinal);
         }
 
-        Assert.DoesNotContain("in the order legs asked", said, StringComparison.Ordinal);
+        // Rules the order does not run: a start once a credit covers the cost, a credit dropped with its unit, one unit a
+        // round whatever the priority, a sweep's tenant waiting its whole cost whatever its next unit waited, and a credit
+        // where the record keeps a deficit.
+        foreach (var unsaid in new[] { "in the order legs asked", "covers the unit's cost", "dropped once it has none", "one a round", "waiting that much", "each tenant's credit" })
+        {
+            Assert.DoesNotContain(unsaid, said, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

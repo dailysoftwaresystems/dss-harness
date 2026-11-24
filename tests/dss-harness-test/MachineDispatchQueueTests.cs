@@ -145,30 +145,38 @@ public sealed class MachineDispatchQueueTests
     }
 
     /// <summary>
-    /// An aging bound of no minutes makes the share past any cost, and a share past any cost still takes a round: each
-    /// tenant's units go one a round, in the order they asked, the tenants in turn - so the second tenant's unit is served
-    /// between the first's two, where a share due in no rounds would serve the first's whole burst before it.
+    /// An aging bound of no minutes makes the share past any cost, and a share past any cost still takes a round: a
+    /// tenant's debt is gone in one round, though no round credits it past its weight times its priority, and its units go
+    /// in the order they asked, the tenants in turn. At priority 1, units of a quantum go one a round - the second tenant's
+    /// served between the first's, where a share due in no rounds would serve the first's whole burst before them; at
+    /// priority 2, the round that clears the first tenant's debt leaves it a quantum's credit, and two of its units start
+    /// between the second tenant's two.
     /// </summary>
-    [Fact]
-    public void AnAgingBoundOfNoMinutes_ServesEachTenantsUnitsOneARound_InTheOrderTheyAsked()
+    [Theory]
+    [InlineData(1, new[] { "a-1", "b-1", "a-2", "b-2", "a-3", "a-4" })]
+    [InlineData(2, new[] { "a-1", "b-1", "a-2", "a-3", "b-2", "a-4" })]
+    public void AnAgingBoundOfNoMinutes_ClearsADebtInOneRound_CreditingNoMoreThanTheUnagedShare(int priority, string[] starts)
     {
         using var machine = new Machine(slots: 1);
 
         var waiting = new List<SlotPlace>
         {
-            machine.Ask("a-1", "/src/a", ageAfter: TimeSpan.Zero),
-            machine.Ask("a-2", "/src/a", ageAfter: TimeSpan.Zero),
+            machine.Ask("a-1", "/src/a", priority: priority, ageAfter: TimeSpan.Zero),
+            machine.Ask("a-2", "/src/a", priority: priority, ageAfter: TimeSpan.Zero),
+            machine.Ask("a-3", "/src/a", priority: priority, ageAfter: TimeSpan.Zero),
+            machine.Ask("a-4", "/src/a", priority: priority, ageAfter: TimeSpan.Zero),
             machine.Ask("b-1", "/src/b", ageAfter: TimeSpan.Zero),
+            machine.Ask("b-2", "/src/b", ageAfter: TimeSpan.Zero),
         };
 
-        Assert.Equal(["a-1", "b-1", "a-2"], machine.Starts(waiting));
+        Assert.Equal(starts, machine.Starts(waiting));
     }
 
     /// <summary>
     /// No tenant's setting starves another: a tenant whose aging bound is no minutes - its share past any cost - asks a
     /// stream of units against one waiting at the default bound with a three-minute build behind it, and still gets one
-    /// round in two once the other's turn comes, its stream held to a unit a round. Under the pre-paid order the
-    /// unbounded tenant's units were due in no rounds at all, and the other tenant waited behind the whole stream.
+    /// round in two once the other's turn comes, its stream of quanta held to a unit a round - where a share due in no
+    /// rounds would serve the whole stream before the other tenant's first build.
     /// </summary>
     [Fact]
     public void AnUnboundedTenantsStream_DoesNotStarveATenantOfTheDefaultBound()
@@ -223,10 +231,11 @@ public sealed class MachineDispatchQueueTests
 
     /// <summary>
     /// A WSL sweep, sent whole as one unit, is charged its whole cost as it starts, and its tenant's charge outlives it:
-    /// a four-minute sweep granted on an idle machine leaves its tenant four minutes in debt, so the four one-minute
-    /// builds the other tenant asked while it held start before its next unit - which asks before two more of that
-    /// tenant's, and behind none of the four it owes. Under the pre-paid order the sweep's tenant owed nothing, its next
-    /// unit starting at once against the other tenant's turn.
+    /// a four-minute sweep granted on an idle machine leaves its tenant four minutes in debt, so - the clock held still,
+    /// no wait aging its next unit - the four one-minute builds the other tenant asked while it held start before its next
+    /// unit, which asks before two more of that tenant's and behind none of the four it owes; where a charge dropped with
+    /// its unit would leave the sweep's tenant owing nothing, its next unit starting at once against the other tenant's
+    /// turn.
     /// </summary>
     [Fact]
     public void AWslSweep_IsChargedWhole_ItsTenantsNextUnitWaitingForTheOtherTenantsUnitsOfThatCost()
@@ -263,6 +272,36 @@ public sealed class MachineDispatchQueueTests
         ]);
 
         Assert.Equal(["b-1", "b-2", "b-3", "b-4", "a-next", "b-5", "b-6"], machine.Starts(waiting));
+    }
+
+    /// <summary>
+    /// A debt its tenant carries is repaid at the aged share once its next unit has waited past the bound, as the clock
+    /// moves: an eight-minute WSL sweep granted on an idle machine leaves its tenant eight minutes in debt, and its next
+    /// unit, asked as the sweep ends behind eight one-minute builds of another tenant that each hold the one slot five
+    /// minutes, starts after five of them at a bound of ten - its share doubled at ten minutes of waiting and again at
+    /// twenty - where a bound no wait reaches repays the debt at the unaged share, a quantum a round, and leaves it behind
+    /// all eight. Aging is what keeps a unit waiting behind its tenant's long debt from starving.
+    /// </summary>
+    [Theory]
+    [InlineData(10, new[] { "b-1", "b-2", "b-3", "b-4", "b-5", "a-next", "b-6", "b-7", "b-8" })]
+    [InlineData(100_000, new[] { "b-1", "b-2", "b-3", "b-4", "b-5", "b-6", "b-7", "b-8", "a-next" })]
+    public void ACarriedDebt_IsRepaidAtTheAgedShare_OnceItsTenantsNextUnitHasWaitedPastTheBound(double ageAfterMinutes, string[] starts)
+    {
+        using var machine = new Machine(slots: 1);
+
+        machine.RanBefore("/src/a", "sweep", TimeSpan.FromMinutes(8));
+
+        var sweep = machine.Ask("sweep", "/src/a");
+
+        Assert.True(machine.Queue.Look(sweep).Holding);
+
+        List<SlotPlace> waiting = [.. Enumerable.Range(1, 8).Select(build => machine.Ask($"b-{build}", "/src/b"))];
+
+        machine.Clock.Advance(TimeSpan.FromMinutes(8));
+        sweep.Dispose();
+        waiting.Add(machine.Ask("a-next", "/src/a", ageAfter: TimeSpan.FromMinutes(ageAfterMinutes)));
+
+        Assert.Equal(starts, machine.Starts(waiting, held: TimeSpan.FromMinutes(5)));
     }
 
     /// <summary>
@@ -774,9 +813,10 @@ public sealed class MachineDispatchQueueTests
 
         /// <summary>
         /// The units of <paramref name="waiting"/> in the order the queue grants them its slots: each look grants what is free,
-        /// and each unit granted gives its slot back before the next look.
+        /// and each unit granted gives its slot back before the next look - <paramref name="held"/> later on the clock, where
+        /// given, so the units still waiting age as the granted ones run.
         /// </summary>
-        public IReadOnlyList<string> Starts(List<SlotPlace> waiting)
+        public IReadOnlyList<string> Starts(List<SlotPlace> waiting, TimeSpan? held = null)
         {
             var starts = new List<string>();
 
@@ -787,6 +827,7 @@ public sealed class MachineDispatchQueueTests
                 var granted = waiting.Where(place => Queue.Look(place).Holding).ToList();
 
                 Assert.NotEmpty(granted);
+                Clock.Advance(held ?? TimeSpan.Zero);
 
                 foreach (var place in granted)
                 {
