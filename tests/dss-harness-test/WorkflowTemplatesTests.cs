@@ -952,7 +952,7 @@ public sealed class WorkflowTemplatesTests
 
         // The prompts that name the graph today, so a new one is held as it comes.
         Assert.Equal(
-            ["item-pipeline/prompts/home-audit.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            ["item-pipeline/prompts/home-audit.md", "item-pipeline/prompts/rework.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
             [.. naming.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
 
         // A file of a workflow the shipped one uses is named under that workflow's place, as the embedded set holds it.
