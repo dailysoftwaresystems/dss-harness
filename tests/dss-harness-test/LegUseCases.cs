@@ -12,8 +12,8 @@ namespace DssHarness.Tests;
 /// process spawned.
 /// </summary>
 /// <remarks>
-/// Only for what is refused before any leg is placed: a run that went on would measure this machine and keep its records
-/// in this user's own data, which a test's process has no business writing.
+/// Only for what is refused before any leg is placed: a run that went on would measure this machine and run its legs'
+/// steps for real, which no test's scene holds to what it pins.
 /// </remarks>
 internal static class LegUseCases
 {

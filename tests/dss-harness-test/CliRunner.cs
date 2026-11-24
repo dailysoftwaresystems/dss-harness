@@ -22,22 +22,18 @@ public static class CliRunner
 
     private static readonly Lazy<string> CliAssembly = new(LocateCliAssembly, LazyThreadSafetyMode.PublicationOnly);
 
-    /// <summary>The variables a test names a home, or a user's data, of its own by: one of them given, its environment stands whole.</summary>
-    private static readonly string[] UserDataVariables = ["HOME", "XDG_DATA_HOME", "LOCALAPPDATA"];
-
-    private static readonly Lazy<(string Variable, string Value, string State)> OwnUserData = new(MakeOwnUserData, LazyThreadSafetyMode.ExecutionAndPublication);
-
     /// <summary>
-    /// The directory every CLI this test process starts keeps this tool's own state in (<see cref="UserState.Directory"/>) -
-    /// this machine's settings file, its dispatch queue and the other records it keeps for its user - unless a test names a
-    /// home or a user's data of its own: a directory of this process's own, below the suite's temporary root, given in the
-    /// one variable each system reads that data from (<see cref="WithOwnUserData"/>). The machine's own user keeps a
-    /// settings file and records every command of theirs shares, and they are no test's: read, the count of heavy legs a
-    /// developer's machine admits would put every CLI of every test process on it in one queue, beside the developer's own
-    /// runs, and write each test repository's history into the developer's records - where a machine with no settings
-    /// file admits every test's legs at once.
+    /// The directory every CLI a test starts and every registration a test builds in process keeps this tool's own state
+    /// in (<see cref="UserState.Directory"/>) - this machine's settings file, its dispatch queue and the other records it
+    /// keeps for its user - unless a test names a home or a user's data of its own for a CLI it starts: a directory of
+    /// this process's own, below the suite's temporary root, which the suite's start gives this process in the one
+    /// variable each system reads that data from and a CLI inherits (<see cref="TestHost"/>). The machine's own user
+    /// keeps a settings file and records every command of theirs shares, and they are no test's: read, the count of heavy
+    /// legs a developer's machine admits would put every test's legs in one queue, beside the developer's own runs, and
+    /// write each test repository's history into the developer's records - where a machine with no settings file admits
+    /// every test's legs at once.
     /// </summary>
-    public static string UserStateDirectory => OwnUserData.Value.State;
+    public static string UserStateDirectory => UserState.Directory;
 
     /// <summary>The CLI assembly the tests run: the build a host's DssHarness is compared with.</summary>
     public static string CliAssemblyPath => CliAssembly.Value;
@@ -54,8 +50,9 @@ public static class CliRunner
     /// <param name="workingDirectory">The directory the CLI starts in, or the test's own.</param>
     /// <param name="standardInput">Text the CLI reads on standard input, as a host's DssHarness reads a request.</param>
     /// <param name="environment">
-    /// Variables to set for the CLI, or to remove where the value is null; the user's data of this process's own beside
-    /// them, where none of them names a home or a user's data of its own (<see cref="UserStateDirectory"/>).
+    /// Variables to set for the CLI, or to remove where the value is null, over the environment it inherits - the user's
+    /// data of this process's own among it (<see cref="UserStateDirectory"/>), which a test that names a home or a user's
+    /// data of its own replaces as it names it.
     /// </param>
     public static async Task<ProcessResult> RunAsync(
         string[] arguments,
@@ -73,7 +70,7 @@ public static class CliRunner
                 Arguments = ["exec", CliAssembly.Value, .. arguments],
                 WorkingDirectory = workingDirectory,
                 StandardInput = standardInput,
-                Environment = WithOwnUserData(environment),
+                Environment = environment ?? new Dictionary<string, string?>(StringComparer.Ordinal),
 
                 // Held open as the machine that reaches a host holds it: the end of a host's input is how the
                 // host learns that machine has gone, so input closed at once would cancel the request.
@@ -89,55 +86,6 @@ public static class CliRunner
             $"'{ToolPackage.Command} {string.Join(' ', arguments)}' did not finish within {Budget}.");
 
         return result;
-    }
-
-    /// <summary>
-    /// <paramref name="environment"/>, with the user's data of this process's own (<see cref="UserStateDirectory"/>) where it
-    /// names no home and no user's data of its own: one that does - as a test that keeps a hold, or a cache, of its own
-    /// does - stands as it was given.
-    /// </summary>
-    /// <param name="environment">The variables a test gives the CLI; none where it gives none.</param>
-    internal static Dictionary<string, string?> WithOwnUserData(IReadOnlyDictionary<string, string?>? environment)
-    {
-        var given = new Dictionary<string, string?>(environment ?? new Dictionary<string, string?>(), StringComparer.Ordinal);
-
-        if (!UserDataVariables.Any(given.ContainsKey))
-        {
-            var (variable, value, _) = OwnUserData.Value;
-
-            given[variable] = value;
-        }
-
-        return given;
-    }
-
-    /// <summary>
-    /// Makes this process's own user data, once: the variable each system reads a user's data from - LOCALAPPDATA on
-    /// Windows, HOME on macOS, whose data is below it in Library/Application Support, and XDG_DATA_HOME on Linux - its
-    /// value, and this tool's own directory below it, as <see cref="UserState"/> reads them. Removed as the process ends.
-    /// </summary>
-    private static (string Variable, string Value, string State) MakeOwnUserData()
-    {
-        var root = Path.Combine(TestHost.TemporaryRoot, $"u{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}");
-
-        Directory.CreateDirectory(root);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
-        {
-            try
-            {
-                Directory.Delete(root, recursive: true);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // A CLI still ending holds a file of it: the temporary root keeps it, as it keeps what any test left.
-            }
-        };
-
-        var (variable, data) = OperatingSystem.IsWindows() ? ("LOCALAPPDATA", root)
-            : OperatingSystem.IsMacOS() ? ("HOME", Path.Combine(root, "Library", "Application Support"))
-            : ("XDG_DATA_HOME", root);
-
-        return (variable, root, Path.Combine(data, ToolPackage.Command));
     }
 
     /// <summary>The names of the commands the root help lists, in its order.</summary>

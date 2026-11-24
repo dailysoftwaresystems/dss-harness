@@ -212,6 +212,60 @@ public sealed class RunnerLegsTests
     }
 
     /// <summary>
+    /// A settings file raising the machine's heavy legs, where the machine's own would be, is no scene of a test to read:
+    /// written for the moment of the test where the machine's user keeps none - one they keep is theirs, and nothing of
+    /// theirs is overwritten - it leaves the registrations a test builds reading the test process's own user data, which
+    /// declares nothing, so the repository's rule (heavyLegs 1, its one slot held by another run) is the one in force and
+    /// the leg waits and is not admitted, on any machine; read instead, it would raise the slots and the leg would run.
+    /// </summary>
+    [Fact]
+    public async Task ASettingsFileRaisingTheMachinesSlots_IsNoSceneOfATestToRead()
+    {
+        Assert.SkipWhen(TestHost.MachineUserState is null, "this process was given no user data of the machine's own to displace");
+
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        var machine = Path.Combine(TestHost.MachineUserState!, MachineSettingsFile.FileNameFor(harness.Platform.MachineId.Id));
+        var written = false;
+
+        if (!File.Exists(machine))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(machine)!);
+            File.WriteAllText(machine, """{ "admission": { "heavyLegs": 4 } }""");
+            written = true;
+        }
+
+        try
+        {
+            await using var services = Services(harness, inspector, record);
+            var settings = services.GetRequiredService<MachineSettingsFile>();
+
+            // The settings file the registrations read is the test process's own, and it declares nothing: where the
+            // machine's own were read, both assertions fail before any leg is placed or any step could start.
+            Assert.Equal(
+                Path.Combine(CliRunner.UserStateDirectory, MachineSettingsFile.FileNameFor(harness.Platform.MachineId.Id)),
+                settings.Location);
+            Assert.Null(settings.Read().Admission);
+
+            var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 32), RunId.New(), Token);
+
+            Assert.Equal(LegExit.NotAdmitted, result.ExitCode);
+            Assert.Equal(LegVerdict.NotAdmitted, Assert.Single(result.Report.Lines).Verdict);
+            Assert.Equal([HostId.Local], inspector.Inspected);
+            Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+        }
+        finally
+        {
+            if (written)
+            {
+                File.Delete(machine);
+            }
+        }
+    }
+
+    /// <summary>
     /// A leg another machine runs reads that machine's .env, never this one's: before it is placed, only what --input gave
     /// is held to its input - refused here as for a leg of this machine - and this machine's runner values are not read at
     /// all, so a run of another machine's legs is never refused over them, a .env here that defines a name twice included.

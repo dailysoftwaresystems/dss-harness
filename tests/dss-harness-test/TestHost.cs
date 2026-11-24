@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 
 namespace DssHarness.Tests;
@@ -11,6 +12,13 @@ internal static class TestHost
 {
     /// <summary>Selects a child behaviour. Unset in an ordinary test run.</summary>
     internal const string ChildModeVariable = "DSSHARNESS_TEST_CHILD";
+
+    /// <summary>
+    /// The directory this tool keeps its own state in as the machine gave the process its user data, captured before
+    /// <see cref="IsolateUserData"/> gave the process a directory of its own: where the machine user's settings file and
+    /// records stand, which a test writes beside only where they keep none of their own.
+    /// </summary>
+    internal static string? MachineUserState { get; private set; }
 
     /// <summary>
     /// Root of every temporary directory the suite creates, with symbolic links resolved.
@@ -86,6 +94,7 @@ internal static class TestHost
         }
 
         IsolateGitConfiguration();
+        IsolateUserData();
 
         // Threads at once for the work the suite's many tests hand the pool, so a test that blocks one - a double that
         // sleeps, a sync wait - never leaves a timer's callback queued behind the pool's slow growth: on a busy runner
@@ -149,6 +158,45 @@ internal static class TestHost
         }
 
         return start;
+    }
+
+    /// <summary>
+    /// Gives this process a user's data of its own, in the one variable each system reads that data from - LOCALAPPDATA
+    /// on Windows, HOME on macOS, XDG_DATA_HOME on Linux - which <see cref="DssHarness.Core.Platform.UserState"/> reads
+    /// and every child inherits: the registrations a test builds in process and every CLI a test starts keep this tool's
+    /// state in a directory of this process's own below the temporary root, never the machine user's, whose settings file
+    /// declares what no test may speak for and whose records every command of theirs shares - unless a test names a home
+    /// or a user's data of its own for a CLI it starts, which stands as it was given. Removed as the process ends.
+    /// </summary>
+    private static void IsolateUserData()
+    {
+        try
+        {
+            MachineUserState = UserState.Directory;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // A process given no home of its own has none to keep: nothing of the machine user's is read either way.
+        }
+
+        var root = Path.Combine(TemporaryRoot, $"u{Environment.ProcessId}-{Guid.NewGuid().ToString("N")[..8]}");
+
+        Directory.CreateDirectory(root);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A CLI still ending holds a file of it: the temporary root keeps it, as it keeps what any test left.
+            }
+        };
+
+        Environment.SetEnvironmentVariable(
+            OperatingSystem.IsWindows() ? "LOCALAPPDATA" : OperatingSystem.IsMacOS() ? "HOME" : "XDG_DATA_HOME",
+            root);
     }
 
     /// <summary>
