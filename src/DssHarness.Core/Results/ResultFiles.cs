@@ -18,8 +18,9 @@ namespace DssHarness.Core.Results;
 /// before any log line is parsed, for what a file holds is typed already; what it does not hold no parser of lines
 /// invents. Each is read as a stream - an XML form a test result at a time, the Dart stream a line at a time - so no file
 /// is held whole for its size, and each is read to its end: a file a crash cut short gives every finding before the
-/// break, and the break is said, never thrown. Its places are kept as the tool wrote them, a <c>file:</c> URI among them,
-/// for a digest's places are read against the tree in one place (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>); its texts are
+/// break, and the break is said, never thrown. Its places are read as a log's are, by one owner
+/// (<see cref="ParsedText.FileOf"/>): a <c>file:</c> URI as the path it names, any other text as the tool wrote it - and
+/// read against the tree in one place (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>); its texts are
 /// masked where the digest is (<see cref="ResultDigest.MaskedBy"/>).
 /// </summary>
 public static class ResultFiles
@@ -247,8 +248,8 @@ public static class ResultFiles
 
     /// <summary>
     /// A SARIF log's results, each a diagnostic: its tool's name, its level - <c>warning</c> where it names none, as SARIF
-    /// says - its rule, its message and its place, in the 2.1 form and the 1.0 form csc writes by default. A member of
-    /// another shape than the form's is read as absent, never thrown over.
+    /// says - its rule, its message and its place, a <c>file:</c> URI the path it names, in the 2.1 form and the 1.0 form
+    /// csc writes by default. A member of another shape than the form's is read as absent, never thrown over.
     /// </summary>
     private static string? Sarif(JsonObject log, ResultDigest.Gathering into)
     {
@@ -279,7 +280,7 @@ public static class ResultFiles
                     },
                     TextOf(found["ruleId"]),
                     TextOf(found["message"]) ?? TextOf(Member(found["message"], "text")) ?? string.Empty,
-                    TextOf(Member(Member(place, "artifactLocation"), "uri")) ?? TextOf(Member(place, "uri")),
+                    ParsedText.FileOf(TextOf(Member(Member(place, "artifactLocation"), "uri")) ?? TextOf(Member(place, "uri"))),
                     WholeOf(Member(region, "startLine")),
                     WholeOf(Member(region, "startColumn")),
                     WholeOf(Member(region, "endLine")),
@@ -428,7 +429,7 @@ public static class ResultFiles
                 "dart",
                 test.Name,
                 Message: said,
-                File: test.Url,
+                File: ParsedText.FileOf(test.Url),
                 Line: test.Line,
                 Exception: said is not null && !own.Failure ? new ExceptionRecord("error", said, frames, []) : null,
                 Stack: said is not null && !own.Failure ? [] : frames,

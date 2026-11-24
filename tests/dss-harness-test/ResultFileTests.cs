@@ -168,7 +168,7 @@ public sealed class ResultFileTests
 
     /// <summary>
     /// Dart's stream is read a line at a time: a failing test with its error event as its message and its stack - a failed
-    /// expectation's stack the failure's own, held once - its place the test's URI as the tool wrote it, and an error no
+    /// expectation's stack the failure's own, held once - its place the path the test's file URI names, and an error no
     /// test owns as a diagnostic.
     /// </summary>
     [Fact]
@@ -181,7 +181,7 @@ public sealed class ResultFileTests
         var one = Assert.Single(digest.Failures);
 
         Assert.Equal(("dart", "charge test", "failed", "Expected: 3\n  Actual: 4"), (one.Framework, one.Id, one.Outcome, one.Message));
-        Assert.Equal(("file:///d:/src/test/charge_test.dart", (int?)7), (one.File, one.Line));
+        Assert.Equal(("d:/src/test/charge_test.dart", (int?)7), (one.File, one.Line));
         Assert.Equal([("d:/src/test/charge_test.dart", (int?)8, "main"), ("d:/src/test/charge_test.dart", 3, "_main")], one.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
         Assert.Null(one.Exception);
 
@@ -229,7 +229,7 @@ public sealed class ResultFileTests
 
     /// <summary>
     /// A SARIF 2.1 log is read by its runs, each result a diagnostic: the driver's name, the level - warning where it names
-    /// none, as SARIF says - the rule, the message, its place as the tool wrote it, a file URI among them, and its range.
+    /// none, as SARIF says - the rule, the message, its place - a file URI the path it names - and its range.
     /// </summary>
     [Fact]
     public void ASarifLog_IsReadByItsRuns_ItsDiagnosticsTyped_ALevelLeftOutAWarning()
@@ -242,7 +242,7 @@ public sealed class ResultFileTests
 
         var one = digest.Diagnostics[0];
 
-        Assert.Equal(("Microsoft Visual C# Compiler", "error", "CS0103", "The name 'x' does not exist in the current context.", "file:///d:/src/Program.cs", (int?)12, (int?)35, (int?)12, (int?)36), (one.Tool, one.Severity, one.Code, one.Message, one.File, one.Line, one.Column, one.EndLine, one.EndColumn));
+        Assert.Equal(("Microsoft Visual C# Compiler", "error", "CS0103", "The name 'x' does not exist in the current context.", "d:/src/Program.cs", (int?)12, (int?)35, (int?)12, (int?)36), (one.Tool, one.Severity, one.Code, one.Message, one.File, one.Line, one.Column, one.EndLine, one.EndColumn));
         Assert.Same(digest.Diagnostics[0], digest.First);
 
         var unlevelled = digest.Diagnostics[1];
@@ -261,7 +261,7 @@ public sealed class ResultFileTests
 
         var one = Assert.Single(digest.Diagnostics);
 
-        Assert.Equal(("Microsoft (R) Visual C# Compiler", "error", "CS0103", "The name 'x' does not exist in the current context", "file:///d:/src/Program.cs", (int?)12, (int?)35), (one.Tool, one.Severity, one.Code, one.Message, one.File, one.Line, one.Column));
+        Assert.Equal(("Microsoft (R) Visual C# Compiler", "error", "CS0103", "The name 'x' does not exist in the current context", "d:/src/Program.cs", (int?)12, (int?)35), (one.Tool, one.Severity, one.Code, one.Message, one.File, one.Line, one.Column));
     }
 
     /// <summary>
