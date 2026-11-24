@@ -292,7 +292,9 @@ public static class FlowAnalysisEvidence
 
         if (!string.Equals(text, said, StringComparison.Ordinal))
         {
-            return $"{named} is {value.ToJsonString()}, not '{said}'";
+            // Said back to the analyst in its own conversation, so written as every JSON an agent reads is: a text with an
+            // apostrophe reads as the report holds it, never as an escape.
+            return $"{named} is {value.ToJsonString(Agents.AgentEnvelope.Written)}, not '{said}'";
         }
 
         numbers = [.. NumbersIn(text).Select(one => one.Value)];

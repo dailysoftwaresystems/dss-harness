@@ -1123,7 +1123,7 @@ public sealed class ReasonStepRunnerTests
             0,
             [new FlowStepRecord("verify", "verify", false, "Failed", 1, 1, [], [], Type: "test", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow, Output: JsonNode.Parse("""
                 {"passed": false, "red": [
-                  {"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": [], "digest": {"errors": 1, "first": {"kind": "diagnostic", "tool": "msbuild", "code": "CS0103", "message": "no x", "file": "a.cs", "line": 1, "column": 2, "count": 1, "stack": [], "said": "msbuild CS0103 a.cs(1,2): no x", "log": [2, 2]}}, "log": @LOG@},
+                  {"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": [], "digest": {"errors": 1, "first": {"kind": "diagnostic", "tool": "msbuild", "code": "CS0103", "message": "The name 'List<T>' does not exist & is not \"known\"", "file": "a.cs", "line": 1, "column": 2, "count": 1, "stack": [], "said": "msbuild CS0103 a.cs(1,2): The name 'List<T>' does not exist & is not \"known\"", "log": [2, 2]}}, "log": @LOG@},
                   {"leg": "tools", "verdict": "failed", "phase": "build", "detail": "the build failed", "tail": ["make: *** [all] Error 2", "the tool's last line"], "log": null}
                 ]}
                 """.Replace("@LOG@", System.Text.Json.JsonSerializer.Serialize(log), StringComparison.Ordinal))),
@@ -1147,12 +1147,14 @@ public sealed class ReasonStepRunnerTests
         Assert.Contains("src/one.cs", continuation, StringComparison.Ordinal);
         Assert.Contains("The last build or test in this worktree was red:", continuation, StringComparison.Ordinal);
 
-        // What the phase printed, said for a model after the ledger's line, with a copy of the log its ranges number; a
-        // red entry with no digest is said by the lines it carries, never by its ledger line alone.
+        // What the phase printed, said for a model after the ledger's line, with a copy of the log its ranges number - its
+        // digest written as every JSON an agent reads is, escaped only where JSON itself must, so an apostrophe, an angle
+        // bracket or an ampersand reads as the tool printed it; a red entry with no digest is said by the lines it carries,
+        // never by its ledger line alone.
         var nl = Environment.NewLine;
         var copy = Path.Combine(DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectory(kit.Layout.InstanceDirectory("think", "reader")), DssHarness.Core.Agents.AgentContinuation.CopiesFolder, "logs", "unit.test.log");
         Assert.Contains(
-            $"- leg 'unit', phase 'test': 2 tests failed{nl}  {{\"errors\":1,\"first\":{{\"kind\":\"diagnostic\",\"tool\":\"msbuild\",\"code\":\"CS0103\",\"message\":\"no x\",\"file\":\"a.cs\",\"line\":1,\"column\":2,\"count\":1,\"stack\":[],\"said\":\"msbuild CS0103 a.cs(1,2): no x\",\"log\":[2,2]}}}}{nl}  Its log, whose lines the digest's ranges number: {copy}{nl}",
+            $"- leg 'unit', phase 'test': 2 tests failed{nl}  {{\"errors\":1,\"first\":{{\"kind\":\"diagnostic\",\"tool\":\"msbuild\",\"code\":\"CS0103\",\"message\":\"The name 'List<T>' does not exist & is not \\\"known\\\"\",\"file\":\"a.cs\",\"line\":1,\"column\":2,\"count\":1,\"stack\":[],\"said\":\"msbuild CS0103 a.cs(1,2): The name 'List<T>' does not exist & is not \\\"known\\\"\",\"log\":[2,2]}}}}{nl}  Its log, whose lines the digest's ranges number: {copy}{nl}",
             continuation,
             StringComparison.Ordinal);
         Assert.Equal("header\nerror CS0103: no x\n", File.ReadAllText(copy));

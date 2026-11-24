@@ -9961,12 +9961,13 @@ of its stack the tree holds, where one is.
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names
 are one read away" in place of "read the output and find the first thing that went wrong" - `diagnose.md` and
-`rediagnose.md` say the same, and the continuation record carries each red leg's ledger line, its digest, the raw lines
-its entry carries beside it - the phase's last lines where nothing was digested, so a leg no parser read is never said
-by its line alone - and a copy of the log its entry names, put with the record's other copies
-(`ReasonStepRunner.RedLegsOf`, `AgentContinuation`), so a step that goes on starts from the first error with its log
-one read away. Red legs are read only from a step whose output the engine wrote of the legs it ran
-(`WorkflowStepTypes.StepType.AnswersLegs`), never from a model's answer: a path a model wrote there would have the
+`rediagnose.md` say the same, and the continuation record carries each red leg's ledger line, its digest - written as
+every JSON an agent reads is (`AgentEnvelope.Written`: JSON's own escapes alone), so an apostrophe or an angle bracket a
+tool printed reads as it printed it - the raw lines its entry carries beside it - the phase's last lines where nothing
+was digested, so a leg no parser read is never said by its line alone - and a copy of the log its entry names, put with
+the record's other copies (`ReasonStepRunner.RedLegsOf`, `AgentContinuation`), so a step that goes on starts from the
+first error with its log one read away. Red legs are read only from a step whose output the engine wrote of the legs it
+ran (`WorkflowStepTypes.StepType.AnswersLegs`), never from a model's answer: a path a model wrote there would have the
 record copy a file the agent's policy never let it read.
 
 CI is digested the same way (`Ci\CiDigest.cs`, the one owner of a CI digest), of the two things the forge keeps of a

@@ -265,6 +265,7 @@ public sealed class AnalyzeReportTests
                 "painPoints[0].evidence[4]: 'totals'.nothing is no member the report holds",
                 "painPoints[0].evidence[5]: 'steps', c.tokens holds nothing in the report",
                 "painPoints[0].evidence[6]: 'steps', b.state is \"Done\", not 'done'",
+                "painPoints[0].evidence[7]: 'signals', classReopenedTwice#1.said is \"'c-rate' of agent 'item-1' was reopened 2 times\", not 'reopened'",
                 "painPoints[0].impact: says 7, which none of its citations holds - cite where the report holds it, or leave it out",
             ],
             FlowAnalysisEvidence.Problems(
@@ -278,7 +279,8 @@ public sealed class AnalyzeReportTests
                         Cited("totals", string.Empty, "tokens", "1"),
                         Cited("totals", string.Empty, "nothing", "1"),
                         Cited("steps", "c", "tokens", "1"),
-                        Cited("steps", "b", "state", "done")),
+                        Cited("steps", "b", "state", "done"),
+                        Cited("signals", "classReopenedTwice#1", "said", "reopened")),
                     "it cost 7 USD"),
                 report));
     }

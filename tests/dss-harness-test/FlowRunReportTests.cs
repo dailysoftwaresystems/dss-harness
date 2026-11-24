@@ -232,6 +232,43 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
+    /// A signal that names no step - a review at its bound, a class reopened twice, spend that could not be counted - is
+    /// said by its id and its words in every form, its steps an empty list in the document and no word of the text; and a
+    /// member of a row that holds an empty list is said as nothing, as a null one is, so no name is said without a value.
+    /// </summary>
+    [Fact]
+    public void ASignalThatNamesNoStep_IsSaidByItsIdAndItsWords_InEveryForm()
+    {
+        var report = FlowRunReport.Of(Source());
+        string[] said =
+        [
+            "reviewAtItsBound#1: a loop reached its bound and asked",
+            "classReopenedTwice#1: 'c-rate' of agent 'item-1' was reopened 2 times",
+            "classReopenedTwice#2: 'c-frame' of agent 'item-2' was reopened 2 times",
+            "uncountedSpend#1: the run's dollars are not known past 0.0300 USD: no provider lists 'model-z'",
+        ];
+
+        Assert.Equal(
+            ["[]", "[]", "[]", "[]"],
+            report["signals"]!.AsArray().Where(signal => signal!["kind"]!.GetValue<string>() is "reviewAtItsBound" or "classReopenedTwice" or "uncountedSpend").Select(signal => signal!["steps"]!.ToJsonString()));
+
+        var text = FlowRunReport.Text(report).Split('\n');
+        var markdown = FlowRunReport.Markdown(report).Split('\n');
+
+        Assert.Equal([.. said.Select(line => $"  {line}")], text.Where(line => said.Any(one => line.EndsWith(one, StringComparison.Ordinal))));
+        Assert.Equal([.. said.Select(line => $"- {line}")], markdown.Where(line => said.Any(one => line.EndsWith(one, StringComparison.Ordinal))));
+
+        // A question's row with a member holding an empty list is said without it, in every form that says the row.
+        report["people"]![0]!.AsObject().Insert(3, "options", new JsonArray());
+        var person = "q1; question q1; kind failure; askedAt";
+
+        Assert.Contains(FlowRunReport.Text(report).Split('\n'), line => line.StartsWith($"  id {person}", StringComparison.Ordinal));
+        Assert.Contains(FlowRunReport.Markdown(report).Split('\n'), line => line.StartsWith($"- id {person}", StringComparison.Ordinal));
+        Assert.DoesNotContain(FlowRunReport.Text(report).Split('\n'), line => line.Contains(" ;", StringComparison.Ordinal));
+        Assert.DoesNotContain(FlowRunReport.Markdown(report).Split('\n'), line => line.Contains(" ;", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// Every failed attempt is an error row of its own (<c>&lt;instance&gt;@&lt;attempt&gt;</c>): its code, why it
     /// ended, its error, the exception it threw whole - type, message, stack and causes - the first error its legs'
     /// digests read, what handled it and the question it raised; every form says them.
@@ -326,9 +363,10 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
-    /// The verb answers the report over a run's records on disk, in text, as Markdown and as one JSON document - its
-    /// code, its line and the report, the shape a read that stopped early keeps, its report null - and says in its notes
-    /// an events file's torn last line, reading the report as of the event before it.
+    /// The verb answers the report over a run's records on disk - the issues it owed a later round among them - in text,
+    /// as Markdown and as one JSON document - its code, its line and the report, the shape a read that stopped early
+    /// keeps, its report null - and says in its notes an events file's torn last line, reading the report as of the
+    /// event before it.
     /// </summary>
     [Fact]
     public async Task TheVerb_AnswersTheReport_FromTheRunsRecordsOnDisk_InOneShape()
@@ -337,6 +375,7 @@ public sealed class FlowRunReportTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var layout = OrchestratorLayout.Of(new HarnessLayout(kit.Main, kit.Main), "o1");
         kit.Harness.OrchestrationStore.WriteFlow(layout, Source().Flow with { Run = "o1" });
+        kit.Harness.OrchestrationStore.WriteNextRound(layout, new FlowNextRoundFile(1, "o1", Began, [new FlowNextIssue("nx-1", "a broken parser", "it reads one format", ["src/Parser.cs"], ["src/Parser.cs"], "", [], "a", Began)]));
 
         var text = await CliRunner.RunAsync([FlowService.ReadReportCommand, "o1", "-C", kit.Main], TestContext.Current.CancellationToken);
         var markdown = await CliRunner.RunAsync([FlowService.ReadReportCommand, "o1", "--markdown", "-C", kit.Main], TestContext.Current.CancellationToken);
@@ -355,6 +394,10 @@ public sealed class FlowRunReportTests
         Assert.Equal(["exitCode", "summary", "report"], refused.Select(member => member.Key));
         Assert.Equal((0, "o1"), (document["exitCode"]!.GetValue<int>(), document["report"]!["run"]!.GetValue<string>()));
         Assert.Equal(["a", "b", "c"], document["report"]!["steps"]!.AsArray().Select(step => step!["step"]!.GetValue<string>()));
+        Assert.Equal(
+            "{\"id\":\"nextRound:nx-1\",\"issue\":\"nx-1\",\"said\":\"'nx-1' a broken parser: next round, not settled\",\"settledBy\":null}",
+            document["report"]!["convergence"]!["nextRound"]!.AsArray().Single()!.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        Assert.Contains("  issue 'nx-1' a broken parser: next round, not settled", text.StandardOutput.Split('\n'));
         Assert.Equal((HarnessExit.Refused, (JsonNode?)null), (refused["exitCode"]!.GetValue<int>(), refused["report"]));
 
         // An events file whose writer stopped mid-line: the report reads the events before it, and its notes say so.

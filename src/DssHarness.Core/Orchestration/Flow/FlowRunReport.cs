@@ -355,7 +355,10 @@ public static class FlowRunReport
                 : Said(node)
             : Said(node);
 
-    /// <summary>How a value of the document is said as one line of text, whatever it holds.</summary>
+    /// <summary>
+    /// How a value of the document is said as one line of text, whatever it holds: an object as its members, each by its
+    /// name and its value, a member that holds nothing - null or an empty list - left out, so no name is said without one.
+    /// </summary>
     private static string Said(JsonNode? node)
         => node switch
         {
@@ -366,7 +369,7 @@ public static class FlowRunReport
             JsonValue value => value.ToJsonString(ReportJson.Options),
             JsonArray array => string.Join("; ", array.Select(Said)),
             JsonObject budget when budget.ContainsKey("usd") && budget.ContainsKey("tokens") && budget.ContainsKey("minutes") => BudgetSaid(budget),
-            JsonObject members => string.Join("; ", members.Where(member => member.Value is not null).Select(member => $"{member.Key} {SaidAs(member.Key, member.Value)}")),
+            JsonObject members => string.Join("; ", members.Where(member => member.Value is not (null or JsonArray { Count: 0 })).Select(member => $"{member.Key} {SaidAs(member.Key, member.Value)}")),
             _ => node.ToJsonString(ReportJson.Options),
         };
 

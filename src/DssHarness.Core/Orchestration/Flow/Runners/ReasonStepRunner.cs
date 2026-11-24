@@ -891,7 +891,7 @@ public sealed class ReasonStepRunner(
 
         return read.Schema is not { } whole || read.Problems.Count > 0
             ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', the output schema of step '{step.Name}', is not a schema the engine reads: {string.Join("; ", read.Problems)}")
-            : whole.ToJsonString();
+            : whole.ToJsonString(AgentEnvelope.Written);
     }
 
     /// <summary>
@@ -1127,8 +1127,10 @@ public sealed class ReasonStepRunner(
                     var phase = red["phase"] is JsonValue named && named.GetValueKind() == JsonValueKind.String ? named.GetValue<string>() : null;
 
                     // What a red result printed, typed and said for a model, so the step that goes on starts from the
-                    // first error; the raw lines beside it, so a leg no parser read is never said by its line alone.
-                    var digest = red["digest"] is { } typed && typed.GetValueKind() == JsonValueKind.Object ? typed.ToJsonString() : null;
+                    // first error - written as every JSON an agent reads is (AgentEnvelope.Written), so what the tool
+                    // printed reads as it printed it; the raw lines beside it, so a leg no parser read is never said by
+                    // its line alone.
+                    var digest = red["digest"] is { } typed && typed.GetValueKind() == JsonValueKind.Object ? typed.ToJsonString(AgentEnvelope.Written) : null;
                     IReadOnlyList<string> tail = red["tail"] is JsonArray lines
                         ? [.. lines.OfType<JsonValue>().Where(line => line.GetValueKind() == JsonValueKind.String).Select(line => line.GetValue<string>())]
                         : [];
