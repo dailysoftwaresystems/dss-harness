@@ -82,6 +82,10 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.
     /// </param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="priority">
+    /// The run's priority, which each unit the leg asks the host's dispatch queue for is charged at there
+    /// (<see cref="HostAgentRequest.Priority"/>); <see langword="null"/> for a command that runs no leg of a run.
+    /// </param>
     /// <param name="onNote">Told each whole note the host's command writes while it runs, as it arrives; never relayed; <see langword="null"/> where this reads none.</param>
     /// <param name="setUpsLeftRunning">
     /// Told each set-up the leg left running on the host where it ended there with no line to carry it, so this run
@@ -112,6 +116,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         PlacedLeg leg,
         IReadOnlyList<HostArgument> arguments,
         RunId? run = null,
+        int? priority = null,
         Action<string, string>? onNote = null,
         Action<IReadOnlyList<SetUps.SetUpFact>>? setUpsLeftRunning = null,
         HostRestarts? earlier = null,
@@ -128,6 +133,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 session,
                 [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. Verbosity, .. arguments],
                 run,
+                priority,
                 onNote,
                 writesLedger: true,
                 again: "its start there once more",
@@ -183,6 +189,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 session,
                 [commandName, "--legs", leg.Name, HereOption, leg.Host.Host.ToString(), .. Verbosity, .. arguments],
                 run: null,
+                priority: null,
                 onNote: null,
                 writesLedger: false,
                 again: "its check there once more",
@@ -247,6 +254,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="session">The session to its host.</param>
     /// <param name="commandLine">The command line, as typed after <c>DssHarness</c>.</param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="priority">The run's priority; <see langword="null"/> for a command that runs no leg of a run.</param>
     /// <param name="onNote">Told each whole note the command writes while it runs; <see langword="null"/> where this reads none.</param>
     /// <param name="writesLedger">Whether the command was asked for its ledger (<c>--json</c>), which its standard output then is.</param>
     /// <param name="again">What the warning before a start once more says is waited for: <c>its start there once more</c>.</param>
@@ -264,6 +272,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         HostSession session,
         IReadOnlyList<HostArgument> commandLine,
         RunId? run,
+        int? priority,
         Action<string, string>? onNote,
         bool writesLedger,
         string again,
@@ -292,7 +301,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                             restarts = restarts.Then(last.SaidAsItStarted(leg));
                         }
 
-                        last = await AskAsync(commandName, leg, session, commandLine, run, onNote, writesLedger, token).ConfigureAwait(false);
+                        last = await AskAsync(commandName, leg, session, commandLine, run, priority, onNote, writesLedger, token).ConfigureAwait(false);
 
                         return last.FailedBeforeAnythingRan
                             ? new RetryTry<HostAnswer>.Failed(last.SaidAsItStarted(leg), last.Cause)
@@ -322,6 +331,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="session">The session to its host.</param>
     /// <param name="commandLine">The command line, as typed after <c>DssHarness</c>.</param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="priority">The run's priority; <see langword="null"/> for a command that runs no leg of a run.</param>
     /// <param name="onNote">Told each whole note the command writes while it runs; <see langword="null"/> where this reads none.</param>
     /// <param name="writesLedger">Whether the command was asked for its ledger (<c>--json</c>), which its standard output then is.</param>
     /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
@@ -334,6 +344,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         HostSession session,
         IReadOnlyList<HostArgument> commandLine,
         RunId? run,
+        int? priority,
         Action<string, string>? onNote,
         bool writesLedger,
         CancellationToken cancellationToken)
@@ -347,6 +358,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             Arguments = [.. commandLine],
             Nonce = nonce,
             RunId = run?.Value,
+            Priority = priority,
 
             // The drive a WSL distribution's disk grows on, which the leg's build fills, and which only this machine sees.
             DiskImageDrive = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.DiskImageSpace?.Filesystem : null,

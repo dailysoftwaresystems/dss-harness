@@ -2164,6 +2164,63 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A heavy leg a host runs for the machine that dispatched it asks the host's dispatch queue at that machine's run's
+    /// priority, which the request carries beside the command: the command there declares none of its own, and a run's
+    /// priority reaches every unit it runs, wherever it runs.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegRunForAnotherMachine_AsksTheQueueAtThatMachinesRunsPriority()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var gauge = new QueueNotingGauge(record);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 2 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = Heavy },
+            admission: AdmissionKit.Admission(harness, record, gauge, new ManualClock()),
+            origin: CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, RunId = "20261008-120000-0a1b2c3d", Priority = 8 })));
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(8, Assert.Single(gauge.Noted).Priority);
+    }
+
+    /// <summary>
+    /// A leg this machine sends to an ssh host is sent with its run's priority beside its command, which the host's own
+    /// process asks that host's dispatch queue at: the host admits it, and this machine asks nothing for it.
+    /// </summary>
+    [Fact]
+    public async Task ALegSentToAnSshHost_IsSentWithItsRunsPriority()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        HostCommand? sent = null;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var verdicts = Verdicts(await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["arm"], Json: true) { Workload = LegWorkload.Copy, Priority = 6 },
+            sync: SyncKit.ServiceDouble(),
+            hosts: hosts));
+
+        Assert.True(verdicts["arm"].Verdict == "passed", $"{verdicts["arm"].Verdict}: {verdicts["arm"].Detail}");
+        Assert.Equal(6, JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Priority);
+    }
+
+    /// <summary>
     /// A heavy leg whose build's need its placement knew claims that room on this machine as it is admitted - read where its
     /// build directory is - holds it while its work runs and gives it back as the work ends, its line naming what it
     /// claimed. Counted only as a command placed its own legs, two commands each placing one leg on one host both found it

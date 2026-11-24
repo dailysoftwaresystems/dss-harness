@@ -127,15 +127,16 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// What a request says of the command it asks for beside its line - the run it is a leg of, the drive its WSL disk grows
-    /// on - is handed to the command, never added to its arguments; a run that is not a run id, and a blank drive, are
-    /// refused, and nothing runs.
+    /// What a request says of the command it asks for beside its line - the run it is a leg of, that run's priority, the
+    /// drive its WSL disk grows on - is handed to the command, never added to its arguments; a run that is not a run id, a
+    /// priority below the least a run has, and a blank drive, are refused, and nothing runs.
     /// </summary>
     [Theory]
-    [InlineData("20261008-120000-0a1b2c3d", "C:\\", null)]
-    [InlineData("../../somewhere", "C:\\", "the request names its run as '../../somewhere', which is not a run id")]
-    [InlineData("20261008-120000-0a1b2c3d", " ", "the request names a blank drive as where WSL keeps the distribution's disk")]
-    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, string drive, string? refusal)
+    [InlineData("20261008-120000-0a1b2c3d", 8, "C:\\", null)]
+    [InlineData("../../somewhere", 8, "C:\\", "the request names its run as '../../somewhere', which is not a run id")]
+    [InlineData("20261008-120000-0a1b2c3d", 0, "C:\\", "the request names its run's priority as 0, below the least a run has, 1")]
+    [InlineData("20261008-120000-0a1b2c3d", 8, " ", "the request names a blank drive as where WSL keeps the distribution's disk")]
+    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, int priority, string drive, string? refusal)
     {
         using var copy = new TempDirectory();
         using var error = new StringWriter();
@@ -149,6 +150,7 @@ public sealed class HostAgentServiceTests
                 Arguments = ["build", "--json"],
                 Nonce = Nonce,
                 RunId = run,
+                Priority = priority,
                 DiskImageDrive = drive,
             },
             HostAgentProtocol.JsonOptions);
@@ -168,7 +170,7 @@ public sealed class HostAgentServiceTests
         {
             Assert.Equal(HarnessExit.Success, exitCode);
             Assert.NotNull(ranFor);
-            Assert.Equal((run, drive, Nonce), (ranFor.RunId?.ToString(), ranFor.DiskImageDrive, ranFor.Nonce));
+            Assert.Equal((run, (int?)priority, drive, Nonce), (ranFor.RunId?.ToString(), ranFor.Priority, ranFor.DiskImageDrive, ranFor.Nonce));
             Assert.Equal(["build", "--json"], ranWith!);
         }
         else
@@ -1682,7 +1684,7 @@ public sealed class HostAgentServiceTests
         var run = new HostAgentRequest { Kind = HostAgentRequestKind.Run };
         var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(run, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
 
-        Assert.Equal(15, HostAgentProtocol.Version);
+        Assert.Equal(16, HostAgentProtocol.Version);
         Assert.Equal(15, read.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(15), "host-agent: beat"), HostAgentProtocol.BeatOf(read));
         Assert.Null(HostAgentProtocol.BeatOf(new HostAgentRequest { Kind = HostAgentRequestKind.Run, BeatSeconds = 0 }));

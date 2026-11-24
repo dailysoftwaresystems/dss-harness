@@ -7181,8 +7181,10 @@ it. Measured: a command's WSL leg, asked for at once with its two Windows legs b
 dispatched them all, waited out its hour behind them and was `not-admitted`. A host serving a leg for
 another machine records the leg's slot under that machine's run, which the run request carries beside
 the command (`HostAgentRequest.RunId`, since protocol 7), so the legs one command sends there wait for each
-other the same way; a request naming its run by what is no run id, or naming a blank drive where WSL
-keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
+other the same way, and asks the host's dispatch queue at that run's priority, carried beside it
+(`HostAgentRequest.Priority`, since protocol 16), so a run's priority reaches every unit it runs, wherever
+it runs; a request naming its run by what is no run id, its run's priority below the least a run has, or a
+blank drive where WSL keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
 for it, never by a timeout: given back when the work ends, and, where that process ended
 first - a command that crashed or was killed holding a slot - reclaimed by the next leg that looks,
 and said to be. Every entry of the record is this machine's, whatever name it carries, so an entry

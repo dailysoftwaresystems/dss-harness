@@ -1191,8 +1191,8 @@ public sealed class LegRunService(
         // one owner of that question spells it on this machine.
         var repository = await _contextLoader.RepositoryOfAsync(context, cancellationToken).ConfigureAwait(false);
 
-        // On an ssh host, under the run of the machine that dispatched the leg: its command's other legs there ask under
-        // it too, and a wait for slots only they hold does not count.
+        // On an ssh host, under the run of the machine that dispatched the leg, and at that run's priority: its command's
+        // other legs there ask under it too, and a wait for slots only they hold does not count.
         return await _admission
             .AdmitAsync(
                 new AdmissionRequest(
@@ -1205,7 +1205,7 @@ public sealed class LegRunService(
                     leg.Variant.DirectoryName,
                     message => ledger.Transition(leg.Name, message),
                     room,
-                    request.Priority,
+                    _origin.Dispatched?.Priority ?? request.Priority,
                     repository)
                 {
                     Settle = settle,
@@ -1576,6 +1576,7 @@ public sealed class LegRunService(
                     leg,
                     [.. request.RemoteArguments ?? [], .. SetUpOption(context, leg, request), .. KeepGoingOption(leg, request), .. own],
                     runId,
+                    request.Priority,
                     onNote,
                     facts => ledger.SetUpsEnded(leg.Name, facts),
                     checkRestarts,

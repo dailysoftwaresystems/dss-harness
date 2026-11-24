@@ -154,7 +154,7 @@ public sealed partial class HelpTests
             "A wait with only legs of its own run ahead of it - holding slots, or in line first: a command's WSL leg behind its Windows legs, "
                 + "asked for at once - is certain to end and does not count: its line says they are its own, and a refusal after it says how much "
                 + "of the wait did not count. Another command's leg in line ahead makes it count, whoever holds the slots. On an ssh host, the "
-                + "legs one command sends there ask under that command's run.",
+                + "legs one command sends there ask under that command's run, and at its run's priority.",
         })
         {
             Assert.Contains(expected, said, StringComparison.Ordinal);

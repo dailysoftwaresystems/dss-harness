@@ -239,7 +239,7 @@ public static partial class HelpTopics
         builder.AppendLine("certain to end and does not count: its line says they are its own, and a refusal");
         builder.AppendLine("after it says how much of the wait did not count. Another command's leg in line");
         builder.AppendLine("ahead makes it count, whoever holds the slots. On an ssh host, the legs one command");
-        builder.AppendLine("sends there ask under that command's run.");
+        builder.AppendLine("sends there ask under that command's run, and at its run's priority.");
         builder.AppendLine();
         builder.AppendLine("The slots are kept in <user data>/dssharness/admission-<machine id>.json; beside them,");
         builder.AppendLine("what the queue weighs each unit by and each tenant's credit in");

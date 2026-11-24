@@ -194,12 +194,13 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
-    /// A leg of a run is sent with that run beside its command, never in its arguments: a leg on the host asking its
-    /// heavy-leg slots is recorded under it, so the legs of one command wait for each other's slots without that wait
-    /// counting. A command that runs no leg of a run sends none.
+    /// A leg of a run is sent with that run and its priority beside its command, never in its arguments: a leg on the host
+    /// asking its heavy-leg slots is recorded under the run, so the legs of one command wait for each other's slots without
+    /// that wait counting, and asks the host's dispatch queue at the run's priority. A command that runs no leg of a run
+    /// sends neither.
     /// </summary>
     [Fact]
-    public async Task ALegOfARun_IsSentWithItsRun_BesideItsCommand()
+    public async Task ALegOfARun_IsSentWithItsRunAndItsPriority_BesideItsCommand()
     {
         var sent = new List<HostCommand>();
         var run = RunId.New();
@@ -211,10 +212,10 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        await Runner(hosts).RunAsync("build", Leg(), [], run, onNote: null, cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", Leg(), [], run, priority: 8, onNote: null, cancellationToken: TestContext.Current.CancellationToken);
         await Runner(hosts).RunAsync("clean", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal([run.Value, null], sent.Select(command => Request(command).RunId));
+        Assert.Equal([(run.Value, 8), (null, null)], sent.Select(command => (Request(command).RunId, Request(command).Priority)));
         Assert.DoesNotContain(run.Value, Request(sent[0]).Arguments);
     }
 
