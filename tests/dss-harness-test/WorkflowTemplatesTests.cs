@@ -23,7 +23,8 @@ public sealed class WorkflowTemplatesTests
     /// The repair prompts start from the digest: mend's first instruction names the digest's first - the first error
     /// in the order the tool met it, the lines its log range names one read away in the log file the entry names, as
     /// that file numbers them - and says what a red entry holds of it, and diagnose and rediagnose say the same, so no
-    /// model is told to search a log for what a file already holds, nor a directory for the file.
+    /// model is told to search a log for what a file already holds, nor a directory for the file. The architecture says
+    /// what the prompt says, in its own words, never a sentence no prompt holds.
     /// </summary>
     [Fact]
     public void TheRepairPrompts_StartFromTheDigestsFirst_NeverALogToSearch()
@@ -34,6 +35,14 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Contains("1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The lines its `log` names are one read away in the entry's `log` file", mend, StringComparison.Ordinal);
         Assert.Contains("Each line reaches you once: where the digest holds an error or a failure, its `unparsed` holds the lines no parser held - the last ones, nearest the failure, `unparsedLeftOut` saying how many more there were - and the `tail` is empty; where it holds neither, the `tail` holds the phase's last lines and `unparsed` those lines no parser held that the `tail` does not. The entry's `log` is the file that phase wrote, null for a leg another machine ran.", mend, StringComparison.Ordinal);
+        Assert.Contains(
+            "`mend.md` starts from the digest's `first`, the first thing that went wrong in the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and `rediagnose.md` say the same,",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`mend.md` starts from the digest's `first`, the first thing that went wrong in the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and `rediagnose.md` say the same,",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
         Assert.Contains("1. Start from the digest's `first` - the first thing that went wrong, in the order the tool met it - and read the", diagnose, StringComparison.Ordinal);
         Assert.Contains("the lines a digest's `log` names are those of the entry's own `log` file, numbered as that file numbers them.", diagnose, StringComparison.Ordinal);
         Assert.Contains("each red entry's digest, its `first` the first thing that went wrong in the order the tool met it, the lines its `log` names those of the entry's own `log` file.", rediagnose, StringComparison.Ordinal);

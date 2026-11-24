@@ -151,7 +151,7 @@ public sealed class ResultFixturesTests
 
             var before = Encoding.UTF8.GetByteCount(string.Join("\n", lines.TakeLast(50))) + Encoding.UTF8.GetByteCount(string.Join("\n", lines));
 
-            Assert.True(held <= before, $"'{fixture}': the digest for a model costs {held} bytes against the {before} it was handed before");
+            Assert.True(held <= before, $"'{fixture}': the digest for a model costs {held} bytes against the {before} of its log's last fifty lines and the whole log");
 
             total += held;
         }

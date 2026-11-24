@@ -10008,8 +10008,8 @@ question needs and each level at most once for a digest however many of its plac
 inside it never wins over the tree's own and the placing stays linear in the tree and the places
 (`ResultDigest.WithInTree`, the one place a digest's paths ask the tree's file system).
 
-The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names
-are one read away" in place of "read the output and find the first thing that went wrong" - `diagnose.md` and
+The model surfaces read it the same way: `mend.md` starts from the digest's `first`, the first thing that went wrong in
+the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and
 `rediagnose.md` say the same, and the continuation record carries each red leg's ledger line, its digest - written as
 every JSON an agent reads is (`AgentEnvelope.Written`: JSON's own escapes alone), so an apostrophe or an angle bracket a
 tool printed reads as it printed it - the raw lines its entry carries beside it - the phase's last lines where nothing
@@ -10057,9 +10057,9 @@ read against a file system holding exactly those files, as a run reads it agains
 marks the same on every machine; its `digest.json`, the whole document, pins everything else against
 drift, and only it is rewritten with `DSSHARNESS_REGENERATE_RESULTS=1`. The bytes a model is handed are
 held too, as the one writer of every JSON a model reads writes them: for every fixture, a short log's
-among them, the digest costs no more than the fifty last lines a model was handed before and the log
-the old instruction sent it to read, and the total over every fixture is pinned exactly, so a change
-that grows or shrinks it is made on purpose.
+among them, the digest costs no more than the last fifty lines of its log and the whole log beside
+them, and the total over every fixture is pinned exactly, so a change that grows or shrinks it is made
+on purpose.
 
 ## Reporting
 
