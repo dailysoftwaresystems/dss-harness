@@ -1849,7 +1849,11 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(support);
         Assert.NotNull(support.Tool);
         Assert.True(support.Narrow);
-        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack], support.Operations!.Order());
+
+        // The run's map of this tree - its configuration's every member a declaration - goes on past its first page, so
+        // map is among the operations, as pack is for a pack that goes on past its message's page.
+        Assert.True(DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(asked.Map!) > 1, asked.Map);
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
         Assert.Null(promptLine.Why);
@@ -2301,11 +2305,20 @@ public sealed class ReasonStepRunnerTests
         Assert.DoesNotContain("src/Keys.cs", agents.Asked[1].Map, StringComparison.Ordinal);
         Assert.Contains("class Planner | src/Planner.cs", agents.Asked[1].Map, StringComparison.Ordinal);
 
-        // Each kept on its own: the run's for the steps no rule narrows, the narrowed steps' named by their rules.
-        var maps = Directory.EnumerateFiles(kit.Layout.GraphDirectory, "map*.md").Select(Path.GetFileName).Order(StringComparer.Ordinal).ToList();
-        Assert.Equal(2, maps.Count);
-        Assert.Equal("map.md", maps[^1]);
-        Assert.Equal(agents.Asked[1].Map, File.ReadAllText(Path.Combine(kit.Layout.GraphDirectory, maps[0]!)));
+        // Each kept on its own, every page of it: the run's for the steps no rule narrows, the narrowed steps' named by
+        // their rules - a first page's file named with no page, each page after it beside it - and no page of the
+        // narrowed one lists the file its steps may not read.
+        var files = Directory.EnumerateFiles(kit.Layout.GraphDirectory, "map*.md").Select(Path.GetFileName).OfType<string>().ToList();
+        var firsts = files.Where(name => name.Count(character => character == '.') == 1).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(2, firsts.Count);
+        Assert.Equal("map.md", firsts[^1]);
+
+        var narrowedName = Path.GetFileNameWithoutExtension(firsts[0]);
+        var narrowedPages = files.Where(name => name == firsts[0] || name.StartsWith(narrowedName + ".", StringComparison.Ordinal)).Select(name => File.ReadAllText(Path.Combine(kit.Layout.GraphDirectory, name))).ToList();
+        Assert.Equal(agents.Asked[1].Map, File.ReadAllText(Path.Combine(kit.Layout.GraphDirectory, firsts[0])));
+        Assert.Equal(DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(agents.Asked[1].Map!), narrowedPages.Count);
+        Assert.Equal(files.Count, DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(agents.Asked[0].Map!) + narrowedPages.Count);
+        Assert.All(narrowedPages, page => Assert.DoesNotContain("src/Keys.cs", page, StringComparison.Ordinal));
     }
 
     /// <summary>
