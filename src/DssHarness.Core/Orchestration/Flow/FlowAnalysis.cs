@@ -131,7 +131,7 @@ public sealed record FlowAnalysis(
 /// <param name="Severity">How much it matters: the review's levels - critical, high, medium, low.</param>
 /// <param name="Where">The steps it names, by the ids of the report's step rows.</param>
 /// <param name="Evidence">The report's own numbers it rests on, each cited by its section, row and member.</param>
-/// <param name="Impact">The time and dollars it cost, every number of it one of its citations'.</param>
+/// <param name="Impact">The time and dollars it cost, every number of it - joined to its unit or not - one of its citations' (<see cref="FlowAnalysisEvidence"/>).</param>
 /// <param name="Cause">What the records show of why.</param>
 /// <param name="Recommendation">The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key.</param>
 public sealed record FlowPainPoint(
@@ -166,7 +166,10 @@ public sealed record FlowNoted(string What, string Why);
 /// question's id, a dollars group's name, a convergence row's - the member by its path, and the value the report holds
 /// there, read as the report's JSON holds it: a number as a number, whatever form it is written in, a text and a truth
 /// word for word. Each step a pain point names is a row of the report's steps, and every number its impact says is one
-/// of its own citations' values. An analysis cannot invent a measurement.
+/// of its own citations' values - a number joined to its unit too (<c>3600s</c>, <c>1.5h</c>, <c>12k</c>, <c>2x</c>),
+/// read as written or converted exactly from its unit to the report's own (<see cref="FactorOf"/>), and a word that
+/// starts as a number and reads as no one number (a date, a range, <c>1h30m</c>) refused as such. An analysis cannot
+/// invent a measurement.
 /// </summary>
 public static class FlowAnalysisEvidence
 {
@@ -211,9 +214,16 @@ public static class FlowAnalysisEvidence
                 }
             }
 
-            foreach (var said in NumbersIn(TextOf(point?["impact"])).Where(said => !cited.Contains(said.Value)))
+            foreach (var said in NumbersIn(TextOf(point?["impact"])))
             {
-                problems.Add($"painPoints[{at}].impact: says {said.Text}, which none of its citations holds - cite where the report holds it, or leave it out");
+                if (!said.Reads)
+                {
+                    problems.Add($"painPoints[{at}].impact: says {said.Text}, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values");
+                }
+                else if (!said.Values.Any(cited.Contains))
+                {
+                    problems.Add($"painPoints[{at}].impact: says {said.Text}, which none of its citations holds - cite where the report holds it, or leave it out");
+                }
             }
         }
 
@@ -297,7 +307,7 @@ public static class FlowAnalysisEvidence
             return $"{named} is {value.ToJsonString(Agents.AgentEnvelope.Written)}, not '{said}'";
         }
 
-        numbers = [.. NumbersIn(text).Select(one => one.Value)];
+        numbers = [.. NumbersIn(text).SelectMany(one => one.Values)];
         return null;
     }
 
@@ -310,20 +320,153 @@ public static class FlowAnalysisEvidence
             _ => [],
         };
 
-    /// <summary>Each number <paramref name="text"/> says, as a word of its own - a sum, a share, a count - with its text; never a digit inside an id.</summary>
-    private static IEnumerable<(string Text, decimal Value)> NumbersIn(string text)
+    /// <summary>
+    /// Each number <paramref name="text"/> says: every word that starts as one - a sign, then a digit - read for its
+    /// numeric head (digits, thousands grouped, one fraction, an exponent) and the unit joined to it, glued
+    /// (<c>3600s</c>, <c>12k</c>, <c>2x</c>) or after one hyphen (<c>40-minute</c>); a number alone takes the next word
+    /// for its unit where that word is one the check converts (<c>30 s</c>, <c>1 hour</c>). Its values are the number as
+    /// written and, where its unit is one the check converts, the number in the report's own unit. A word that starts as
+    /// a number and holds more than one number and its unit - a date, a time of day, a range, <c>1h30m</c> - reads as no
+    /// one number. A digit inside an id is never read: an id starts with a letter.
+    /// </summary>
+    private static IEnumerable<SaidNumber> NumbersIn(string text)
     {
-        foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var bare = word.Trim(Wrapping).TrimEnd('.').Trim(Wrapping);
+        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(word => word.Trim(Wrapping).TrimEnd('.').Trim(Wrapping))
+            .ToList();
 
-            if (bare.Length > 0 && (char.IsAsciiDigit(bare[0]) || (bare.Length > 1 && bare[0] is '-' or '+' && char.IsAsciiDigit(bare[1])))
-                && decimal.TryParse(bare, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value))
+        for (var at = 0; at < words.Count; at++)
+        {
+            var word = words[at];
+            var head = HeadOf(word);
+
+            if (head == 0)
             {
-                yield return (bare, value);
+                continue;
             }
+
+            var unit = word[head..];
+
+            if (unit.Length > 1 && unit[0] == '-' && unit.Skip(1).All(char.IsAsciiLetter))
+            {
+                unit = unit[1..];
+            }
+
+            if (!unit.All(char.IsAsciiLetter))
+            {
+                yield return new SaidNumber(word, Reads: false, []);
+                continue;
+            }
+
+            if (!decimal.TryParse(word[..head], NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value))
+            {
+                // Past what a decimal holds, so no citation can hold it: said as a number none of them holds.
+                yield return new SaidNumber(word, Reads: true, []);
+                continue;
+            }
+
+            var factor = unit.Length > 0 ? FactorOf(unit)
+                : at + 1 < words.Count && words[at + 1] is { Length: > 0 } next && next.All(char.IsAsciiLetter) ? FactorOf(next)
+                : null;
+
+            yield return new SaidNumber(word, Reads: true, factor is { } by && by != 1 ? [value, value * by] : [value]);
         }
     }
+
+    /// <summary>
+    /// How many characters of <paramref name="word"/> its numeric head is: a sign, digits - thousands grouped by commas
+    /// between digits - one fraction and an exponent; 0 where the word does not start as a number (a sign alone, or a
+    /// letter - an id).
+    /// </summary>
+    private static int HeadOf(string word)
+    {
+        var at = word.Length > 0 && word[0] is '-' or '+' ? 1 : 0;
+
+        if (at >= word.Length || !char.IsAsciiDigit(word[at]))
+        {
+            return 0;
+        }
+
+        while (at < word.Length && (char.IsAsciiDigit(word[at]) || (word[at] == ',' && at + 1 < word.Length && char.IsAsciiDigit(word[at + 1]))))
+        {
+            at++;
+        }
+
+        if (at + 1 < word.Length && word[at] == '.' && char.IsAsciiDigit(word[at + 1]))
+        {
+            at++;
+
+            while (at < word.Length && char.IsAsciiDigit(word[at]))
+            {
+                at++;
+            }
+        }
+
+        if (at + 1 < word.Length && word[at] is 'e' or 'E')
+        {
+            var digits = word[at + 1] is '-' or '+' ? at + 2 : at + 1;
+
+            if (digits < word.Length && char.IsAsciiDigit(word[digits]))
+            {
+                at = digits;
+
+                while (at < word.Length && char.IsAsciiDigit(word[at]))
+                {
+                    at++;
+                }
+            }
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// What a number written in <paramref name="unit"/> is multiplied by to be in the report's own unit - seconds for a
+    /// time, ones for a count written in thousands or millions; null for a unit the check does not convert (a multiple,
+    /// a size, a currency, a word), whose number is held as written. A unit of one letter is read as it is written, for
+    /// <c>m</c> and <c>M</c> are not one unit; a longer one in any case.
+    /// </summary>
+    private static decimal? FactorOf(string unit)
+        => Factors.TryGetValue(unit, out var exact) ? exact
+            : unit.Length > 1 && Factors.TryGetValue(unit.ToLowerInvariant(), out var lower) ? lower
+            : null;
+
+    /// <summary>The units the check converts a number from, each with what it multiplies the number by to read it in the report's unit (<see cref="FactorOf"/>).</summary>
+    private static readonly Dictionary<string, decimal> Factors = new(StringComparer.Ordinal)
+    {
+        ["ms"] = 0.001m,
+        ["msec"] = 0.001m,
+        ["millisecond"] = 0.001m,
+        ["milliseconds"] = 0.001m,
+        ["s"] = 1m,
+        ["sec"] = 1m,
+        ["secs"] = 1m,
+        ["second"] = 1m,
+        ["seconds"] = 1m,
+        ["min"] = 60m,
+        ["mins"] = 60m,
+        ["minute"] = 60m,
+        ["minutes"] = 60m,
+        ["h"] = 3600m,
+        ["hr"] = 3600m,
+        ["hrs"] = 3600m,
+        ["hour"] = 3600m,
+        ["hours"] = 3600m,
+        ["d"] = 86400m,
+        ["day"] = 86400m,
+        ["days"] = 86400m,
+        ["k"] = 1000m,
+        ["K"] = 1000m,
+        ["thousand"] = 1000m,
+        ["M"] = 1000000m,
+        ["million"] = 1000000m,
+    };
+
+    /// <summary>
+    /// One number a text says: the word it is said in; whether it reads as one number with its unit; and its values - as
+    /// written and, where its unit converts, in the report's unit - empty where no citation could hold it.
+    /// </summary>
+    private readonly record struct SaidNumber(string Text, bool Reads, IReadOnlyList<decimal> Values);
 
     /// <summary>A text member's text; empty where it is none.</summary>
     private static string TextOf(JsonNode? node)

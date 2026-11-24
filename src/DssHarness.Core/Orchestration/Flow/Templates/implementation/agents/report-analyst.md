@@ -20,7 +20,11 @@ comes from it.
   `questions.json` what was asked and answered. Read what you need and no more.
 - Each pain point you name rests on the report's numbers. Cite them: the section, the row by its id, the member, and
   the value exactly as the report holds it. A citation the report does not hold is refused and you are asked again -
-  copy, never recompute, never round differently. Every number its impact says is one of its citations'.
+  copy, never recompute, never round differently. Every number its impact says is one of its citations' - with
+  its unit or without (`412.3 s`, `412.3s`), or that value written exactly in another unit of time (`3600 s` as `1h`)
+  or in thousands or millions (`180000` as `180k`). A number you work out from the report - a sum, a ratio, a share -
+  is not the report's: cite where the report holds it, or leave it out. Write no date, range or other run of numbers
+  in it.
 - Order the pain points by what they cost: time and dollars, from the report. What you cannot put a number on goes
   under `noted`, with why you could not confirm it.
 - Name steps as the report's rows name them, by their instance ids. A recommendation names its change exactly: a

@@ -3916,7 +3916,10 @@ cost the person's. The analyst's answer is held to the report by the structured-
 analyst's own conversation under the schema's one count of repairs - never a run asked anew: each citation names a
 section of the report (the schema's enum), the row by its `id`, the member by its path and the value the report holds
 there, read by its JSON kind - a number for its value, a text and a truth word for word - each step a point names is a
-row of the report's steps, and every number its impact says is one of its citations'. Every rule a text must keep is
+row of the report's steps, and every number its impact says is one of its citations' - a number joined to its unit
+too (`3600s`, `1.5h`, `12k`, `2x`), read for its numeric head and held as written or converted exactly from its unit
+to the report's (`FlowAnalysisEvidence.FactorOf`: seconds for a time, ones for a count in thousands or millions), a
+word that starts as a number and reads as no one number (a date, a range, `1h30m`) refused as such. Every rule a text must keep is
 the schema's (a pattern for every text, an enum for every closed list), and a run with nothing to change is analysed
 as one, no pain point named. What a run of the analyst leaves is kept under `analysis/<stamp>/` whatever it answered -
 `report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis or why it was refused

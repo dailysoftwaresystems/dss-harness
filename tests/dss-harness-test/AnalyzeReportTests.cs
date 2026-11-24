@@ -286,6 +286,48 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
+    /// Every number an impact says is held to its citations, one joined to its unit too: read for its numeric head, it is
+    /// held as written or converted exactly from its unit to the report's - seconds for a time, ones for a count in
+    /// thousands or millions - so a wait of 3600s, 1.5h or 12k tokens no citation holds is refused as a bare number is, a
+    /// cited value written in another unit is held, and a word that starts as a number and reads as no one number - a
+    /// date, a compound duration - is refused as such: an analyst writes no measurement past the check by gluing it to
+    /// its unit.
+    /// </summary>
+    [Fact]
+    public void ANumberJoinedToItsUnit_IsHeldToTheCitations_AsWrittenOrConvertedExactly()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        JsonNode Analysis(string evidence, string impact)
+            => JsonNode.Parse($$"""{"summary":"s","painPoints":[{"title":"t","severity":"high","where":["b"],"evidence":[{{evidence}}],"impact":"{{impact}}","cause":"c","recommendation":"r"}],"noted":[]}""")!;
+        static string Cited(string section, string row, string of, string said)
+            => $$"""{"section":"{{section}}","row":"{{row}}","of":"{{of}}","said":"{{said}}"}""";
+        var evidence = string.Join(
+            ",",
+            Cited("people", "q1", "waitedSeconds", "60"),
+            Cited("criticalPath", "b", "seconds", "30.0"),
+            Cited("totals", string.Empty, "tokens.input", "180000"),
+            Cited("steps", "b", "tokens", "100500"));
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            Analysis(evidence, "q1 waited 60s, 1min, 1 minute and a 1-minute wait; b ran 0.5min of the path; 180k input tokens, 100.5k of them b's."),
+            report));
+
+        Assert.Equal(
+            [
+                "painPoints[0].impact: says 3600s, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 1.5h, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 12k, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 2x, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 61s, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 2026-11-24, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
+                "painPoints[0].impact: says 1h30m, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
+            ],
+            FlowAnalysisEvidence.Problems(
+                Analysis(evidence, "the gate waited 3600s, 1.5h and 12k tokens, cost 2x the build and 61s more since 2026-11-24, 1h30m in all"),
+                report));
+    }
+
+    /// <summary>
     /// The sections a citation may name are the schema's one list, and each is a section of the report that holds rows or
     /// members - so the schema refuses a section the report does not hold before the report is read.
     /// </summary>

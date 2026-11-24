@@ -331,6 +331,23 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic says what an analysis's impact is held to: every number it says one of its citations',
+    /// a number joined to its unit as well - as written or converted exactly to the report's unit - and a word that reads
+    /// as no one number refused, as the evidence check holds it.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysEveryNumberAnImpactSays_WithItsUnitOrNot_IsACitationsValue()
+    {
+        Assert.Contains(
+            "and every number its impact says is one of its citations' - one joined to its unit too (3600s, 1.5h, 12k, 2x), as "
+                + "written or converted exactly from its unit to the report's (seconds for a time, ones for a count in thousands "
+                + "or millions), and a word that starts as a number and reads as no one number (a date, a range) refused. An "
+                + "analysis cannot invent a measurement.",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic says what a run's report says its reviews converged to: the counts by which a repository
     /// sees whether its rounds converge, of each item and of the run.
     /// </summary>

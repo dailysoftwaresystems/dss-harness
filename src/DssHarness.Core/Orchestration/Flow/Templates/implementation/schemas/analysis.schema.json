@@ -100,7 +100,7 @@
           "impact": {
             "type": "string",
             "pattern": "\\S",
-            "description": "The time and dollars it cost: every number written here is the value of one of this point's citations - a number none of them holds is refused and you are asked again."
+            "description": "The time and dollars it cost: every number written here, alone or joined to its unit (3600s, 1.5h, 12k, 2x), is the value of one of this point's citations, as written or converted exactly from its unit to the report's (seconds for a time, ones for thousands or millions) - a number none of them holds, or a word that reads as no one number (a date, a range), is refused and you are asked again."
           },
           "cause": {
             "type": "string",
