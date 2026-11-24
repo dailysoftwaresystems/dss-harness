@@ -402,5 +402,18 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
             linked.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates } && edge.To.StartsWith("xml:", StringComparison.Ordinal)).Select(edge => (edge.To, edge.Line)).Order());
     }
 
+    /// <summary>
+    /// The help says the paths a config's keys are named by - the dotted places, and a key whose own name holds a dot
+    /// quoted in brackets - so a later wording change to them is held as the extract is.
+    /// </summary>
+    [Fact]
+    public void TheHelp_SaysThePathsAConfigsKeysAreNamedBy()
+    {
+        Assert.Contains(
+            "(appSettings.Timeout, connectionStrings.Main, a key holding a dot quoted in brackets: appSettings[\"Serilog.MinimumLevel\"])",
+            new XmlExtractor().Help.Reads,
+            StringComparison.Ordinal);
+    }
+
     private static FileExtract Read(string path, string text) => new XmlExtractor().Extract(new CodeFileInput(path, text));
 }

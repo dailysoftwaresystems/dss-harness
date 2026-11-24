@@ -499,6 +499,19 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             extract.Nodes.Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary)));
     }
 
+    /// <summary>
+    /// The help says the spelling a key's path takes where its own name holds a dot or a bracket - one place quoted in
+    /// brackets, named as its file writes it - so a later wording change to it is held as the extract is.
+    /// </summary>
+    [Fact]
+    public void TheHelp_SaysTheSpellingANameHoldingADotOrABracketTakes()
+    {
+        Assert.Contains(
+            "(a name holding a dot or a bracket quoted in brackets, metadata.annotations[\"nginx.ingress.kubernetes.io/rewrite-target\"], [\".defaults\"])",
+            new YamlExtractor().Help.Reads,
+            StringComparison.Ordinal);
+    }
+
     private static FileExtract Read(string path, string text) => new YamlExtractor().Extract(new CodeFileInput(path, text));
 
     /// <summary>Each reference an extract makes, by where it is made from, the name it repeats, its line and the node of its own file it names.</summary>

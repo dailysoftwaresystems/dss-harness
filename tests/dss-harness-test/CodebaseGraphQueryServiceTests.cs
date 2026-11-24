@@ -490,6 +490,28 @@ public sealed class CodebaseGraphQueryServiceTests
     }
 
     /// <summary>
+    /// The command's own help says what its --sites option takes - a key path dotted, a name holding a dot or a bracket
+    /// quoted in brackets in either quote mark or its names' dots as they are, or a path as .NET's configuration writes
+    /// one - as the graph's help does, so a later wording change to the option is held.
+    /// </summary>
+    [Fact]
+    public async Task TheCommandsSitesOption_SaysTheDatumFormsItTakes()
+    {
+        var help = await CliRunner.RunAsync([CodebaseGraphQueryService.CommandName, "--help"], Token);
+
+        Assert.Equal(HarnessExit.Success, help.ExitCode);
+        Assert.Contains(
+            Prose.Words(
+                "Every place that decides data - a name, a key path (dotted - a name holding a dot or a bracket quoted in "
+                + "brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as "
+                + ".NET's configuration writes one: A:B, A__B), a diagnostic id, or a quoted literal asked by its value "
+                + "alone: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal "
+                + "that holds it and every key it names, with the coverage lines."),
+            Prose.Words(help.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every read operation runs on an agent's view - a body read from the agent's worktree, as it holds the file - and none
     /// writes anything of the graph.
     /// </summary>

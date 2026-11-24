@@ -62,6 +62,27 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The topic says every spelling the keys' join names a key by - a literal of its last segment, of its whole path, of
+    /// its path in brackets in either quote mark, of the path as .NET's configuration spells it, and of a path through a
+    /// YAML alias or merge - each read from the code, so a later wording change to the spellings is held.
+    /// </summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysTheSpellingsTheKeysJoinNames_AsTheCodeHoldsThem()
+    {
+        var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
+
+        Assert.Contains(
+            Prose.Words(
+                $"The keys' join gives a configuration key a uses edge of {DssHarness.Core.Codebase.CodeConfidences.Candidates} from each declaration "
+                + "holding a string literal of its last segment, of its whole path, of its path in brackets in either quote mark "
+                + "(Logging.LogLevel['Microsoft.AspNetCore']), or of the path as .NET's configuration spells it "
+                + "(Payments:TimeoutSeconds, Payments__TimeoutSeconds, Limits:1:Value, Logging:LogLevel:Microsoft.AspNetCore, "
+                + "a name holding a dot one place), or of a path that runs through a YAML alias or merge to it"),
+            prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The codebase-graph-languages topic, under each of its names, says every implementation this build holds - its version, what
     /// it claims, what it reads and each limit it does not see under its short name, the name a sites answer gives a limit no file
     /// it read shows the sign of - each read from the code; and the codebase-graph topic points to it.
