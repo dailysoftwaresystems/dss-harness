@@ -1148,7 +1148,7 @@ public sealed class FlowService(
         }
 
         var cost = analysed.Ran
-            ? $"This analysis cost {analysed.Dollars.Said()}{(analysed.Tokens is { } used ? $", {used.ToString(System.Globalization.CultureInfo.InvariantCulture)} tokens" : string.Empty)}. It is not counted in the run's budget."
+            ? FlowReports.CostSaid("analysis", analysed.Model, analysed.Tokens is { } used ? (analysed.Dollars, used) : null)
             : null;
         var records = AnalysisRecordsOf(directory, analysed);
 
@@ -1352,11 +1352,17 @@ public sealed class FlowService(
 
         if (question is null)
         {
+            // The facts are the answer whatever became of the reporter's words, so the status succeeds where no model
+            // worded them - but an interrupt that stopped its reporter ends it as an interrupt ends every command, the
+            // facts and what the reporter spent still said and kept.
             return Answered(
                 layout,
                 reported.Answer is { } worded
                     ? CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, worded])
-                    : CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, $"no model worded this: {reported.WhyNot}"]),
+                    : new CommandOutcome(
+                        reported.ExitCode == HarnessExit.Cancelled ? HarnessExit.Cancelled : HarnessExit.Success,
+                        facts[0],
+                        [.. facts.Skip(1), string.Empty, $"no model worded this: {reported.WhyNot}"]),
                 asks,
                 text,
                 reported.Answer,
@@ -1425,9 +1431,7 @@ public sealed class FlowService(
             [
                 .. outcome.Details ?? [],
                 string.Empty,
-                cost is not null || model is { Length: > 0 }
-                    ? $"This answer cost {cost?.Dollars.Said(format: "0.####") ?? "an unknown amount"}{(model is { Length: > 0 } ? $" ({model}{(cost is { Tokens: var tokens } ? $", {tokens.ToString(CultureInfo.InvariantCulture)} tokens" : string.Empty)})" : string.Empty)}. It is not counted in the run's budget."
-                    : "This answer cost nothing: no model worded it.",
+                FlowReports.CostSaid("answer", model, cost),
                 $"Record: {asks}",
             ],
         };

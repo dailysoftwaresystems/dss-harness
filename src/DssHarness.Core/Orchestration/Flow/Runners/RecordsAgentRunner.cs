@@ -156,26 +156,23 @@ public sealed class RecordsAgentRunner(
     private async Task<Ran> RunAsync(RecordsAgent agent, CancellationToken cancellationToken)
     {
         // What a run that was begun spent, and the model it was resolved to, held where a throw cannot lose them: a
-        // client that fails after paid turns is why no model answered, and what it spent is still said and kept - never
-        // lost with the throw that kept its result from being read.
+        // client that fails after paid turns, or an interrupt that stops it, is why no model answered, and what it spent
+        // is still said and kept - never lost with the throw that kept its result from being read.
         var begun = new BegunRun();
 
         try
         {
             return await RanAsync(agent, begun, cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception failed)
+        catch (Exception failed) when (failed is not OperationCanceledException || begun.Spend is not null)
         {
             // Whatever kept the agent from answering - its files not reading, the slot or the configuration refusing,
-            // its client failing - is why no model answered, with the code it means by the one mapping every command's
-            // failure is read by.
+            // its client failing, an interrupt once its run was begun - is why no model answered, with the code it means
+            // by the one mapping every command's failure is read by. An interrupt before the run was begun stopped nothing
+            // paid, and ends the command as an interrupt ends every command.
             var meaning = KnownCauses.Meaning(failed);
 
-            return new Ran(meaning.Message, meaning.ExitCode, begun.Model, begun.Spend);
+            return new Ran(meaning.Message, meaning.ExitCode, begun.Served, begun.Spend);
         }
     }
 
@@ -187,6 +184,12 @@ public sealed class RecordsAgentRunner(
 
         /// <summary>What the run spends, as its turns are reported; null until the run was made.</summary>
         public AgentRunSpend? Spend { get; set; }
+
+        /// <summary>
+        /// The model that served the run, as its spend's own account says - the one every turn it reported was priced at,
+        /// a fallback's where one moved it - and the model it was resolved to where no run was begun.
+        /// </summary>
+        public string? Served => Spend?.Account().Model ?? Model;
     }
 
     /// <inheritdoc cref="RunAsync"/>

@@ -153,8 +153,8 @@ public sealed class AnalyzeReportTests
 
         var said = string.Join("\n", text.Details!);
 
-        Assert.Contains("This analysis cost ", said, StringComparison.Ordinal);
-        Assert.Contains(", 140 tokens). It is not counted in the run's budget.", said, StringComparison.Ordinal);
+        // The cost names the model that served the turns, as an ask's does.
+        Assert.Equal($"This analysis cost {new FlowDollars(AgentPrices.CostOf(priced.Provider, priced.Model, turn)!.Value).Said(format: "0.####")} ({served}, 140 tokens). It is not counted in the run's budget.", text.Details![0]);
         Assert.Contains($"records: {analyst.Asked[0].RecordDirectory!}", said, StringComparison.Ordinal);
 
         Assert.Equal(HarnessExit.InternalError, (int)document["exitCode"]!);
@@ -167,6 +167,90 @@ public sealed class AnalyzeReportTests
         var kept = JsonNode.Parse(File.ReadAllText(Path.Combine(analyst.Asked[0].RecordDirectory!, "analysis.json")))!;
 
         Assert.Equal((AgentPrices.CostOf(priced.Provider, priced.Model, turn), turn.AllTokens), ((double?)kept["usd"]!, (long)kept["tokens"]!));
+    }
+
+    /// <summary>
+    /// An analysis a person interrupts after paid turns is answered with what it spent, as every other run that gave no
+    /// analysis is: the command ends interrupted, says what it cost and names every record it left - analysis.json written
+    /// with the spend, the model that served it and why no analysis holds - in the text and in the --json document alike,
+    /// where the interrupt would lose the spend with the run it stopped.
+    /// </summary>
+    [Fact]
+    public async Task AnAnalysisInterruptedAfterPaidTurns_SaysAndKeepsWhatItSpent()
+    {
+        var (harness, temp, analyst, service, run) = await AnalyzableAsync();
+        using var disposed = temp;
+        var turn = new AgentUsage(100, 40, 0, 0, 0, 0);
+        analyst.Says.Add(new UsageReported(turn, turn));
+        analyst.Interrupted = true;
+
+        var text = await service.AnalyzeReportAsync(temp.Path, run, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var json = await service.AnalyzeReportAsync(temp.Path, run, json: true, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var served = analyst.Asked[0].Model!;
+        var priced = AgentProviders.Resolve(harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)))!.Providers!.Of(served)
+            ?? throw new InvalidOperationException($"'{served}' is no model the configuration lists");
+        var usd = AgentPrices.CostOf(priced.Provider, priced.Model, turn);
+        var directory = analyst.Asked[0].RecordDirectory!;
+        var document = JsonNode.Parse(Assert.Single(json.Data))!.AsObject();
+        var kept = JsonNode.Parse(File.ReadAllText(Path.Combine(directory, "analysis.json")))!;
+
+        Assert.Equal(HarnessExit.Cancelled, text.ExitCode);
+        Assert.Equal("analyze-orchestrator-report was refused: the analyst's run gave no analysis that holds: Interrupted before completion.", text.Message);
+        Assert.Equal(
+            [
+                $"This analysis cost {new FlowDollars(usd!.Value).Said(format: "0.####")} ({served}, 140 tokens). It is not counted in the run's budget.",
+                $"records: {directory}",
+                $"analysis: {Path.Combine(directory, "analysis.json")}",
+                $"report: {Path.Combine(directory, "report.json")}",
+            ],
+            text.Details!);
+        Assert.Equal(
+            (served, usd, 140L, "Interrupted before completion."),
+            ((string)kept["model"]!, (double?)kept["usd"], (long)kept["tokens"]!, (string)kept["refused"]!));
+
+        Assert.Equal(HarnessExit.Cancelled, (int)document["exitCode"]!);
+        Assert.Null((JsonNode?)document["analysis"]);
+        Assert.Equal((served, usd, 140L), ((string)document["cost"]!["model"]!, (double?)document["cost"]!["usd"], (long)document["cost"]!["tokens"]!));
+        Assert.Equal(analyst.Asked[1].RecordDirectory!, (string)document["record"]!);
+    }
+
+    /// <summary>
+    /// A run that fell back to another model before its client threw is said and kept at the model that served it - the
+    /// one its spend's own account priced every turn at - never the model it was resolved to: analysis.json and the --json
+    /// document name the model that took over, and what they say it cost is that model's price of the turn.
+    /// </summary>
+    [Fact]
+    public async Task ARunThatFellBackAndThenThrew_IsKeptAtTheModelThatServedIt()
+    {
+        var (harness, temp, analyst, service, run) = await AnalyzableAsync();
+        using var disposed = temp;
+        var config = harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path));
+        var turn = new AgentUsage(100, 40, 0, 0, 0, 0);
+        analyst.SaysFirst = step =>
+        {
+            var (provider, model) = config.Providers.SelectMany(provider => provider.Models.Select(model => (provider, model))).First(entry => entry.model.Code != step.Model && entry.model.PriceInputMiss is not null);
+            return [new FallbackStarted(step.Model!, "first", "first", model.Code, provider.Name, provider.Client, "key refused", AgentFallback.SentAgain, 1, ThrewAway: false, CreditAsked: false)];
+        };
+        analyst.Says.Add(new UsageReported(turn, turn));
+        analyst.Throws = true;
+
+        _ = await service.AnalyzeReportAsync(temp.Path, run, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var json = await service.AnalyzeReportAsync(temp.Path, run, json: true, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var providers = AgentProviders.Resolve(config)!.Providers!;
+        var resolved = analyst.Asked[0].Model!;
+        var took = ((FallbackStarted)analyst.SaysFirst(analyst.Asked[0])[0]).ToModel;
+        var served = providers.Of(took) ?? throw new InvalidOperationException($"'{took}' is no model the configuration lists");
+        var first = providers.Of(resolved) ?? throw new InvalidOperationException($"'{resolved}' is no model the configuration lists");
+        var usd = AgentPrices.CostOf(served.Provider, served.Model, turn);
+        var kept = JsonNode.Parse(File.ReadAllText(Path.Combine(analyst.Asked[0].RecordDirectory!, "analysis.json")))!;
+        var document = JsonNode.Parse(Assert.Single(json.Data))!.AsObject();
+
+        // The two models' prices differ, so the cost itself says which model's turn it is.
+        Assert.NotEqual(AgentPrices.CostOf(first.Provider, first.Model, turn), usd);
+        Assert.Equal((took, usd), ((string)kept["model"]!, (double?)kept["usd"]));
+        Assert.Equal((took, usd), ((string)document["cost"]!["model"]!, (double?)document["cost"]!["usd"]));
     }
 
     /// <summary>
@@ -206,7 +290,7 @@ public sealed class AnalyzeReportTests
         const string Why = "the answer did not read against its schema after 2 repairs: $.output.painPoints[0].evidence[0]: 'steps', gate.tokens holds nothing in the report";
         var (_, temp, analyst, service, run) = await AnalyzableAsync();
         using var disposed = temp;
-        analyst.Answer = step => new AgentRunResult(AgentRunStatus.InvalidOutput, Error: Why);
+        analyst.Answer = step => new AgentRunResult(AgentRunStatus.InvalidOutput, Error: Why) { Model = step.Model };
         analyst.Says.Add(new UsageReported(new AgentUsage(100, 40, 0, 0, 0, 0), new AgentUsage(100, 40, 0, 0, 0, 0)));
 
         var refused = await service.AnalyzeReportAsync(temp.Path, run, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
@@ -215,7 +299,7 @@ public sealed class AnalyzeReportTests
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
         Assert.Equal($"analyze-orchestrator-report was refused: the analyst's run gave no analysis that holds: {Why}", refused.Message);
         Assert.StartsWith("This analysis cost ", refused.Details![0], StringComparison.Ordinal);
-        Assert.Contains(", 140 tokens. It is not counted in the run's budget.", refused.Details[0], StringComparison.Ordinal);
+        Assert.EndsWith($" ({analyst.Asked[0].Model}, 140 tokens). It is not counted in the run's budget.", refused.Details[0], StringComparison.Ordinal);
         Assert.Equal([$"records: {directory}", $"analysis: {Path.Combine(directory, "analysis.json")}", $"report: {Path.Combine(directory, "report.json")}"], refused.Details.Skip(1));
 
         var analysis = JsonNode.Parse(File.ReadAllText(Path.Combine(directory, "analysis.json")))!;
@@ -580,14 +664,20 @@ public sealed class AnalyzeReportTests
         /// <summary>The events the run says before it answers, as a client says them.</summary>
         public List<AgentEvent> Says { get; } = [];
 
+        /// <summary>The events the run says first, made of the request it was asked - a fallback from the model it was resolved to; none unless a test sets them.</summary>
+        public Func<AgentStepRequest, IReadOnlyList<AgentEvent>> SaysFirst { get; set; } = _ => [];
+
         /// <summary>Whether the run throws once its events are said, as a client that fails after paid turns.</summary>
         public bool Throws { get; set; }
+
+        /// <summary>Whether the run is stopped once its events are said, as a person's interrupt stops a client after paid turns.</summary>
+        public bool Interrupted { get; set; }
 
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
             Asked.Add(step);
 
-            foreach (var said in Says)
+            foreach (var said in SaysFirst(step).Concat(Says))
             {
                 await events!.EmitAsync(said);
             }
@@ -595,6 +685,11 @@ public sealed class AnalyzeReportTests
             if (Throws)
             {
                 throw new InvalidOperationException("the client failed after paid turns");
+            }
+
+            if (Interrupted)
+            {
+                throw new OperationCanceledException("the person interrupted the run");
             }
 
             return Answer(step);

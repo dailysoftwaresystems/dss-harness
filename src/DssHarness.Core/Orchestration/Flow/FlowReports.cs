@@ -184,6 +184,30 @@ public static class FlowReports
     }
 
     /// <summary>
+    /// What a run of an agent a person calls on a run's records cost, as every exit of the commands that run one says it
+    /// - the reporter's answer and the analyst's analysis alike: its dollars as far as they were counted, finer than a cent
+    /// where they are small, at least that and why where a turn's cost could not be counted, and an unknown amount where no
+    /// turn was reported; the model that served it and the tokens its turns used, each where it is known; and that it is
+    /// the person's, never the run's - or that it cost nothing, where no model was asked.
+    /// </summary>
+    /// <param name="what">What the run gave: <c>answer</c>, <c>analysis</c>.</param>
+    /// <param name="model">The model that served it; null where none was resolved.</param>
+    /// <param name="spent">What its turns spent and the tokens they used; null where no turn was reported.</param>
+    internal static string CostSaid(string what, string? model, (FlowDollars Dollars, long Tokens)? spent)
+    {
+        if (spent is null && model is not { Length: > 0 })
+        {
+            return $"This {what} cost nothing: no model worded it.";
+        }
+
+        var named = string.Join(
+            ", ",
+            new[] { model is { Length: > 0 } ? model : null, spent is { Tokens: var tokens } ? $"{tokens.ToString(CultureInfo.InvariantCulture)} tokens" : null }.OfType<string>());
+
+        return $"This {what} cost {spent?.Dollars.Said(format: "0.####") ?? "an unknown amount"}{(named.Length > 0 ? $" ({named})" : string.Empty)}. It is not counted in the run's budget.";
+    }
+
+    /// <summary>
     /// The <c>--json</c> document of the two ask commands - <c>ask-orchestrator-status</c> and <c>ask-orchestrator</c> -
     /// with the facts and the answer apart, so a caller that wants no model's words reads the facts alone: the facts as
     /// text, the answer where a model worded them and why not where none did, what the answer cost, and where the call's

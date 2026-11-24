@@ -42,6 +42,9 @@ public sealed class RunReporterTests
         /// <summary>Whether the run throws once its events are said, as a client that fails after paid turns.</summary>
         public bool Throws { get; set; }
 
+        /// <summary>Whether the run is stopped once its events are said, as a person's interrupt stops a client after paid turns.</summary>
+        public bool Interrupted { get; set; }
+
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
             Asked.Add(step);
@@ -54,6 +57,11 @@ public sealed class RunReporterTests
             if (Throws)
             {
                 throw new InvalidOperationException("the client failed after paid turns");
+            }
+
+            if (Interrupted)
+            {
+                throw new OperationCanceledException("the person interrupted the run");
             }
 
             return Answer(step);
@@ -430,6 +438,59 @@ public sealed class RunReporterTests
         var record = JsonNode.Parse(File.ReadAllText(Path.Combine(reporter.Asked[0].RecordDirectory!, "ask.json")))!;
 
         Assert.Equal((AgentPrices.CostOf(priced.Provider, priced.Model, turn), turn.AllTokens), ((double?)record["usd"]!, (long)record["tokens"]!));
+    }
+
+    /// <summary>
+    /// A reporter a person interrupts after paid turns keeps what it spent said and kept, as every other run that worded
+    /// nothing does: the person's question and the status both end interrupted - the status still saying its facts and
+    /// why no model worded them - each naming what the reporter cost and the model that served it, the call's own
+    /// record holding the spend, and the --json answer in the command's own shape with its cost and its record.
+    /// </summary>
+    [Fact]
+    public async Task AReporterInterruptedAfterPaidTurns_EndsInterrupted_ItsSpendSaidAndKept()
+    {
+        var (harness, temp, reporter, service, run) = await PausedAsync();
+        using var disposed = temp;
+        var turn = new AgentUsage(1, 2, 3, 4, 5, 6);
+        reporter.Says.Add(new UsageReported(turn, turn));
+        reporter.Interrupted = true;
+
+        var asked = await service.AskAsync(temp.Path, run, "what is it doing?", json: false, Token).WaitAsync(Bound, Token);
+        var status = await service.AskStatusAsync(temp.Path, run, json: false, Token).WaitAsync(Bound, Token);
+        var answered = await service.AskAsync(temp.Path, run, "what is it doing?", json: true, Token).WaitAsync(Bound, Token);
+
+        var served = reporter.Asked[0].Model!;
+        var priced = AgentProviders.Resolve(harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)))!.Providers!.Of(served)
+            ?? throw new InvalidOperationException($"'{served}' is no model the configuration lists");
+        var usd = AgentPrices.CostOf(priced.Provider, priced.Model, turn);
+        var spent = $" ({served}, 15 tokens). It is not counted in the run's budget.";
+
+        Assert.Equal((HarnessExit.Cancelled, "ask-orchestrator was refused: no model worded an answer: Interrupted before completion."), (asked.ExitCode, asked.Message));
+        Assert.Equal($"Record: {reporter.Asked[0].RecordDirectory!}", asked.Details![^1]);
+        Assert.StartsWith("This answer cost ", asked.Details[^2], StringComparison.Ordinal);
+        Assert.EndsWith(spent, asked.Details[^2], StringComparison.Ordinal);
+
+        var told = status.Details!;
+
+        Assert.Equal(HarnessExit.Cancelled, status.ExitCode);
+        Assert.StartsWith($"run '{run}' (workflow '{Workflow}'), as of ", status.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            ["no model worded this: Interrupted before completion.", string.Empty],
+            told.SkipWhile(line => !line.StartsWith("no model worded this", StringComparison.Ordinal)).Take(2));
+        Assert.EndsWith(spent, told[^2], StringComparison.Ordinal);
+        Assert.Equal($"Record: {reporter.Asked[1].RecordDirectory!}", told[^1]);
+
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(reporter.Asked[0].RecordDirectory!, "ask.json")))!;
+
+        Assert.Equal(
+            (served, usd, turn.AllTokens, "Interrupted before completion."),
+            ((string)record["model"]!, (double?)record["usd"], (long)record["tokens"]!, (string)record["whyNot"]!));
+
+        var document = JsonNode.Parse(Assert.Single(answered.Data))!.AsObject();
+
+        Assert.Equal(HarnessExit.Cancelled, (int)document["exitCode"]!);
+        Assert.Equal((served, usd, turn.AllTokens), ((string)document["cost"]!["model"]!, (double?)document["cost"]!["usd"], (long)document["cost"]!["tokens"]!));
+        Assert.Equal(reporter.Asked[2].RecordDirectory!, (string)document["record"]!);
     }
 
     /// <summary>

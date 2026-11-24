@@ -406,6 +406,30 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic says what an interrupt does to the agents a person calls on a run's records: the status and
+    /// the question end 130, and what a reporter or an analyst that was begun spent is still said and kept, at the model
+    /// that served it, as on every other exit.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysAnInterruptedRecordsAgent_Ends130_ItsSpendSaidAndKept()
+    {
+        var help = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "and exits 0 (130 where an interrupt stopped its reporter): the facts are the answer, and the words were a service; "
+                + "the person's question is refused - 12 where the workflow names no reporter or the reporter's own files do not "
+                + "read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, "
+                + "21 where it could not be reached or its account is at its limit, 130 where an interrupt stopped the reporter - "
+                + "what a reporter that was begun spent said and kept in ask.json however it ended, at the model that served it,",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "every one named on every exit, and what it cost said, at the model that served it, refused, failed or interrupted (130).",
+            help,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic says what a run's report says its reviews converged to: the counts by which a repository
     /// sees whether its rounds converge, of each item and of the run.
     /// </summary>

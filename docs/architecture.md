@@ -3966,8 +3966,11 @@ nothing to change is analysed as one, no pain point named. What a run of the ana
 and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
 it cost, the `--json` document's `record` the same directory the text's lines name wherever any record is; where no
 analyst ran, the command says nothing was written. What a run that was begun spent is said however it ended - a client
-that throws after paid turns is why no analysis holds, its spend and its model held past the throw
-(`RecordsAgentRunner`'s begun run) and still said and kept in `analysis.json`. It runs on the tier `reporting` names in
+that throws after paid turns, or an interrupt that stops it (130), is why no analysis holds, its spend and the model its
+spend's own account says served - a fallback's, where one moved it - held past the throw (`RecordsAgentRunner`'s begun
+run) and still said and kept in `analysis.json`, the cost said in the one form an ask's is (`FlowReports.CostSaid`: the
+dollars, the model and the tokens). An interrupt before the run was begun spent nothing, and ends the command as an
+interrupt ends every command. It runs on the tier `reporting` names in
 `tierConfig`, which `init` seeds as it seeds every other tier (`Agents\Templates\agent-providers.json`: the balanced
 tier's models, the person's to change), refused (12) naming the key where a configuration defines none.
 
@@ -4554,16 +4557,17 @@ command over an orchestrator makes first - what a call leaves behind is its own 
 run's `asks/<stamp>/` (the facts as given, the files of its reporter's attempt, the conversations
 its client stores under `sessions/` - never under an agent's of the run - and `ask.json`), a
 directory the engine never reads. Where no model words them the status still prints the facts, says
-`no model worded this` and why, and exits 0 - the facts are the answer, and the words were a
-service; the person's question is refused, naming why (12 where the workflow names no reporter or
+`no model worded this` and why, and exits 0 - 130 where an interrupt stopped its reporter, as an interrupt ends every
+command - the facts are the answer, and the words were a service; the person's question is refused, naming why (12 where the workflow names no reporter or
 the reporter's own files do not read - whatever keeps the reporter from wording the facts is why no
 model did, read by `KnownCauses.Meaning`, and never an error of the command - 13
 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model
 failed, 21 where it could not be reached or its account is at its limit - `AgentRunResult.ToOutcome`
-the one mapping), and what a run that was begun spent is said however it ended - a client that throws after paid
-turns is why no model worded them, its spend and its model held past the throw (`RecordsAgentRunner`'s begun run) and
-still said and kept in the call's own `ask.json`, the `--json` answer in the command's shape with its record named -
-and neither command installs Claude Code or brings one up to date. An orchestrator
+the one mapping - and 130 where an interrupt stopped the reporter),
+and what a run that was begun spent is said however it ended - a client that throws after paid turns, or an interrupt
+that stops it, is why no model worded them, its spend and the model its spend's own account says served held past the
+throw (`RecordsAgentRunner`'s begun run) and still said and kept in the call's own `ask.json`, the `--json` answer in
+the command's shape with its record named - and neither command installs Claude Code or brings one up to date. An orchestrator
 made by hand, which no flow runs, has no reporter and fewer facts: its status prints what
 `list-orchestrator` has of it and says so, and the person's question is refused (12).
 
