@@ -1833,8 +1833,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Writes how this run of the attempt ended into its measure entry - opened as the attempt started, every turn it
     /// spent charged into it as it was reported - with the account its runner gave of the run: what served it, the turns,
-    /// the tools, the compactions, the legs. Its spend is never written here: its turns alone charge it, at the one place
-    /// a token is counted (<see cref="Charge"/>), so an attempt that asks and goes on holds both its runs' spend whole.
+    /// the tools, the compactions, the legs, and the first error its output's digests read, the attempt's own whichever
+    /// attempt ends the step. Its spend is never written here: its turns alone charge it, at the one place a token is
+    /// counted (<see cref="Charge"/>), so an attempt that asks and goes on holds both its runs' spend whole.
     /// </summary>
     /// <param name="instance">The instance whose attempt ended.</param>
     /// <param name="result">What the attempt's runner answered.</param>
@@ -1863,6 +1864,7 @@ public sealed class FlowCoordinator
                 Error = error,
                 Cause = cause == OutcomeCause.None ? null : cause.ToString(),
                 Exception = result.Thrown,
+                FirstError = FlowStepAttempt.FirstErrorOf(result.Output),
             });
     }
 
@@ -9508,6 +9510,13 @@ public sealed class FlowCoordinator
                 : FlowRecommendation.NotSought,
         };
         _questions.Add(asked);
+
+        // The question is the attempt's own that raised it - kept on its entry after it is answered, so each attempt's
+        // ending says the question it raised and never the step's newest. A step that never began an attempt holds none.
+        if (instance.Measure?.Attempts?.Any(entry => entry.N == instance.Attempt) == true)
+        {
+            instance.Measure = instance.Measure.Asked(instance.Attempt, id);
+        }
 
         var was = instance.State;
         var configured = ConfiguredAnswer(instance, kind, options, subject);

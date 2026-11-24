@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using DssHarness.Core.Agents;
 
@@ -213,6 +214,16 @@ public sealed record FlowStepMeasure(
             : entry.Runs is { Count: > 0 } runs && runs[^1].FinishedAt is null ? entry : entry with { Runs = [.. entry.Runs ?? [], new FlowStepSpan(at)] });
 
     /// <summary>
+    /// This measure with the question <paramref name="question"/> written onto attempt <paramref name="attempt"/>'s entry
+    /// as the one raised while it was the step's own: kept there after the question is answered, so what each attempt's
+    /// ending asked is the attempt's own, never the step's newest question.
+    /// </summary>
+    /// <param name="attempt">The attempt that was the step's own when the question was raised.</param>
+    /// <param name="question">The question's id.</param>
+    public FlowStepMeasure Asked(int attempt, string question)
+        => With(attempt, entry => entry with { Question = question });
+
+    /// <summary>
     /// This measure with the backoff the engine waits before attempt <paramref name="attempt"/> runs again written onto
     /// its entry: the wait is the failed attempt's own, what its ending cost the run in time before the next began.
     /// </summary>
@@ -351,6 +362,15 @@ public sealed record FlowStepSpan(
 /// and a price changed in the configuration later never changes what a past part cost.
 /// </param>
 /// <param name="Legs">What a machine step's legs did in this attempt, each leg's phases with their times and its digest's counts; null for a step that runs no leg.</param>
+/// <param name="FirstError">
+/// The first error its digests read as it ended - the first red entry of its step's output that holds one, as a model
+/// reads it, with its stack and its causes (<see cref="FirstErrorOf"/>) - kept for this attempt whichever attempt ends
+/// the step; null where none was read.
+/// </param>
+/// <param name="Question">
+/// The id of the question raised of the step while this attempt was its own - its failure's, a bound's, its agent's
+/// asking - the newest where it raised more than one, kept once the question is answered; null where it raised none.
+/// </param>
 public sealed record FlowStepAttempt(
     int N,
     [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? StartedAt = null,
@@ -375,7 +395,9 @@ public sealed record FlowStepAttempt(
     IReadOnlyList<FlowStepSpan>? Runs = null,
     int? Reports = null,
     IReadOnlyList<FlowStepPart>? Parts = null,
-    IReadOnlyList<FlowStepLeg>? Legs = null)
+    IReadOnlyList<FlowStepLeg>? Legs = null,
+    JsonObject? FirstError = null,
+    string? Question = null)
 {
     /// <summary>The seconds its runs took, summed - the open one counted from nothing until it ends.</summary>
     [JsonIgnore]
@@ -470,6 +492,18 @@ public sealed record FlowStepAttempt(
 
         static int? Sum(int? held, int? more) => held is null && more is null ? null : (held ?? 0) + (more ?? 0);
     }
+
+    /// <summary>
+    /// The first error a step's output says its digests read: the <c>first</c> of the first entry of its <c>red</c> list -
+    /// a red leg's, a red check's - whose digest holds one, copied whole; null where none does. The one reading of it, which
+    /// an attempt's ending keeps (<see cref="FirstError"/>).
+    /// </summary>
+    /// <param name="output">The step's output as its runner answered it; null where it answered none.</param>
+    public static JsonObject? FirstErrorOf(JsonNode? output)
+        => output?["red"] is JsonArray red
+            && red.OfType<JsonObject>().Select(entry => entry["digest"]?["first"]).OfType<JsonObject>().FirstOrDefault() is { } first
+                ? (JsonObject)first.DeepClone()
+                : null;
 
     /// <summary>This attempt with its open run, where one is, closed at <paramref name="at"/>.</summary>
     /// <param name="at">When it stopped.</param>

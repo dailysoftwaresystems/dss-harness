@@ -931,7 +931,8 @@ public static class FlowRunReport
     /// <summary>
     /// Every attempt that failed, each with its own id (<c>&lt;instance&gt;@&lt;attempt&gt;</c>): its code, why it ended, its
     /// error, the exception it threw where one did - its type, message, stack and causes as the attempt keeps them - the
-    /// first error its legs' digests read where the step's output holds them, and what handled the step.
+    /// first error its digests read as it ended, what handled the step, and the question its ending raised - each the
+    /// attempt's own, as its entry keeps it, never the step's last attempt's or its newest question.
     /// </summary>
     private static IEnumerable<JsonObject> ErrorsOf(FlowRunReportSource source)
         => source.Flow.Steps
@@ -946,13 +947,9 @@ public static class FlowRunReport
                 ["cause"] = failed.attempt.Cause,
                 ["error"] = failed.attempt.Error ?? failed.step.Error,
                 ["exception"] = failed.attempt.Exception is { } thrown ? System.Text.Json.JsonSerializer.SerializeToNode(thrown, FileSystem.JsonStateFile.Options) : null,
-                ["firstError"] = failed.attempt.N == failed.step.Attempt
-                    && failed.step.Output?["red"] is JsonArray red
-                    && red.OfType<JsonObject>().Select(entry => entry["digest"]?["first"]).OfType<JsonObject>().FirstOrDefault() is { } first
-                        ? first.DeepClone()
-                        : null,
+                ["firstError"] = failed.attempt.FirstError?.DeepClone(),
                 ["handledBy"] = failed.step.HandledBy,
-                ["question"] = failed.step.Question,
+                ["question"] = failed.attempt.Question,
             });
 
     /// <summary>Every question a person was asked: when, how long it waited (<see cref="PersonWaitOf"/>), the recommendation it was shown, and its first answer.</summary>

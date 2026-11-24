@@ -882,6 +882,61 @@ public sealed class FlowStepMeasureTests
     }
 
     /// <summary>
+    /// Each failed attempt keeps what its own ending gave, as the engine ends it: the first error its output's digests
+    /// read - the first attempt's its own, never the last attempt's - and the question raised while it was the step's own:
+    /// none for the attempt the engine ran again, the person's for the one whose failure paused the step, kept on its
+    /// entry once the question is answered.
+    /// </summary>
+    [Fact]
+    public async Task EachFailedAttempt_KeepsItsOwnFirstError_AndTheQuestionItsEndingRaised()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: machine
+                type: orient
+                retries: 1
+                onFailure: pause
+            """);
+        static JsonObject Red(string code, string file)
+            => new()
+            {
+                ["passed"] = false,
+                ["red"] = new JsonArray(
+                    new JsonObject { ["leg"] = "linux", ["digest"] = null },
+                    new JsonObject { ["leg"] = "windows", ["digest"] = new JsonObject { ["first"] = new JsonObject { ["code"] = code, ["file"] = file, ["line"] = 3 } } }),
+            };
+        var runner = new Runner().On("machine", attempt => FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "it did not finish", attempt == 1 ? Red("CS1002", "src/a.cs") : Red("CS0103", "src/b.cs")));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            var asked = Assert.Single(coordinator.OpenQuestions);
+            Assert.Equal(("q1", "failure"), (asked.Id, asked.Kind));
+
+            // A retry answered runs a third attempt, which fails past its retries and asks again: q1 is answered, q2 open.
+            Assert.True(coordinator.TryAnswer(asked.Id, "retry", null, out var problem), problem);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var machine = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single();
+
+        Assert.Equal("q2", machine.Question);
+        Assert.Equal(
+            [
+                (1, "Failed", (string?)"""{"code":"CS1002","file":"src/a.cs","line":3}""", (string?)null),
+                (2, "Failed", """{"code":"CS0103","file":"src/b.cs","line":3}""", "q1"),
+                (3, "Failed", """{"code":"CS0103","file":"src/b.cs","line":3}""", "q2"),
+            ],
+            machine.Measure!.Attempts!.Select(attempt => (attempt.N, attempt.Outcome, attempt.FirstError?.ToJsonString(), attempt.Question)));
+    }
+
+    /// <summary>
     /// A runner that throws an exception the engine did not expect ends the step 70, and the attempt's measure entry
     /// keeps the exception's own record: its type, its message, the stack with each frame's file and line.
     /// </summary>

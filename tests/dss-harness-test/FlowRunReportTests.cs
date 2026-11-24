@@ -271,7 +271,9 @@ public sealed class FlowRunReportTests
     /// <summary>
     /// Every failed attempt is an error row of its own (<c>&lt;instance&gt;@&lt;attempt&gt;</c>): its code, why it
     /// ended, its error, the exception it threw whole - type, message, stack and causes, and what the bounds cut of each -
-    /// the first error its legs' digests read, what handled it and the question it raised; every form says them.
+    /// the first error its digests read, what handled it and the question its ending raised, each read from the attempt's
+    /// own entry: an attempt before the last keeps its own first error, an attempt that raised no question names none, and
+    /// the question one raised is named once it is answered and the step asks none; every form says them.
     /// </summary>
     [Fact]
     public void EachFailedAttempt_IsAnErrorRow_WithItsCauseItsExceptionAndItsDigestsFirstError()
@@ -281,15 +283,19 @@ public sealed class FlowRunReportTests
         var failed = source.Flow.Steps[2] with
         {
             HandledBy = "fix",
-            Question = "q1",
-            Measure = new FlowStepMeasure(Attempts: [new FlowStepAttempt(1, Outcome: "Failed", Exit: 70, Error: "it threw", Cause: "LockHeld", Exception: thrown)]),
-            Output = JsonNode.Parse("""{"red":[{"leg":"linux","digest":{"first":{"code":"CS1002","file":"src/a.cs","line":3}}}]}"""),
+            Question = null,
+            Measure = new FlowStepMeasure(Attempts:
+            [
+                new FlowStepAttempt(1, Outcome: "Failed", Exit: 20, Error: "it did not build", FirstError: JsonNode.Parse("""{"code":"CS1002","file":"src/a.cs","line":3}""")!.AsObject()),
+                new FlowStepAttempt(2, Outcome: "Failed", Exit: 70, Error: "it threw", Cause: "LockHeld", Exception: thrown, FirstError: JsonNode.Parse("""{"code":"CS0103","file":"src/b.cs","line":7}""")!.AsObject(), Question: "q1"),
+            ]),
+            Output = null,
         };
 
         var report = FlowRunReport.Of(source with { Flow = source.Flow with { Steps = [source.Flow.Steps[0], source.Flow.Steps[1], failed] } });
         var errors = report["errors"]!.AsArray();
 
-        Assert.Equal(["b@1", "c@1"], errors.Select(error => error!["id"]!.GetValue<string>()));
+        Assert.Equal(["b@1", "c@1", "c@2"], errors.Select(error => error!["id"]!.GetValue<string>()));
         Assert.True(
             JsonNode.DeepEquals(
                 JsonNode.Parse("""
@@ -297,21 +303,42 @@ public sealed class FlowRunReportTests
                       "id": "c@1",
                       "step": "c",
                       "attempt": 1,
-                      "exit": 70,
-                      "cause": "LockHeld",
-                      "error": "it threw",
-                      "exception": {"type": "InvalidOperationException", "message": "the node has a parent", "stack": [{"text": "at Rows.Keep()", "file": "src/Rows.cs", "line": 12, "kind": "call", "inTree": true}], "causedBy": [], "stackCut": 0, "causesCut": 0},
+                      "exit": 20,
+                      "cause": null,
+                      "error": "it did not build",
+                      "exception": null,
                       "firstError": {"code": "CS1002", "file": "src/a.cs", "line": 3},
                       "handledBy": "fix",
-                      "question": "q1"
+                      "question": null
                     }
                     """),
                 errors[1]),
             errors[1]!.ToJsonString());
+        Assert.True(
+            JsonNode.DeepEquals(
+                JsonNode.Parse("""
+                    {
+                      "id": "c@2",
+                      "step": "c",
+                      "attempt": 2,
+                      "exit": 70,
+                      "cause": "LockHeld",
+                      "error": "it threw",
+                      "exception": {"type": "InvalidOperationException", "message": "the node has a parent", "stack": [{"text": "at Rows.Keep()", "file": "src/Rows.cs", "line": 12, "kind": "call", "inTree": true}], "causedBy": [], "stackCut": 0, "causesCut": 0},
+                      "firstError": {"code": "CS0103", "file": "src/b.cs", "line": 7},
+                      "handledBy": "fix",
+                      "question": "q1"
+                    }
+                    """),
+                errors[2]),
+            errors[2]!.ToJsonString());
 
-        const string Said = "c@1, exit 70 (LockHeld): it threw; threw InvalidOperationException: the node has a parent; first error code CS1002; file src/a.cs; line 3 (handled by fix), asked as q1";
-        Assert.Contains($"  {Said}", FlowRunReport.Text(report).Split('\n'));
-        Assert.Contains($"- {Said}", FlowRunReport.Markdown(report).Split('\n'));
+        const string First = "c@1, exit 20: it did not build; first error code CS1002; file src/a.cs; line 3 (handled by fix)";
+        const string Second = "c@2, exit 70 (LockHeld): it threw; threw InvalidOperationException: the node has a parent; first error code CS0103; file src/b.cs; line 7 (handled by fix), asked as q1";
+        Assert.Contains($"  {First}", FlowRunReport.Text(report).Split('\n'));
+        Assert.Contains($"  {Second}", FlowRunReport.Text(report).Split('\n'));
+        Assert.Contains($"- {First}", FlowRunReport.Markdown(report).Split('\n'));
+        Assert.Contains($"- {Second}", FlowRunReport.Markdown(report).Split('\n'));
     }
 
     /// <summary>
