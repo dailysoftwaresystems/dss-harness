@@ -309,6 +309,14 @@ internal static class ParsedText
         var said = string.Join('\n', lines.Select(line => line.TrimEnd())).Trim('\n');
         return said.Trim().Length == 0 ? null : said;
     }
+
+    /// <summary>
+    /// A message a results file holds as one text - a TRX's <c>Message</c>, a JUnit failure's <c>message</c> - cut into its
+    /// lines by the one rule of where lines end (<see cref="LineEnds"/>) and joined as every message read off a log is
+    /// (<see cref="Joined"/>), so a failure says the same message whichever its producer wrote; null where none holds anything.
+    /// </summary>
+    /// <param name="text">The message as the file holds it; null where it holds none.</param>
+    public static string? Message(string? text) => text is null ? null : Joined(LineEnds.Lines(text));
 }
 
 /// <summary>

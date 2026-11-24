@@ -34,7 +34,7 @@ public sealed class ResultFileTests
         <?xml version="1.0" encoding="UTF-8"?>
         <testsuites tests="2" failures="1">
           <testsuite name="demo" tests="2" failures="1" errors="0" time="0.01" timestamp="2026-11-23T10:00:00">
-            <testcase classname="demo" name="one" time="0.006"><failure message="the charge was wrong" type="assert"></failure></testcase>
+            <testcase classname="demo" name="one" time="0.006"><failure message="the charge was wrong&#13;&#10;expected 3" type="assert"></failure></testcase>
             <testcase classname="demo" name="two" time="0.004"></testcase>
           </testsuite>
         </testsuites>
@@ -113,7 +113,7 @@ public sealed class ResultFileTests
 
         Assert.Equal(("trx", "DssHarness.Tests.Demo.One", "One", "DssHarness.Tests.Demo", "failed"), (one.Framework, one.Id, one.Name, one.Class, one.Outcome));
         Assert.Equal(1.25, one.Duration);
-        Assert.Equal("Assert.Contains() Failure: Sub-string not found\rCollection: [\"one\"]", one.Message);
+        Assert.Equal("Assert.Contains() Failure: Sub-string not found\nCollection: [\"one\"]", one.Message);
         Assert.Equal(
             [("D:/src/tests/Demo.cs", (int?)12, "DssHarness.Tests.Demo.One()"), ("D:/src/tests/Runner.cs", 30, "DssHarness.Tests.Demo.Runner()")],
             one.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
@@ -153,7 +153,10 @@ public sealed class ResultFileTests
         Assert.Equal("row two", digest.Failures[^1].Message);
     }
 
-    /// <summary>A JUnit XML is read through the mutation arm's reader, a case at a time: its failed case said, its passing one not.</summary>
+    /// <summary>
+    /// A JUnit XML is read through the mutation arm's reader, a case at a time: its failed case said, its message's lines
+    /// cut by the one rule of where lines end as a log's are, its passing one not.
+    /// </summary>
     [Fact]
     public void AJUnitReport_IsReadThroughTheMutatorArmsReader_ItsFailuresSaid()
     {
@@ -163,7 +166,7 @@ public sealed class ResultFileTests
 
         var one = Assert.Single(digest.Failures);
 
-        Assert.Equal(("junit", "demo.one", "one", "demo", "failed", "the charge was wrong", 0.006), (one.Framework, one.Id, one.Name, one.Class, one.Outcome, one.Message, one.Duration));
+        Assert.Equal(("junit", "demo.one", "one", "demo", "failed", "the charge was wrong\nexpected 3", 0.006), (one.Framework, one.Id, one.Name, one.Class, one.Outcome, one.Message, one.Duration));
     }
 
     /// <summary>

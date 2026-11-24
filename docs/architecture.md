@@ -10092,7 +10092,10 @@ before its first `: ` - an error no test owns as a diagnostic), and a SARIF log 
 its 2.1 and 1.0 forms, read from its stream a result at a time and never held whole (each result a diagnostic: the driver's name, the level - `warning` where it
 names none - the rule, the message, the place and its range). A member of another shape than the
 form's is read as absent; a file a crash cut short gives every finding before the break and says
-the break, and a line of the Dart stream that is no event is counted and the first said. Text read
+the break, and a line of the Dart stream that is no event is counted and the first said. A message a
+file holds as one text - a TRX's, a JUnit failure's, a Dart error event's - is cut into its lines by
+the one rule of where lines end and joined as a message read off a log is (`ParsedText.Message`), so
+a failure says the same message whichever its producer wrote. Text read
 from these files is masked as the phase's log is, through the one mask its log is written through
 (`ResultDigest.Gathering.Through`), every text a digest holds. A path naming nothing, or a file no form
 owns, is said in the digest's unparsed lines - never refused, for the failure may have been before
