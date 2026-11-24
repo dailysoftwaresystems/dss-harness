@@ -344,10 +344,10 @@ public sealed class ResultParsersTests
     [InlineData("dart", null, "dart")]
     [InlineData("cmake", "MSVC", "msbuild cmake ninja")]
     [InlineData("cmake", "GNU", "gcc ld cmake ninja")]
-    [InlineData("cmake", "Clang", "clang ld cmake ninja")]
-    [InlineData("cmake", "AppleClang", "clang ld cmake ninja")]
-    [InlineData("cmake", "GNU Clang", "msbuild cc ld cmake ninja")]
-    [InlineData("cmake", "", "msbuild cc ld cmake ninja")]
+    [InlineData("cmake", "Clang", "clang msbuild ld cmake ninja")]
+    [InlineData("cmake", "AppleClang", "clang msbuild ld cmake ninja")]
+    [InlineData("cmake", "GNU Clang", "cc msbuild ld cmake ninja")]
+    [InlineData("cmake", "", "cc msbuild ld cmake ninja")]
     public void ABuildsParsers_AreChosenByTheCompilerItsToolchainDeclares(string type, string? compilers, string chosen)
     {
         var config = new HarnessConfig();
@@ -603,6 +603,51 @@ public sealed class ResultParsersTests
                 ("msbuild", "CS0168", @"D:\a\app\app\src\Lib.cs", 3, 1, @"D:\a\app\app\src\Lib.csproj"),
             ],
             digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Code!, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Column, diagnostic.Project)));
+    }
+
+    /// <summary>
+    /// clang-cl - CMake's <c>Clang</c> where it is the compiler on Windows - writes its place as MSVC does and no code, and
+    /// is read as clang, its flag its code and its notes its chain, while link's lines beside it are read in the canonical
+    /// form; where the toolchain declares no compiler, the same lines are the C compiler's, never MSBuild's with a flag for
+    /// a project.
+    /// </summary>
+    [Fact]
+    public void ClangCl_IsReadAsClang_InMsvcsPlaceForm_AndLinkBesideIt()
+    {
+        string[] lines =
+        [
+            @"D:\a\app\src\main.cpp(7,5): error: use of undeclared identifier 'x'",
+            "    7 |     x = count;",
+            "      |     ^",
+            @"D:\a\app\src\store.cpp(8,18): error: invalid operands to binary expression ('const Text' and 'int')",
+            @"D:\a\app\src\store.cpp(14,12): note: in instantiation of function template specialization 'twice<Text>' requested here",
+            @"D:\a\app\src\warn.cpp(3,9): warning: unused variable 'unused' [-Wunused-variable]",
+            "2 errors generated.",
+            @"main.cpp.obj : error LNK2019: unresolved external symbol ""int __cdecl store::load_records(char const *)"" (?load_records@store@@YAHPEBD@Z) referenced in function main",
+        ];
+
+        var config = new HarnessConfig();
+        config.Toolchains["clang-cl"] = new ToolchainConfig { CompilerId = { ["C"] = "Clang", ["CXX"] = "Clang" } };
+
+        static IEnumerable<string> Said(ResultDigest digest)
+            => digest.Diagnostics.Select(diagnostic => $"{diagnostic.Tool} {diagnostic.Severity} {diagnostic.Code ?? "-"} {diagnostic.File ?? "-"}:{diagnostic.Line}:{diagnostic.Column} {diagnostic.Project ?? "-"} {diagnostic.Stack.Count}");
+
+        Assert.Equal(
+            [
+                @"clang error - D:\a\app\src\main.cpp:7:5 - 0",
+                @"clang error - D:\a\app\src\store.cpp:8:18 - 1",
+                @"clang warning -Wunused-variable D:\a\app\src\warn.cpp:3:9 - 0",
+                "link error LNK2019 -:: main.cpp.obj 0",
+            ],
+            Said(PhaseParsers.DigestOf(lines, PhaseParsers.ForBuild(config, "cmake", "clang-cl"))!));
+        Assert.Equal(
+            [
+                @"cc error - D:\a\app\src\main.cpp:7:5 - 0",
+                @"cc error - D:\a\app\src\store.cpp:8:18 - 1",
+                @"cc warning -Wunused-variable D:\a\app\src\warn.cpp:3:9 - 0",
+                "link error LNK2019 -:: main.cpp.obj 0",
+            ],
+            Said(PhaseParsers.DigestOf(lines, PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!));
     }
 
     /// <summary>

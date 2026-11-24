@@ -24,15 +24,17 @@ public static class PhaseParsers
     private static readonly string[] CiPlan =
     [
         "dotnet-test", "gtest", "ctest", "dart-test", "jest", "vitest",
-        "msbuild", "cc", "ld", "cmake", "ninja", "tsc", "eslint", "dart",
+        "cc", "msbuild", "ld", "cmake", "ninja", "tsc", "eslint", "dart",
         .. StackPlan,
     ];
 
     /// <summary>
     /// The parsers a build phase's log is read by: MSBuild's for a .NET build, the Dart tools' for a Dart one, and for a
-    /// CMake build the compiler's its toolchain declares - MSVC's canonical form with CMake and Ninja, gcc's or clang's
-    /// with the linker, CMake and Ninja - or, where it declares none or more than one, every C compiler's form, the
-    /// diagnostics said as the C compiler's (<c>cc</c>). The configured matchers no runner or invocation names.
+    /// CMake build the compiler's its toolchain declares - MSVC's canonical form with CMake and Ninja, gcc's with the
+    /// linker, CMake and Ninja, clang's with them and the canonical form too, which link and MSBuild print where clang-cl
+    /// is the compiler (CMake's <c>Clang</c>) - or, where it declares none or more than one, every C compiler's form, the
+    /// diagnostics said as the C compiler's (<c>cc</c>), ahead of the canonical form, so a line of no code - clang-cl's - is
+    /// the compiler's. The configured matchers no runner or invocation names.
     /// </summary>
     /// <param name="config">The configuration the build runs under.</param>
     /// <param name="projectType">The project's type: <c>cmake</c>, <c>dotnet</c> or <c>dart</c>.</param>
@@ -228,8 +230,8 @@ public static class PhaseParsers
         {
             ["MSVC"] => ["msbuild", "cmake", "ninja"],
             ["GNU"] => ["gcc", "ld", "cmake", "ninja"],
-            _ when declared.Count > 0 && declared.All(id => id is "Clang" or "AppleClang") => ["clang", "ld", "cmake", "ninja"],
-            _ => ["msbuild", "cc", "ld", "cmake", "ninja"],
+            _ when declared.Count > 0 && declared.All(id => id is "Clang" or "AppleClang") => ["clang", "msbuild", "ld", "cmake", "ninja"],
+            _ => ["cc", "msbuild", "ld", "cmake", "ninja"],
         };
     }
 

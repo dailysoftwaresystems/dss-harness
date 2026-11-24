@@ -9867,10 +9867,12 @@ its tests' own forms ends knowing what they said: a line that only says a build 
 collect2's, the compiler driver's, link's `LNK1120`, MSBuild's recap, Ninja's edge, CTest's status
 and list, cargo's `error: test failed` - is said only where nothing before it said why. The forms
 are read as the tools print them at the versions CI runs: MSBuild's canonical form wherever it is
-printed (MSBuild and csc, MSVC's cl and link, tsc with `--pretty false`, clang-cl), a Windows
+printed (MSBuild and csc, MSVC's cl and link, tsc with `--pretty false`), a Windows
 drive's path and cl's `fatal error` among them, each diagnostic named for the tool its code belongs
 to and its project the project's file (what MSBuild writes after it for an inner build of a project
-that targets several frameworks, `::TargetFramework=...`, left with the build); gcc's and clang's form, the chain that led to an error its stack - the include chain, the
+that targets several frameworks, `::TargetFramework=...`, left with the build); gcc's and clang's form -
+clang-cl's place written in MSVC's parentheses with no code among it, read as clang's ahead of the
+canonical form - the chain that led to an error its stack - the include chain, the
 instantiation chain, the macro expansions - handed whole, for the digest is the one owner of a
 stack's bound; the linkers (GNU ld, gold, lld, ld64, link); CMake's message blocks (the command that raised one
 said ahead of its message, for a diagnostic's project is the project or target a build names, never a command); Ninja's
@@ -9889,8 +9891,9 @@ lldb's - names no file, only its line: a base name is no path, and is never read
 
 The parsers a phase's log is read by are chosen by what the phase runs (`Results\PhaseParsers.cs`,
 the one owner of the choice): a .NET build's by MSBuild's form, a Dart build's by the Dart tools', a
-CMake build's by the compiler its toolchain declares (`compilerId`: MSVC's canonical form, gcc's or
-clang's with the linkers, every C compiler's form where it declares none or more than one) with
+CMake build's by the compiler its toolchain declares (`compilerId`: MSVC's canonical form, gcc's with
+the linkers, clang's with them and the canonical form link and MSBuild print beside clang-cl, every C
+compiler's form ahead of the canonical one where it declares none or more than one) with
 CMake's and Ninja's; a test's by its runner - CTest's console with GoogleTest's, the sanitizers',
 the native crash's and CMake's; `dotnet test`'s with .NET's stacks and MSBuild's; `dart test`'s and
 `flutter test`'s; Python's; Node's runners with jest's, vitest's, V8's, tsc's and eslint's; Go's;

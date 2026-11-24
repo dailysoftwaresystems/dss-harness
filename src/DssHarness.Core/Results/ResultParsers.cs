@@ -233,8 +233,10 @@ internal static class ParsedText
 /// MSBuild's canonical form, read for every tool that prints it: <c>origin : [fatal] error|warning CODE: text [project]</c>,
 /// the origin a file with its place - <c>path(line)</c>, <c>path(line,col)</c>, <c>path(line-line)</c>,
 /// <c>path(line,col-col)</c>, <c>path(line,col,line,col)</c> - or a tool's or a project's name. MSBuild and csc print it,
-/// and so do MSVC's cl and link, tsc with <c>--pretty false</c> and clang-cl; each diagnostic's tool is the one its code
-/// belongs to - <c>C</c> and <c>D</c> codes cl's (<c>msvc</c>), <c>LNK</c> link's, <c>TS</c> tsc's, every other MSBuild's.
+/// and so do MSVC's cl and link and tsc with <c>--pretty false</c>; each diagnostic's tool is the one its code belongs to -
+/// <c>C</c> and <c>D</c> codes cl's (<c>msvc</c>), <c>LNK</c> link's, <c>TS</c> tsc's, every other MSBuild's. clang-cl
+/// writes its place the same way with no code, and is read with clang's own form (<see cref="GnuFormParser"/>), which
+/// every choice that may read clang-cl's output puts ahead of this one.
 /// An MSVC note under an error is its: <c>see reference to ... being compiled</c> a frame of its instantiation chain,
 /// any other a line of its record. MSBuild's summary after <c>Build FAILED.</c> repeats what was said, and is taken
 /// with it; link's <c>LNK1120</c>, a count of the unresolved externals said before it, is said only where none was. The
@@ -449,8 +451,9 @@ internal sealed class MsBuildParser : IBuiltInParser
 }
 
 /// <summary>
-/// gcc's and clang's form, read as one: <c>path:line[:col]: [fatal] error|warning|note: message [-Wflag]</c>, and the
-/// driver's own <c>gcc: error: ...</c>. The chain that led to an error is its stack, innermost first, in the order
+/// gcc's and clang's form, read as one: <c>path:line[:col]: [fatal] error|warning|note: message [-Wflag]</c> - and the place
+/// written as MSVC writes one, <c>path(line,col): error: message [-Wflag]</c>, as clang prints it where it is clang-cl - and
+/// the driver's own <c>gcc: error: ...</c>. The chain that led to an error is its stack, innermost first, in the order
 /// printed: the include chain above it (<c>In file included from</c>, gcc's indented <c>from</c> lines), gcc's
 /// instantiation chain above it (<c>In instantiation of</c>, <c>required from</c>), and the notes under it that carry a
 /// chain - clang's <c>in instantiation of ... requested here</c> and <c>expanded from macro</c>, gcc's <c>in expansion of
@@ -468,6 +471,13 @@ internal abstract class GnuFormParser : IBuiltInParser
 
     private static readonly Regex Said = LinearRegex.Compile(
         @"^(?<file>.+?):(?<line>\d+):(?:(?<col>\d+):)?\s+(?<severity>fatal error|error|warning|note):\s+(?<message>.*?)(?:\s+\[(?<flag>-W[^\]\s]*)\])?$");
+
+    /// <summary>
+    /// clang's place written as MSVC writes one, as clang-cl prints it: <c>path(line[,col]): severity: message [-Wflag]</c>,
+    /// its severity never followed by a code, which cl's own lines carry.
+    /// </summary>
+    private static readonly Regex SaidAsMsvc = LinearRegex.Compile(
+        @"^(?<file>.+?)\((?<line>\d+)(?:,(?<col>\d+))?\) ?:\s+(?<severity>fatal error|error|warning|note):\s+(?<message>.*?)(?:\s+\[(?<flag>-W[^\]\s]*)\])?$");
 
     private static readonly Regex Driver = LinearRegex.Compile(
         @"^(?:\S*[/\\])?(?:[\w.]+-)*(?:gcc|g\+\+|cc|c\+\+|clang|clang\+\+|cc1|cc1plus|cc1obj|lto1)(?:-\d+(?:\.\d+)*)?(?:\.exe)?: (?<severity>fatal error|error|warning|note|internal compiler error): (?<message>.+)$");
@@ -508,7 +518,7 @@ internal abstract class GnuFormParser : IBuiltInParser
                     return LineTaken.Took;
                 }
 
-                if (Said.Match(text) is { Success: true } note && note.Groups["severity"].Value == "note")
+                if (SaidOf(text) is { Success: true } note && note.Groups["severity"].Value == "note")
                 {
                     if (Chained.IsMatch(note.Groups["message"].Value))
                     {
@@ -561,7 +571,7 @@ internal abstract class GnuFormParser : IBuiltInParser
                 return LineTaken.Held;
             }
 
-            if (Said.Match(text) is { Success: true } said)
+            if (SaidOf(text) is { Success: true } said)
             {
                 Open(line, new Diagnostic(
                     tool,
@@ -648,6 +658,10 @@ internal abstract class GnuFormParser : IBuiltInParser
             _open = null;
             _frames = [];
         }
+
+        /// <summary>The diagnostic <paramref name="text"/> says, its place in either form clang prints: its own, or MSVC's as clang-cl writes it.</summary>
+        private static Match SaidOf(string text)
+            => Said.Match(text) is { Success: true } said ? said : SaidAsMsvc.Match(text);
 
         /// <summary>The flag that names a diagnostic: <c>-Wx</c>, also where <c>-Werror=x</c> or <c>-Werror,-Wx</c> promoted it.</summary>
         private static string? CodeOf(Group flag)
