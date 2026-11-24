@@ -804,7 +804,7 @@ public sealed class ResultParsersTests
             PhaseParsers.ForTests(new HarnessConfig(), "ctest", null))!;
 
         Assert.Equal(
-            [("gtest", "StoreTest.LoadsItsRecords", (4, 10)), ("ctest", "parse_tests", (12, 12))],
+            [("gtest", "StoreTest.LoadsItsRecords", (4, 10)), ("ctest", "parse_tests", (12, 13))],
             digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Log!.Value)));
         Assert.Empty(digest.Diagnostics);
         Assert.Empty(digest.Unparsed ?? []);

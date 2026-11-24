@@ -505,7 +505,8 @@ internal sealed class GTestParser : IBuiltInParser
 /// <c>***SIGABRT***Exception:</c>, <c>Subprocess aborted***Exception:</c> as the CTest of a subprocess's death arranges
 /// it, <c>SEGFAULT</c>, <c>Child aborted</c>) one crashed - and its failed list, <c>3 - name
 /// (SEGFAULT)</c>. A failed test is said by its own output where that output said why (a gtest's failures, a sanitizer's
-/// report, printed under it by <c>--output-on-failure</c>), and by its status line where nothing did; the failed list and
+/// report, printed under it by <c>--output-on-failure</c>), and by its status line where nothing did - its log range
+/// running from the status line through that output, so the output is one read away; the failed list and
 /// <c>Errors while running CTest</c> say only what was said, and a test only they name is said from them.
 /// </summary>
 internal sealed class CTestParser : IBuiltInParser
@@ -618,7 +619,8 @@ internal sealed class CTestParser : IBuiltInParser
             Shut(int.MaxValue);
 
             // A failed test is said by its status line only where nothing printed under it - its own output, up to the next
-            // line CTest printed - said why it failed.
+            // line CTest printed - said why it failed: its log range runs from its status line through that output, so
+            // the output is one read away.
             foreach (var (name, outcome, status, seconds, at, through) in _failed)
             {
                 if (!sink.SaidWithin(at + 1, through))
@@ -629,7 +631,7 @@ internal sealed class CTestParser : IBuiltInParser
                         Message: outcome == "failed" && status == "Failed" ? null : status,
                         Duration: seconds,
                         Outcome: outcome,
-                        Log: (at, at)));
+                        Log: (at, through)));
                 }
             }
 

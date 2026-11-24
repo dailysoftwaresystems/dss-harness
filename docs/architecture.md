@@ -9914,7 +9914,9 @@ at, each with its log range as the log's file numbers its lines (`NumberedLine`)
 every parser finishes what it holds, the last chosen first, so a runner's console chosen ahead of
 its tests' own forms ends knowing what they said: a line that only says a build or a test run failed -
 collect2's, the compiler driver's, link's `LNK1120`, MSBuild's recap, Ninja's edge, CTest's status
-and list, cargo's `error: test failed` - is said only where nothing before it said why. The forms
+and list, cargo's `error: test failed` - is said only where nothing before it said why, and a failed
+test CTest's own status line says holds the log range from that line through the test's output, so
+the output is one read away. The forms
 are read as the tools print them at the versions CI runs: MSBuild's canonical form wherever it is
 printed (MSBuild and csc, MSVC's cl and link, tsc with `--pretty false`), a Windows
 drive's path and cl's `fatal error` among them, each diagnostic named for the tool its code belongs
