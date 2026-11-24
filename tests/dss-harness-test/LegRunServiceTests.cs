@@ -5697,6 +5697,61 @@ public sealed class LegRunServiceTests
         Assert.Equal([$"run {run.Value} began", "placed native in a copy", "native ended"], said.Said);
     }
 
+    /// <summary>
+    /// A leg's line holds what the leg built of each file of its tree its digest names, taken as the line is made and told
+    /// with it: a leg in a copy, each file as the run's reading of its tree read it - what the copy holds, whatever was
+    /// written into the tree while the leg worked - and a leg in the tree itself, each file as the tree holds it as its work
+    /// ends. A file its tree does not hold is one it holds nothing of.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ALegsLine_HoldsWhatTheLegBuiltOfEachFileItsDigestNames(bool localCopy)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var config = WatchedConfig(harness, localCopy);
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        temp.WriteFile("src/a.c", "int a;\n");
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        var transports = LocalOnlyTransports(harness);
+        var said = new SaidWatch();
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = LegWorkload.BuildOnly, Watch = said },
+            sync: SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports),
+            transports: transports,
+            loader: harness.ContextLoader,
+            work: work =>
+            {
+                // Written into the tree while the leg works: a fold landing, or the leg's own work in the tree itself.
+                File.WriteAllText(temp.Combine("src/a.c"), "int b;\n");
+
+                return new LegEntry
+                {
+                    Leg = work.Leg.Name,
+                    Verdict = LegVerdict.Failed,
+                    TailPhase = "build",
+                    Digest = ResultDigest.Of(
+                        [new Diagnostic("gcc", "error", null, "'x' undeclared", "src/a.c", 1, 5), new Diagnostic("gcc", "error", null, "'y' undeclared", "src/gone.c", 2, 5)],
+                        [],
+                        []),
+                };
+            });
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+        Assert.Equal(
+            new Dictionary<string, FileContent> { ["src/a.c"] = FileContent.Of(System.Text.Encoding.UTF8.GetBytes(localCopy ? "int a;\n" : "int b;\n")) },
+            Assert.Single(said.Lines).Tree!.Built);
+    }
+
     /// <summary>One leg this machine runs, in a copy of its own where <paramref name="localCopy"/>, under no limit on its paths.</summary>
     private static HarnessConfig WatchedConfig(HarnessFactory harness, bool localCopy) => new()
     {

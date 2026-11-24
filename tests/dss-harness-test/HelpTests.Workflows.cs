@@ -116,7 +116,10 @@ public sealed partial class HelpTests
                 + "its table, and {run.red} says it on its line. Where the run keeps a codebase graph of the tree the step's legs ran "
                 + "in, each red leg's digest is joined to it before the step's ledger is kept: each place inside the tree carries the "
                 + "declaration the graph holds enclosing it - its kind, its qualified name, its handle - the first error's as its "
-                + "symbol and each frame of a stack inside the tree with it in brackets after its line; a plain build, test or run "
+                + "symbol and each frame of a stack inside the tree with it in brackets after its line, where its file holds what its "
+                + "leg built, as the graph is asked and once it has answered: a leg in a copy built the tree as the copy was made of "
+                + "it, a leg in the tree itself the tree as it held it when the leg ended, and a place whose file was written since - "
+                + "a fold landing while the legs worked - carries none; a plain build, test or run "
                 + "command asks no graph, and its digest's symbols are null",
             prose,
             StringComparison.Ordinal);
@@ -663,7 +666,10 @@ public sealed partial class HelpTests
                 + "its table, and {run.red} says it on its line. Where the run keeps a codebase graph of the tree the step's legs ran "
                 + "in, each red leg's digest is joined to it before the step's ledger is kept: each place inside the tree carries the "
                 + "declaration the graph holds enclosing it - its kind, its qualified name, its handle - the first error's as its "
-                + "symbol and each frame of a stack inside the tree with it in brackets after its line; a plain build, test or run "
+                + "symbol and each frame of a stack inside the tree with it in brackets after its line, where its file holds what its "
+                + "leg built, as the graph is asked and once it has answered: a leg in a copy built the tree as the copy was made of "
+                + "it, a leg in the tree itself the tree as it held it when the leg ended, and a place whose file was written since - "
+                + "a fold landing while the legs worked - carries none; a plain build, test or run "
                 + "command asks no graph, and its digest's symbols are null. What "
                 + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
                 + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "

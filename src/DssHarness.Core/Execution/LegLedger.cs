@@ -313,6 +313,19 @@ public sealed record WorkedTree(string Path)
 
     /// <summary>What the leg's line says of the reading it tested, or <see langword="null"/> where none is known.</summary>
     public string? Said => Reading?.Said(Staged);
+
+    /// <summary>
+    /// What the leg built of each file of its tree its digest's places name, by the file's path relative to the tree with
+    /// forward separators: for a copy, the file as the run's reading of the tree it was made of read it - what the copy was
+    /// made from and checked against file by file as it was made, wherever the work then ran; for the tree itself, the file
+    /// as the tree held it as the leg's line was made, while the leg - and a step of an orchestrator run that ran it - still
+    /// held the tree. A named file it holds nothing of is one nothing proves the leg built as the tree holds it: one its copy
+    /// was not given, gone, or unreadable. <see langword="null"/> where nothing was taken: a line with no place in its tree,
+    /// a run on what is staged - which made no reading - and a leg a host ran for another machine, whose line that machine
+    /// makes. Never written out: it is the placing run's own, read where the run's digests are joined to the tree's graph
+    /// (<see cref="Orchestration.Flow.FlowStepLegs"/>).
+    /// </summary>
+    public IReadOnlyDictionary<string, FileSystem.FileContent>? Built { get; init; }
 }
 
 /// <summary>

@@ -6,6 +6,7 @@ using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
@@ -358,9 +359,11 @@ public sealed class LegStepRunnerTests : IDisposable
                         [])),
             ],
             []);
+        // A leg in the tree itself, which built the file as the tree holds it.
+        var built = new WorkedTree(repository.Path) { Built = new Dictionary<string, FileContent> { ["src/Store.cs"] = FileContent.Of(File.ReadAllBytes(repository.Combine("src/Store.cs"))) } };
         var legs = new FakeLegs
         {
-            Answer = Result([new LegEntry { Leg = "native", Verdict = LegVerdict.Failed, TailPhase = "build", Digest = digest }], HarnessExit.CommandFailed, "a leg failed"),
+            Answer = Result([new LegEntry { Leg = "native", Verdict = LegVerdict.Failed, TailPhase = "build", Digest = digest, Tree = built }], HarnessExit.CommandFailed, "a leg failed"),
         };
         var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
         var layout = await LayoutAsync(harness, repository);
@@ -390,6 +393,126 @@ public sealed class LegStepRunnerTests : IDisposable
         var kept = ledger["legs"]![0]!["digest"]!;
         Assert.Equal(said, kept["diagnostics"]![0]!["symbol"]!.GetValue<string>());
         Assert.Equal($"App.Store.Load [{said}]", kept["failures"]![0]!["exception"]!["stack"]![0]!["symbol"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A red leg's place is joined to a declaration only where its file holds what the leg built: the step lets its tree go
+    /// once its legs' copies are made, so a fold may write a file while they work, and the graph reads the tree as it is
+    /// when it is asked. A file written after the copy was made - a method put at the top of its class, so the line the
+    /// build named is another declaration's now - says no declaration at its places, never the new code's, in the entry a
+    /// model reads and the ledger the step keeps alike; a file the tree holds as the copy was made of it is joined.
+    /// </summary>
+    [Fact]
+    public async Task APlaceWhoseFileWasWrittenAfterItsLegsCopyWasMade_IsJoinedToNoDeclaration()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: true));
+        const string Store = "namespace App;\n\npublic sealed class Store\n{\n    public int Load(string name)\n    {\n        var found = 0;\n        return found + x;\n    }\n}\n";
+        const string Other = "namespace App;\n\npublic sealed class Other\n{\n    public int Run()\n    {\n        return y;\n    }\n}\n";
+        repository.WriteFile("src/Store.cs", Store);
+        repository.WriteFile("src/Other.cs", Other);
+        await harness.CommitAllAsync(repository.Path, "the store", Token);
+
+        var layout = await LayoutAsync(harness, repository);
+        var context = await harness.ContextLoader.LoadAsync(repository.Path, Token);
+        await harness.CodebaseGraph.SyncAsync(FlowGraphSyncs.RequestOf(context, new FlowRunPlace(repository.Path, "r1", null, Flow), "test"), Token);
+        var run = new DssHarness.Core.Codebase.CodebaseGraphQueries((await harness.CodebaseGraph.ReadOnlyAsync(layout, null, Token))!).AtLine("src/Other.cs", 7)!;
+
+        // The copy was made of the tree as it was read: both files as committed.
+        var line = new LegEntry
+        {
+            Leg = "native",
+            Verdict = LegVerdict.Failed,
+            TailPhase = "build",
+            Tree = new WorkedTree(repository.Combine(".legs", "native"))
+            {
+                CopyOf = repository.Path,
+                Built = new Dictionary<string, FileContent>
+                {
+                    ["src/Store.cs"] = FileContent.Of(System.Text.Encoding.UTF8.GetBytes(Store)),
+                    ["src/Other.cs"] = FileContent.Of(System.Text.Encoding.UTF8.GetBytes(Other)),
+                },
+            },
+            Digest = ResultDigest.Of(
+                [
+                    new Diagnostic("csc", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Store.cs", 8, 24),
+                    new Diagnostic("csc", "error", "CS0103", "The name 'y' does not exist in the current context", "src/Other.cs", 7, 16),
+                ],
+                [],
+                []),
+        };
+        var legs = new FakeLegs
+        {
+            Answer = Result([line], HarnessExit.CommandFailed, "a leg failed"),
+            WhileItRuns = watch =>
+            {
+                watch.Placed([new LegPlace("native", InACopy: true)]);
+                watch.CopyMade("native");
+
+                // A fold lands while the leg works in its copy: its line 8 is the new method's now.
+                repository.WriteFile("src/Store.cs", Store.Replace("{\n    public int Load", "{\n    public void Validate()\n    {\n        Check();\n    }\n\n    public int Load", StringComparison.Ordinal));
+                watch.Ended(line);
+            },
+        };
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
+
+        var result = await runner.RunAsync(Run(new WorkflowStep { Name = "graphed", Type = "build" }, repository.Path), Token);
+
+        // The written file's place names nothing; the other is joined to the declaration the graph holds at it.
+        var entry = result.Output!["red"]![0]!["digest"]!;
+        Assert.Null(entry["first"]!["symbol"]);
+        Assert.Equal(
+            [null, $"member App.Other.Run {run.Handle}"],
+            JsonNode.Parse(File.ReadAllText(Path.Combine(layout.InstanceDirectory("graphed", null), OrchestratorLayout.StepLedgerFileName)))!["legs"]![0]!["digest"]!["diagnostics"]!
+                .AsArray()
+                .Select(diagnostic => diagnostic!["symbol"]?.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A file written while the graph is asked may have been read as written: a place is joined only where its file holds
+    /// what the leg built both as the graph is asked and once it has answered, so a file written in between says no
+    /// declaration at its places, whatever the graph answered of it, and a file that held still is joined.
+    /// </summary>
+    [Fact]
+    public async Task AFileWrittenWhileTheGraphIsAsked_IsJoinedToNoDeclaration()
+    {
+        using var tree = new TempDirectory();
+        var harness = new HarnessFactory();
+        var store = tree.WriteFile("src/Store.cs", "class Store {}\n");
+        var other = tree.WriteFile("src/Other.cs", "class Other {}\n");
+        var line = new LegEntry
+        {
+            Leg = "native",
+            Verdict = LegVerdict.Failed,
+            TailPhase = "build",
+            Tree = new WorkedTree(tree.Path)
+            {
+                Built = new Dictionary<string, FileContent>
+                {
+                    ["src/Store.cs"] = FileContent.Of(File.ReadAllBytes(store)),
+                    ["src/Other.cs"] = FileContent.Of(File.ReadAllBytes(other)),
+                },
+            },
+            Digest = ResultDigest.Of([new Diagnostic("csc", "error", "CS0103", "x", "src/Store.cs", 1, 1), new Diagnostic("csc", "error", "CS0103", "y", "src/Other.cs", 1, 1)], [], []),
+        };
+        IReadOnlyList<string>? asked = null;
+        var request = new FlowStepLegsRequest(new HarnessConfig(), tree.Path, tree.Path, tree.Combine("step"), tree.Combine("step"), RedLogs: false, "'checks'", "build")
+        {
+            Declarations = (files, _) =>
+            {
+                asked = files;
+
+                // A fold writes the file while the graph reads it.
+                File.WriteAllText(store, "class Validate {}\nclass Store {}\n");
+                return Task.FromResult<Func<string, int, EnclosingDeclaration?>?>((file, _) => new EnclosingDeclaration("type", file, "h1"));
+            },
+        };
+
+        var ran = await new FlowStepLegs(harness.FileSystem, harness.Output, harness.ChildSessions, new TestIsolation())
+            .RunAsync(request, watch: null, (_, _) => Task.FromResult(Result([line], HarnessExit.CommandFailed, "a leg failed")), Token);
+
+        // Both were asked, each holding what the leg built as the graph was asked; only the one that held still is joined.
+        Assert.Equal(["src/Store.cs", "src/Other.cs"], asked);
+        Assert.Equal([null, "type src/Other.cs h1"], ran.Result!.Report.Lines.Single().Digest!.Diagnostics.Select(diagnostic => diagnostic.Symbol));
     }
 
     /// <summary>

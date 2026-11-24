@@ -552,7 +552,7 @@ public sealed class LegRunService(
                             MaxParallelLegsTotal = context.Config.Defaults.MaxParallelLegsTotal,
                             SyncTree = syncTree,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, sources, token),
                         },
                         ledger,
                         stopping.Token)
@@ -927,6 +927,7 @@ public sealed class LegRunService(
         string commandName,
         LegLedger ledger,
         ConcurrentDictionary<string, string> lockedTrees,
+        IReadOnlyDictionary<string, Task<SyncSource>>? sources,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
@@ -1037,9 +1038,63 @@ public sealed class LegRunService(
 
                 var entry = await RunTakenLegAsync(context, start, runId, runDirectory, request, work, commandName, ledger, started, check.Restarts, cancellationToken).ConfigureAwait(false);
 
+                // What it built of each file its digest names, taken before its line is kept: as the leg's line is made, it
+                // still holds the tree it worked in.
+                tree = request.Here is null ? await BuiltAsync(tree, entry.Digest, sources, cancellationToken).ConfigureAwait(false) : tree;
+
                 return (admitted is null ? entry : entry with { Admission = admitted.Fact }) with { Tree = tree };
             }
         }
+    }
+
+    /// <summary>
+    /// <paramref name="tree"/> with what the leg built of each file of it <paramref name="digest"/>'s places name
+    /// (<see cref="WorkedTree.Built"/>): for a copy, each file as the run's reading of the tree it was made of read it - the
+    /// copy holds that reading, checked file by file as it was made, so the content is proven whatever the tree holds now -
+    /// and for the tree itself, each file as it holds it now, the leg's work ended and its line not yet kept. A file the
+    /// reading did not carry, or the tree no longer holds or cannot be read, holds nothing proven. As it was where the digest
+    /// names no file of the tree, or the copy holds no reading of this run's - a run on what is staged.
+    /// </summary>
+    private async Task<WorkedTree> BuiltAsync(WorkedTree tree, ResultDigest? digest, IReadOnlyDictionary<string, Task<SyncSource>>? sources, CancellationToken cancellationToken)
+    {
+        if (digest?.FilesInTree() is not { Count: > 0 } files)
+        {
+            return tree;
+        }
+
+        var built = new Dictionary<string, FileContent>(StringComparer.Ordinal);
+
+        if (tree.CopyOf is { } copyOf)
+        {
+            if (tree.Staged || sources?.GetValueOrDefault(copyOf) is not { IsCompletedSuccessfully: true } read)
+            {
+                return tree;
+            }
+
+            foreach (var file in files)
+            {
+                if (read.Result.Files.Entries.TryGetValue(file, out var entry))
+                {
+                    built[file] = entry.Identity;
+                }
+            }
+
+            return tree with { Built = built };
+        }
+
+        foreach (var file in files)
+        {
+            try
+            {
+                built[file] = await FileContentHash.OfAsync(_fileSystem, Path.Combine(tree.Path, file), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception unread) when (unread is IOException or UnauthorizedAccessException)
+            {
+                // Gone or unreadable: nothing proves what the leg built of it.
+            }
+        }
+
+        return tree with { Built = built };
     }
 
     /// <summary>

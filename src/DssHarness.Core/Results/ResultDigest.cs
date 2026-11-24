@@ -376,7 +376,11 @@ public sealed record ResultDigest
     /// ran in - for a digest made where its phase ran, against that machine's copy of the tree, names its places as the
     /// tree does.
     /// </summary>
-    /// <param name="declarationAt">The tree's graph's declaration enclosing a file of the tree, named as the tree names it, at a line of it; null where it holds none.</param>
+    /// <param name="declarationAt">
+    /// The tree's graph's declaration enclosing a file of the tree, named as the tree names it, at a line of it; null where it
+    /// holds none, and where the file the graph read is not proven to hold what the digest's phase read
+    /// (<see cref="Execution.WorkedTree.Built"/>).
+    /// </param>
     public ResultDigest Declared(Func<string, int, EnclosingDeclaration?> declarationAt)
     {
         ArgumentNullException.ThrowIfNull(declarationAt);

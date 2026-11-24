@@ -10220,7 +10220,16 @@ answer the graph gives checks the files it names, and each place is asked by its
 (`CodebaseGraphQueries.AtLine`), once however many findings name it, through the one owner of a digest's symbols
 (`ResultDigest.Declared`). Only a place in the tree is asked - a diagnostic's own, named as the tree names its files,
 and each frame the placing marked the tree's, a diagnostic's chain and every failure's stack down its causes - never a
-frame outside it. A diagnostic's symbol is the declaration - a type, a member, a section - with its kind, its
+frame outside it - and only where its file holds what its leg built, proven by content: the step lets its tree go once
+its legs' copies are made and its legs in the tree itself have ended, so a fold, or anything else, may write a file
+while the legs work, and the graph reads the tree as it is when it is asked. Each leg's line holds what it built of
+each file its digest names, taken as the line is made (`WorkedTree.Built`, by `LegRunService`): for a leg in a copy,
+the file as the run's reading of the tree held it - what the copy was made from and checked against file by file, on
+this machine or a host - and for a leg in the tree itself, the file as the tree held it as the leg ended, while the
+step still held it. A file is asked of the graph only where the tree holds that content just before the graph is asked,
+and joined only where it still does once the graph has answered (`FlowStepLegs`); a file written since, or one nothing
+proves the leg built - one its copy was not given, gone, unreadable, a run on what is staged - says no declaration at its
+places, never one of code its leg did not build. A diagnostic's symbol is the declaration - a type, a member, a section - with its kind, its
 qualified name and its handle, said as the graph names a node; a frame holds it beside the function its line printed
 (`StackFrame.Declaration`), and the record says both. A model reads it as the first error's `symbol` and in brackets
 after each frame of a rendered stack inside the tree, so a place joins to the code it stands in by a handle the graph

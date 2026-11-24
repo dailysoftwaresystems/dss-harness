@@ -211,7 +211,11 @@ ends, named on its line as `logBroughtBack`. Each leg's line carries its phases 
 workflow's leg step whose run keeps a codebase graph of the tree its legs ran in joins each red leg's
 digest to it before it keeps the step's ledger: each place inside the tree carries the declaration
 the graph holds enclosing it - its kind, its qualified name, its handle - which a model reads as the
-first error's `symbol` and in brackets after each frame of a stack inside the tree.
+first error's `symbol` and in brackets after each frame of a stack inside the tree, where its file
+holds what its leg built, as the graph is asked and once it has answered. A leg in a copy built the
+tree as the copy was made of it, a leg in the tree itself the tree as it held it when the leg ended;
+a place whose file was written since - a fold landing while the legs worked - carries none, never
+the declaration of code its leg did not build.
 
 ## Running legs at once
 

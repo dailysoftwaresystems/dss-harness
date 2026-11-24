@@ -28,7 +28,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// pass, whole, as it is on this machine, a host's brought back by its run: that worktree, and the run directory in it,
 /// go when the agent does. Where its legs run in the tree the step works in and the run keeps a graph of that tree, each
 /// red leg's digest is joined to the declarations the graph holds at its places before the ledger is kept
-/// (<see cref="FlowGraphSyncs.DeclarationsAsync"/>).
+/// (<see cref="FlowGraphSyncs.DeclarationsAsync"/>), each place only where its file holds what its leg built
+/// (<see cref="WorkedTree.Built"/>).
 /// </summary>
 /// <remarks>
 /// What its legs build, test and run is what the run's agents wrote: the work of each leg this machine runs is held inside

@@ -41,9 +41,10 @@ public sealed record FlowStepLegsRequest(HarnessConfig Config, string MainChecko
     /// <summary>
     /// The declarations of the run's graph each red leg's digest is joined with before the step's records are kept
     /// (<see cref="ResultDigest.Declared"/>), asked by the files of the tree its places name and answering null where
-    /// there are none to give (<see cref="FlowGraphSyncs.DeclarationsAsync"/>): a leg step's whose legs run in the tree the
-    /// step works in; none for every other - a sweep on a copy of a commit, which no graph of the run is of, and a measure
-    /// call - whose digests' places stay with no declaration.
+    /// there are none to give (<see cref="FlowGraphSyncs.DeclarationsAsync"/>) - each place joined only where its file
+    /// holds what the leg built (<see cref="WorkedTree.Built"/>): a leg step's whose legs run in the tree the step works
+    /// in; none for every other - a sweep on a copy of a commit, which no graph of the run is of, and a measure call -
+    /// whose digests' places stay with no declaration.
     /// </summary>
     public Func<IReadOnlyList<string>, CancellationToken, Task<Func<string, int, EnclosingDeclaration?>?>>? Declarations { get; init; }
 }
@@ -141,11 +142,17 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, IHarnessOutput output, 
     /// <summary>
     /// <paramref name="result"/> with each red leg's digest joined to the declarations <paramref name="declarations"/>
     /// gives for the files of the tree its places name (<see cref="ResultDigest.Declared"/>), so the ledger the step keeps
-    /// and the entries it answers hold the same; as it was where nothing is asked - no declarations given, a run cut off,
-    /// no red leg with a place in the tree, an ask that answers none - and where a stop comes while the graph is asked, for
-    /// what the legs reached is kept whatever stops the step after they ended.
+    /// and the entries it answers hold the same - each place only where its file holds what the leg built
+    /// (<see cref="WorkedTree.Built"/>): the graph reads the tree as it is when it is asked, and the step let its tree go
+    /// once its legs' copies were made and its legs in the tree ended, so a fold, or anything else, may have written a file
+    /// since. A file is asked only where its content as the tree holds it just before the graph is asked is what the leg
+    /// built, and joined only where it still is once the graph answered; any other - written since, or one nothing proves
+    /// the leg built - says no declaration at its places, never one of code the leg did not build. As it was where nothing
+    /// is asked - no declarations given, a run cut off, no red leg with a place in the tree whose file holds what it built,
+    /// an ask that answers none - and where a stop comes while the files are read or the graph is asked, for what the legs
+    /// reached is kept whatever stops the step after they ended.
     /// </summary>
-    private static async Task<LegRunResult> DeclaredAsync(
+    private async Task<LegRunResult> DeclaredAsync(
         LegRunResult result,
         Func<IReadOnlyList<string>, CancellationToken, Task<Func<string, int, EnclosingDeclaration?>?>>? declarations,
         CancellationToken cancellationToken)
@@ -155,30 +162,82 @@ public sealed class FlowStepLegs(IFileSystem fileSystem, IHarnessOutput output, 
             return result;
         }
 
-        var files = result.Report.Lines.Where(Joined).SelectMany(line => line.Digest!.FilesInTree()).Distinct(StringComparer.Ordinal).ToList();
-
-        if (files.Count == 0)
-        {
-            return result;
-        }
-
-        Func<string, int, EnclosingDeclaration?>? declarationAt;
+        // Each red leg's places' files in the tree, by the tree its leg built from: the tree itself, or the one its copy is of.
+        var named = result.Report.Lines
+            .Where(Joined)
+            .Select(line => (Line: line, Tree: line.Tree?.CopyOf ?? line.Tree?.Path, Files: line.Digest!.FilesInTree()))
+            .Where(red => red.Files.Count > 0)
+            .ToList();
 
         try
         {
-            declarationAt = await declarations(files, cancellationToken).ConfigureAwait(false);
+            var before = await HeldAsync(named.SelectMany(red => Proven(red.Line, red.Tree, red.Files, held: null)), cancellationToken).ConfigureAwait(false);
+            var asked = named.Select(red => (red.Line, Places: Proven(red.Line, red.Tree, red.Files, before).ToList())).ToList();
+            var files = asked.SelectMany(red => red.Places.Select(place => place.File)).Distinct(StringComparer.Ordinal).ToList();
+
+            if (files.Count == 0 || await declarations(files, cancellationToken).ConfigureAwait(false) is not { } declarationAt)
+            {
+                return result;
+            }
+
+            // Once the graph has answered: a file written while it was asked may have been read as written, and is joined to none.
+            var after = await HeldAsync(asked.SelectMany(red => red.Places), cancellationToken).ConfigureAwait(false);
+            var joined = asked.ToDictionary<(LedgerLine Line, List<(string Tree, string File)> Places), LedgerLine, HashSet<string>>(
+                red => red.Line,
+                red => red.Places.Where(place => after[place] == before[place]).Select(place => place.File).ToHashSet(StringComparer.Ordinal),
+                ReferenceEqualityComparer.Instance);
+
+            return result with
+            {
+                Report = result.Report.WithDigests(line => joined.TryGetValue(line, out var held)
+                    ? line.Digest!.Declared((file, at) => held.Contains(file) ? declarationAt(file, at) : null)
+                    : line.Digest),
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return result;
         }
 
-        return declarationAt is null
-            ? result
-            : result with { Report = result.Report.WithDigests(line => Joined(line) ? line.Digest!.Declared(declarationAt) : line.Digest) };
-
         // A red leg's digest is what a model is handed, and what the step's ledger keeps of it.
         static bool Joined(LedgerLine line) => line.Digest is not null && FlowLegVerdicts.ClassOf(line.Verdict) == FlowLegClass.Red;
+
+        // The places of a red leg's files whose content as the leg built them is known: every one where what the tree holds
+        // is not read yet, else those the tree holds as the leg built them.
+        static IEnumerable<(string Tree, string File)> Proven(LedgerLine line, string? tree, IReadOnlyList<string> files, IReadOnlyDictionary<(string Tree, string File), FileContent?>? held)
+            => tree is null || line.Tree?.Built is not { } built
+                ? []
+                : files
+                    .Where(file => built.TryGetValue(file, out var content) && (held is null || held.GetValueOrDefault((tree, file)) == content))
+                    .Select(file => (tree, file));
+    }
+
+    /// <summary>
+    /// What each of <paramref name="places"/> - a file by the tree it is in and its path below it with forward separators -
+    /// holds now, each read once; null for one that is gone or cannot be read.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<(string Tree, string File), FileContent?>> HeldAsync(IEnumerable<(string Tree, string File)> places, CancellationToken cancellationToken)
+    {
+        var held = new Dictionary<(string Tree, string File), FileContent?>();
+
+        foreach (var place in places)
+        {
+            if (held.ContainsKey(place))
+            {
+                continue;
+            }
+
+            try
+            {
+                held[place] = await FileContentHash.OfAsync(fileSystem, Path.Combine(place.Tree, place.File), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception unread) when (unread is IOException or UnauthorizedAccessException)
+            {
+                held[place] = null;
+            }
+        }
+
+        return held;
     }
 
     /// <summary>
