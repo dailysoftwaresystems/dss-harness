@@ -197,7 +197,9 @@ toolchain chose, a test's structured results where its invocation names any and 
 runner's parsers where they gave nothing, with `results.matchers` everywhere. The text ledger says each
 red leg's first error in a block below its table; `--json` carries the whole digest as `digest` - every
 diagnostic and failure with its place, stack, causes and counts, each file inside the tree named
-relative to it, each log range numbering the lines of that phase's log as the file numbers them - and
+relative to it (a Go test's, which `go test` prints relative to its package, read from the package's
+directory below the `go.mod` that owns its import path), each log range numbering the lines of that
+phase's log as the file numbers them - and
 a leg a host ran carries the host's own digest, every text in it naming the host as configured.
 
 ## Running legs at once

@@ -5,7 +5,7 @@ namespace DssHarness.Core.Results;
 /// <summary>
 /// The one owner of digesting a phase that did not pass - a build's, a test's, a run check's: its structured results
 /// files first, its log read by the parsers chosen for it wherever the files gave no finding, and every place marked and
-/// made the tree's once (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>), so every caller's digest is read and marked by one rule.
+/// made the tree's once (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>), so every caller's digest is read and marked by one rule.
 /// </summary>
 public static class PhaseDigest
 {

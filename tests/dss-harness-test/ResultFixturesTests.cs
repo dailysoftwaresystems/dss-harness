@@ -24,7 +24,7 @@ public sealed class ResultFixturesTests
     private static string Root => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "results");
 
     /// <summary>The bytes every fixture's digest said for a model costs, in all: pinned, so a change that grows or shrinks them is seen.</summary>
-    private const int HeldBytes = 32_557;
+    private const int HeldBytes = 32_575;
 
     /// <summary>Every fixture's directory: one tool's output, its <c>expect.json</c> and its <c>digest.json</c> inside.</summary>
     private static IReadOnlyList<string> Fixtures =>
@@ -206,7 +206,8 @@ public sealed class ResultFixturesTests
     /// <summary>
     /// <paramref name="digest"/> with every place read against the tree its tool ran in, as a run reads it: the
     /// expectation's root, holding exactly the files its <c>tree</c> names - every project file the output names, each
-    /// below the root with forward slashes, as a real tree holds them - a relative path read from where the tool ran
+    /// below the root with forward slashes, as a real tree holds them, and with its text where a file's text is read in
+    /// placing (<c>{"path": ..., "text": ...}</c>: a <c>go.mod</c>) - a relative path read from where the tool ran
     /// (<c>workingDirectory</c>, the root where it names none), so the in-tree marks are what a real run gives, and the
     /// same on every machine. The frames the expectation calls the tree's are among those files. A CI job's digest is
     /// placed already, against the job's workspace on its runner.
@@ -221,12 +222,14 @@ public sealed class ResultFixturesTests
         var root = expect["root"]?.GetValue<string>() ?? throw new InvalidOperationException($"'{fixture}': its expectation names no root to read its places against");
         var ranIn = expect["workingDirectory"]?.GetValue<string>();
         var held = (expect["tree"] as JsonArray ?? throw new InvalidOperationException($"'{fixture}': its expectation names no tree - every project file its output names, below its root"))
-            .Select(file => file!.GetValue<string>())
-            .ToHashSet(StringComparer.Ordinal);
+            .Select(file => file is JsonObject withText
+                ? (Path: withText["path"]!.GetValue<string>(), Text: withText["text"]!.GetValue<string>())
+                : (Path: file!.GetValue<string>(), Text: string.Empty))
+            .ToDictionary(file => file.Path, file => file.Text, StringComparer.Ordinal);
 
         foreach (var frame in (expect["stack"]?["inTree"]?.AsArray() ?? []).Select(frame => frame!.GetValue<string>()))
         {
-            if (PlatformPaths.RelativeAsWritten(root, frame[..frame.LastIndexOf(':')], ranIn) is not { } file || !held.Contains(file))
+            if (PlatformPaths.RelativeAsWritten(root, frame[..frame.LastIndexOf(':')], ranIn) is not { } file || !held.ContainsKey(file))
             {
                 throw new InvalidOperationException($"'{fixture}': '{frame}' is in the tree by its expectation, and names no file of its tree");
             }
@@ -261,17 +264,46 @@ public sealed class ResultFixturesTests
     private static int Count(JsonObject expect, string name) => expect[name]?.GetValue<int>() ?? 0;
 
     /// <summary>
-    /// The tree a fixture's tool ran in, holding exactly <paramref name="held"/>: a file is the tree's where its path is
-    /// <paramref name="root"/>, a separator and one of them - the root joined to a name below it by whichever machine
-    /// reads it, one form's root joined by the other's separator among them.
+    /// The tree a fixture's tool ran in, holding exactly <paramref name="held"/>, each file with its text: a file is the
+    /// tree's where its path is <paramref name="root"/>, a separator and one of them - the root joined to a name below it
+    /// by whichever machine reads it, one form's root joined by the other's separator among them; a directory holds the
+    /// directories its files are below, each named as the directory joined to it with <c>/</c>; nothing in it is a link,
+    /// and nothing outside it is read from the disk.
     /// </summary>
-    private sealed class FixtureTree(string root, IReadOnlySet<string> held) : PassThroughFileSystem(new DssHarness.Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create()))
+    private sealed class FixtureTree(string root, IReadOnlyDictionary<string, string> held) : PassThroughFileSystem(new DssHarness.Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create()))
     {
-        public override bool FileExists(string path)
-            => path.Length > root.Length + 1
-                && path.StartsWith(root, StringComparison.Ordinal)
-                && path[root.Length] is '/' or '\\'
-                && held.Contains(path[(root.Length + 1)..].Replace('\\', '/'));
+        public override bool FileExists(string path) => Below(path) is { } file && held.ContainsKey(file);
+
+        public override bool IsLink(string path) => false;
+
+        public override Stream OpenRead(string path)
+            => Below(path) is { } file && held.TryGetValue(file, out var text)
+                ? new MemoryStream(Encoding.UTF8.GetBytes(text))
+                : throw new FileNotFoundException($"'{path}' is no file of the fixture's tree.", path);
+
+        public override IEnumerable<string> EnumerateDirectories(string path)
+        {
+            var directory = path == root ? string.Empty
+                : Below(path) is { } below ? $"{below}/"
+                : throw new DirectoryNotFoundException($"'{path}' is no directory of the fixture's tree.");
+            var names = new SortedSet<string>(StringComparer.Ordinal);
+
+            foreach (var file in held.Keys.Where(file => file.StartsWith(directory, StringComparison.Ordinal)))
+            {
+                if (file.IndexOf('/', directory.Length) is var slash and >= 0)
+                {
+                    names.Add(file[directory.Length..slash]);
+                }
+            }
+
+            return [.. names.Select(name => $"{path}/{name}")];
+        }
+
+        /// <summary>A path below the root, with forward slashes; null where it is not below it.</summary>
+        private string? Below(string path)
+            => path.Length > root.Length + 1 && path.StartsWith(root, StringComparison.Ordinal) && path[root.Length] is '/' or '\\'
+                ? path[(root.Length + 1)..].Replace('\\', '/')
+                : null;
     }
 
     private static string Text(int? number) => number?.ToString(CultureInfo.InvariantCulture) ?? "-";

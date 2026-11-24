@@ -114,6 +114,63 @@ public sealed class ResultDigestTests
             marked.Diagnostics[0].Stack.Select(frame => (frame.File, frame.InTree)));
     }
 
+    /// <summary>
+    /// A Go test's place is read from its package's directory, for <c>go test</c> prints it relative to that directory and
+    /// names the package by its import path: the import path less the module path of the <c>go.mod</c> nearest the tree's
+    /// root that owns it - a module at the root, one in a directory of its own below it, its path quoted, in a block or
+    /// beside a comment as Go reads them; the root's module over a copy of the tree inside it that holds the same; of two
+    /// equally near, the longer module path, as Go gives a package to the most specific module - and a module path owns an
+    /// import path only at a part's end. Where no <c>go.mod</c> owns the package, or no package was named, the place stays
+    /// as printed: never read from where the tool ran, though the file is there.
+    /// </summary>
+    [Fact]
+    public void AGoTestsPlace_IsReadFromItsPackagesDirectory_ThroughTheModuleNearestTheRootThatOwnsIt()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("go.mod", "// The application.\nmodule example.com/app // its path\n\ngo 1.22\n");
+        temp.WriteFile("store/store_test.go");
+        temp.WriteFile(".legs/copy/go.mod", "module example.com/app\n");
+        temp.WriteFile(".legs/copy/store/store_test.go");
+        temp.WriteFile("tools/go.mod", "module \"example.com/tools\"\n");
+        temp.WriteFile("tools/gen/gen_test.go");
+        temp.WriteFile("lib/go.mod", "module (\n\texample.com/lib\n)\n");
+        temp.WriteFile("lib/lib_test.go");
+        temp.WriteFile("mono/go.mod", "module example.com/mono\n");
+        temp.WriteFile("mono/b/z/z_test.go");
+        temp.WriteFile("nested/go.mod", "module example.com/mono/b\n");
+        temp.WriteFile("nested/z/z_test.go");
+        temp.WriteFile("lication/x/x_test.go");
+        temp.WriteFile("cmd/parse_test.go");
+        temp.WriteFile("cmd/cut_test.go");
+
+        // The first asks of a package no module owns, so the whole tree is read before the others are asked.
+        var marked = ResultDigest.Of(
+            [],
+            [
+                new TestFailure("go", "TestX", Class: "example.com/application/x", File: "x_test.go", Line: 3),
+                new TestFailure("go", "TestStoreLoads", Class: "example.com/app/store", File: "store_test.go", Line: 14),
+                new TestFailure("go", "TestGen", Class: "example.com/tools/gen", File: "gen_test.go", Line: 5),
+                new TestFailure("go", "TestLib", Class: "example.com/lib", File: "lib_test.go", Line: 2),
+                new TestFailure("go", "TestZ", Class: "example.com/mono/b/z", File: "z_test.go", Line: 7),
+                new TestFailure("go", "TestParse", Class: "example.org/parse", File: "parse_test.go", Line: 9),
+                new TestFailure("go", "TestCut", File: "cut_test.go", Line: 4),
+            ],
+            [])
+            .WithInTree(new DigestTree(temp.Path, temp.Combine("cmd"), new PhysicalFileSystem(FilePermissionsFactory.Create())));
+
+        Assert.Equal(
+            [
+                ("TestX", "x_test.go", (int?)3),
+                ("TestStoreLoads", "store/store_test.go", 14),
+                ("TestGen", "tools/gen/gen_test.go", 5),
+                ("TestLib", "lib/lib_test.go", 2),
+                ("TestZ", "nested/z/z_test.go", 7),
+                ("TestParse", "parse_test.go", 9),
+                ("TestCut", "cut_test.go", 4),
+            ],
+            marked.Failures.Select(failure => (failure.Id, failure.File!, failure.Line)));
+    }
+
     /// <summary>The digest as one JSON document keeps everything: every diagnostic and failure whole, its counts, its unparsed lines.</summary>
     [Fact]
     public void TheDocument_KeepsEverythingWhole()

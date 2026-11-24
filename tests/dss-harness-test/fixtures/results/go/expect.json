@@ -3,7 +3,13 @@
     "tests": "go"
   },
   "root": "/home/runner/work/app/app",
-  "tree": ["sum/sum.go", "sum/sum_test.go", "store/store_test.go", "store/parser_test.go"],
+  "tree": [
+    { "path": "go.mod", "text": "module example.com/app\n\ngo 1.22\n" },
+    "sum/sum.go",
+    "sum/sum_test.go",
+    "store/store_test.go",
+    "store/parser_test.go"
+  ],
   "failed": 2,
   "crashed": 1,
   "first": null,

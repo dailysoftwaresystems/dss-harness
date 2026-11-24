@@ -922,11 +922,18 @@ internal sealed class DartStackParser : IBuiltInParser
 /// goroutine's stack - each frame a function line, <c>main.f(...)</c> or <c>main.(*T).M(args)</c>, then its place,
 /// <c>\tpath:line +0x1d</c>, an inlined frame's with no offset; <c>created by</c> a frame too. Every other goroutine's
 /// stack is part of the record; a panic inside a test has crashed that test. A panic no goroutine follows is given back.
-/// The package's <c>FAIL</c> lines and <c>exit status N</c> say only what was said before them; a package that did not
-/// build (<c>FAIL pkg [build failed]</c>) is said where nothing before it said why.
+/// <c>go test</c> prints a package's result after its output - <c>FAIL\texample.com/mod/store\t0.01s</c> - so the
+/// failures read since the last such line are said with it, each naming the package by its import path as its class: the
+/// place a test logged is printed relative to that package's directory, which only the tree's module that owns the import
+/// path places (<see cref="ResultDigest.WithInTree(DigestTree)"/>), and a failure no such line followed is said with no
+/// class. The bare <c>FAIL</c> and <c>exit status N</c> say only what was said before them; a package that did not build
+/// (<c>FAIL pkg [build failed]</c>) is said where nothing before it said why.
 /// </summary>
 internal sealed class GoPanicParser : IBuiltInParser
 {
+    /// <summary>The framework a failure Go's output said names: what places its file through its package (<see cref="ResultDigest.WithInTree(DigestTree)"/>).</summary>
+    internal const string Framework = "go";
+
     private static readonly Regex Failed = LinearRegex.Compile(@"^(?<indent>\s*)--- FAIL: (?<name>\S+) \((?<seconds>\d+(?:\.\d+)?)s\)$");
 
     private static readonly Regex Logged = LinearRegex.Compile(@"^\s+(?<file>[^\s:]+\.go):(?<line>\d+): (?<message>.*)$");
@@ -963,6 +970,7 @@ internal sealed class GoPanicParser : IBuiltInParser
         private int _goroutines;
         private (string Symbol, string Text)? _function;
         private readonly List<StackFrame> _frames = [];
+        private readonly List<TestFailure> _package = [];
         private int _from;
         private int _to;
 
@@ -970,7 +978,7 @@ internal sealed class GoPanicParser : IBuiltInParser
         {
             var text = line.Text;
 
-            if (_kind is not null && ReadPanic(line, sink) is { } read)
+            if (_kind is not null && ReadPanic(line) is { } read)
             {
                 return read;
             }
@@ -998,7 +1006,7 @@ internal sealed class GoPanicParser : IBuiltInParser
                 }
                 else if (!Panic.IsMatch(text))
                 {
-                    CloseTest(sink);
+                    CloseTest();
                 }
             }
 
@@ -1022,15 +1030,17 @@ internal sealed class GoPanicParser : IBuiltInParser
 
             if (Package.Match(text) is { Success: true } package)
             {
+                Said(sink, package.Groups["package"].Value);
+
                 if (package.Groups["reason"].Success && sink.Said == 0)
                 {
-                    sink.Add(new TestFailure("go", package.Groups["package"].Value, Message: package.Groups["reason"].Value, Outcome: "errored", Log: (line.Number, line.Last)));
+                    sink.Add(new TestFailure(Framework, package.Groups["package"].Value, Message: package.Groups["reason"].Value, Outcome: "errored", Log: (line.Number, line.Last)));
                 }
 
                 return LineTaken.Took;
             }
 
-            return Summary.IsMatch(text) && sink.Said > 0 ? LineTaken.Took : LineTaken.Left;
+            return Summary.IsMatch(text) && sink.Said + _package.Count > 0 ? LineTaken.Took : LineTaken.Left;
         }
 
         public LineTaken End(ResultSink sink)
@@ -1043,15 +1053,30 @@ internal sealed class GoPanicParser : IBuiltInParser
             }
             else
             {
-                ClosePanic(sink);
+                ClosePanic();
             }
 
-            CloseTest(sink);
+            CloseTest();
+            Said(sink, null);
             return given ? LineTaken.Left : LineTaken.Took;
         }
 
+        /// <summary>
+        /// Says the failures read since the last package's result line, each naming <paramref name="package"/> - the import
+        /// path that line names - as its class; none where the output ended with no such line.
+        /// </summary>
+        private void Said(ResultSink sink, string? package)
+        {
+            foreach (var failure in _package)
+            {
+                sink.Add(failure with { Class = package });
+            }
+
+            _package.Clear();
+        }
+
         /// <summary>What the open panic made of the next line; null where the panic ended before it.</summary>
-        private LineTaken? ReadPanic(NumberedLine line, ResultSink sink)
+        private LineTaken? ReadPanic(NumberedLine line)
         {
             var text = line.Text;
 
@@ -1106,16 +1131,16 @@ internal sealed class GoPanicParser : IBuiltInParser
                 return LineTaken.Took;
             }
 
-            ClosePanic(sink);
+            ClosePanic();
             return null;
         }
 
-        private void CloseTest(ResultSink sink)
+        private void CloseTest()
         {
             if (_test is { } test)
             {
-                sink.Add(new TestFailure(
-                    "go",
+                _package.Add(new TestFailure(
+                    Framework,
                     test.Name,
                     Message: ParsedText.Joined(_logged),
                     File: _file,
@@ -1130,14 +1155,14 @@ internal sealed class GoPanicParser : IBuiltInParser
             _line = null;
         }
 
-        private void ClosePanic(ResultSink sink)
+        private void ClosePanic()
         {
             if (_kind is { } kind)
             {
                 var message = ParsedText.Joined(_message) ?? string.Empty;
 
-                sink.Add(new TestFailure(
-                    "go",
+                _package.Add(new TestFailure(
+                    Framework,
                     _test?.Name ?? ParsedText.Headed(kind, _message[0]),
                     Message: message,
                     Exception: new ExceptionRecord(kind, message, [.. _frames], []),

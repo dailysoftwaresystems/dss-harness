@@ -20,7 +20,7 @@ namespace DssHarness.Core.Results;
 /// is held whole for its size, and each is read to its end: a file a crash cut short gives every finding before the
 /// break, and the break is said, never thrown. Its places are read as a log's are, by one owner
 /// (<see cref="ParsedText.FileOf"/>): a <c>file:</c> URI as the path it names, any other text as the tool wrote it - and
-/// read against the tree in one place (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>); its texts are
+/// read against the tree in one place (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>); its texts are
 /// masked where the digest is (<see cref="ResultDigest.MaskedBy"/>).
 /// </summary>
 public static class ResultFiles

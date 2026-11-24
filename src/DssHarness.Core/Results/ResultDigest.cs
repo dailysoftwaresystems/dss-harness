@@ -16,7 +16,7 @@ namespace DssHarness.Core.Results;
 /// <param name="Severity">How bad it is: <c>error</c>, <c>warning</c> or <c>note</c>.</param>
 /// <param name="Code">The tool's code for it (<c>CS0103</c>, <c>C2065</c>, <c>-Wunused-variable</c>, <c>TS2304</c>, <c>LNK2019</c>); null where the tool gives none.</param>
 /// <param name="Message">The message, one line, masked; never empty.</param>
-/// <param name="File">The file it names, relative to the tree where the tree holds it (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>); null where the tool names none.</param>
+/// <param name="File">The file it names, relative to the tree where the tree holds it (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>); null where the tool names none.</param>
 /// <param name="Line">The line it names; null where it names none.</param>
 /// <param name="Column">The column it names; null where it names none.</param>
 /// <param name="EndLine">The last line it names, where the tool gives a range; null where it does not.</param>
@@ -80,17 +80,19 @@ public sealed record Diagnostic(
 /// One test that failed: its identity as the runner gives it, the assertion as the framework reports it, and - where
 /// the failure is a thrown error - the exception with its stack and its causes, typed once for every framework.
 /// </summary>
-/// <param name="Framework">The framework that ran it: <c>xunit</c>, <c>mstest</c>, <c>nunit</c>, <c>gtest</c>, <c>catch2</c>, <c>ctest</c>, <c>dart</c>, <c>jest</c>, <c>vitest</c>, <c>junit</c>, or a matcher's name.</param>
+/// <param name="Framework">The framework that ran it: <c>xunit</c>, <c>mstest</c>, <c>nunit</c>, <c>gtest</c>, <c>catch2</c>, <c>ctest</c>, <c>dart</c>, <c>jest</c>, <c>vitest</c>, <c>go</c>, <c>junit</c>, or a matcher's name.</param>
 /// <param name="Id">The test's id as the runner gives it (its fully-qualified name or its filter form); never empty.</param>
 /// <param name="Name">The test's own name; null where the runner gives only the id.</param>
-/// <param name="Class">The test's class or suite; null where the runner gives none.</param>
+/// <param name="Class">The test's class or suite - a Go test's package, by the import path <c>go test</c> names it by; null where the runner gives none.</param>
 /// <param name="Method">The test's method; null where the runner gives none.</param>
 /// <param name="Message">The assertion's message as the framework reports it, masked; null where it gives none.</param>
 /// <param name="Expected">What was expected, where the framework says it apart; null where it does not.</param>
 /// <param name="Actual">What there was, where the framework says it apart; null where it does not.</param>
 /// <param name="File">
 /// Where it failed, relative to the tree where the tree holds it: the top frame of its stack the tree holds, where one
-/// is (<see cref="ResultDigest.WithInTree(Func{string, string?})"/>), else the assertion's place the runner named apart; null where neither names one.
+/// is (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>), else the assertion's
+/// place the runner named apart - a Go test's read from its package's directory, as <c>go test</c> prints it, and as
+/// printed where no module of the tree owns its package; null where neither names one.
 /// </param>
 /// <param name="Line">The line <paramref name="File"/> names; null where none was named.</param>
 /// <param name="Exception">Where the failure is a thrown error: its record, which holds the failure's stack; null for a plain assertion.</param>
@@ -317,8 +319,12 @@ public sealed record ResultDigest
     /// (<see cref="PlatformPaths.RelativeAsWritten"/>) - a relative one from the directory the tool ran in, a
     /// <c>file:</c> URI as the path it names - and is in the tree only where the tree holds that file: a frame that names
     /// no file, a runtime's own module (<c>dart:</c>, <c>node:</c>), a bare name the tree has no file of
-    /// (<c>Thread.java</c>), a path outside the root, are in none. Placed by the one owner of placing a digest's paths
-    /// (<see cref="WithInTree(Func{string, string?})"/>).
+    /// (<c>Thread.java</c>), a path outside the root, are in none. A Go test's place is read from its package's directory,
+    /// for <c>go test</c> prints it relative to that directory and names the package by its import path: the import path
+    /// less the module path of the <c>go.mod</c> nearest the tree's root that owns it (<see cref="GoModules"/>); where no
+    /// <c>go.mod</c> of the tree owns it, the place stays as printed. Placed by the one owner of placing a digest's paths
+    /// (<see cref="WithInTree(Func{string, string?}, Func{string, string, string?})"/>), and the one place a digest's paths
+    /// ask the tree's file system.
     /// </summary>
     /// <param name="tree">The tree the phase ran in, and where its tool ran.</param>
     public ResultDigest WithInTree(DigestTree tree)
@@ -326,10 +332,17 @@ public sealed record ResultDigest
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentException.ThrowIfNullOrWhiteSpace(tree.Root);
 
-        return WithInTree(file => PlatformPaths.RelativeAsWritten(tree.Root, file, tree.WorkingDirectory) is { } below
-            && tree.FileSystem.FileExists(Path.Combine(tree.Root, below))
+        var modules = new GoModules(tree);
+
+        return WithInTree(
+            file => Held(file, tree.WorkingDirectory),
+            (file, package) => modules.DirectoryOf(package) is { } directory ? Held(file, directory) : null);
+
+        // A path the tree holds, read from the directory a relative one was printed relative to, named as the tree's.
+        string? Held(string file, string? from)
+            => PlatformPaths.RelativeAsWritten(tree.Root, file, from) is { } below && tree.FileSystem.FileExists(Path.Combine(tree.Root, below))
                 ? below
-                : null);
+                : null;
     }
 
     /// <summary>
@@ -339,15 +352,23 @@ public sealed record ResultDigest
     /// among them, marked by whether its file is in the tree, and every file in it - a frame's, a diagnostic's and its
     /// project's, a failure's, a count's by file - named as the tree names it; a file outside it named as the tool wrote it,
     /// and a frame that names no file in no tree. A failure's place is then the top frame of its stack in the tree, where
-    /// one is - the assertion's line, not the framework's - else the place its runner named apart.
+    /// one is - the assertion's line, not the framework's - else the place its runner named apart: a Go test's, which
+    /// <c>go test</c> prints relative to its package's directory, placed by <paramref name="inPackage"/> alone and as
+    /// printed where that places it nowhere, never read from where the tool ran.
     /// </summary>
     /// <param name="inTree">A file as the tool wrote it, named as the tree names it; null where it is not in the tree.</param>
-    public ResultDigest WithInTree(Func<string, string?> inTree)
+    /// <param name="inPackage">
+    /// A file a Go test printed and the import path of its package - the failure's class - named as the tree names it; null
+    /// where it is not in the tree or the tree's module that owns the package is not known. Null where the places are read by
+    /// their text alone - a job another machine ran - so such a file stays as printed.
+    /// </param>
+    public ResultDigest WithInTree(Func<string, string?> inTree, Func<string, string, string?>? inPackage = null)
     {
         ArgumentNullException.ThrowIfNull(inTree);
 
-        // Each path asked once, however many frames name it.
+        // Each path asked once, however many frames name it; a Go test's place once for its package.
         var asked = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var askedInPackage = new Dictionary<(string File, string Package), string?>();
 
         return this with
         {
@@ -369,9 +390,32 @@ public sealed record ResultDigest
             {
                 Exception = exception,
                 Stack = stack,
-                File = top is not null ? top.File : Placed(failure.File),
+                File = top is not null ? top.File : PlaceOf(failure),
                 Line = top is not null ? top.Line : failure.Line,
             };
+        }
+
+        // The place a failure's runner named apart: a Go test's read from its package's directory alone, any other's as
+        // every path is.
+        string? PlaceOf(TestFailure failure)
+        {
+            if (failure is not { Framework: GoPanicParser.Framework, File: { } file })
+            {
+                return Placed(failure.File);
+            }
+
+            if (failure.Class is not { } package)
+            {
+                return file;
+            }
+
+            if (!askedInPackage.TryGetValue((file, package), out var relative))
+            {
+                relative = inPackage?.Invoke(file, package);
+                askedInPackage[(file, package)] = relative;
+            }
+
+            return relative ?? file;
         }
 
         ExceptionRecord Thrown(ExceptionRecord thrown)
@@ -1006,6 +1050,219 @@ public sealed record ResultDigest
 
             run.Clear();
         }
+    }
+
+    /// <summary>
+    /// Where a Go package's directory is in a tree: below the directory of the <c>go.mod</c> that owns the import path
+    /// <c>go test</c> names the package by, the import path less that module's path. A tree may hold several modules - and
+    /// the copies of the tree the harness keeps inside it hold the same ones again, deeper - so the owner is the
+    /// <c>go.mod</c> nearest the tree's root whose module path is the import path or begins it at a part's end; of two
+    /// equally near, the longer module path, as Go gives a package to the most specific module; of those, the first by its
+    /// directory's path. The tree is read a level at a time from its root - each level's <c>go.mod</c> files read before
+    /// the level below it is listed - and no deeper than the first level that holds an owner, so a tree whose root holds
+    /// the module is read no further than its root; each directory is read once, whatever is asked. A directory reached
+    /// through a link is never walked, and one that cannot be read, or a <c>go.mod</c> that cannot, owns nothing: the
+    /// places it would have given stay as printed.
+    /// </summary>
+    private sealed class GoModules(DigestTree tree)
+    {
+        /// <summary>The file a Go module is declared in, at its directory's top.</summary>
+        private const string ModuleFile = "go.mod";
+
+        /// <summary>The directive that declares a module's path.</summary>
+        private const string ModuleDirective = "module";
+
+        private readonly Dictionary<string, string?> _asked = new(StringComparer.Ordinal);
+        private readonly List<Module> _met = [];
+        private List<TreeDirectory> _level = [new(tree.Root, string.Empty)];
+        private bool _levelRead;
+        private int _depth;
+
+        /// <summary>
+        /// The directory of the package <paramref name="importPath"/> names, written as the tree's root is - the root, a
+        /// <c>/</c> and its path below it - or null where no <c>go.mod</c> of the tree owns it.
+        /// </summary>
+        /// <param name="importPath">The package's import path, as <c>go test</c> printed it.</param>
+        public string? DirectoryOf(string importPath)
+        {
+            if (_asked.TryGetValue(importPath, out var known))
+            {
+                return known;
+            }
+
+            var owner = OwnerOf(importPath);
+
+            while (owner is null && ReadOn())
+            {
+                owner = OwnerOf(importPath);
+            }
+
+            var directory = owner is null ? null : Written(owner.Relative, importPath[owner.Declared.Length..].TrimStart('/'));
+
+            _asked[importPath] = directory;
+            return directory;
+        }
+
+        /// <summary>The owner of <paramref name="importPath"/> among the modules of every level read so far; null where none is.</summary>
+        private Module? OwnerOf(string importPath)
+            => _met
+                .Where(module => importPath.StartsWith(module.Declared, StringComparison.Ordinal)
+                    && (importPath.Length == module.Declared.Length || importPath[module.Declared.Length] == '/'))
+                .OrderBy(module => module.Depth)
+                .ThenByDescending(module => module.Declared.Length)
+                .ThenBy(module => module.Relative, StringComparer.Ordinal)
+                .FirstOrDefault();
+
+        /// <summary>
+        /// Reads the tree one step further - the <c>go.mod</c> files of the level listed last, or else the level below it -
+        /// and says whether there was anything left to read.
+        /// </summary>
+        private bool ReadOn()
+        {
+            if (!_levelRead)
+            {
+                foreach (var directory in _level)
+                {
+                    if (ModuleOf(Path.Combine(directory.Path, ModuleFile)) is { } path)
+                    {
+                        _met.Add(new Module(_depth, directory.Relative, path));
+                    }
+                }
+
+                _levelRead = true;
+                return true;
+            }
+
+            var below = new List<TreeDirectory>();
+
+            foreach (var directory in _level)
+            {
+                Beneath(directory, below);
+            }
+
+            _level = below;
+            _levelRead = false;
+            _depth++;
+            return below.Count > 0;
+        }
+
+        /// <summary>Adds to <paramref name="below"/> each directory directly beneath <paramref name="directory"/> that is no link; none where it cannot be read.</summary>
+        private void Beneath(TreeDirectory directory, List<TreeDirectory> below)
+        {
+            List<TreeDirectory> found = [];
+
+            try
+            {
+                foreach (var path in tree.FileSystem.EnumerateDirectories(directory.Path))
+                {
+                    if (Path.GetFileName(path) is { Length: > 0 } name && !tree.FileSystem.IsLink(path))
+                    {
+                        found.Add(new TreeDirectory(path, directory.Relative.Length == 0 ? name : $"{directory.Relative}/{name}"));
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return;
+            }
+
+            below.AddRange(found);
+        }
+
+        /// <summary>The module path the <c>go.mod</c> at <paramref name="file"/> declares; null where there is none, it cannot be read, or it declares none.</summary>
+        private string? ModuleOf(string file)
+        {
+            if (!tree.FileSystem.FileExists(file))
+            {
+                return null;
+            }
+
+            try
+            {
+                return ModulePathOf(FileLines.Read(tree.FileSystem, file).Select(line => line.Text));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The path a <c>go.mod</c>'s <c>module</c> directive declares, read as Go reads the file's lines: a <c>//</c>
+        /// comment taken off each, the path bare or quoted (<c>"..."</c>, <c>`...`</c>), on the directive's line or alone in
+        /// its <c>module ( ... )</c> block; null where the file declares none. The lines after the directive are never read.
+        /// </summary>
+        /// <param name="lines">The file's lines, in order.</param>
+        private static string? ModulePathOf(IEnumerable<string> lines)
+        {
+            var block = false;
+
+            foreach (var text in lines)
+            {
+                var comment = text.IndexOf("//", StringComparison.Ordinal);
+                var line = (comment >= 0 ? text[..comment] : text).Trim();
+
+                if (block)
+                {
+                    if (line == ")")
+                    {
+                        return null;
+                    }
+
+                    if (line.Length > 0)
+                    {
+                        return Unquoted(line);
+                    }
+
+                    continue;
+                }
+
+                if (!line.StartsWith(ModuleDirective, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var rest = line[ModuleDirective.Length..];
+
+                if (rest.Length > 0 && !char.IsWhiteSpace(rest[0]) && rest[0] is not ('(' or '"' or '`'))
+                {
+                    // A word that only begins with the directive's.
+                    continue;
+                }
+
+                rest = rest.Trim();
+
+                if (rest == "(")
+                {
+                    block = true;
+                    continue;
+                }
+
+                return rest.Length > 0 ? Unquoted(rest) : null;
+            }
+
+            return null;
+        }
+
+        /// <summary>A module path as written, its quotes taken off; null where nothing is inside them.</summary>
+        private static string? Unquoted(string said)
+            => said.Length >= 2 && ((said[0] == '"' && said[^1] == '"') || (said[0] == '`' && said[^1] == '`'))
+                ? said[1..^1].Trim() is { Length: > 0 } inner ? inner : null
+                : said;
+
+        /// <summary>The directory <paramref name="module"/> and <paramref name="package"/> name below the root, written as the root is.</summary>
+        private string Written(string module, string package)
+        {
+            var below = string.Join('/', new[] { module, package }.Where(part => part.Length > 0));
+
+            return below.Length == 0 ? tree.Root : $"{tree.Root.TrimEnd('/', '\\')}/{below}";
+        }
+
+        /// <summary>A directory of the tree: as the file system names it, and its path below the root with <c>/</c>.</summary>
+        private sealed record TreeDirectory(string Path, string Relative);
+
+        /// <summary>A <c>go.mod</c> met: how many levels below the root, its directory's path below the root, and the module path it declares.</summary>
+        private sealed record Module(int Depth, string Relative, string Declared);
     }
 
     /// <summary>

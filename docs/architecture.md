@@ -9971,7 +9971,13 @@ ran in - is the tree's where the tree holds that file, named relative to its roo
 its own text in the form it is written in (`PlatformPaths.RelativeAsWritten`) and never by the reading machine's rules
 - a Windows path a tool wrote is in no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a bare name the
 tree has no file of (`Thread.java`) in none, a `file:` URI the path it names - and a failure's place is the top frame
-of its stack the tree holds, where one is.
+of its stack the tree holds, where one is. A Go test's place is read from its package's directory, for `go test` prints
+it relative to that directory and names the package by its import path on its result line after the failures, which
+the parser gives each as its class: the import path less the module path of the `go.mod` nearest the tree's root that
+owns it - of two equally near, the longer module path - found by reading the tree a level at a time from its root and
+no deeper than the first level holding an owner, so a copy of the tree kept inside it never wins over the tree's own;
+where no `go.mod` of the tree owns the package the place stays as printed, never read from where the tool ran
+(`ResultDigest.WithInTree`, the one place a digest's paths ask the tree's file system).
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names
 are one read away" in place of "read the output and find the first thing that went wrong" - `diagnose.md` and
@@ -9999,7 +10005,8 @@ would become the first error ahead of the tool's own, so where a log is read it 
 holds every one under its marker, and a marked line no form read is said among the lines no parser held, once; a
 check with no log is said by its annotations alone. Every path is placed against the job's workspace on its runner,
 `<work>/<repository>/<repository>` on every runner GitHub hosts or not, the repository named by the job's own address
-(`PlatformPaths.DirectoryEndingAsWritten`), never against this machine's checkout. A run check's failure is read for the
+(`PlatformPaths.DirectoryEndingAsWritten`), never against this machine's checkout; a Go test's place, printed relative
+to its package's directory, which no file of the job's tells, is left as printed. A run check's failure is read for the
 error it threw (`RunnerRunService.ExceptionIn`, by `PhaseParsers.ForRun`: every runtime's stack form and the runner's matchers): the thrown error's whole record - type,
 message, stack, causes - is what an expected exception is matched against, both halves of a match of one exception:
 the one that reached the log with the run's message or its own - a line the unit printed only where no stack was read,

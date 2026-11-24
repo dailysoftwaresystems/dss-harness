@@ -602,6 +602,39 @@ public sealed class ResultParsersTests
             Assert.Single(digest.Failures).Exception!.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
     }
 
+    /// <summary>
+    /// <c>go test</c> names a package by its import path only after its output, on its result line, and a test's place it
+    /// logged is relative to that package's directory: each failure read before the line is said with it, naming the
+    /// package as its class, its place as Go printed it - and one no result line followed is said with no class.
+    /// </summary>
+    [Fact]
+    public void AGoTestsFailure_NamesThePackageItsResultLineNames_AsItsClass()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "--- FAIL: TestParse (0.01s)",
+                "    parse_test.go:9: Parse(\"\") returned no error",
+                "FAIL",
+                "FAIL\texample.com/app/parse\t0.002s",
+                "--- FAIL: TestCut (0.00s)",
+                "    cut_test.go:3: cut short",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "store_test.go", 14, (1, 2)),
+                ("TestParse", "example.com/app/parse", "parse_test.go", 9, (5, 6)),
+                ("TestCut", null, "cut_test.go", 3, (9, 10)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.File!, failure.Line!.Value, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
     private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
     {

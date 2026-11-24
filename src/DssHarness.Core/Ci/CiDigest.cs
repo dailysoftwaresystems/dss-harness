@@ -91,7 +91,9 @@ public static class CiLog
 /// a repository out at <c>&lt;work&gt;/&lt;repository&gt;/&lt;repository&gt;</c> on every runner, hosted or not, in a
 /// container or not, so a file a tool there named under that directory is inside the tree and named by its path relative
 /// to it, read in the form the runner wrote it (<see cref="PlatformPaths.DirectoryEndingAsWritten"/>); a path relative
-/// already - an annotation's, a tool's run in the tree - is inside it as it stands.
+/// already - an annotation's, a tool's run in the tree - is inside it as it stands. A Go test's place, which
+/// <c>go test</c> prints relative to its package's directory, is left as printed: no file of the job's tells that
+/// directory (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>).
 /// </para>
 /// </remarks>
 public static class CiDigest
