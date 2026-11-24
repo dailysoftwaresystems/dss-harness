@@ -2321,10 +2321,10 @@ public sealed class ImplementationFlowTests
                 "\n## Convergence\n\n"
                     + "- 'c-rate': the rate holds over every format\n"
                     + "- item 'rounds#1.items[0]': 3 review round(s), 1 home audit(s), classes 'c-rate' (0 site(s) consolidated, 2 deleted, 2 cell(s) pinned, 0 neighbour(s) measured, 0 unmeasured, sent back 2 time(s), home audited)\n"
-                    + "- 'c-rate', reopened 2 time(s)\n\n## Questions\n",
+                    + "- 'c-rate', reopened 2 time(s)\n\n## Signals\n",
                 report,
                 StringComparison.Ordinal);
-            Assert.Contains("\n- kind classReopenedTwice; steps ; said 'c-rate' was reopened 2 times\n", report, StringComparison.Ordinal);
+            Assert.Contains($"\n- classReopenedTwice#1: 'c-rate' of agent '{agent}' was reopened 2 times\n", report, StringComparison.Ordinal);
         }
 
         /// <summary>What the plan's check says of the proof run's plan that patches one site of the class, not its home.</summary>
