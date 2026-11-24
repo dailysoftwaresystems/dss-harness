@@ -285,7 +285,50 @@ public sealed record FlowStepMeasure(
 }
 
 /// <summary>
-/// What the advisor spent answering one step's own questions: its tokens and dollars, charged to the run as any
+/// What one attempt of a step asked of the codebase graph in pages past the first: how many pages it asked for in
+/// all, over every answer it asked of, and the deepest page one answer reached - which operation asked it, how many
+/// pages past the first were asked of that operation, and the page it reached. Counted from the <c>graph</c> calls the
+/// attempt's run answered, each naming the page it asked for; an ask refused - a page past an answer's last - counts
+/// nothing, for it read nothing.
+/// </summary>
+/// <param name="Asked">How many pages past the first the attempt asked for, over every answer it asked of.</param>
+/// <param name="Deepest">The deepest ask one answer reached; null where the attempt asked for no page past the first.</param>
+public sealed record FlowStepGraphPages(int Asked, FlowStepGraphAsk? Deepest = null)
+{
+    /// <summary>What is wrong with this count; null when nothing is.</summary>
+    public string? Problem()
+        => Asked < 0 ? $"it asked for {Asked.ToString(CultureInfo.InvariantCulture)} graph page(s)"
+            : (Asked > 0) != (Deepest is not null) ? "a count that asked for a page names its deepest ask, and one that asked for none names no"
+            : Deepest?.Problem() is { } deepest ? $"its deepest ask: {deepest}"
+            : null;
+
+    /// <summary>
+    /// Two counts as one: the pages asked summed, and the deepest ask the deeper of them - the first where both
+    /// reached as deep, for the count that was held keeps what it had. The deeper ask's own count stands as its
+    /// account held it, for the two counts were kept apart.
+    /// </summary>
+    /// <param name="held">The count held; null where none was.</param>
+    /// <param name="more">The count to add; null where none was.</param>
+    public static FlowStepGraphPages? Merged(FlowStepGraphPages? held, FlowStepGraphPages? more)
+        => held is null ? more
+            : more is null ? held
+            : new(held.Asked + more.Asked, more.Deepest?.Page > held.Deepest?.Page ? more.Deepest : held.Deepest);
+}
+
+/// <summary>The deepest page one answer of an attempt reached: the operation that asked it, how many pages past the first were asked of that operation, and the page.</summary>
+/// <param name="Op">The operation, as the call named it.</param>
+/// <param name="Asked">How many pages past the first were asked of that operation.</param>
+/// <param name="Page">The deepest page one answer of it reached.</param>
+public sealed record FlowStepGraphAsk(string Op, int Asked, int Page)
+{
+    /// <summary>What is wrong with this ask; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Op) ? "a graph ask names no operation"
+            : Asked < 1 || Page < 2 ? "a graph ask asks for a page past the first, and at least one"
+            : null;
+}
+
+/// <summary>What the advisor spent answering one step's own questions: its tokens and dollars, charged to the run as any
 /// attempt's are and kept on the step's measure beside them - never in an attempt, for the advisor's turns are its
 /// own, in its own records, and an attempt's tokens are its stream's alone.
 /// </summary>
@@ -371,6 +414,10 @@ public sealed record FlowStepSpan(
 /// The id of the question raised of the step while this attempt was its own - its failure's, a bound's, its agent's
 /// asking - the newest where it raised more than one, kept once the question is answered; null where it raised none.
 /// </param>
+/// <param name="GraphPages">
+/// What the attempt asked of the codebase graph in pages past the first: how many, and the deepest page one answer
+/// reached; null where it asked for none.
+/// </param>
 public sealed record FlowStepAttempt(
     int N,
     [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? StartedAt = null,
@@ -397,7 +444,8 @@ public sealed record FlowStepAttempt(
     IReadOnlyList<FlowStepPart>? Parts = null,
     IReadOnlyList<FlowStepLeg>? Legs = null,
     JsonObject? FirstError = null,
-    string? Question = null)
+    string? Question = null,
+    FlowStepGraphPages? GraphPages = null)
 {
     /// <summary>The seconds its runs took, summed - the open one counted from nothing until it ends.</summary>
     [JsonIgnore]
@@ -418,6 +466,7 @@ public sealed record FlowStepAttempt(
             : Tools?.Select(tool => tool.Problem()).FirstOrDefault(problem => problem is not null) is { } tool ? tool
             : Parts?.Select(part => part.Problem()).FirstOrDefault(problem => problem is not null) is { } part ? part
             : Legs?.Select(leg => leg.Problem()).FirstOrDefault(problem => problem is not null) is { } leg ? leg
+            : GraphPages?.Problem() is { } pages ? pages
             : null;
 
     /// <summary>
@@ -488,6 +537,7 @@ public sealed record FlowStepAttempt(
             Compactions = whole ? account.Compactions : Sum(Compactions, account.Compactions),
             Tools = whole ? account.Tools : FlowStepToolUse.Merged(Tools, account.Tools),
             Legs = account.Legs ?? Legs,
+            GraphPages = whole ? account.GraphPages : FlowStepGraphPages.Merged(GraphPages, account.GraphPages),
         };
 
         static int? Sum(int? held, int? more) => held is null && more is null ? null : (held ?? 0) + (more ?? 0);

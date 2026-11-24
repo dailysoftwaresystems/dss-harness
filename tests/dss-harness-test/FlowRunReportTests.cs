@@ -198,9 +198,9 @@ public sealed class FlowRunReportTests
     /// <summary>
     /// Each signal fires on what it names - the slowest steps, the most expensive, the most retried, every fallback,
     /// the longest wait for a person, a queue wait past its share of a step's time, a cache share under its bound,
-    /// output a digest held unread, a review at its bound, a class reopened twice, a hotspot, spend that could not be
-    /// counted - each with an id of its own and naming its steps and its numbers, and each threshold-bound one is silent
-    /// below its threshold.
+    /// a step that read past the depth of one graph answer, output a digest held unread, a review at its bound, a class
+    /// reopened twice, a hotspot, spend that could not be counted - each with an id of its own and naming its steps and
+    /// its numbers, and each threshold-bound one is silent below its threshold.
     /// </summary>
     [Fact]
     public void EachSignal_FiresOnWhatItNames_AndIsSilentBelowItsThreshold()
@@ -210,7 +210,7 @@ public sealed class FlowRunReportTests
         Assert.Equal(
             [
                 "slowestStep#1", "slowestStep#2", "slowestStep#3", "mostExpensiveStep#1", "mostExpensiveStep#2", "retriedStep#1", "fallback#1",
-                "longestWaitForAPerson#1", "queueWait#1", "cacheShare#1", "unparsedOutput#1", "reviewAtItsBound#1", "classReopenedTwice#1",
+                "longestWaitForAPerson#1", "queueWait#1", "cacheShare#1", "wideGraphQuery#1", "unparsedOutput#1", "reviewAtItsBound#1", "classReopenedTwice#1",
                 "classReopenedTwice#2", "hotspot#1", "uncountedSpend#1",
             ],
             signals.Select(signal => signal!["id"]!.GetValue<string>()));
@@ -222,10 +222,16 @@ public sealed class FlowRunReportTests
             ],
             signals.Where(signal => signal!["kind"]!.GetValue<string>() is "unparsedOutput" or "classReopenedTwice").Select(signal => signal!["said"]!.GetValue<string>()));
 
+        // The step's deepest is the deepest of its attempts with its numbers said; a step whose deepest reach is at
+        // the depth itself - b asked page 3 of one answer - is no signal.
+        Assert.Equal(
+            "a read to page 4 of one graph answer ('find'), past 3, asking 2 page(s) of it and 2 page(s) in all past the first",
+            signals.Single(signal => signal!["kind"]!.GetValue<string>() == "wideGraphQuery")!["said"]!.GetValue<string>());
+
         // The same run under thresholds nothing reaches: only the signals no threshold holds back remain.
         var quiet = FlowRunReport.Of(Source() with
         {
-            Thresholds = new FlowReportThresholds(Top: 1, QueueSharePercent: 90, CacheSharePercent: 100, CacheInputTokens: 10_000_000),
+            Thresholds = new FlowReportThresholds(Top: 1, QueueSharePercent: 90, CacheSharePercent: 100, CacheInputTokens: 10_000_000, GraphPageDepth: 100),
         })["signals"]!.AsArray().Select(signal => signal!["kind"]!.GetValue<string>()).ToList();
 
         Assert.Equal(["slowestStep", "mostExpensiveStep", "retriedStep", "fallback", "longestWaitForAPerson", "unparsedOutput", "reviewAtItsBound", "classReopenedTwice", "classReopenedTwice", "hotspot", "uncountedSpend"], quiet);
@@ -615,10 +621,10 @@ public sealed class FlowRunReportTests
             new FlowBudgetRecord(0.03, 180_000, 0, "no provider lists 'model-z'"),
             0,
             [
-                Step("a", "orient", "Done", Began, Began.AddSeconds(10), agent: "item-1", measure: new FlowStepMeasure(Attempts: [Attempt(1, "Done", usd: 0.01, model: "model-x", tokens: new AgentUsage(90_000, 500, 60_000, 0, 0, 0))], Totals: new FlowStepTotals(new AgentUsage(90_000, 500, 60_000, 0, 0, 0), 0.01))),
+                Step("a", "orient", "Done", Began, Began.AddSeconds(10), agent: "item-1", measure: new FlowStepMeasure(Attempts: [Attempt(1, "Done", usd: 0.01, model: "model-x", tokens: new AgentUsage(90_000, 500, 60_000, 0, 0, 0)) with { GraphPages = new FlowStepGraphPages(2, new FlowStepGraphAsk("find", 2, 4)) }], Totals: new FlowStepTotals(new AgentUsage(90_000, 500, 60_000, 0, 0, 0), 0.01))),
                 Step("b", "orient", "Done", Began.AddSeconds(15), Began.AddSeconds(45), agent: "item-2", measure: new FlowStepMeasure(
                     Waited: [new FlowStepWait(FlowWaits.Quiet, 5.0)],
-                    Attempts: [Attempt(1, "Failed"), Attempt(2, "Done", usd: 0.02, model: "model-y", tokens: new AgentUsage(90_000, 500, 10_000, 0, 0, 0), fallbackFrom: "model-w", fallbackReason: "key refused")],
+                    Attempts: [Attempt(1, "Failed"), Attempt(2, "Done", usd: 0.02, model: "model-y", tokens: new AgentUsage(90_000, 500, 10_000, 0, 0, 0), fallbackFrom: "model-w", fallbackReason: "key refused") with { GraphPages = new FlowStepGraphPages(1, new FlowStepGraphAsk("node", 1, 3)) }],
                     Totals: new FlowStepTotals(new AgentUsage(90_000, 500, 10_000, 0, 0, 0), 0.02))),
                 Step("c", "class-closure", "Failed", Began.AddSeconds(50), Began.AddSeconds(60), agent: "item-1", measure: new FlowStepMeasure(Attempts: [Attempt(1, "Failed", exit: 20, error: "it did not pass") with { Legs = [new FlowStepLeg("linux", "Failed", Unparsed: 4)] }], Totals: new FlowStepTotals()),
                     output: JsonNode.Parse("""{"hotspots":[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}]}""")),

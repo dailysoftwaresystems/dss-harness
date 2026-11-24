@@ -95,6 +95,33 @@ public sealed class FlowStepMeasureTests
         Assert.Equal(0.015, record.Measure.Totals!.Usd);
     }
 
+    /// <summary>
+    /// The measure holds what each attempt asked of the graph in pages past the first - how many in all, and the
+    /// deepest page one answer reached, with the operation that asked it and how many pages of it were asked - and an
+    /// attempt that runs again keeps both runs' asks whole, its deepest the deeper of them; a count that asks for a
+    /// page names its deepest ask, and one that asks for none names no.
+    /// </summary>
+    [Fact]
+    public void AnAttempt_HoldsTheGraphPagesItAskedFor_BothOfItsRunsWhole()
+    {
+        var entry = new FlowStepAttempt(1, GraphPages: new FlowStepGraphPages(3, new FlowStepGraphAsk("find", 2, 4)));
+        var account = new FlowStepAttempt(0, GraphPages: new FlowStepGraphPages(2, new FlowStepGraphAsk("body", 1, 6)));
+        var measure = new FlowStepMeasure(Attempts: [entry], Totals: FlowStepTotals.Of([entry]));
+
+        Assert.Null(new FlowStepAttempt(1).GraphPages);
+        Assert.Null(measure.Problem());
+        Assert.Equal(new FlowStepGraphPages(5, new FlowStepGraphAsk("body", 1, 6)), entry.Accounted(account).GraphPages);
+        Assert.Equal(new FlowStepGraphPages(2, new FlowStepGraphAsk("body", 1, 6)), new FlowStepAttempt(1).Accounted(account, whole: true).GraphPages);
+        Assert.Equal(new FlowStepGraphPages(3, new FlowStepGraphAsk("find", 2, 4)), entry.Accounted(new FlowStepAttempt(0)).GraphPages);
+
+        // A count holds together or says why: pages asked name their deepest ask, an ask names its operation, and an
+        // ask past the first is at least the second page asked of at least one answer.
+        Assert.NotNull(new FlowStepGraphPages(1).Problem());
+        Assert.NotNull(new FlowStepGraphPages(0, new FlowStepGraphAsk("find", 1, 2)).Problem());
+        Assert.NotNull(new FlowStepGraphPages(1, new FlowStepGraphAsk(" ", 1, 2)).Problem());
+        Assert.NotNull(new FlowStepGraphPages(1, new FlowStepGraphAsk("find", 1, 1)).Problem());
+    }
+
     /// <summary>The price of an attempt is the model's entry as the configuration gives it, copied - not referenced.</summary>
     [Fact]
     public void ThePrice_IsTheModelsEntry_CopiedFromTheConfiguration()

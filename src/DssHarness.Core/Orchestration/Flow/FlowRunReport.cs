@@ -8,17 +8,20 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The thresholds a report's signals are computed by, every one a key of <c>defaults.report</c> in
 /// <c>config.json</c> and shipped with these values: a queue wait counts where it holds more than this share of the
 /// step's own time, a cache share counts where it holds less under it on an attempt whose input tokens reach beyond
-/// it, and the lists the signals name are bounded by the count.
+/// it, a graph page count names a step whose read of one answer reaches past it, and the lists the signals name are
+/// bounded by the count.
 /// </summary>
 /// <param name="Top">How many of the slowest, the most expensive and the most retried steps the signals name.</param>
 /// <param name="QueueSharePercent">The share of a step's own time a queue wait must pass to be a signal, in percent.</param>
 /// <param name="CacheSharePercent">The share of an attempt's input tokens read from the cache under which it is a signal, in percent.</param>
 /// <param name="CacheInputTokens">The input tokens an attempt must reach before its cache share is a signal.</param>
+/// <param name="GraphPageDepth">The page a step's read of one graph answer must stay within; a deeper one is a signal, for a query that wide asks too much.</param>
 public sealed record FlowReportThresholds(
     int Top = 5,
     double QueueSharePercent = 10,
     double CacheSharePercent = 30,
-    long CacheInputTokens = 50_000)
+    long CacheInputTokens = 50_000,
+    int GraphPageDepth = 3)
 {
     /// <summary>
     /// Each key of <c>defaults.report</c>, with its shipped value and the values it takes, as help says them - read from
@@ -30,6 +33,7 @@ public sealed record FlowReportThresholds(
         ("queueSharePercent", new FlowReportThresholds().QueueSharePercent.ToString(CultureInfo.InvariantCulture), "a percent from 0 to 100"),
         ("cacheSharePercent", new FlowReportThresholds().CacheSharePercent.ToString(CultureInfo.InvariantCulture), "a percent from 0 to 100"),
         ("cacheInputTokens", new FlowReportThresholds().CacheInputTokens.ToString(CultureInfo.InvariantCulture), "a count of tokens from 0"),
+        ("graphPageDepth", new FlowReportThresholds().GraphPageDepth.ToString(CultureInfo.InvariantCulture), "a count of pages from 1"),
     ];
 
     /// <summary>What is wrong with these thresholds; null when nothing is.</summary>
@@ -38,6 +42,7 @@ public sealed record FlowReportThresholds(
             : QueueSharePercent is < 0 or > 100 || double.IsNaN(QueueSharePercent) ? $"a queue share of {QueueSharePercent.ToString(CultureInfo.InvariantCulture)}%"
             : CacheSharePercent is < 0 or > 100 || double.IsNaN(CacheSharePercent) ? $"a cache share of {CacheSharePercent.ToString(CultureInfo.InvariantCulture)}%"
             : CacheInputTokens < 0 ? $"a cache token bound of {CacheInputTokens.ToString(CultureInfo.InvariantCulture)}"
+            : GraphPageDepth < 1 ? $"a graph page depth of {GraphPageDepth.ToString(CultureInfo.InvariantCulture)}, and the first page is 1"
             : null;
 
     /// <summary>
@@ -1166,6 +1171,20 @@ public static class FlowRunReport
         {
             var tokens = cold.attempt.Tokens!;
             yield return new("cacheShare", [cold.step.Instance], $"{cold.step.Instance} attempt {cold.attempt.N.ToString(CultureInfo.InvariantCulture)} read {ShareOf(tokens.CacheReadTokens, tokens.InputTokens + tokens.CacheReadTokens).ToString("0.0", CultureInfo.InvariantCulture)}% of its input from the cache ({tokens.CacheReadTokens.ToString(CultureInfo.InvariantCulture)} of {(tokens.InputTokens + tokens.CacheReadTokens).ToString(CultureInfo.InvariantCulture)} tokens)");
+        }
+
+        // A step that read past the depth of one graph answer: its query was too wide, the pages it walked saying so.
+        // The step's deepest is the deepest of its attempts, each attempt's own measure naming its own.
+        foreach (var wide in steps
+                     .Select(step => (step, Deep: (step.Measure?.Attempts ?? []).Select(attempt => attempt.GraphPages?.Deepest).OfType<FlowStepGraphAsk>().OrderByDescending(ask => ask.Page).ThenBy(ask => ask.Op, StringComparer.Ordinal).FirstOrDefault()))
+                     .Where(step => step.Deep?.Page > thresholds.GraphPageDepth)
+                     .OrderBy(step => step.step.Instance, StringComparer.Ordinal))
+        {
+            var asked = (wide.step.Measure?.Attempts ?? []).Sum(attempt => attempt.GraphPages?.Asked ?? 0);
+            yield return new(
+                "wideGraphQuery",
+                [wide.step.Instance],
+                $"{wide.step.Instance} read to page {wide.Deep!.Page.ToString(CultureInfo.InvariantCulture)} of one graph answer ('{wide.Deep.Op}'), past {thresholds.GraphPageDepth.ToString(CultureInfo.InvariantCulture)}, asking {ReportText.Counted(wide.Deep.Asked, "page")} of it and {ReportText.Counted(asked, "page")} in all past the first");
         }
 
         foreach (var unread in steps.SelectMany(step => (step.Measure?.Attempts ?? []).SelectMany(attempt => (attempt.Legs ?? []).Where(leg => leg.Unparsed > 0).Select(leg => (step, attempt, leg))))

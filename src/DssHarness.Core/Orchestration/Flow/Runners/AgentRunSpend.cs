@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -28,6 +30,12 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
     private readonly HashSet<string> _denied = new(StringComparer.Ordinal);
     private readonly List<(string Id, string Tool)> _open = [];
     private readonly List<FlowTurnSpend> _turns = [];
+
+    /// <summary>
+    /// The pages past the first the run's <c>graph</c> calls asked for, by operation: how many asks, and the deepest
+    /// page one operation's answer reached. One entry an operation, in the order the run first asked of it.
+    /// </summary>
+    private readonly Dictionary<string, (int Asked, int Page)> _graphPages = new(StringComparer.Ordinal);
 
     /// <summary>Every token the run's turns used, of every kind.</summary>
     public long Tokens { get; private set; }
@@ -133,9 +141,19 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
                 // the run never saw is counted by no name.
                 _ = _open.RemoveAll(open => string.Equals(open.Id, finished.Id, StringComparison.Ordinal));
 
-                if (_calls.Remove(finished.Id, out var tool) && !_denied.Remove(finished.Id) && !finished.Ok && _tools.TryGetValue(tool, out var made))
+                if (_calls.Remove(finished.Id, out var tool))
                 {
-                    _tools[tool] = (made.Calls, made.Failed + 1, made.Denied);
+                    if (!_denied.Remove(finished.Id) && !finished.Ok && _tools.TryGetValue(tool, out var made))
+                    {
+                        _tools[tool] = (made.Calls, made.Failed + 1, made.Denied);
+                    }
+
+                    // A page of the graph the call asked for and was answered counts here, past the first: the one
+                    // measure of what a step reached for in pages, read from the call's own input.
+                    if (finished.Ok && string.Equals(tool, AgentGraphSupport.ToolName, StringComparison.Ordinal))
+                    {
+                        CountGraphPages(finished.Input);
+                    }
                 }
 
                 break;
@@ -170,9 +188,10 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
 
     /// <summary>
     /// The run's own account, as the runner hands it to the engine with its answer: what served it - the provider, the
-    /// model, the effort, where a fallback moved it from and why - with the turns it took, the tools it called and how
-    /// often its conversation was compacted. No spend: that is the engine's own count, charged turn by turn into the
-    /// attempt's entry as each was reported (<see cref="Turns"/>).
+    /// model, the effort, where a fallback moved it from and why - with the turns it took, the tools it called, how
+    /// often its conversation was compacted, and the pages past the first its <c>graph</c> calls asked for. No spend:
+    /// that is the engine's own count, charged turn by turn into the attempt's entry as each was reported
+    /// (<see cref="Turns"/>).
     /// </summary>
     public FlowStepAttempt Account()
         => new(
@@ -186,7 +205,38 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
             Tools: _tools.Count > 0
                 ? [.. _tools.OrderBy(tool => tool.Key, StringComparer.Ordinal).Select(tool => new FlowStepToolUse(tool.Key, tool.Value.Calls, tool.Value.Failed, tool.Value.Denied))]
                 : null,
-            Compactions: Compactions > 0 ? Compactions : null);
+            Compactions: Compactions > 0 ? Compactions : null,
+            GraphPages: _graphPages.Count > 0
+                ? new(
+                    _graphPages.Values.Sum(each => each.Asked),
+                    _graphPages.OrderByDescending(each => each.Value.Page).Select(each => new FlowStepGraphAsk(each.Key, each.Value.Asked, each.Value.Page)).First())
+                : null);
+
+    /// <summary>
+    /// One answered <c>graph</c> call's ask of a page past the first, counted by the operation that asked it: the
+    /// operation's asks grow and its deepest page reaches where the call asked. An input that does not read as a call
+    /// with an operation and a page past the first counts nothing - a misused call is answered with a usage line, not
+    /// a page.
+    /// </summary>
+    /// <param name="input">The call's input, as its stream holds it.</param>
+    private void CountGraphPages(string input)
+    {
+        try
+        {
+            if (Json.JsonDepth.ParseNode(input) is JsonObject { } call
+                && call["op"] is JsonValue op && op.TryGetValue<string>(out var named)
+                && call["page"] is JsonValue page && page.TryGetValue<int>(out var asked)
+                && asked > 1)
+            {
+                var held = _graphPages.GetValueOrDefault(named);
+                _graphPages[named] = (held.Asked + 1, Math.Max(held.Page, asked));
+            }
+        }
+        catch (JsonException)
+        {
+            // An input that does not read is no page ask to count.
+        }
+    }
 }
 
 /// <summary>

@@ -1,4 +1,5 @@
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration.Flow;
 
@@ -348,6 +349,55 @@ public sealed class AgentRunSpendTests
 
         // Each turn is handed on as counted - the unpriced one with no cost and why, never as a cost of nothing.
         Assert.Equal([(1_000_000L, (double?)5.0, (string?)null), (1_020L, null, Why)], events.Spent);
+    }
+
+    /// <summary>
+    /// The run's account counts the pages past the first its <c>graph</c> calls asked for, each as its call ends well:
+    /// how many in all, by operation, and the deepest page one operation reached. A call that named no page past the
+    /// first, a call of another tool, and a call answered with a usage line - a page past an answer's last - count
+    /// nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsAccount_CountsTheGraphPagesItsCallsAskedForPastTheFirst()
+    {
+        var (providers, problems) = AgentProviders.Resolve(new HarnessConfig
+        {
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["glm-5.3"] },
+            Providers =
+            [
+                new AgentProviderConfig
+                {
+                    Name = "zai",
+                    Type = "zai",
+                    Api = "https://api",
+                    ApiKeyNames = ["KEY"],
+                    Client = "glm",
+                    Currency = "USD",
+                    ReadOn = "2026-10-12",
+                    Models = [new AgentModelConfig { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["best"], Efforts = ["high"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072, PriceInputMiss = 1.4, PriceInputHit = 0.26, PriceOutput = 4.4 }],
+                },
+            ],
+        });
+
+        Assert.Empty(problems);
+
+        var spend = new AgentRunSpend(providers!, "glm-5.3");
+
+        async Task Asked(string id, string input, bool ok = true)
+        {
+            await spend.EmitAsync(new ToolCallStarted(id, AgentGraphSupport.ToolName, AgentToolRunner.Harness));
+            await spend.EmitAsync(new ToolCallFinished(id, Ok: ok, TimeSpan.Zero, input, ok ? "a page" : "a usage line"));
+        }
+
+        await Asked("g1", """{"op":"find","query":"Total","page":2}""");
+        await Asked("g2", """{"op":"find","query":"Total","page":4}""");
+        await Asked("g3", """{"op":"find","query":"Total"}""");
+        await Asked("g4", """{"op":"body","symbols":["Total"],"page":3}""");
+        await Asked("g5", """{"op":"find","query":"Total","page":9}""", ok: false);
+        await spend.EmitAsync(new ToolCallStarted("v1", AgentTools.ViewFile, AgentToolRunner.Harness));
+        await spend.EmitAsync(new ToolCallFinished("v1", Ok: true, TimeSpan.Zero, """{"path":"a.txt"}""", "the file"));
+
+        Assert.Equal(new FlowStepGraphPages(3, new FlowStepGraphAsk("find", 2, 4)), spend.Account().GraphPages);
     }
 
     /// <summary>
