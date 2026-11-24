@@ -58,6 +58,7 @@ namespace DssHarness.Core.Orchestration;
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
 /// graph/map.md, map.json      the run's repository map of the steps no read rule narrows, made once from the base as it stood when the first of them was given its prompt, and what it was made from; read as it is by every one after
+/// graph/map.2.md, and on      the map's pages after its first, written with it and never again, each a whole page of the same size
 /// graph/map-&lt;reads&gt;.md, .json  the same, of the steps whose read rules are the same, named by their digest: no map holds a declaration of a file the steps given it may not read
 /// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
 /// graph/sync.jsonl            one line for each sync of the graph
@@ -264,7 +265,7 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file the base's link result is kept in, in the graph's directory.</summary>
     public const string GraphSymbolsFileName = "symbols.jsonl";
 
-    /// <summary>The name of the file the run's repository map is kept in, in the graph's directory, made once and read as it is.</summary>
+    /// <summary>The name of the file the run's repository map's first page is kept in, in the graph's directory, made once and read as it is.</summary>
     public const string GraphMapFileName = "map.md";
 
     /// <summary>The name of the file what the run's repository map was made from is kept in, in the graph's directory.</summary>
@@ -596,7 +597,22 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// and read as it is by every step of those rules: <see cref="GraphMapFileName"/> where it names none.
     /// </summary>
     /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
-    public string GraphMapFileOf(string? reads) => Path.Combine(GraphDirectory, reads is null ? GraphMapFileName : $"map-{reads}.md");
+    public string GraphMapFileOf(string? reads) => GraphMapPageFileOf(reads, 1);
+
+    /// <summary>
+    /// The file page <paramref name="page"/> of the run's repository map of the steps whose read rules
+    /// <paramref name="reads"/> names is kept in: the first in <see cref="GraphMapFileName"/> and every one after it
+    /// beside it (<c>map.2.md</c> and on), all written when the map is, the first last.
+    /// </summary>
+    /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
+    /// <param name="page">The page, from 1.</param>
+    public string GraphMapPageFileOf(string? reads, int page)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
+        return Path.Combine(GraphDirectory, reads is null
+            ? (page == 1 ? GraphMapFileName : $"map.{page.ToString(System.Globalization.CultureInfo.InvariantCulture)}.md")
+            : (page == 1 ? $"map-{reads}.md" : $"map-{reads}.{page.ToString(System.Globalization.CultureInfo.InvariantCulture)}.md"));
+    }
 
     /// <summary>What the map of the steps whose read rules <paramref name="reads"/> names was made from, kept beside it.</summary>
     /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>

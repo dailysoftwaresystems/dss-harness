@@ -1010,41 +1010,87 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     }
 
     /// <summary>
-    /// The run's repository map of the steps whose read rules <paramref name="reads"/> names (<see cref="OrchestratorLayout.GraphMapFileOf"/>):
-    /// the one kept, read as it is, where it is there; else made by <paramref name="make"/> and kept - what it was made
-    /// from first and the map after, so a map is never kept without it - all under the map's own section across the
-    /// machine's processes, so steps that start together keep one map and every one of them is given the same bytes.
-    /// Null where none is kept and <paramref name="make"/> makes none.
+    /// The run's repository map's first page, of the steps whose read rules <paramref name="reads"/> names
+    /// (<see cref="OrchestratorLayout.GraphMapFileOf"/>), with how many pages the map holds: the one kept, read as it
+    /// is, where it is there; else made by <paramref name="make"/> and kept - what it was made from first, then the
+    /// pages after the first, then the first page itself last, so a map.md that is there says its pages are - all under
+    /// the map's own section across the machine's processes, so steps that start together keep one map and every one of
+    /// them is given the same bytes. Null where none is kept and <paramref name="make"/> makes none.
     /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
-    /// <param name="make">Makes the map and what it was made from; null where there is nothing to make it of.</param>
+    /// <param name="make">Makes the map's pages and what it was made from; null where there is nothing to make it of.</param>
     /// <param name="cancellationToken">Ends a wait for another process making the map, before anything is read or made.</param>
-    public string? MapOnce(OrchestratorLayout orchestrator, string? reads, Func<(string Text, System.Text.Json.Nodes.JsonNode Meta)?> make, CancellationToken cancellationToken = default)
+    public (string? Map, int Pages) MapOnce(OrchestratorLayout orchestrator, string? reads, Func<(IReadOnlyList<string> Pages, System.Text.Json.Nodes.JsonNode Meta)?> make, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(make);
 
         var map = orchestrator.GraphMapFileOf(reads);
 
-        return WhileHeld(map, () =>
+        return WhileHeld<(string? Map, int Pages)>(map, () =>
         {
             if (_fileSystem.FileExists(map))
             {
-                return _fileSystem.ReadAllText(map);
+                return (_fileSystem.ReadAllText(map), MapPagesOf(orchestrator, reads));
             }
 
             if (make() is not { } made)
             {
-                return null;
+                return (null, 0);
             }
 
             _fileSystem.CreateDirectory(orchestrator.GraphDirectory);
-            _fileSystem.WriteAllTextAtomic(orchestrator.GraphMapMetaFileOf(reads), made.Meta.ToJsonString(JsonStateFile.Options));
-            _fileSystem.WriteAllTextAtomic(map, made.Text);
 
-            return made.Text;
+            // The record of the map says how many pages the store keeps, whatever the maker said: a kept map's pages are
+            // read from it (<see cref="MapPagesOf"/>).
+            if (made.Meta is System.Text.Json.Nodes.JsonObject meta)
+            {
+                meta["pages"] = made.Pages.Count;
+            }
+
+            _fileSystem.WriteAllTextAtomic(orchestrator.GraphMapMetaFileOf(reads), made.Meta.ToJsonString(JsonStateFile.Options));
+
+            // The pages after the first are kept before it, so a first page that is there says its pages are: no step
+            // reads a map whose rest is missing.
+            for (var page = 2; page <= made.Pages.Count; page++)
+            {
+                _fileSystem.WriteAllTextAtomic(orchestrator.GraphMapPageFileOf(reads, page), made.Pages[page - 1]);
+            }
+
+            var first = made.Pages is [var head, ..] ? head : string.Empty;
+            _fileSystem.WriteAllTextAtomic(map, first);
+
+            return (first, made.Pages.Count);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// How many pages the map of the steps whose read rules <paramref name="reads"/> names holds, read from what it was
+    /// made from (<see cref="OrchestratorLayout.GraphMapMetaFileOf"/>); 1 where that record holds no count - a map kept
+    /// before its pages were, all of it the one page on the disk - or cannot be read, for the map is a cache and its
+    /// first page still reads.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
+    public int MapPagesOf(OrchestratorLayout orchestrator, string? reads)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+
+        try
+        {
+            var meta = orchestrator.GraphMapMetaFileOf(reads);
+
+            return _fileSystem.FileExists(meta)
+                && Json.JsonDepth.ParseNode(_fileSystem.ReadAllText(meta)) is System.Text.Json.Nodes.JsonObject { } read
+                && read["pages"] is System.Text.Json.Nodes.JsonValue pages
+                && pages.TryGetValue<int>(out var count)
+                && count > 0 ? count : 1;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return 1;
+        }
     }
 
     /// <summary>Appends one sync's line to the graph's <c>sync.jsonl</c>, whole and on the disk before it returns.</summary>

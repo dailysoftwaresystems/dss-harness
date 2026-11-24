@@ -43,6 +43,9 @@ public enum GraphOp
 
     /// <summary>A page of the codebase changes the step's message began, by its number.</summary>
     Changes,
+
+    /// <summary>A page of the repository map the step's first message began, by its number.</summary>
+    Map,
 }
 
 /// <summary>What answering a <c>graph</c> call left: the text given to the model, how it ended, and the file a write touched.</summary>
@@ -111,6 +114,15 @@ public sealed record GraphWrittenLines(string Path, int Start, int Count, string
             : null;
 }
 
+/// <summary>
+/// One page of a repository map the <c>graph</c> tool was asked for, as its serving reads it from where the map is kept:
+/// the page's text, and how many pages the map holds - which a page past the last is refused by, as any answer's is.
+/// </summary>
+/// <param name="Pages">How many pages the map holds; 0 where the page could not be read.</param>
+/// <param name="Text">The page's text; null where the page is past the last, or could not be read.</param>
+/// <param name="Why">Why the page could not be read, where it could not; null otherwise.</param>
+public sealed record GraphMapPage(int Pages, string? Text, string? Why = null);
+
 /// <summary>What became of a <c>graph</c> call.</summary>
 public enum GraphToolOutcome
 {
@@ -145,9 +157,9 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// The one tool <c>graph</c>, over the lookups of <see cref="CodebaseGraphQueries"/>: its operations - <c>find</c>,
 /// <c>node</c>, <c>related</c>, <c>outline</c>, <c>body</c>, <c>sites</c>, <c>edit</c> and <c>wholeFile</c> - the same on every
 /// client, each answering in pages of whole entries with a line range and a hash on every node, and a text search where the
-/// graph is not sure; and <c>pack</c> and <c>changes</c>, the later pages of the context pack and of the codebase
-/// changes a step's message began, where they go on past it. The schema a step is given holds only the operations it
-/// may use. No step opens it: the tool
+/// graph is not sure; and <c>pack</c>, <c>changes</c> and <c>map</c>, the later pages of the context pack, of the codebase
+/// changes a step's message began and of the repository map, where they go on past it. The schema a step is given holds
+/// only the operations it may use. No step opens it: the tool
 /// runtime's table does not hold it. The <c>query-codebase-graph</c> verb runs its read operations by hand.
 /// </summary>
 /// <remarks>
@@ -189,6 +201,7 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// message's pack; null, or answering null, where it has none.
 /// </param>
 /// <param name="changes">The pages of the codebase changes the step's message began, read at each <c>changes</c>; null, or answering null, where it was told none.</param>
+/// <param name="map">A page of the repository map the step's first message began, read at each <c>map</c> by its number; null, or answering none, where it was given no map.</param>
 public sealed class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
@@ -201,7 +214,8 @@ public sealed class CodebaseGraphTool(
     GraphPageStore? pages = null,
     Execution.ILineMask? mask = null,
     Func<GraphTextPages?>? pack = null,
-    Func<GraphTextPages?>? changes = null)
+    Func<GraphTextPages?>? changes = null,
+    Func<int, GraphMapPage>? map = null)
 {
     /// <summary>
     /// The most characters an answer holds (<see cref="PageRoom.GraphAnswer"/>): its pages hold whole entries within it
@@ -241,6 +255,7 @@ public sealed class CodebaseGraphTool(
         [GraphOp.WholeFile] = "wholeFile",
         [GraphOp.Pack] = "pack",
         [GraphOp.Changes] = "changes",
+        [GraphOp.Map] = "map",
     };
 
     private readonly AgentFiles _files = files ?? throw new ArgumentNullException(nameof(files));
@@ -286,14 +301,16 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>
     /// The operations a step is given: the read ones always, <c>edit</c> where it may write, <c>wholeFile</c> where its
-    /// reads are narrowed, <c>pack</c> where its context pack goes on past its first message's page, and <c>changes</c>
-    /// where the codebase changes it is told go on past its message's.
+    /// reads are narrowed, <c>pack</c> where its context pack goes on past its first message's page, <c>changes</c>
+    /// where the codebase changes it is told go on past its message's, and <c>map</c> where the repository map it is
+    /// given goes on past its first page.
     /// </summary>
     /// <param name="write">Whether the step has the <c>write</c> capability.</param>
     /// <param name="narrow">Whether the step's reads are narrowed (<c>graphReads: narrow</c>).</param>
     /// <param name="pack">Whether the step's context pack has a page after its first message's.</param>
     /// <param name="changes">Whether the codebase changes the step is told have a page after its message's.</param>
-    public static IReadOnlySet<GraphOp> Operations(bool write, bool narrow, bool pack = false, bool changes = false)
+    /// <param name="map">Whether the repository map the step is given has a page after its first.</param>
+    public static IReadOnlySet<GraphOp> Operations(bool write, bool narrow, bool pack = false, bool changes = false, bool map = false)
     {
         var ops = new HashSet<GraphOp>(Read);
 
@@ -315,6 +332,11 @@ public sealed class CodebaseGraphTool(
         if (changes)
         {
             ops.Add(GraphOp.Changes);
+        }
+
+        if (map)
+        {
+            ops.Add(GraphOp.Map);
         }
 
         return ops;
@@ -397,7 +419,7 @@ public sealed class CodebaseGraphTool(
         GraphOp.Sites => (["data", "page"], ["data"]),
         GraphOp.Edit => (["symbol", "hash", "text"], ["symbol", "hash", "text"]),
         GraphOp.WholeFile => (["path", "reason"], ["path", "reason"]),
-        GraphOp.Pack or GraphOp.Changes => (["page"], ["page"]),
+        GraphOp.Pack or GraphOp.Changes or GraphOp.Map => (["page"], ["page"]),
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Not an operation of the graph tool."),
     };
 
@@ -470,6 +492,7 @@ public sealed class CodebaseGraphTool(
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
             [GraphOp.Changes] = "changes - a page of the codebase changes your message began, its last line saying how to ask for the next",
+            [GraphOp.Map] = "map - a page of the repository map your first message began, by page, its last line saying where the rest is",
         };
 
         return "Asks the codebase graph of the tree you work in: "
@@ -516,6 +539,7 @@ public sealed class CodebaseGraphTool(
             GraphOp.Edit => await OneEditAtATimeAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Pack => TextPage(pack?.Invoke(), "pack", "context pack", Int(input, "page")!.Value),
             GraphOp.Changes => TextPage(changes?.Invoke(), "changes", "codebase changes", Int(input, "page")!.Value),
+            GraphOp.Map => MapPage(map?.Invoke(Int(input, "page")!.Value), Int(input, "page")!.Value),
             _ => WholeFile(input),
         };
     }
@@ -539,6 +563,19 @@ public sealed class CodebaseGraphTool(
 
         return Usage(Paging.PastTheLastSaid(page, text.Known!.Value, asked, note: null));
     }
+
+    /// <summary>
+    /// <c>map</c>: page <paramref name="page"/> of the repository map the step's first message began, read from where the
+    /// run keeps it; a page past the last refused with how many there are, as any answer's is, a map the run was given
+    /// none of said, and a page that cannot be read said with why.
+    /// </summary>
+    /// <param name="read">The page as the run's serving of its map read it; null where the run was given no map.</param>
+    /// <param name="page">The page asked, from 1.</param>
+    private static GraphToolAnswer MapPage(GraphMapPage? read, int page)
+        => read is not { Pages: > 0 }
+            ? Usage(read is { Why: { Length: > 0 } why } ? $"the repository map's page {Paging.Number(page)} could not be read: {why}" : "this run was given no repository map to page")
+            : read.Text is { } text ? new GraphToolAnswer(text, GraphToolOutcome.Answered)
+            : Usage(Paging.PastTheLastSaid(page, read.Pages, "map", note: null));
 
     private async Task<GraphToolAnswer> FindAsync(JsonObject input, CancellationToken cancellationToken)
     {

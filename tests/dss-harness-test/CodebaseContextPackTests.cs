@@ -464,9 +464,10 @@ public sealed class CodebaseContextPackTests
         Assert.True(cut.Tokens <= 300, cut.Text);
         Assert.True(cut.More);
         Assert.Equal(cut.Text, pages[0].Text);
-        Assert.EndsWith(" tokens; context pack page 1 · ask graph for pack with page: 2 for the next", cut.Text, StringComparison.Ordinal);
+        Assert.EndsWith($" tokens; context pack page 1 of {pages.Count} · ask graph for pack with page: 2 for the next", cut.Text, StringComparison.Ordinal);
         Assert.All(pages, page => Assert.True(page.Tokens <= 300, page.Text));
         Assert.All(pages.Skip(1), page => Assert.StartsWith($"codebase graph: context pack page {page.Page}\n", page.Text, StringComparison.Ordinal));
+        Assert.All(pages.Skip(1).SkipLast(1), page => Assert.EndsWith($" tokens; context pack page {page.Page} of {pages.Count} · ask graph for pack with page: {page.Page + 1} for the next", page.Text, StringComparison.Ordinal));
         Assert.EndsWith($" tokens; context pack page {pages.Count} of {pages.Count} · the last", pages[^1].Text, StringComparison.Ordinal);
         Assert.Equal((int?)pages.Count, cut.Pages);
         Assert.Null(cut.Page(pages.Count + 1));

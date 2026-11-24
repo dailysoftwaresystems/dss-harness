@@ -34,10 +34,11 @@ public sealed class FlowStepGraph
     /// <summary>
     /// How the run's repository maps are made and kept, as every help text that names them says it: one for each ground of
     /// reads, from the base as it stands when the first step of that ground is given its prompt (<see cref="MapOfAsync"/>,
-    /// <see cref="OrchestrationStore.MapOnce"/>), at the file <see cref="OrchestratorLayout.GraphMapFileOf"/> names.
+    /// <see cref="OrchestrationStore.MapOnce"/>), at the files <see cref="OrchestratorLayout.GraphMapFileOf"/> and
+    /// <see cref="OrchestratorLayout.GraphMapPageFileOf"/> name.
     /// </summary>
-    public const string MapsKept = "made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept in "
-        + OrchestratorLayout.GraphMapFileName + " (map-<a digest of the read rules>.md for steps whose read rules narrow them)";
+    public const string MapsKept = "made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept whole in pages in "
+        + OrchestratorLayout.GraphMapFileName + " with the pages after it in map.2.md and on (map-<a digest of the read rules>.md and on for steps whose read rules narrow them)";
 
     /// <summary>Why a launch was given no pack, where its step asked for none.</summary>
     public const string NoPackAsked = "the step asked for no pack: its graphPromptTokens is 0";
@@ -67,13 +68,14 @@ public sealed class FlowStepGraph
     private GraphTextPages? told;
     private AgentCodebaseGiven? given;
 
-    private FlowStepGraph(string mode, string from, string viewName, int tokens, string? map, ContextPack? made, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
+    private FlowStepGraph(string mode, string from, string viewName, int tokens, string? map, int mapPages, ContextPack? made, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
     {
         Mode = mode;
         From = from;
         View = viewName;
         Tokens = tokens;
         Map = map;
+        MapPages = mapPages;
         this.made = made;
         Pack = made is { Text.Length: > 0 } ? made : null;
         Missing = missing;
@@ -216,7 +218,7 @@ public sealed class FlowStepGraph
         {
             var missing = MissingOutputOf(store, layout, place.Definition, run.Instance);
 
-            return new FlowStepGraph(mode, from, worktree?.Agent ?? CodebaseGraphService.BaseView, tokens, map: null, made: null, missing, noPack: null, store, output, directory, run.Instance)
+            return new FlowStepGraph(mode, from, worktree?.Agent ?? CodebaseGraphService.BaseView, tokens, map: null, mapPages: 0, made: null, missing, noPack: null, store, output, directory, run.Instance)
             {
                 section = missing,
                 support = mode == "tools" ? new AgentGraphSupport(Tool: null) { Gone = missing } : null,
@@ -229,7 +231,8 @@ public sealed class FlowStepGraph
 
         bool Readable(string relative) => policy.Read(Path.Combine(tree, relative.Replace('/', Path.DirectorySeparatorChar))).Refusal() is null;
 
-        var map = await MapOfAsync(graph, store, fileSystem, output, layout, run, request.Shape.MapTokens, ReadsOf(ground), Readable, cancellationToken).ConfigureAwait(false);
+        var reads = ReadsOf(ground);
+        var (map, mapPages) = await MapOfAsync(graph, store, fileSystem, output, layout, run, request.Shape.MapTokens, reads, Readable, cancellationToken).ConfigureAwait(false);
 
         // The pack's seeds: the working sets of the work the run holds - or, where the step names one, that step's in
         // their place - and what the work changed, under graphFrom: changes, leading the pack.
@@ -270,7 +273,7 @@ public sealed class FlowStepGraph
                     ChangesUnread = changesUnread,
                 })
             : null;
-        var served = new FlowStepGraph(mode, from, read.View, tokens, map, pack, missing: null, tokens == 0 ? NoPackAsked : pack is not { Text.Length: > 0 } ? NoPackHeld : null, store, output, directory, run.Instance)
+        var served = new FlowStepGraph(mode, from, read.View, tokens, map, mapPages, pack, missing: null, tokens == 0 ? NoPackAsked : pack is not { Text.Length: > 0 } ? NoPackHeld : null, store, output, directory, run.Instance)
         {
             view = queries,
         };
@@ -279,8 +282,8 @@ public sealed class FlowStepGraph
 
         if (mode == "tools" && git is not null)
         {
-            // pack where the step's pack goes on past its first message's page; changes once the step is told changes that go on past its message's (ChangesSince).
-            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { More: true });
+            // pack where the step's pack goes on past its first message's page; changes once the step is told changes that go on past its message's (ChangesSince); map where the run's map of its ground goes on past its first page.
+            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { More: true }, map: mapPages > 1);
             var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
             var tool = new CodebaseGraphTool(
                 queries,
@@ -294,7 +297,8 @@ public sealed class FlowStepGraph
                 pages: PagesOf(fileSystem, layout, run, directory, ground),
                 mask: mask,
                 pack: () => served.Pack?.Paged,
-                changes: () => served.told);
+                changes: () => served.told,
+                map: page => MapPageOf(fileSystem, layout, reads, mapPages, page));
 
             served.support = new AgentGraphSupport(
                 tool,
@@ -388,10 +392,14 @@ public sealed class FlowStepGraph
     /// The run's repository map of the step's ground of reads, the <c>&lt;repository-map&gt;</c> part ahead of the
     /// <c>&lt;codebase&gt;</c> part of the first message of each launch that begins a conversation of its own: made once
     /// from the base as it stood when the first graphed reason step of that ground was given its prompt, holding no
-    /// declaration of a file the step may not read, and read as it is by every step of that ground after; null where the
-    /// workflow's <c>mapTokens</c> is 0, the run's graph was never built, or the map could not be made or read.
+    /// declaration of a file the step may not read, and read as it is by every step of that ground after - its first
+    /// page, whole as the map's pages are kept with it; null where the workflow's <c>mapTokens</c> is 0, the run's graph
+    /// was never built, or the map could not be made or read.
     /// </summary>
     public string? Map { get; }
+
+    /// <summary>How many pages the run's repository map of the step's ground of reads holds; 0 where there is no map.</summary>
+    public int MapPages { get; }
 
     /// <summary>The map's estimated tokens; 0 where there is none.</summary>
     public int MapTokens => Map is null ? 0 : EstimatedTokens.Of(Map);
@@ -747,8 +755,9 @@ public sealed class FlowStepGraph
     /// <summary>
     /// The run's repository map of the step's ground of reads: kept where it is there and read as it is, made from the base
     /// as it stands where it is not - once, whatever the steps after find, for the base moves as folds land and the map
-    /// does not - holding no declaration of a file the step may not read; null where the workflow asks for no map, the base
-    /// does not read, or the map could not be made or read, which is said - the step goes on without one.
+    /// does not - whole, in pages, no line dropped, holding no declaration of a file the step may not read, and with it how
+    /// many pages it holds; null where the workflow asks for no map, the base does not read, or the map could not be made or
+    /// read, which is said - the step goes on without one.
     /// </summary>
     /// <param name="graph">The one graph service every graph is read and written by, for the base as it stands.</param>
     /// <param name="store">Keeps the run's maps, and reads its records for its task terms.</param>
@@ -760,7 +769,7 @@ public sealed class FlowStepGraph
     /// <param name="reads">The digest of the step's read rules (<see cref="ReadsOf"/>), which names its map.</param>
     /// <param name="readable">Whether the step may read a file, by its path relative to the tree.</param>
     /// <param name="cancellationToken">Stops the reading of the base.</param>
-    private static async Task<string?> MapOfAsync(
+    private static async Task<(string? Map, int Pages)> MapOfAsync(
         ICodebaseGraphService graph,
         OrchestrationStore store,
         IFileSystem fileSystem,
@@ -774,7 +783,7 @@ public sealed class FlowStepGraph
     {
         if (mapTokens <= 0)
         {
-            return null;
+            return (null, 0);
         }
 
         try
@@ -816,7 +825,30 @@ public sealed class FlowStepGraph
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             output.Warn("reason", $"the repository map of run '{layout.Name}' was not made or read for '{run.Instance}': {ex.Message.TrimEnd('.')}. The step goes on without it; the next step tries again.");
-            return null;
+            return (null, 0);
+        }
+    }
+
+    /// <summary>
+    /// Page <paramref name="page"/> of the run's repository map of the step's ground of reads, as the graph tool serves
+    /// it: read whole from where it is kept, with how many pages the map holds - which a page past the last is refused
+    /// by - and a page that cannot be read said with why, never thrown, for the map is a cache and no read of it fails
+    /// the step's call.
+    /// </summary>
+    /// <param name="fileSystem">The file system the map is kept on.</param>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="reads">The digest of the step's read rules, which names its map; null for steps no read rule narrows.</param>
+    /// <param name="pages">How many pages the map holds, as its making read it.</param>
+    /// <param name="page">The page asked, from 1.</param>
+    private static GraphMapPage MapPageOf(IFileSystem fileSystem, OrchestratorLayout layout, string? reads, int pages, int page)
+    {
+        try
+        {
+            return new GraphMapPage(pages, page > pages ? null : fileSystem.ReadAllText(layout.GraphMapPageFileOf(reads, page)));
+        }
+        catch (Exception ex) when (Unkept(ex))
+        {
+            return new GraphMapPage(0, null, ex.Message.TrimEnd('.'));
         }
     }
 

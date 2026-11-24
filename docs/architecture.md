@@ -5904,8 +5904,11 @@ gone through and its neighbours are ranked down, never cut; a
 node the step may not read is neither listed, named nor gone through, only counted. It is laid in
 pages of the step's tokens
 (`GraphTextPages`, `EstimatedTokens`), best first, a page's task lines by file, generated code
-last in each section: page 1 is given, and its last line says nothing is left out or how to ask
-graph's `pack` with page for the next; each later page continues the same walk as it is asked; a
+last in each section, the pages laid once whole (`GraphTextPages.Whole`) when the pack is made:
+page 1 is given, and its last line says nothing is left out or which page of how many and how to
+ask graph's `pack` with page for the next, the total exact on every page and the last saying it
+is; a step whose graph is not tools is told, in the same place, that the rest is on the pages
+after it, which a step whose graph is tools asks the graph for; a
 size too small for a page's first and last lines gives no pack, every node counted left out; the
 first line names the view, its commit, the files that differ
 from its base and what the pack was seeded from, the last its nodes, its tokens and what was left out.
@@ -5945,7 +5948,21 @@ launch that begins a conversation of its own, after the run's map (`AgentPromptP
 the sentence for a step that left no output in its place - and the tool its `Near`; a launch that goes on with a
 stored conversation is told the changes instead, the one decision `AgentPromptParts.CodebaseOf`'s, made as each
 launch's first message is written, so a fallback to another client or provider begins with the map and the pack. A
-graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it. Its reads
+graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it.
+The run's repository map (`CodebaseRepositoryMap`, `FlowStepGraph.MapOfAsync`) is made once for each ground of reads
+the run's steps share, from the base as it stands when the first graphed reason step of that ground is given its
+prompt, raised for the run's task, holding no declaration of a file its steps may not read: a header line, the
+projects and top directories with their counts, then the most central declarations one line each. It is paged at
+whole lines under `codebaseGraph.mapTokens` by the one owner of a given text's pages (`GraphTextPages`, in its
+exact-room form: page 1 holds byte for byte what the map's cap always held, but the last line it now ends with), and
+no line is dropped - the pages after the first are kept with it (`OrchestratorLayout.GraphMapPageFileOf`:
+`map.2.md` and on, `map-<reads>.2.md` and on where read rules narrow), written by `OrchestrationStore.MapOnce` in the
+map's own cross-process section, what it was made from first (`map.json`, saying how many pages), then the pages after
+the first, then the first itself last, so a `map.md` that is there says its pages are. Every step of the ground reads
+the same first page - the prefix a client caches never moves - and a step given the tool asks the rest of it as
+`graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
+it: it says the rest is on the pages after it, which a step whose graph is tools asks the graph for, never how this
+step asks for it, for the map is one file every step of the ground reads and no step's kind is written into it. Its reads
 narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on every client - Claude
 Code's served by the engine's tool server - of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
 the refusal; a range, a search and a write pass; a file the graph is not sure of

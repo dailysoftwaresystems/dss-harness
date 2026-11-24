@@ -29,8 +29,8 @@ public sealed class SideTaskGraph
     private readonly CodebaseGraphSync request;
     private readonly SideTaskLayout layout;
     private readonly string map;
-    private readonly string mapMeta;
     private readonly Execution.ILineMask? mask;
+    private int mapPages;
     private CodebaseGraphQueries? queries;
 
     /// <summary>The side-task's graph over its records, not yet opened.</summary>
@@ -65,14 +65,14 @@ public sealed class SideTaskGraph
         this.layout = layout;
         this.mask = mask;
         map = layout.MapFile;
-        mapMeta = layout.MapMetaFile;
         request = new CodebaseGraphSync(repository, layout.AsGraph, CodebaseGraphShape.Default, worktreesRoot, Rebuild: false, $"the side-task '{layout.Name}' opened");
     }
 
     /// <summary>
     /// Opens the graph: the whole first sync, seeded from the newest of the repository, then the repository map made once
     /// from the base as it stands and kept - read as it is by every message after, a cache, while the pack and the tool
-    /// say what the tree is now.
+    /// say what the tree is now - whole, in pages, kept by the one owner of a map's files as a run's is
+    /// (<see cref="OrchestrationStore.MapOnce"/>).
     /// </summary>
     /// <param name="cancellationToken">Stops the sync.</param>
     public async Task OpenAsync(CancellationToken cancellationToken)
@@ -80,12 +80,9 @@ public sealed class SideTaskGraph
         await graph.SyncAsync(request, cancellationToken).ConfigureAwait(false);
         queries = await ReadAsync(cancellationToken).ConfigureAwait(false);
 
-        if (!files.FileExists(map) && queries is { })
+        if (queries is { })
         {
-            var (text, meta) = CodebaseRepositoryMap.Make(queries, terms: string.Empty, CodebaseGraphShape.Default.MapTokens);
-            files.CreateDirectory(Path.GetDirectoryName(map)!);
-            files.WriteAllTextAtomic(map, text);
-            files.WriteAllTextAtomic(mapMeta, meta.ToJsonString(JsonStateFile.Options));
+            mapPages = store.MapOnce(layout.AsGraph, reads: null, () => CodebaseRepositoryMap.Make(queries, terms: string.Empty, CodebaseGraphShape.Default.MapTokens), cancellationToken).Pages;
         }
     }
 
@@ -108,13 +105,13 @@ public sealed class SideTaskGraph
 
         var tool = Tool(queries, new AgentPolicy(files, platform, ground), Orchestration.Flow.FlowStepGraph.ReadsOf(ground));
 
-        // Every operation its client serves, pack among them: each message's pack goes on in pages, the tool held for the
-        // whole chat paging the last message's.
+        // Every operation its client serves, pack and map among them: each message's pack goes on in pages and the map
+        // with it, the tool held for the whole chat paging the last message's pack and the one map the side-task keeps.
         return new AgentGraphSupport(
             tool,
             line => store.AppendGraphStepLine(layout.Directory, line),
             (written, cancellationToken) => AfterWriteAsync(tool, written, cancellationToken),
-            CodebaseGraphTool.Operations(write: true, narrow: false, pack: true));
+            CodebaseGraphTool.Operations(write: true, narrow: false, pack: true, map: mapPages > 1));
     }
 
     /// <summary>
@@ -205,6 +202,25 @@ public sealed class SideTaskGraph
             () => near,
             pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads),
             mask: mask,
-            pack: () => pack?.Paged);
+            pack: () => pack?.Paged,
+            map: ReadMapPage);
+    }
+
+    /// <summary>
+    /// Page <paramref name="page"/> of the side-task's repository map, as the graph tool serves it: read whole from where
+    /// it is kept, with how many pages the map holds - which a page past the last is refused by - and a page that cannot
+    /// be read said with why, never thrown, for the map is a cache and no read of it fails the side-task's call.
+    /// </summary>
+    /// <param name="page">The page asked, from 1.</param>
+    private GraphMapPage ReadMapPage(int page)
+    {
+        try
+        {
+            return new(mapPages, page > mapPages ? null : files.ReadAllText(layout.MapPageFileOf(page)));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return new(0, null, ex.Message.TrimEnd('.'));
+        }
     }
 }

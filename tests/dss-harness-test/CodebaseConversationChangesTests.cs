@@ -158,8 +158,9 @@ public sealed class CodebaseConversationChangesTests
         Assert.True(pages.Count > 1);
         Assert.StartsWith($"{declared.Count} declarations the conversation held: {declared.Count} moved or changed, 0 removed; 0 nodes of this step's pack added\n", pages[0].Text, StringComparison.Ordinal);
         Assert.Equal(pages[0].Text, CodebaseConversationChanges.Make(after, NoPack, [held], CodebaseContextPack.DefaultTokens));
-        Assert.EndsWith("codebase changes page 1 · ask graph for changes with page: 2 for the next", pages[0].Text, StringComparison.Ordinal);
+        Assert.EndsWith($"codebase changes page 1 of {pages.Count} · ask graph for changes with page: 2 for the next", pages[0].Text, StringComparison.Ordinal);
         Assert.All(pages.Skip(1), page => Assert.StartsWith($"codebase changes page {page.Page}:\n", page.Text, StringComparison.Ordinal));
+        Assert.All(pages.Skip(1).SkipLast(1), page => Assert.EndsWith($"codebase changes page {page.Page} of {pages.Count} · ask graph for changes with page: {page.Page + 1} for the next", page.Text, StringComparison.Ordinal));
         Assert.EndsWith($"codebase changes page {pages.Count} of {pages.Count} · the last", pages[^1].Text, StringComparison.Ordinal);
         Assert.All(pages, page => Assert.True(page.Tokens <= CodebaseContextPack.DefaultTokens, page.Text));
         Assert.Equal(declared.Order(StringComparer.Ordinal), lines.Order(StringComparer.Ordinal));

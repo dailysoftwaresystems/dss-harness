@@ -22,19 +22,21 @@ public sealed record GraphTextPage(int Page, string Text, IReadOnlyList<GraphTex
 /// <param name="Page">The page, from 1.</param>
 /// <param name="Lines">The lines it gives.</param>
 /// <param name="Last">Whether no page follows it.</param>
-/// <param name="Pages">How many pages the text holds, where every one is laid: always on the last; null on a page before it, while the text goes on.</param>
+/// <param name="Pages">How many pages the text holds: known on every page once the whole text is laid (<see cref="GraphTextPages.Whole"/>); null on a page before the last while only the pages asked for are laid, for the text may go on.</param>
 /// <param name="Tokens">The page's estimated tokens without its last line: the line says the whole page's.</param>
 public sealed record GraphTextPageEnd(int Page, IReadOnlyList<GraphTextLine> Lines, bool Last, int? Pages, int Tokens);
 
 /// <summary>
 /// The pages of a graph text a step is given without asking - its context pack, the changes a conversation gone on with is
-/// told - each of the step's estimated tokens (<see cref="EstimatedTokens"/>): page 1 goes in the step's message, and every
-/// later page is the text going on, laid from its lines as it is asked for - so a text of any length is given whole, and
-/// what it costs follows what is asked, not its length. A page holds whole lines, each costing its bytes and its line's
-/// end and its section's caption where the page begins the section, within the page's tokens less its first line and
-/// <see cref="LastLineRoom"/> for its last; a line that does not fit begins the next page, and a line wider than a whole
-/// page is given in pieces by the one rule a piece is cut by (<see cref="Pages.Paging"/>'s), each marked where it goes on.
-/// Its lines are read once, in order, and never laid again: a page asked again is the one laid.
+/// told, a repository map - each page of a size in estimated tokens (<see cref="EstimatedTokens"/>) or of an exact room in
+/// bytes: page 1 goes in the step's message, and every later page is the text going on, laid from its lines as it is asked
+/// for - or the whole text laid once, where its pages say their total (<see cref="Whole"/>) - so a text of any length is
+/// given whole, and what it costs follows what is asked, not its length. A page holds whole lines, each costing its bytes
+/// and its line's end and its section's caption where the page begins the section, within the page's room less its first
+/// line and <see cref="LastLineRoom"/> for its last - or, in the exact-room form, of all the room and no reserve; a line
+/// that does not fit begins the next page, and a line wider than a whole page is given in pieces by the one rule a piece
+/// is cut by (<see cref="Pages.Paging"/>'s), each marked where it goes on. Its lines are read once, in order, and never
+/// laid again: a page asked again is the one laid.
 /// </summary>
 public sealed class GraphTextPages
 {
@@ -42,7 +44,8 @@ public sealed class GraphTextPages
     public const int LastLineRoom = 200;
 
     private readonly IEnumerator<GraphTextLine> _lines;
-    private readonly int _tokens;
+    private readonly long _room;
+    private readonly int _lastLineRoom;
     private readonly Func<int, string> _first;
     private readonly Func<GraphTextPageEnd, string?> _last;
     private readonly Func<IReadOnlyList<GraphTextLine>, IReadOnlyList<GraphTextLine>> _arranged;
@@ -62,14 +65,33 @@ public sealed class GraphTextPages
     /// <param name="last">The last line of each page, from what it holds; null for a page that ends with its lines, one that says all there is.</param>
     /// <param name="arranged">How a page's lines are written, from the order they were laid in: as they are, where it is null.</param>
     public GraphTextPages(IEnumerable<GraphTextLine> lines, int tokens, Func<int, string> first, Func<GraphTextPageEnd, string?> last, Func<IReadOnlyList<GraphTextLine>, IReadOnlyList<GraphTextLine>>? arranged = null)
+        : this(lines, (long)tokens * EstimatedTokens.BytesPerToken, LastLineRoom, first, last, arranged)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(tokens, 1);
+    }
+
+    /// <summary>
+    /// The pages of <paramref name="lines"/> in pages of <paramref name="room"/> bytes each - the exact-room form a text
+    /// takes whose first page must hold what a size in tokens held, as a repository map's does - none laid until one is
+    /// asked for.
+    /// </summary>
+    /// <param name="lines">The text's lines, in order: read once, as far as the pages asked for need.</param>
+    /// <param name="room">The bytes a page holds of its lines, its first line among them; at least one.</param>
+    /// <param name="lastLineRoom">The bytes a page keeps of its room for its last line; 0 where the last line stands beyond the room, however long it is.</param>
+    /// <param name="first">The first line of each page, by its number.</param>
+    /// <param name="last">The last line of each page, from what it holds; null for a page that ends with its lines, one that says all there is.</param>
+    /// <param name="arranged">How a page's lines are written, from the order they were laid in: as they are, where it is null.</param>
+    public GraphTextPages(IEnumerable<GraphTextLine> lines, long room, int lastLineRoom, Func<int, string> first, Func<GraphTextPageEnd, string?> last, Func<IReadOnlyList<GraphTextLine>, IReadOnlyList<GraphTextLine>>? arranged = null)
     {
         ArgumentNullException.ThrowIfNull(lines);
         ArgumentNullException.ThrowIfNull(first);
         ArgumentNullException.ThrowIfNull(last);
-        ArgumentOutOfRangeException.ThrowIfLessThan(tokens, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(room, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(lastLineRoom);
 
         _lines = lines.GetEnumerator();
-        _tokens = tokens;
+        _room = room;
+        _lastLineRoom = lastLineRoom;
         _first = first;
         _last = last;
         _arranged = arranged ?? (laid => laid);
@@ -104,6 +126,23 @@ public sealed class GraphTextPages
         }
     }
 
+    /// <summary>
+    /// Every page of the text, laid once to its end: the form a text kept whole takes, and the only one whose pages can say
+    /// their total - a page's last line then holds <see cref="GraphTextPageEnd.Pages"/> on every page, not only the last.
+    /// Linear in the text: every line is read once, as the pages asked for read them, and this reads them all.
+    /// </summary>
+    public IReadOnlyList<GraphTextPage> Whole()
+    {
+        lock (_laid)
+        {
+            for (var page = 1; Laid(page) is { }; page++)
+            {
+            }
+
+            return [.. _pages];
+        }
+    }
+
     private GraphTextPage? Laid(int page)
     {
         while (_laid.Count < page && Lay() is { } laid)
@@ -116,13 +155,16 @@ public sealed class GraphTextPages
             return null;
         }
 
-        // A page's last line says whether one follows it: known once the next line is read, or the text has ended.
+        // A page's last line says whether one follows it: known once the next line is read, or the text has ended. Where
+        // the whole text is laid, every page also says how many there are, for that no longer changes.
+        var whole = _drained && _held is null;
+
         for (var at = _pages.Count; at < page; at++)
         {
             var last = at == _laid.Count - 1 && !More();
             var (lines, said) = _laid[at];
             var body = string.Join('\n', said);
-            var draft = new GraphTextPageEnd(at + 1, lines, last, last ? _laid.Count : null, EstimatedTokens.Of(body));
+            var draft = new GraphTextPageEnd(at + 1, lines, last, last || whole ? _laid.Count : null, EstimatedTokens.Of(body));
             var text = _last(draft) is { } closing
 
                 // The line says the page's tokens, itself among them: made again with the count its first making gives.
@@ -169,7 +211,7 @@ public sealed class GraphTextPages
         }
 
         var first = _first(number);
-        var left = ((long)_tokens * EstimatedTokens.BytesPerToken) - Bytes(first) - LastLineRoom;
+        var left = _room - Bytes(first) - _lastLineRoom;
 
         if (left < 0)
         {

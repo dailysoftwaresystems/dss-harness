@@ -643,7 +643,12 @@ own text search, and no pack, which lights none of a plan's text; the prioritise
 (the scope's whole overhead a fifth of a cent beside the review rounds it steers); and the scribe's
 steps, which write the run's records, ask none of it (`dssharness help codebase-graph`). The planner
 keeps the tool, its default, as it was: the measurement found it costlier with the graph and did not
-move it.
+move it. What a graphed step is given never cuts: the repository map of its ground of reads is paged
+whole under `codebaseGraph.mapTokens`, made once and read as it is by every step of the ground - page 1
+byte for byte what that size always held but the last line it ends with, which says where the rest is
+and is asked of the tool's `map` where it goes on past it - and the pack is paged the same way under
+`graphPromptTokens`, every page's last line naming the total, the later pages asked of the tool's
+`pack` and `changes`.
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
