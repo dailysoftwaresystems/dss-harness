@@ -327,14 +327,14 @@ public sealed class ResultDigestTests
         Assert.Same(read.Diagnostics[1], read.First);
         var cut = read.Failures[0].Exception!;
 
-        for (var depth = 1; depth < ExceptionRecord.CauseBound; depth++)
+        for (var depth = 1; depth <= ExceptionRecord.CauseBound; depth++)
         {
             cut = cut.CausedBy[0];
         }
 
-        // The cuts the bounds made are read back as they were said: six frames of seventy, the three records below the
-        // eighth, and the three unparsed lines past the fifty held.
-        Assert.Equal((6, 3, ResultDigest.Bound + 3), (read.Diagnostics[1].StackCut, cut.CausesCut, read.UnparsedCount));
+        // The cuts the bounds made are read back as they were said: six frames of seventy, the two records below the
+        // eighth cause, and the three unparsed lines past the fifty held.
+        Assert.Equal((6, 2, ResultDigest.Bound + 3), (read.Diagnostics[1].StackCut, cut.CausesCut, read.UnparsedCount));
         Assert.Null(ResultDigest.Read(null));
 
         var said = ResultDigest.Read(digest.Document(), text => text.Replace("192.0.2.10", "mac", StringComparison.Ordinal))!;

@@ -145,8 +145,9 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
-    /// A cause chain is followed eight deep, the records below counted on the eighth, never left out unsaid; the document
-    /// keeps the chain whole down to its cut, each cause beneath the one it caused; a model reads each cause under its error.
+    /// A cause chain is followed eight deep below its outermost record, the records below counted on the eighth cause,
+    /// never left out unsaid; the document keeps the chain whole down to its cut, each cause beneath the one it caused; a
+    /// model reads each cause under its error.
     /// </summary>
     [Fact]
     public void ACauseChain_IsFollowedToItsBound_TheRestCounted_AndRenderedUnderItsError()
@@ -162,12 +163,12 @@ public sealed class ResultDigestRecordTests
         var held = digest.Failures[0].Exception!;
         var eighth = held;
 
-        for (var depth = 1; depth < ExceptionRecord.CauseBound; depth++)
+        for (var depth = 1; depth <= ExceptionRecord.CauseBound; depth++)
         {
             eighth = Assert.Single(eighth.CausedBy);
         }
 
-        Assert.Equal(("Cause8", 4), (eighth.Type, eighth.CausesCut));
+        Assert.Equal(("Cause9", 3), (eighth.Type, eighth.CausesCut));
         Assert.Empty(eighth.CausedBy);
         Assert.Null(held.Problem());
 
@@ -181,24 +182,28 @@ public sealed class ResultDigestRecordTests
         Assert.Equal(
             ["at C1()", "caused by Cause2: cause 2", "at C2()", "caused by Cause3: cause 3", "at C3()", "caused by Cause4: cause 4", "at C4()",
                 "caused by Cause5: cause 5", "at C5()", "caused by Cause6: cause 6", "at C6()", "caused by Cause7: cause 7", "at C7()",
-                "caused by Cause8: cause 8", "at C8()", "... 4 causes deeper, left out of the record"],
+                "caused by Cause8: cause 8", "at C8()", "caused by Cause9: cause 9", "at C9()", "... 3 causes deeper, left out of the record"],
             rendered);
     }
 
-    /// <summary>A record whose chain is deeper than its bound says so: a cause depth is checked, never a count of siblings.</summary>
+    /// <summary>
+    /// A record whose chain is deeper than its bound says so - eight causes below the outermost record are within it, a
+    /// ninth is not: a cause depth is checked, never a count of siblings.
+    /// </summary>
     [Fact]
     public void ARecordPastItsCauseDepth_SaysItsProblem_ManySiblingsDoNot()
     {
         var siblings = new ExceptionRecord("System.AggregateException", "many", [], [.. Enumerable.Range(0, 20).Select(at => new ExceptionRecord("Inner", $"inner {at}", [], []))]);
-        var deep = new ExceptionRecord("Cause9", "nine", [], []);
+        var deep = new ExceptionRecord("Cause10", "ten", [], []);
 
-        for (var depth = 8; depth >= 1; depth--)
+        for (var depth = 9; depth >= 1; depth--)
         {
             deep = new ExceptionRecord($"Cause{depth}", $"cause {depth}", [], [deep]);
         }
 
         Assert.Null(siblings.Problem());
         Assert.Equal("its cause chain is over 8 deep", deep.Problem());
+        Assert.Null(deep.CausedBy[0].Problem());
         Assert.Null(deep.Held().Problem());
     }
 

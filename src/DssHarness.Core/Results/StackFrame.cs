@@ -57,7 +57,7 @@ public sealed record ExceptionRecord(
     IReadOnlyList<StackFrame> Stack,
     IReadOnlyList<ExceptionRecord> CausedBy)
 {
-    /// <summary>How many causes deep a chain is followed: a record this many below the outermost holds no causes of its own, and counts them.</summary>
+    /// <summary>How many causes deep a chain is followed below its outermost record: the cause this many below it holds no causes of its own, and counts them.</summary>
     public const int CauseBound = 8;
 
     /// <summary>How many of the stack's frames <see cref="Held"/> left out of the middle - which the log still holds; 0 where none were.</summary>
@@ -67,7 +67,7 @@ public sealed record ExceptionRecord(
     public int CausesCut { get; init; }
 
     /// <summary>What is wrong with this record; null when nothing is.</summary>
-    public string? Problem() => ProblemAt(1);
+    public string? Problem() => ProblemAt(0);
 
     /// <summary>
     /// This record held to the bounds every record a digest keeps is held to - its stack and each cause's to
@@ -75,7 +75,7 @@ public sealed record ExceptionRecord(
     /// was made, never left out unsaid. The one place a record is held: a parser and the engine read a chain whole, and
     /// the bound is applied here.
     /// </summary>
-    public ExceptionRecord Held() => HeldAt(1);
+    public ExceptionRecord Held() => HeldAt(0);
 
     /// <summary>
     /// The record of <paramref name="thrown"/>, as the engine keeps an error it did not expect: its type, its message, its

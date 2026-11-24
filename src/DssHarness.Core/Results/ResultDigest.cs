@@ -810,7 +810,7 @@ public sealed record ResultDigest
                 Optional(failure, "actual") is { } actual ? text(actual) : null,
                 Optional(failure, "file") is { } file ? text(file) : null,
                 Number(failure, "line"),
-                failure["exception"] is { } thrown ? ExceptionOf(thrown, 1) : null,
+                failure["exception"] is { } thrown ? ExceptionOf(thrown, 0) : null,
                 StackOf(failure),
                 failure["duration"] is null ? null : failure["duration"] is JsonValue duration && duration.TryGetValue<double>(out var seconds) ? seconds : throw new System.Text.Json.JsonException("'duration' is no number"),
                 Required(failure, "outcome"),

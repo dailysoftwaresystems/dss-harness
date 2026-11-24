@@ -9842,8 +9842,8 @@ tool met and the fold is linear; the first 50 diagnostics of each severity are h
 never displaced by warnings - with the first 50 failures and the first 50 unparsed lines, and the
 rest are counted by severity, by outcome, by code and by file over the whole output; every stack
 is held to 64 frames - the first 48 and the last 16, the middle cut and its count kept
-(`stackCut`), which the log range still holds - and every cause chain to 8 deep, the records below
-counted (`causesCut`); and a finding that is not one a digest holds - a severity, an outcome or a
+(`stackCut`), which the log range still holds - and every cause chain to 8 causes below its
+outermost error, the records below them counted (`causesCut`); and a finding that is not one a digest holds - a severity, an outcome or a
 line no tool means - is said among the unparsed lines with why, never held and never dropped
 unsaid. A digest says whether output the parsers did not understand remains: never a guess.
 
