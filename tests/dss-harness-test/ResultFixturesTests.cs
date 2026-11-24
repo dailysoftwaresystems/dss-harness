@@ -24,7 +24,7 @@ public sealed class ResultFixturesTests
     private static string Root => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "results");
 
     /// <summary>The bytes every fixture's digest said for a model costs, in all: pinned, so a change that grows or shrinks them is seen.</summary>
-    private const int HeldBytes = 33_066;
+    private const int HeldBytes = 33_094;
 
     /// <summary>Every fixture's directory: one tool's output, its <c>expect.json</c> and its <c>digest.json</c> inside.</summary>
     private static IReadOnlyList<string> Fixtures =>

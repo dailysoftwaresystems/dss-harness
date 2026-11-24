@@ -29,7 +29,7 @@ public sealed class ResultFileTests
         </TestRun>
         """;
 
-    /// <summary>A JUnit XML as ctest writes it with <c>--output-junit</c>.</summary>
+    /// <summary>A JUnit XML in the form the family shares: a failed case with what its assertion said, a passing one.</summary>
     private const string JUnit = """
         <?xml version="1.0" encoding="UTF-8"?>
         <testsuites tests="2" failures="1">
@@ -164,6 +164,35 @@ public sealed class ResultFileTests
         var one = Assert.Single(digest.Failures);
 
         Assert.Equal(("junit", "demo.one", "one", "demo", "failed", "the charge was wrong", 0.006), (one.Framework, one.Id, one.Name, one.Class, one.Outcome, one.Message, one.Duration));
+    }
+
+    /// <summary>
+    /// A case CTest wrote failed as CTest says it ended - a timeout timed out, a signal, a fault or an abort crashed, a
+    /// failure failed - read from the words its console says them in; a case another runner wrote failed, whatever its
+    /// assertion said.
+    /// </summary>
+    [Fact]
+    public void ACaseCTestWrote_EndedAsCTestSaysIt_AndAnotherRunnersFailed()
+    {
+        var digest = ResultFiles.Digest(
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="(empty)" tests="6" failures="5">
+              <testcase name="folds" classname="folds" time="0.0008" status="fail"><failure message="Failed"/></testcase>
+              <testcase name="parses" classname="parses" time="0.0133" status="fail"><failure message="SEGFAULT"/></testcase>
+              <testcase name="waits" classname="waits" time="3.0016" status="fail"><failure message="Timeout"/></testcase>
+              <testcase name="aborts" classname="aborts" time="0.0010" status="fail"><failure message="Child aborted"/></testcase>
+              <testcase name="keeps" classname="keeps" time="0.0011" status="run"/>
+              <testcase name="Waits" classname="Store" time="0.0020" status="run" result="completed"><failure message="Timeout of 5s was exceeded"/></testcase>
+            </testsuite>
+            """,
+            out var problem);
+
+        Assert.Null(problem);
+        Assert.Equal(
+            [("folds.folds", "failed"), ("parses.parses", "crashed"), ("waits.waits", "timedOut"), ("aborts.aborts", "crashed"), ("Store.Waits", "failed")],
+            digest.Failures.Select(failure => (failure.Id, failure.Outcome)));
+        Assert.Equal((2, 1, 2), (digest.Failed, digest.TimedOut, digest.Crashed));
     }
 
     /// <summary>

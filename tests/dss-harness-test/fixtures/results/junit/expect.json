@@ -3,11 +3,13 @@
     "file": true
   },
   "root": "/home/runner/work/app/app",
-  "failed": 3,
+  "failed": 1,
+  "timedOut": 1,
+  "crashed": 1,
   "first": null,
   "failures": [
     "failed folds_duplicates.folds_duplicates",
-    "failed parses_input.parses_input",
-    "failed waits_for_lock.waits_for_lock"
+    "crashed parses_input.parses_input",
+    "timedOut waits_for_lock.waits_for_lock"
   ]
 }

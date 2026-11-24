@@ -9809,7 +9809,9 @@ the digest's bounds apply. A file is known by its own shape, never by its name: 
 the .NET frame form, a data-driven test by its rows; a skipped one is no failure), a JUnit XML by
 the mutation arm's reader a case at a time (`JUnitReport`, which reads the message, file, line,
 time and outcome of a failed case - GoogleTest's attributes, Catch2's summaries, doctest's
-`path(line):` places - through its one reader that takes no document type), Dart's JSON reporter
+`path(line):` places, a case CTest's `--output-junit` marks `status="fail"` ended as its failure's
+`message` says in CTest's console words (`CTestParser.OutcomeOf`: `Timeout` timed out, a signal or
+a fault crashed) - through its one reader that takes no document type), Dart's JSON reporter
 stream a line at a time by its `type`-carrying lines (a failing test with its error event as its
 message and its `#n` stack, an error no test owns as a diagnostic), and a SARIF log by its runs in
 its 2.1 and 1.0 forms (each result a diagnostic: the driver's name, the level - `warning` where it

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using DssHarness.Core.Results;
 using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Mutations;
@@ -17,7 +18,11 @@ namespace DssHarness.Core.Mutations;
 /// </param>
 /// <param name="File">The file it names - the case's own <c>file</c> attribute (GoogleTest's), else one its body places itself in (doctest's <c>path(line):</c>); null where neither does.</param>
 /// <param name="Line">The line its <paramref name="File"/> names; null where none was named.</param>
-/// <param name="Outcome">How it failed: <c>errored</c> where it holds an <c>error</c>, <c>failed</c> where a <c>failure</c>; null where it did not.</param>
+/// <param name="Outcome">
+/// How it failed: <c>errored</c> where it holds an <c>error</c>; where a <c>failure</c>, how CTest says the test ended
+/// where CTest wrote the case (<c>timedOut</c>, <c>crashed</c>, <c>errored</c> or <c>failed</c>), else <c>failed</c>;
+/// null where it did not fail.
+/// </param>
 public sealed record JUnitCase(
     string Id,
     bool Ran,
@@ -29,15 +34,20 @@ public sealed record JUnitCase(
     string? Outcome = null);
 
 /// <summary>
-/// A test binary's JUnit XML report, read the one way GoogleTest, Catch2, doctest and Boost.Test all write it: every
-/// <c>testcase</c> under the <c>testsuites</c> or <c>testsuite</c> root, at whatever depth its suites nest.
+/// A test binary's JUnit XML report, read the one way GoogleTest, Catch2, doctest, Boost.Test and CTest's
+/// <c>--output-junit</c> all write it: every <c>testcase</c> under the <c>testsuites</c> or <c>testsuite</c> root, at
+/// whatever depth its suites nest.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A case is named <c>classname.name</c>, which for GoogleTest is <c>Suite.Case</c>, and <c>Prefix/Suite.Case/0</c> for a
 /// parameterized one; a case with no class is named by its name. It ran unless its <c>status</c> is <c>notrun</c>, which
 /// is how GoogleTest reports a disabled case: a skipped case ran, and was skipped, which a count of cases run includes.
-/// It is red when it holds a <c>failure</c> or an <c>error</c>.
+/// It is red when it holds a <c>failure</c> or an <c>error</c>. CTest marks a case it ran that failed <c>status="fail"</c>
+/// and says in its failure's <c>message</c> how the test ended, in the words its console says it in - <c>Failed</c>,
+/// <c>Timeout</c>, <c>SEGFAULT</c> and the other ends of a process - so that case's outcome is read from those words
+/// by the one owner of them (<see cref="CTestParser.OutcomeOf"/>); no other runner writes that status, and
+/// another's message is what its assertion said, never how its test ended.
 /// </para>
 /// <para>
 /// Read from the report, never from what the binary printed: a case name parsed out of a test's output is whatever the
@@ -235,7 +245,9 @@ public sealed class JUnitReport
             Message: said,
             File: file,
             Line: line,
-            Outcome: failed.Name.LocalName == "error" ? "errored" : "failed");
+            Outcome: failed.Name.LocalName == "error" ? "errored"
+                : string.Equals((string?)@case.Attribute("status"), "fail", StringComparison.Ordinal) && said is not null ? CTestParser.OutcomeOf(said) ?? "failed"
+                : "failed");
     }
 
     /// <summary>The case's own time, in seconds as the report writes it; null where it says none.</summary>
