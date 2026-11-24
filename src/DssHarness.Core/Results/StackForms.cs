@@ -1685,7 +1685,7 @@ internal sealed class RustPanicParser : IBuiltInParser
 /// path:line[:col]</c>, <c>(module+0x...)</c> where only the binary is known - and the stacks after it (where the memory
 /// was allocated, freed, last written, where its value was made) are part of the record. A report the sanitizer ended
 /// the program over - closed by the line it halts with, AddressSanitizer's <c>==pid==ABORTING</c>, MemorySanitizer's
-/// <c>Exiting</c> under its <c>SUMMARY:</c> - has <c>crashed</c> it; every other - one the program recovered from and ran
+/// <c>Exiting</c>, the last line of its report - has <c>crashed</c> it; every other - one the program recovered from and ran
 /// on, a warning, a runtime error UBSan printed no halt line for - has <c>errored</c> it. A report that ended the program
 /// inside a test a runner said began is that test's failure (<see cref="ResultSink.AddCrash"/>).
 /// </summary>
@@ -1709,7 +1709,10 @@ internal sealed class SanitizerParser : IBuiltInParser
 
     private static readonly Regex Aborting = LinearRegex.Compile(@"^==\d+==ABORTING$");
 
-    /// <summary>The line MemorySanitizer halts the program with, under its report's <c>SUMMARY:</c>.</summary>
+    /// <summary>
+    /// The line MemorySanitizer halts the program with, the last of its report: under its <c>SUMMARY:</c>, or under its
+    /// stacks where it was told to print no summary.
+    /// </summary>
     private const string MemoryHalt = "Exiting";
 
     private static readonly Regex Shadow = LinearRegex.Compile(@"^(?:Shadow byte.*|=>0x.*|\s+\S.*)$");
@@ -1841,7 +1844,7 @@ internal sealed class SanitizerParser : IBuiltInParser
 
         /// <summary>Whether a line is the one the open report's sanitizer halts the program with.</summary>
         private bool Halted(string text)
-            => Aborting.IsMatch(text) || (_summary && _kind == "MemorySanitizer" && string.Equals(text, MemoryHalt, StringComparison.Ordinal));
+            => Aborting.IsMatch(text) || (_kind == "MemorySanitizer" && string.Equals(text, MemoryHalt, StringComparison.Ordinal));
 
         private void Open(NumberedLine line, string kind, string message, bool runtime)
         {

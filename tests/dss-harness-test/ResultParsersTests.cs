@@ -1278,10 +1278,13 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
-    /// A sanitizer's report has crashed the program only where the sanitizer aborted it - its <c>==pid==ABORTING</c>
-    /// closed the report - and errored it where the program ran on, as one recovers from UndefinedBehaviorSanitizer's
+    /// A sanitizer's report has crashed the program only where the sanitizer ended it - the line it halts with closed the
+    /// report, AddressSanitizer's <c>==pid==ABORTING</c>, MemorySanitizer's <c>Exiting</c>, the last line of its report
+    /// whether or not it was told to print its summary (the msan fixture holds its summary, from a program it halted and
+    /// one it let run on) - and errored it where the program ran on, as one recovers from UndefinedBehaviorSanitizer's
     /// runtime error by default: the report still said, its place the line it named, never a crash the program did not
-    /// make. The lines are the tool's own output (g++ 13's UBSan, recovering).
+    /// make. The lines are the tools' own output: g++ 13's UBSan recovering, and clang 19's MemorySanitizer halting a
+    /// program run with <c>print_summary=0</c>.
     /// </summary>
     [Fact]
     public void ASanitizersReport_HasCrashedTheProgramOnlyWhereItAbortedIt()
@@ -1290,14 +1293,25 @@ public sealed class ResultParsersTests
             [
                 "ubsan.c:5:18: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'",
                 "next is -2147483648",
+                "==392==WARNING: MemorySanitizer: use-of-uninitialized-value",
+                "    #0 0x55555561ffe6 in pick /home/runner/work/app/app/umr.c:5:3",
+                "    #1 0x55555561fde9 in main /home/runner/work/app/app/umr.c:11:7",
+                "    #2 0x7ffff7c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7ffff7c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5555555862f4 in _start (/home/runner/work/app/app/umr+0x322f4) (BuildId: 8b79297ecb13ba3876f8c5850e6a6b9dfee7c518)",
+                string.Empty,
+                "Exiting",
             ],
             PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
 
-        var said = Assert.Single(digest.Failures);
-
         Assert.Equal(
-            ("sanitizer", "errored", "UndefinedBehaviorSanitizer: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'", "ubsan.c", 5),
-            (said.Framework, said.Outcome, said.Id, said.File!, said.Line!.Value));
+            [
+                ("sanitizer", "errored", "UndefinedBehaviorSanitizer: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'", (1, 1)),
+                ("sanitizer", "crashed", "MemorySanitizer: use-of-uninitialized-value", (3, 10)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Log!.Value)));
+        Assert.Equal(("ubsan.c", 5), (digest.Failures[0].File!, digest.Failures[0].Line!.Value));
+        Assert.Equal(5, digest.Failures[1].Exception!.Stack.Count);
         Assert.Empty(digest.Unparsed ?? []);
     }
 
