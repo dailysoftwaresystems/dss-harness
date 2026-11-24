@@ -10029,7 +10029,9 @@ failure's - and the runner says the test crashed only where no report said it al
 program recovered from and ran on is the report's own, its message naming the test it ran in, and the
 runner says that test as it ended, passed or failed. An error that ended its program has `crashed` it, on every runtime - .NET's
 `Unhandled exception.`, the JVM's `Exception in thread`, Node's printed under the header of where it
-was thrown, Python's whose traceback runs through a module's top level, Dart's `Unhandled exception:`,
+was thrown, Python's whose traceback runs through a module's top level and is the last its program
+printed (the next line not blank the log's end or another traceback's head: an error a handler at a
+module's top level logged, the program printing on, has errored), Dart's `Unhandled exception:`,
 Go's panic, Rust's on `main` - and one a program caught and printed, the program going on, has
 `errored`, as a sanitizer's report has where the program ran on: crashed only where the line its
 sanitizer halts the program with closed it - AddressSanitizer's `==pid==ABORTING`, MemorySanitizer's

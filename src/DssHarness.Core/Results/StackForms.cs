@@ -606,9 +606,12 @@ internal sealed class JvmStackParser : IBuiltInParser
 /// innermost first. Tracebacks chained by <c>During handling of the above exception</c> or <c>The above exception was
 /// the direct cause</c> are one error: the last printed the one raised, each before it the cause of the one after. A
 /// traceback no error line ends is given back. The error raised has <c>crashed</c> the program where its traceback runs
-/// through a module's top level (<c>&lt;module&gt;</c>) - an error no handler caught on its way out, which is how Python
-/// reports the one that ended it, run as a script, with <c>-m</c> or <c>-c</c> - and has <c>errored</c> where it does
-/// not: one a handler caught and printed inside a function, or a thread's.
+/// through a module's top level (<c>&lt;module&gt;</c>) and is the last thing the program printed - the next line not
+/// blank the log's end or another traceback's head - which is how Python reports the error that ended it, run as a script,
+/// with <c>-m</c> or <c>-c</c>, printing nothing after it; it has <c>errored</c> where it does not: one a handler caught
+/// and printed inside a function, a thread's, or one a handler at a module's top level caught and logged, the program
+/// printing on after it. The reading holds no line while it waits for the line after the chain: a blank one says nothing
+/// either way, and is no record's.
 /// </summary>
 internal sealed class PythonStackParser : IBuiltInParser
 {
@@ -635,6 +638,7 @@ internal sealed class PythonStackParser : IBuiltInParser
         private List<StackFrame>? _frames;
         private bool _chained;
         private bool _blank;
+        private bool _whole;
         private int _from;
         private int _to;
 
@@ -665,12 +669,13 @@ internal sealed class PythonStackParser : IBuiltInParser
                     return LineTaken.Took;
                 }
 
+                // A traceback no error line ended is given back, and the program printed on past the chain before it.
                 _frames = null;
-                Close(sink);
+                Close(sink, printedOn: true);
                 return LineTaken.Left;
             }
 
-            if (_chain.Count > 0)
+            if (_chain.Count > 0 && !_whole)
             {
                 if (text.Trim().Length == 0 && !_blank)
                 {
@@ -692,7 +697,8 @@ internal sealed class PythonStackParser : IBuiltInParser
 
                 if (!_chained || !Head.IsMatch(text))
                 {
-                    Close(sink);
+                    // The chain is whole; the line after it says whether the program printed on.
+                    _whole = true;
 
                     if (blank)
                     {
@@ -700,6 +706,19 @@ internal sealed class PythonStackParser : IBuiltInParser
                         return LineTaken.Left;
                     }
                 }
+            }
+
+            if (_whole)
+            {
+                if (text.Trim().Length == 0)
+                {
+                    // A blank line says nothing of whether the program printed on: no record holds it, and none is held.
+                    return LineTaken.Left;
+                }
+
+                // Python prints nothing after the traceback of the error that ended the program: a line of the program's
+                // after it says it ran on, while another traceback's head, or the log's end, says nothing did.
+                Close(sink, printedOn: !Head.IsMatch(text));
             }
 
             if (Head.IsMatch(text))
@@ -719,14 +738,20 @@ internal sealed class PythonStackParser : IBuiltInParser
         public LineTaken End(ResultSink sink)
         {
             _frames = null;
-            Close(sink);
+            Close(sink, printedOn: false);
             return LineTaken.Left;
         }
 
-        private void Close(ResultSink sink)
+        /// <summary>
+        /// Says the chain read: <c>crashed</c> where the error it raised ran through a module's top level and the program
+        /// printed nothing after it, <c>errored</c> where it did not - caught inside a function, a thread's - or where the
+        /// program printed on, its handler having caught and printed it.
+        /// </summary>
+        private void Close(ResultSink sink, bool printedOn)
         {
             _chained = false;
             _blank = false;
+            _whole = false;
 
             if (_chain.Count == 0)
             {
@@ -745,7 +770,7 @@ internal sealed class PythonStackParser : IBuiltInParser
                 ParsedText.Headed(cause!.Type, cause.Message),
                 Message: cause.Message.Length > 0 ? cause.Message : null,
                 Exception: cause,
-                Outcome: cause.Stack.Any(frame => frame.Symbol == ModuleLevel) ? "crashed" : "errored",
+                Outcome: !printedOn && cause.Stack.Any(frame => frame.Symbol == ModuleLevel) ? "crashed" : "errored",
                 Log: (_from, _to)));
             _chain.Clear();
         }
