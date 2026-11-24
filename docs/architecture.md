@@ -9923,7 +9923,10 @@ that targets several frameworks, `::TargetFramework=...`, left with the build); 
 clang-cl's place written in MSVC's parentheses with no code among it, read as clang's ahead of the
 canonical form - the chain that led to an error its stack - the include chain, the
 instantiation chain, the macro expansions - handed whole, for the digest is the one owner of a
-stack's bound; the linkers (GNU ld - a reference by its line where the object holds line information,
+stack's bound; the source and caret lines are the record's they follow, printed with the line-number
+gutter and, as clang before 17 printed them, with none - a bare source line held for the caret under
+it, which says it is the source - so the notes after it still read as its chain on the clang of
+macOS's runner and of Ubuntu 22.04; the linkers (GNU ld - a reference by its line where the object holds line information,
 behind its object where ld names it first as MinGW's does, behind a linker named by a drive's path -
 gold, lld, ld64, link); CMake's message blocks (the command that raised one
 said ahead of its message, for a diagnostic's project is the project or target a build names, never a command); Ninja's

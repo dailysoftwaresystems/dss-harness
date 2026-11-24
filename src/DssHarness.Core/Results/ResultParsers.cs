@@ -534,7 +534,10 @@ internal sealed class MsBuildParser : IBuiltInParser
 /// instantiation chain above it (<c>In instantiation of</c>, <c>required from</c>), and the notes under it that carry a
 /// chain - clang's <c>in instantiation of ... requested here</c> and <c>expanded from macro</c>, gcc's <c>in expansion of
 /// macro</c>. Every other note, the source and caret lines, and the trailers (<c>N errors generated.</c>,
-/// <c>compilation terminated.</c>) are lines of the record they follow, never diagnostics of their own. The flag that
+/// <c>compilation terminated.</c>) are lines of the record they follow, never diagnostics of their own. The source and
+/// caret lines are read as clang prints them, with the line-number gutter and, as clang before 17 printed them, with
+/// none: a bare line under a diagnostic or a note is held for the one line after it, which says by its caret whether it
+/// was the source. The flag that
 /// names a diagnostic is its code, <c>-Werror=x</c> and <c>-Werror,-Wx</c> read as the <c>-Wx</c> they promote.
 /// </summary>
 internal abstract class GnuFormParser : IBuiltInParser
@@ -560,6 +563,9 @@ internal abstract class GnuFormParser : IBuiltInParser
 
     private static readonly Regex Excerpt = LinearRegex.Compile(@"^(?:\s*\d*\s*\|.*|\s*\+\+\+ \|.*|\s+[\^~][\^~\s]*)$");
 
+    /// <summary>The caret line under a source line, wherever under it clang printed it: with the gutter or, as clang before 17 printed it, with none.</summary>
+    private static readonly Regex Caret = LinearRegex.Compile(@"^\s*[\^~][\^~\s]*$");
+
     private static readonly Regex Trailer = LinearRegex.Compile(@"^(?:\d+ (?:error|warning)s? generated\.|compilation terminated\.|(?:\S*[/\\])?(?:cc1\w*|lto1)(?:\.exe)?: (?:some|all) warnings being treated as errors)$");
 
     private static readonly Regex Chained = LinearRegex.Compile(@"(?:in instantiation of .* requested here|required from|expanded from macro|in expansion of macro)");
@@ -581,6 +587,8 @@ internal abstract class GnuFormParser : IBuiltInParser
         private List<StackFrame> _frames = [];
         private int _to;
         private bool _saidSinceTrailer;
+        private bool _source;
+        private bool _candidate;
 
         public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
@@ -588,8 +596,27 @@ internal abstract class GnuFormParser : IBuiltInParser
 
             if (_open is not null)
             {
+                if (_candidate)
+                {
+                    // The line under the one held, which says by its caret whether that was the source clang printed
+                    // with no gutter: it was, and both are the record's, or the held line was no source line, and both
+                    // are offered again - the held one to the others, this one to every reading as from a fresh start.
+                    _candidate = false;
+
+                    if (Caret.IsMatch(text))
+                    {
+                        _source = false;
+                        _to = line.Last;
+                        return LineTaken.Took;
+                    }
+
+                    Close(sink);
+                    return LineTaken.Left;
+                }
+
                 if (Excerpt.IsMatch(text))
                 {
+                    _source = false;
                     _to = line.Last;
                     return LineTaken.Took;
                 }
@@ -606,6 +633,7 @@ internal abstract class GnuFormParser : IBuiltInParser
                             Kind: note.Groups["message"].Value.Contains("macro", StringComparison.Ordinal) ? "macro" : "instantiation"));
                     }
 
+                    _source = true;
                     _to = line.Last;
                     return LineTaken.Took;
                 }
@@ -615,6 +643,15 @@ internal abstract class GnuFormParser : IBuiltInParser
                     Close(sink);
                     _saidSinceTrailer = false;
                     return LineTaken.Took;
+                }
+
+                if (_source)
+                {
+                    // The line under a diagnostic or a note, which clang before 17 printed with no gutter: held for
+                    // the one line after it, the caret under it, which says whether it is the source.
+                    _source = false;
+                    _candidate = true;
+                    return LineTaken.Held;
                 }
 
                 Close(sink);
@@ -719,6 +756,7 @@ internal abstract class GnuFormParser : IBuiltInParser
             _open = diagnostic with { Log = (_from ?? line.Number, line.Last) };
             _frames = [.. _chain];
             _to = line.Last;
+            _source = true;
             Unchain();
         }
 
@@ -733,6 +771,8 @@ internal abstract class GnuFormParser : IBuiltInParser
             _saidSinceTrailer = true;
             _open = null;
             _frames = [];
+            _source = false;
+            _candidate = false;
         }
 
         /// <summary>The diagnostic <paramref name="text"/> says, its place in either form clang prints: its own, or MSVC's as clang-cl writes it.</summary>
