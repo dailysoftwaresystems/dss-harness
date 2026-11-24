@@ -287,8 +287,9 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
 
     /// <summary>
     /// The handoff an answer gives: its notes where it answered with an envelope that holds them
-    /// (<see cref="AgentEnvelope.Notes"/>), else the whole answer held to the schema, else its text; null where that says
-    /// nothing, and the agent gave no handoff.
+    /// (<see cref="AgentEnvelope.Notes"/>), else the whole answer held to the schema - written as every JSON an agent reads
+    /// is (<see cref="AgentEnvelope.Written"/>), so the next to read it reads what was written - else its text; null where
+    /// that says nothing, and the agent gave no handoff.
     /// </summary>
     /// <param name="structured">The answer held to the run's schema, where it carries one.</param>
     /// <param name="text">The answer's text.</param>
@@ -296,7 +297,7 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
     {
         var answer = structured is System.Text.Json.Nodes.JsonObject held && held[AgentEnvelope.Notes] is System.Text.Json.Nodes.JsonValue notes && notes.TryGetValue<string>(out var said)
             ? said
-            : structured?.ToJsonString() ?? text;
+            : structured?.ToJsonString(AgentEnvelope.Written) ?? text;
 
         return string.IsNullOrWhiteSpace(answer) ? null : answer;
     }

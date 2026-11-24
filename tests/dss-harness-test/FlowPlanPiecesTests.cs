@@ -643,6 +643,38 @@ public sealed class FlowPlanPiecesTests
         + "'rounds.items[0].withdraw' (withdraw): skipped (not this work item's: it is 'added', and 'build' carries it); "
         + "the newest output of the work, of 'rounds.items[0].probe': {\"answer\":\"go\",\"text\":\"\"}; the work now is in the worktree you are in, with what was not folded";
 
+    /// <summary>
+    /// The engine's account of the work a piece starts from quotes the work's newest output as it was written - JSON's own
+    /// escapes alone - so what a person answered, an angle bracket, an ampersand, an apostrophe and a letter past ASCII
+    /// among it, reaches the visit that reads it as the person wrote it.
+    /// </summary>
+    [Fact]
+    public async Task ThePiecesBefore_QuotesTheNewestOutputOfTheWork_AsItWasWritten()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Flow.Replace("            options: [go, stop]\n", "            options: [go, stop]\n            text: [go]\n", StringComparison.Ordinal));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, ChangingOne(), records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+            var firstProbe = coordinator.OpenQuestions.Single().Id;
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("the one item is different", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(firstProbe, "go", "keep <List<T>> & the 'café'", out var refused), refused);
+            _ = await coordinator.RunAsync(Token);
+
+            Assert.Contains(
+                "the newest output of the work, of 'rounds.items[0].probe': {\"answer\":\"go\",\"text\":\"keep <List<T>> & the 'café'\"}; the work now is in",
+                coordinator.OpenQuestions.Single().Problem,
+                StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>The runner of <see cref="Flow"/> whose planner concludes "one" and whose update changes it: the shape most tests of an instance brought to rest drive.</summary>
     private static FakeRunner ChangingOne()
     {

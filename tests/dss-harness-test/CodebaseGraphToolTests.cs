@@ -692,7 +692,12 @@ public sealed partial class CodebaseGraphToolTests
     public async Task TheSchemaMadeForAStep_HoldsOnlyTheOperationsItIsGiven(bool write, bool narrow, string ops, string extra)
     {
         var given = CodebaseGraphTool.Operations(write, narrow);
-        var schema = JsonNode.Parse(CodebaseGraphTool.Schema(given))!;
+        var written = CodebaseGraphTool.Schema(given);
+        var schema = JsonNode.Parse(written)!;
+
+        // Written as every JSON an agent's call carries is: JSON's own escapes alone.
+        Assert.DoesNotContain("\\u", written, StringComparison.Ordinal);
+        Assert.Contains("a file's path, relative to the tree with forward separators.", written, StringComparison.Ordinal);
         var members = schema["properties"]!.AsObject().Select(member => member.Key).ToHashSet(StringComparer.Ordinal);
 
         Assert.Empty(JsonSchemaSubset.SubsetProblems(schema));

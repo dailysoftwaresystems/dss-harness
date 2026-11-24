@@ -11846,7 +11846,8 @@ public sealed class FlowCoordinator
 
         if (spoke?.Output is JsonObject newest)
         {
-            lines.Add($"the newest output of the work, of '{spoke.Id}': {newest.ToJsonString()}");
+            // Written as every JSON an agent reads is: what a person or an agent wrote reads as written.
+            lines.Add($"the newest output of the work, of '{spoke.Id}': {newest.ToJsonString(DssHarness.Core.Agents.AgentEnvelope.Written)}");
         }
 
         lines.Add(again

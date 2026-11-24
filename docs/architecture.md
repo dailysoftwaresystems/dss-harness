@@ -3090,8 +3090,14 @@ schema says (the notes not empty, a null output only where the answer asks, and 
 record's own rule - `AgentAssumption.Problems`, `AgentQuestion.Problems`: every text written, options no two alike, a
 recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), an
 output that reads against its schema held to the step's own rules where it has any (`AgentOutput.Holds`, each problem a
-path under `$.output`, sent back as a schema's is and counted with its repairs), and the run's end - `Completed` or
-`Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
+path under `$.output`, sent back as a schema's is and counted with its repairs - the route's rules of a review's
+findings and the analyst's evidence alike, one hook), and the run's end - `Completed` or `Asked`, with `PersonAsked`, or
+a repair sent back, then `InvalidOutput`. Every JSON an agent reads or its call carries is written by one writer,
+`AgentEnvelope.Written`, JSON's own escapes alone and at any depth, so an apostrophe, an angle bracket, an ampersand
+or a letter past ASCII reads as it was written: the envelope, a value a problem quotes, a template's JSON value
+(`FlowValue.AsTemplateText`, `{run.closure}` among them), the engine's account of the work a piece starts from
+(`{piece.before}`), a red leg's digest in the continuation record, a handoff given as the whole answer
+(`AgentHandoffSignal.AnswerOf`), each tool's input schema and a measure call's answer. The runner writes
 the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
 before an attempt begins, for the step's directory is every attempt's; it writes the first user message as sent, masked,
 as `user.md` (`OrchestratorLayout.StepUserFileName`) before the client is taken - the parts the attempt was given, held

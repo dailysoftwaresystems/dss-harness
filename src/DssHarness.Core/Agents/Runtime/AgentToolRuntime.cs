@@ -643,7 +643,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         var records = AgentMeasureSupport.RecordsOf(_run.StepDirectory, callId);
         var asked = new AgentMeasureCall(callId, Text(input["leg"]), Text(input["variant"]), Text(input["filter"]), Text(input["cell"]), records);
         var answer = await _run.Measure!.Measure(asked, cancellationToken).ConfigureAwait(false);
-        var said = AgentMeasureSupport.Said(asked, answer).ToJsonString();
+        var said = AgentMeasureSupport.Said(asked, answer).ToJsonString(AgentEnvelope.Written);
 
         _host.FileSystem.CreateDirectory(records);
         _host.FileSystem.WriteAllTextAtomic(AgentMeasureSupport.RecordFileOf(_run.StepDirectory, callId), _run.Mask.Redact(said) + "\n");

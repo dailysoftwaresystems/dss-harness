@@ -456,7 +456,7 @@ public sealed class CodebaseGraphTool(
             ["properties"] = properties,
             ["required"] = new JsonArray("op"),
             ["additionalProperties"] = false,
-        }.ToJsonString();
+        }.ToJsonString(AgentEnvelope.Written);
     }
 
     /// <summary>What the model is told the tool does, for a step given <paramref name="ops"/>: the operations it may use alone, with their bounds.</summary>
