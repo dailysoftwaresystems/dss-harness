@@ -10022,7 +10022,8 @@ only where that package's own block said nothing, so neither another package's b
 failing tests silence it, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
 or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
 failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
-test`'s, jest's, vitest's). A crash a report says ended the program inside a test a runner said began
+test`'s - a failure whose top frame is the test framework's own an expectation that failed, any other
+a thrown error that errored the test, as its JSON reporter says of it - jest's, vitest's). A crash a report says ended the program inside a test a runner said began
 is that test's failure, said once - the report's own words its message, its stack and place the
 failure's - and the runner says the test crashed only where no report said it already; a report the
 program recovered from and ran on is the report's own, its message naming the test it ran in, and the
@@ -10085,7 +10086,9 @@ time and outcome of a failed case - GoogleTest's attributes, Catch2's summaries,
 a fault crashed) - through its one reader that takes no document type, a case whose class is its own
 name, as CTest writes every one, named once in the digest with no class), Dart's JSON reporter
 stream a line at a time by its `type`-carrying lines (a failing test with its error event as its
-message and its `#n` stack, an error no test owns as a diagnostic), and a SARIF log by its runs in
+message and its `#n` stack, a thrown error its record by the one reading of a Dart error that `dart
+test`'s console and the VM's `Unhandled exception:` are read by - its type what its first line says
+before its first `: ` - an error no test owns as a diagnostic), and a SARIF log by its runs in
 its 2.1 and 1.0 forms, read from its stream a result at a time and never held whole (each result a diagnostic: the driver's name, the level - `warning` where it
 names none - the rule, the message, the place and its range). A member of another shape than the
 form's is read as absent; a file a crash cut short gives every finding before the break and says

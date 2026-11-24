@@ -189,6 +189,42 @@ public static class StackForms
 
         return [.. lines.Select(DartFrameOf).OfType<StackFrame>()];
     }
+
+    /// <summary>
+    /// A Dart error as its lines say it, with <paramref name="frames"/> its stack: its type what its first line says before
+    /// its first <c>: </c>, as Dart prints it (<c>Bad state</c>, <c>RangeError (index)</c>), else that whole line; its
+    /// message the rest, every line of it. Null where its lines say nothing. The one reading of a Dart error, whichever
+    /// printed it - the VM's <c>Unhandled exception:</c>, <c>dart test</c>'s console, its JSON reporter's event.
+    /// </summary>
+    /// <param name="lines">The error's lines, as printed.</param>
+    /// <param name="frames">Its frames.</param>
+    public static ExceptionRecord? DartThrownOf(IEnumerable<string> lines, IReadOnlyList<StackFrame> frames)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(frames);
+
+        if (ParsedText.Joined(lines) is not { } said || said.Split('\n')[0] is not { Length: > 0 } first)
+        {
+            return null;
+        }
+
+        var colon = first.IndexOf(": ", StringComparison.Ordinal);
+
+        return new ExceptionRecord(colon > 0 ? first[..colon] : first, colon > 0 ? said[(colon + 2)..] : string.Empty, frames, []);
+    }
+
+    /// <summary>
+    /// Whether a Dart failure's top frame is a test framework's own - <c>package:matcher</c>'s <c>expect</c>,
+    /// <c>package:test_api</c>'s <c>fail</c>, <c>package:checks</c>' checks: a failed expectation, where any other top frame
+    /// is a thrown error's.
+    /// </summary>
+    /// <param name="top">The failure's first frame.</param>
+    public static bool IsDartExpectation(StackFrame top)
+    {
+        ArgumentNullException.ThrowIfNull(top);
+
+        return top.Module is "package:matcher" or "package:test_api" or "package:test" or "package:checks";
+    }
 }
 
 /// <summary>
@@ -923,9 +959,8 @@ internal sealed class V8StackParser : IBuiltInParser
 /// <summary>
 /// Dart's stack trace: <c>Unhandled exception:</c>, the error's lines under it, and its frames - the VM's <c>#0 f
 /// (location:line:col)</c> with <c>&lt;asynchronous suspension&gt;</c> between awaited ones, or the terse form
-/// <c>package:stack_trace</c> prints (<see cref="StackForms.DartFrameOf"/>). The error's type is what its first line
-/// says before its first <c>: </c>, as Dart prints it (<c>Bad state</c>, <c>RangeError (index)</c>). An error that ended
-/// the isolate has <c>crashed</c> it.
+/// <c>package:stack_trace</c> prints (<see cref="StackForms.DartFrameOf"/>). The error is read by the one reading of a
+/// Dart error (<see cref="StackForms.DartThrownOf"/>). An error that ended the isolate has <c>crashed</c> it.
 /// </summary>
 internal sealed class DartStackParser : IBuiltInParser
 {
@@ -989,8 +1024,7 @@ internal sealed class DartStackParser : IBuiltInParser
 
             var said = ParsedText.Joined(error) ?? string.Empty;
             var first = said.Split('\n')[0];
-            var colon = first.IndexOf(": ", StringComparison.Ordinal);
-            var record = first.Length == 0 ? null : new ExceptionRecord(colon > 0 ? first[..colon] : first, colon > 0 ? said[(colon + 2)..] : string.Empty, [.. _frames], []);
+            var record = StackForms.DartThrownOf(error, [.. _frames]);
 
             sink.Add(new TestFailure(
                 "dart",

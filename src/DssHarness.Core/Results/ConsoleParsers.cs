@@ -664,8 +664,11 @@ internal sealed class CTestParser : IBuiltInParser
 /// <summary>
 /// <c>dart test</c>'s console: each progress line <c>00:00 +0 -1: file: name [E]</c> opening a failure, the lines under
 /// it - the matcher's <c>Expected:</c> and <c>Actual:</c>, or the thrown error's own words - and its stack in the terse
-/// form (<see cref="StackForms.DartFrameOf"/>); a suite that failed to load (<c>loading file [E]</c>) has errored. The
-/// progress lines, <c>Some tests failed.</c> and the <c>Failing tests:</c> list say only what was said.
+/// form (<see cref="StackForms.DartFrameOf"/>). A failure whose top frame is the test framework's own
+/// (<see cref="StackForms.IsDartExpectation"/>) failed an expectation; one whose top frame is any other is a thrown error,
+/// read by the one reading of a Dart error (<see cref="StackForms.DartThrownOf"/>), and has errored the test, as the JSON
+/// reporter says of the same test; a suite that failed to load (<c>loading file [E]</c>) has errored. The progress lines,
+/// <c>Some tests failed.</c> and the <c>Failing tests:</c> list say only what was said.
 /// </summary>
 internal sealed class DartTestParser : IBuiltInParser
 {
@@ -754,7 +757,8 @@ internal sealed class DartTestParser : IBuiltInParser
             {
                 var colon = name.IndexOf(": ", StringComparison.Ordinal);
                 var loading = name.StartsWith("loading ", StringComparison.Ordinal);
-                var (expected, actual) = ConsoleText.ValuesOf(_message);
+                var thrown = !loading && _frames.Count > 0 && !StackForms.IsDartExpectation(_frames[0]) ? StackForms.DartThrownOf(_message, [.. _frames]) : null;
+                var (expected, actual) = thrown is null ? ConsoleText.ValuesOf(_message) : (null, null);
 
                 sink.Add(new TestFailure(
                     "dart",
@@ -764,8 +768,9 @@ internal sealed class DartTestParser : IBuiltInParser
                     Message: ParsedText.Joined(_message),
                     Expected: expected,
                     Actual: actual,
-                    Stack: [.. _frames],
-                    Outcome: loading ? "errored" : "failed",
+                    Exception: thrown,
+                    Stack: thrown is null ? [.. _frames] : [],
+                    Outcome: loading || thrown is not null ? "errored" : "failed",
                     Log: (_from, _to)));
                 _said.Add(name);
             }

@@ -357,7 +357,7 @@ public sealed class ResultFileTests
 
         var one = Assert.Single(digest.Failures);
 
-        Assert.Equal(("dart", "charge test", "failed", "Expected: 3\n  Actual: 4"), (one.Framework, one.Id, one.Outcome, one.Message));
+        Assert.Equal(("dart", "charge test", "failed", "Expected: 3\n  Actual: 4", "3", "4"), (one.Framework, one.Id, one.Outcome, one.Message, one.Expected, one.Actual));
         Assert.Equal(("d:/src/test/charge_test.dart", (int?)7), (one.File, one.Line));
         Assert.Equal([("d:/src/test/charge_test.dart", (int?)8, "main"), ("d:/src/test/charge_test.dart", 3, "_main")], one.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
         Assert.Null(one.Exception);
@@ -386,7 +386,7 @@ public sealed class ResultFileTests
 
         Assert.Null(problem);
         Assert.Equal([("charges", "failed", (string?)null), ("keeps records", "errored", "This test failed after it had already completed.")], digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Message)));
-        Assert.Equal("error", digest.Failures[1].Exception!.Type);
+        Assert.Equal(("This test failed after it had already completed.", string.Empty), (digest.Failures[1].Exception!.Type, digest.Failures[1].Exception!.Message));
     }
 
     /// <summary>

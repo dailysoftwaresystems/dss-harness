@@ -591,22 +591,28 @@ public static class ResultFiles
         }
 
         /// <summary>
-        /// A test that did not pass: its name, its place, and the error its own - a failed expectation's stack the
-        /// failure's, an unexpected error's its record's.
+        /// A test that did not pass: its name, its place, and the error its own, its lines cut by the one rule of where
+        /// lines end - a failed expectation's message what it expected and what there was, its stack the failure's; an
+        /// unexpected error's read by the one reading of a Dart error (<see cref="StackForms.DartThrownOf"/>), its stack
+        /// its record's - so the same test reads the same from the console and from the reporter.
         /// </summary>
         private static TestFailure Failure((string Name, string? Url, int? Line) test, string result, (string Error, string? Stack, bool Failure) own)
         {
-            IReadOnlyList<StackFrame> frames = own.Stack is { } thrown ? StackForms.DartFramesOf(LineEnds.Lines(thrown)) : [];
-            var said = own.Error is { Length: > 0 } error ? error : null;
+            IReadOnlyList<StackFrame> frames = own.Stack is { } stack ? StackForms.DartFramesOf(LineEnds.Lines(stack)) : [];
+            List<string> lines = own.Error is { } error ? LineEnds.Lines(error) : [];
+            var thrown = own.Failure ? null : StackForms.DartThrownOf(lines, frames);
+            var (expected, actual) = thrown is null ? ConsoleText.ValuesOf(lines) : (null, null);
 
             return new TestFailure(
                 "dart",
                 test.Name,
-                Message: said,
+                Message: ParsedText.Joined(lines),
+                Expected: expected,
+                Actual: actual,
                 File: ParsedText.FileOf(test.Url),
                 Line: test.Line,
-                Exception: said is not null && !own.Failure ? new ExceptionRecord("error", said, frames, []) : null,
-                Stack: said is not null && !own.Failure ? [] : frames,
+                Exception: thrown,
+                Stack: thrown is null ? frames : [],
                 Outcome: result == "error" ? "errored" : "failed");
         }
     }
