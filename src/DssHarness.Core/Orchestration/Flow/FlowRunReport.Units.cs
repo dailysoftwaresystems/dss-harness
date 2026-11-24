@@ -76,9 +76,10 @@ public sealed record FlowUnit(string Kind, decimal Base)
     /// The unit a word written beside a number names - <c>s</c>, <c>min</c>, <c>hours</c>, <c>tokens</c>, <c>USD</c>,
     /// <c>KB</c>, <c>x</c>, a currency's name (<c>euros</c>, <c>pounds</c>, <c>reais</c>) or its code (<see cref="OfCode"/>)
     /// - read as written where it is one letter, for <c>m</c> and <c>M</c> are not one unit, or a code, and in any case
-    /// where it is a longer word; null for a word that names none. A scale names no unit (<see cref="ScaleOf"/>).
+    /// where it is a longer word, or two (<c>per cent</c>); null for a word that names none. A scale names no unit (<see
+    /// cref="ScaleOf"/>).
     /// </summary>
-    /// <param name="word">The word, without what wraps it.</param>
+    /// <param name="word">The word, without what wraps it; two words with one space between them.</param>
     public static FlowUnit? Named(string word)
     {
         ArgumentNullException.ThrowIfNull(word);
@@ -87,31 +88,86 @@ public sealed record FlowUnit(string Kind, decimal Base)
     }
 
     /// <summary>
-    /// The unit a name written after the word that qualifies it names, nothing but space between them (<c>Canadian
-    /// dollars</c>): a dollar's or a cent's name after a word that starts with a capital and is no name of the United
-    /// States' (<c>US</c>, <c>USA</c>, <c>USD</c>, <c>American</c>, <c>States</c>) is that word's dollars, a
-    /// currency of its own (<c>Canadian dollars</c>); any other name, and a dollar's after any other word, the unit it names
-    /// alone (<see cref="Named"/>).
+    /// The currency a currency's name says written after the name of a country it is named after (<c>Canadian
+    /// dollars</c>, <c>New Zealand dollars</c>, <c>U.S. dollars</c>, <c>Swiss francs</c>, <c>South Korean won</c>), the
+    /// country one of a closed list, in any case: a dollar's or a cent's name after the United States' (<c>US</c>,
+    /// <c>U.S.</c>, <c>USA</c>, <c>American</c>, <c>United States</c>) the report's dollars, and after any other
+    /// country's that country's dollars, a currency of its own; any other currency's name or code the currency it names,
+    /// a name that is an ordinary English word (<c>won</c>, <c>real</c>) among them, read only here; null where
+    /// <paramref name="country"/> is no country of the list, or <paramref name="name"/> names no currency - so a word
+    /// that is no country's (<c>Wasted dollars</c>) never makes a currency of its own.
     /// </summary>
-    /// <param name="qualifier">The word written directly before the name, without what wraps it.</param>
-    /// <param name="name">The name, without what wraps it.</param>
-    public static FlowUnit? NamedAfter(string qualifier, string name)
+    /// <param name="country">The country's name as written, its words one space apart and an abbreviation's point kept (<c>U.S.</c>).</param>
+    /// <param name="name">The currency's name written after it, without what wraps it.</param>
+    public static FlowUnit? OfCountry(string country, string name)
     {
-        ArgumentNullException.ThrowIfNull(qualifier);
+        ArgumentNullException.ThrowIfNull(country);
         ArgumentNullException.ThrowIfNull(name);
 
-        var named = Named(name);
+        if (!Countries.TryGetValue(country, out var listed) || (Named(name) is { IsCurrency: true } named ? named : Ordinary.GetValueOrDefault(name)) is not { } currency)
+        {
+            return null;
+        }
 
-        return named is not null && DollarNames.Contains(name) && qualifier.Length > 0 && char.IsUpper(qualifier[0]) && !UnitedStates.Contains(qualifier)
-            ? new($"{qualifier} dollars", named.Base)
-            : named;
+        return DollarNames.Contains(name) && !UnitedStates.Contains(listed) ? new($"{listed} dollars", currency.Base) : currency;
     }
 
-    /// <summary>The names of the dollar and its cent, which name the report's dollars where no other country's name qualifies them (<see cref="NamedAfter"/>).</summary>
+    /// <summary>
+    /// Whether <paramref name="words"/>, one space apart, start the name of a country a currency is named after that goes
+    /// on with more words (<c>New</c> of <c>New Zealand</c>, <c>Trinidad and</c> of <c>Trinidad and Tobago</c>).
+    /// </summary>
+    /// <param name="words">The words read so far.</param>
+    public static bool StartsCountry(string words)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+
+        return CountryStarts.Contains(words);
+    }
+
+    /// <summary>The names of the dollar and its cent, which name the report's dollars where no other country's name qualifies them (<see cref="OfCountry"/>).</summary>
     private static readonly HashSet<string> DollarNames = new(StringComparer.OrdinalIgnoreCase) { "dollar", "dollars", "cent", "cents" };
 
-    /// <summary>The words that say a dollar is the United States' (<c>States</c> as in <c>United States dollars</c>).</summary>
-    private static readonly HashSet<string> UnitedStates = new(StringComparer.Ordinal) { "US", "USA", "USD", "American", "States" };
+    /// <summary>The names the United States is written by before its dollar's name.</summary>
+    private static readonly HashSet<string> UnitedStates = new(StringComparer.OrdinalIgnoreCase) { "US", "U.S.", "USA", "U.S.A.", "American", "United States" };
+
+    /// <summary>
+    /// The closed list of countries a currency's name is written after (<see cref="OfCountry"/>): the United States', the
+    /// other countries whose currency is a dollar, and the countries of every other currency whose name is read.
+    /// </summary>
+    private static readonly HashSet<string> Countries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "US", "U.S.", "USA", "U.S.A.", "American", "United States",
+        "Australian", "Aussie", "Bahamian", "Barbadian", "Belizean", "Bermudian", "Brunei", "Bruneian", "Canadian", "Cayman",
+        "Cayman Islands", "East Caribbean", "Fijian", "Guyanese", "Hong Kong", "HK", "Jamaican", "Kiwi", "Liberian", "Namibian",
+        "New Taiwan", "New Zealand", "NZ", "Singapore", "Singaporean", "Solomon Islands", "Surinamese", "Taiwan", "Taiwanese",
+        "Trinidad and Tobago", "Trinidadian", "Zimbabwean",
+        "British", "UK", "Egyptian", "Lebanese", "Syrian", "Sudanese", "South Sudanese",
+        "Japanese", "Chinese", "Brazilian",
+        "Indian", "Pakistani", "Sri Lankan", "Nepalese", "Nepali", "Mauritian", "Seychellois", "Indonesian",
+        "Swiss", "French", "Belgian", "CFA", "CFP", "Congolese", "Rwandan", "Burundian", "Guinean", "Djiboutian", "Comorian",
+        "Mexican", "Argentine", "Argentinian", "Chilean", "Colombian", "Cuban", "Dominican", "Philippine", "Uruguayan",
+        "Russian", "Belarusian", "Turkish", "Italian", "Swedish", "Icelandic", "Norwegian", "Danish", "Polish", "Hungarian",
+        "Thai", "Malaysian", "Korean", "South Korean", "North Korean", "Israeli", "New Israeli",
+        "Algerian", "Bahraini", "Iraqi", "Jordanian", "Kuwaiti", "Libyan", "Serbian", "Tunisian", "Moroccan", "Emirati", "UAE",
+        "Saudi", "Qatari", "Omani", "Yemeni", "Iranian", "South African", "Nigerian", "Ukrainian",
+    };
+
+    /// <summary>Every run of whole words a country's name of more than one word starts with (<see cref="StartsCountry"/>).</summary>
+    private static readonly HashSet<string> CountryStarts = new(
+        Countries.SelectMany(country => country.Split(' ') is var words ? Enumerable.Range(1, words.Length - 1).Select(count => string.Join(' ', words[..count])) : []),
+        StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The currencies whose name is an ordinary English word - <c>won</c> a verb, <c>real</c> an adjective - each read
+    /// only after a country's name (<see cref="OfCountry"/>: <c>South Korean won</c>, <c>Brazilian real</c>), and
+    /// elsewhere by its code or its sign alone (<c>KRW</c>, <c>₩</c>), as a name read beside any number would make an
+    /// amount of a sentence's word.
+    /// </summary>
+    private static readonly Dictionary<string, FlowUnit> Ordinary = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["won"] = new("won", 1m),
+        ["real"] = new("reais", 1m),
+    };
 
     /// <summary>
     /// The currency a code names: one of ISO 4217's, written in capitals as the standard writes it - <c>USD</c> the
@@ -206,10 +262,12 @@ public sealed record FlowUnit(string Kind, decimal Base)
     };
 
     /// <summary>
-    /// The units written as a longer word, each read in any case: a currency's name among them, its kind the name in the
-    /// plural - so the pesos of several countries are one kind, as no member of the report is any - but not
-    /// <c>real</c>, which after a number is far more often a sentence's word (<c>2 real failures</c>) than one real; its
-    /// plural <c>reais</c>, its code and its sign are read.
+    /// The units written as a longer word, or as two (<c>per cent</c>, a share in percent and never a dollar's cent),
+    /// each read in any case: a currency's name among them, its kind the name in the plural - so the pesos of several
+    /// countries are one kind, as no member of the report is any - but not a name that is an ordinary English word,
+    /// <c>won</c> or <c>real</c>, which after a number is far more often a sentence's word (<c>2 won</c>, <c>2 real
+    /// failures</c>) than the currency, and is read only after a country's name (<see cref="Ordinary"/>); the plural
+    /// <c>reais</c>, and every code and sign, are read.
     /// </summary>
     private static readonly Dictionary<string, FlowUnit> Words = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -246,6 +304,7 @@ public sealed record FlowUnit(string Kind, decimal Base)
         ["token"] = Count,
         ["tokens"] = Count,
         ["percent"] = Percent,
+        ["per cent"] = Percent,
         ["pct"] = Percent,
         ["usd"] = Dollars,
         ["dollar"] = Dollars,
@@ -284,7 +343,6 @@ public sealed record FlowUnit(string Kind, decimal Base)
         ["forints"] = new("forints", 1m),
         ["baht"] = new("baht", 1m),
         ["ringgit"] = new("ringgit", 1m),
-        ["won"] = new("won", 1m),
         ["shekel"] = new("shekels", 1m),
         ["shekels"] = new("shekels", 1m),
         ["dinar"] = new("dinars", 1m),

@@ -667,15 +667,17 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
-    /// A currency named anywhere in a number's own phrase is its currency: after it, up to the next number or its clause's
-    /// end - whatever stands between, an adjective, a preposition, a bracket - and before it where it is its clause's first
-    /// number, a colon between; a dollar's name after a country's but the United States' names that country's dollars. So
-    /// Canadian dollars, Swiss francs, Japanese yen, an amount in euros and an amount the code EUR is written beside are
-    /// each refused against a cost the report holds in dollars, and one whose phrase names two currencies reads as no one
-    /// number, while US and American dollars, dollars after a preposition and the code USD before or after are held.
+    /// A currency written in a number's own phrase is its currency: its code or its sign directly before it, a colon
+    /// between allowed, and after it a currency's name or code - beside it, in brackets, after <c>in</c>, behind a
+    /// country's name of a closed list - a dollar's name after a country's but the United States' naming that country's
+    /// dollars, a name that is a sentence's word (real) read there alone. So Canadian dollars, Swiss francs, Japanese yen,
+    /// Brazilian reais, an amount in euros and an amount the code EUR is written beside are each refused against a cost the
+    /// report holds in dollars, and one whose phrase names two currencies - after a dollar's sign, or before it - reads as
+    /// no one number, while US and American dollars, dollars after a preposition and the code USD before or after are
+    /// held.
     /// </summary>
     [Fact]
-    public void ACurrencyNamedAnywhereInANumbersOwnPhrase_IsItsCurrency()
+    public void ACurrencyWrittenInANumbersOwnPhrase_IsItsCurrency()
     {
         var report = FlowRunReport.Of(FlowRunReportTests.Source());
         var evidence = Cited("totals", "model-y", "usd", "0.02");
@@ -690,13 +692,148 @@ public sealed class AnalyzeReportTests
                 Other("0.02 Canadian dollars", "Canadian dollars"),
                 Other("0.02 Swiss francs", "francs"),
                 Other("20 Japanese yen", "yen"),
+                Other("0.02 Brazilian real", "reais"),
                 Other("0.02 in euros", "euros"),
                 Other("0.02 EUR", "EUR"),
                 Other("EUR 0.02", "EUR"),
                 "painPoints[0].impact: says $0.02 CAD, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
+                "painPoints[0].impact: says CAD $0.02, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
             ],
             FlowAnalysisEvidence.Problems(
-                AnalysisOf(evidence, "the cold cache cost 0.02 Canadian dollars on model-y; 0.02 Swiss francs; 20 Japanese yen; 0.02 in euros; 0.02 (EUR) and EUR: 0.02 at last; $0.02 CAD."),
+                AnalysisOf(evidence, "the cold cache cost 0.02 Canadian dollars on model-y; 0.02 Swiss francs; 20 Japanese yen; 0.02 Brazilian real; 0.02 in euros; 0.02 (EUR) and EUR: 0.02 at last; $0.02 CAD, CAD $0.02."),
+                report));
+    }
+
+    /// <summary>
+    /// A currency is a number's only by the number's own phrase, never by a currency's word its sentence uses otherwise: a
+    /// word that names money further on (time and dollars, after the next words, in a bracket the currency does not
+    /// close), one that qualifies another noun (the dollar cost) or the verb won says nothing of the count or the exit
+    /// code beside it, which is held as written; per cent is a share in percent, never a dollar's cent; and the won is read
+    /// only by its code, its sign or after a country's name - so an exact cited count is never refused as an amount for a
+    /// word of its sentence.
+    /// </summary>
+    [Fact]
+    public void ACurrencysWordOutsideANumbersOwnPhrase_SaysNothingOfIt()
+    {
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with { Flow = source.Flow with { Spent = source.Flow.Spent with { Tokens = 3 } } });
+        var evidence = string.Join(
+            ",",
+            Cited("errors", "c@1", "exit", "20"),
+            Cited("errors", "c@1", "attempt", "1"),
+            Cited("criticalPath", "b", "seconds", "30.0"),
+            Cited("totals", "model-y", "usd", "0.02"),
+            Cited("theRun", string.Empty, "budget.tokens", "3"),
+            Cited("totals", string.Empty, "cacheSharePercent", "28.0"));
+        static string Other(string said, string kind)
+            => $"painPoints[0].impact: says {said}, an amount in {kind}, and no member of the report is one - write the report's own numbers, each cited, or leave it out";
+
+        Assert.Equal(3L, report["theRun"]!["budget"]!["tokens"]!.GetValue<long>());
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "c@1 exited 20 and cost time and dollars: 30.0 s and $0.02. The dollar cost of its 3 retries was $0.02. Retrying c@1 won nothing: its 3 retries all exited 20 (dollars lost: $0.02); of its tries 1 won. 28 per cent of the input came from the cache."),
+            report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 3 per cent, a share in percent {NoneHolds}",
+                Other("₩20", "₩"),
+                Other("20 KRW", "KRW"),
+                Other("20 South Korean won", "won"),
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "its 3 retries were 3 per cent of its time, and c@1 cost ₩20, 20 KRW or 20 South Korean won."), report));
+    }
+
+    /// <summary>
+    /// Another country's dollars are named only by a closed list of the countries a currency is named after - Canadian,
+    /// Australian, New Zealand, Hong Kong, Singapore - never by a word in capitals before a dollar's name (0.02 API
+    /// dollars), and a currency's name before a number is no currency of its: a cost written after a label or a sentence's
+    /// first word (Wasted dollars: 0.02, **Lost dollars:** 0.02, The dollars it burned: 0.02) is held as the report's cost
+    /// it is, as are US, U.S., United States and American dollars, while an amount in another country's dollars, beside the
+    /// number, after in or in brackets, is refused as a currency of its own.
+    /// </summary>
+    [Fact]
+    public void ADollarsNameAfterAWordOfNoCountryOfTheList_MakesNoCurrencyOfItsOwn()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = string.Join(
+            ",",
+            Cited("totals", "model-y", "usd", "0.02"),
+            Cited("criticalPath", "b", "seconds", "30.0"));
+        static string Other(string said, string kind)
+            => $"painPoints[0].impact: says {said}, an amount in {kind}, and no member of the report is one - write the report's own numbers, each cited, or leave it out";
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "Wasted dollars: 0.02; wasted time: 30.0 s. Total dollars: 0.02, Extra dollars 0.02, The dollars it burned: 0.02, **Lost dollars:** 0.02 and 0.02 API dollars - 0.02 U.S. dollars, 0.02 United States dollars, 0.02 in US dollars, 0.02 (American dollars)."),
+            report));
+        Assert.Equal(
+            [
+                Other("0.02 Canadian dollars", "Canadian dollars"),
+                Other("0.02 Australian dollars", "Australian dollars"),
+                Other("0.02 New Zealand dollars", "New Zealand dollars"),
+                Other("0.02 in Hong Kong dollars", "Hong Kong dollars"),
+                Other("0.02 Singapore dollars", "Singapore dollars"),
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "the cold cache cost 0.02 Canadian dollars, 0.02 Australian dollars, 0.02 New Zealand dollars, 0.02 in Hong Kong dollars and 0.02 (Singapore dollars)."),
+                report));
+    }
+
+    /// <summary>
+    /// A colon or a slash between two digits keeps the word whole, as a comma between them does: a time of day, an
+    /// h:mm:ss duration, a date or a ratio written so is one word that reads as no one number, refused as a date is, and
+    /// never three or two bare numbers each held by any citation equal to it - while a colon after a letter still parts a
+    /// word, so a number glued to a name by one is read.
+    /// </summary>
+    [Fact]
+    public void ATimeOfDayOrARatio_WrittenWithAColonOrASlashBetweenDigits_ReadsAsNoOneNumber()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = string.Join(
+            ",",
+            Cited("errors", "c@1", "attempt", "1"),
+            Cited("errors", "c@1", "exit", "20"),
+            Cited("totals", string.Empty, "stepsSkipped", "0"),
+            Cited("criticalPath", "a", "seconds", "10"),
+            Cited("criticalPath", "b", "seconds", "30.0"),
+            Cited("steps", "b", "tries", "2"));
+        static string NoOne(string said)
+            => $"painPoints[0].impact: says {said}, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values";
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "c@1: exited 20 on its 1 attempt after queue:10s, 0 skipped and b's 2 tries."), report));
+        Assert.Equal(
+            [NoOne("1:00:00"), NoOne("10:30"), NoOne("1/2"), NoOne("2/10")],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "q1 waited 1:00:00 for the gate, from 10:30, for 1/2 of b's tries on 2/10."), report));
+    }
+
+    /// <summary>
+    /// A line's end is space between a number and its unit, its scale or the next part of its duration, as a hard-wrapped
+    /// impact writes them - 60 at a line's end and hours at the next one's start are 60 hours, no wait of 60 seconds, and
+    /// 1.5 and hours a budget's 90 minutes - but where a list's item opens the next line, so a bullet's 1h and the next
+    /// bullet's 30m are two values, each refused where no citation holds it.
+    /// </summary>
+    [Fact]
+    public void AUnitOnTheNextLine_IsItsNumbers_ButWhereAListsItemOpensTheLine()
+    {
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with { Flow = source.Flow with { Spent = source.Flow.Spent with { Minutes = 90 } } });
+        var evidence = string.Join(
+            ",",
+            Cited("theRun", string.Empty, "budget.minutes", "90"),
+            Cited("people", "q1", "waitedSeconds", "60"),
+            Cited("totals", "model-y", "usd", "0.02"));
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "the run reasoned 1.5\nhours - 1h\n30m - while q1 waited 60\ns for $0.02."), report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 60 hours, a time {NoneHolds}",
+                "painPoints[0].impact: says 0.02 EUR, an amount in EUR, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                $"painPoints[0].impact: says 1.2 million tokens, a count {NoneHolds}",
+                $"painPoints[0].impact: says 1h, a time {NoneHolds}",
+                $"painPoints[0].impact: says 30m, a time {NoneHolds}",
+                $"painPoints[0].impact: says 1h, a time {NoneHolds}",
+                $"painPoints[0].impact: says 30m, a time {NoneHolds}",
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "q1 waited 60\nhours on the gate, cost 0.02\r\nEUR and reasoned 1.2\nmillion tokens:\n* 1h\n* 30m\n\n- 1h\n  - 30m"),
                 report));
     }
 

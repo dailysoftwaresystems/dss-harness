@@ -3967,32 +3967,37 @@ one: a word is an id only where the report holds it as one - a row's id, a name 
 members hold it (a hotspot's item and path), a section's or a member's name - or a citation writes it as its path
 (`c@1.exit`), and an id is read whole, its `: + @ # /` and brackets included, never for a number (`c@1`,
 `slowestStep#2`, `hotspots:<item>:<class>:<path>`); an id that starts as a number is read as any word is, so no number
-goes unread. Every other word ends at every character but a letter, a digit, a mark, a hyphen, a point, an underscore
-and the signs a number is written with - space, `: + @ # / =`, a dash but the hyphen, a comparison, an arrow, a
-bracket, a quote, Markdown's marks - so `queue:3600s`, `T+3600s`, `wait=3600s` and `queue—3600s—before` each say a
-number, `b@2` says 2 where the report holds no such attempt, and `windows-2022`, `net10.0` or `claude-opus-4-5` stays
-whole and unread; a currency's sign or its ISO 4217 code in capitals that starts a number inside a word starts a word of
-its own, with the capitals before the sign that say whose currency it is (`cost$0.40`, `US$0.40`, `R$0.40`,
-`costUSD0.40`). A word is read once every character at its ends that is neither a letter nor a digit is read off it -
+goes unread. Every other word ends at every character but a letter, a digit, a mark, a hyphen, a point, an underscore,
+a comma, a colon or a slash between two digits and the signs a number is written with - space, `: + @ # / =`, a dash
+but the hyphen, a comparison, an arrow, a bracket, a quote, Markdown's marks - so `queue:3600s`, `T+3600s`,
+`wait=3600s` and `queue—3600s—before` each say a number, `b@2` says 2 where the report holds no such attempt, and
+`windows-2022`, `net10.0` or `claude-opus-4-5` stays whole and unread; a currency's sign or its ISO 4217 code in
+capitals that starts a number inside a word starts a word of its own, with the capitals before the sign that say whose
+currency it is (`cost$0.40`, `US$0.40`, `R$0.40`, `costUSD0.40`). A word is read once every character at its ends that is neither a letter nor a digit is read off it -
 Markdown's marks, a point, a sign - but where an amount starts: a digit, a sign or a point directly before one, the lead
 that names its unit directly before those (a currency's sign, with its capitals before or after it, `US$`, `$US`; its
 code glued to a digit, `USD0.40`; a multiple's sign) and a sign before the lead, the number's own (`-$0.02` is minus two
 cents) - for its numeric head (thousands grouped in threes) and its unit (`FlowUnit`: its kind and how many of the
 kind's base one of it is; a currency by its sign, its ISO 4217 code in capitals or its name, `US$`, `USD`, `$` and
-`dollars` the report's dollars, a dollar's name after another country's - `Canadian dollars` - a currency of its own),
-the words beside it naming the unit of a number written with none - a scale and a unit after it, else a currency's word
-before it - beside meaning with nothing between them but space on one line and Markdown's emphasis and code marks
-(`**1.5** hours`), so a sentence's punctuation sets them apart; a number with no unit of its own, or a currency's, takes
-the currency its own phrase names, anywhere after it up to the next number or the clause's end (a comma, a semicolon, a
-point, a closing bracket, a line's end) and, where it is its clause's first number, anywhere before it in the clause
-(`0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`, `EUR: 0.02`), two currencies in its phrase reading as no one
-number (`$0.02 CAD`); a number written bare is the cited value as written, a number joined to its unit (`3600s`,
+`dollars` the report's dollars, a dollar's name after another country's of a closed list - `Canadian dollars`,
+`New Zealand dollars` - a currency of its own, a name that is an ordinary English word - `won`, `real` - read only
+after a country's name and else by its code or its sign; `per cent` a share in percent), the words beside it naming the
+unit of a number written with none - a scale and a unit after it, of one word or two - beside meaning with nothing
+between them but space and Markdown's emphasis and code marks (`**1.5** hours`), a line's end space but where a list's
+item opens the next line (`60` ending a line and `hours` starting the next are 60 hours, `* 1h` and `* 30m` on two
+lines two values), so a sentence's punctuation sets them apart. A currency is a number's only by the number's own
+phrase, a closed grammar: its code or sign directly before it, a colon between allowed (`EUR 0.02`, `EUR: 0.02`), or
+after it a currency's name, code or sign - beside it, after `in`, or in brackets that close on it - behind a country's
+name of the list (`0.02 EUR`, `0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`, `0.02 U.S. dollars`); never a
+currency's word elsewhere in its sentence, so in `c@1 exited 20 and cost time and dollars` 20 is bare and
+`Wasted dollars: 0.02` says the report's 0.02, and two currencies in a number's phrase read as no one number
+(`$0.02 CAD`, `CAD $0.02`). A number written bare is the cited value as written, a number joined to its unit (`3600s`,
 `1.5h`, `12k tokens`, `$0.02`, `28%`) is held where a cited member of its unit's kind holds it, converted exactly into
 that member's unit - `1.5h` is a budget's 90 minutes, and `60 hours` no wait's 60 seconds - numbers joined to units of
 one kind from the largest to the smallest, glued or beside each other (`1h30m`, `1h 30m`, `2 min 5 s`), are one
 value held as their sum, one of a kind no member is (`2x`, a size, another currency: `€0.02`, `0.02 EUR`,
-`0.02 euros`) is refused, and a word that starts as a number and reads as no one number (a date, a range) is refused as
-such.
+`0.02 euros`) is refused, and a word that starts as a number and reads as no one number (a date, a time of day, a
+ratio, a range: `2026-11-24`, `10:30`, `1/2`, `3-5`) is refused as such.
 Every rule a text must keep is the schema's (a pattern for every text, an enum for every closed list), and a run with
 nothing to change is analysed as one, no pain point named. What a run of the analyst leaves is kept under
 `analysis/<stamp>/` whatever it answered -
