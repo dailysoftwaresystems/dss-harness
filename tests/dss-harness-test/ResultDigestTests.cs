@@ -171,6 +171,95 @@ public sealed class ResultDigestTests
             marked.Failures.Select(failure => (failure.Id, failure.File!, failure.Line)));
     }
 
+    /// <summary>
+    /// A Dart frame that names one of the project's own files by its package - <c>package:demo/store.dart</c> - is the
+    /// tree's, read from the <c>lib</c> directory beside the <c>pubspec.yaml</c> nearest the root that names the package
+    /// (its name quoted or beside a comment as YAML writes it; the root's over a copy of the tree inside it; a name only
+    /// when it is the whole name), and the failure's place is that frame: the throw site, never its caller. A package no
+    /// <c>pubspec.yaml</c> of the tree names, a file its <c>lib</c> does not hold and the runtime's own library are in none,
+    /// and stay as the runtime wrote them.
+    /// </summary>
+    [Fact]
+    public void ADartFrameNamingTheProjectsOwnPackage_IsReadFromThePackagesLibrary_ThroughItsPubspec()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("app/pubspec.yaml", "# The app.\nname: \"demo\" # its package\nenvironment:\n  sdk: ^3.5.0\n");
+        temp.WriteFile("app/lib/store.dart");
+        temp.WriteFile(".legs/copy/app/pubspec.yaml", "name: demo\n");
+        temp.WriteFile(".legs/copy/app/lib/store.dart");
+        temp.WriteFile("tools/pubspec.yaml", "name: demo_tools\n");
+        temp.WriteFile("tools/lib/gen.dart");
+
+        // The first frame names a package no pubspec names, so the whole tree is read before the others are asked.
+        var stack = new List<StackFrame>
+        {
+            new("#0 expect (package:test_api/expect.dart:5:3)", "package:test_api/expect.dart", 5),
+            new("#1 Store.load (package:demo/store.dart:14:7)", "package:demo/store.dart", 14),
+            new("#2 gen (package:demo_tools/gen.dart:3:1)", "package:demo_tools/gen.dart", 3),
+            new("#3 gone (package:demo/gone.dart:2:1)", "package:demo/gone.dart", 2),
+            new("#4 _throw (dart:core/errors.dart:9:1)", "dart:core/errors.dart", 9),
+        };
+        var marked = ResultDigest.Of([], [new TestFailure("dart", "Bad state: no record", Exception: new ExceptionRecord("StateError", "no record", stack, []))], [])
+            .WithInTree(new DigestTree(temp.Path, temp.Combine("app"), new PhysicalFileSystem(FilePermissionsFactory.Create())));
+
+        Assert.Equal(
+            [
+                ("package:test_api/expect.dart", false),
+                ("app/lib/store.dart", true),
+                ("tools/lib/gen.dart", true),
+                ("package:demo/gone.dart", false),
+                ("dart:core/errors.dart", false),
+            ],
+            marked.Failures[0].Exception!.Stack.Select(frame => (frame.File!, frame.InTree)));
+        Assert.Equal(("app/lib/store.dart", (int?)14), (marked.Failures[0].File, marked.Failures[0].Line));
+    }
+
+    /// <summary>
+    /// The tree's declarations are read once for a digest, however many of its places ask: several Go tests of packages no
+    /// <c>go.mod</c> owns, and a Dart frame of a package no <c>pubspec.yaml</c> names, each needing the whole tree read, list
+    /// each directory of it exactly once - the placing stays linear in the tree and the places - and every place stays as
+    /// written.
+    /// </summary>
+    [Fact]
+    public void TheTreesDeclarations_AreReadOnceForADigest_HoweverManyOfItsPlacesAsk()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("a/b/c/c_test.go");
+        temp.WriteFile("d/d_test.go");
+        temp.WriteFile("e/f/f.dart");
+        var files = new CountedListings();
+
+        var marked = ResultDigest.Of(
+            [],
+            [
+                new TestFailure("go", "TestC", Class: "example.org/c", File: "c_test.go", Line: 1),
+                new TestFailure("go", "TestD", Class: "example.org/d", File: "d_test.go", Line: 2),
+                new TestFailure("go", "TestE", Class: "example.org/e", File: "e_test.go", Line: 3),
+                new TestFailure("dart", "Bad state", Exception: new ExceptionRecord("StateError", "bad", [new StackFrame("#0 f (package:other/f.dart:4:1)", "package:other/f.dart", 4)], [])),
+            ],
+            [])
+            .WithInTree(new DigestTree(temp.Path, null, files));
+
+        string[] directories = [temp.Path, .. Directory.EnumerateDirectories(temp.Path, "*", SearchOption.AllDirectories)];
+
+        Assert.Equal(directories.Order(StringComparer.Ordinal).Select(directory => (directory, 1)), files.Listed.OrderBy(listed => listed.Key, StringComparer.Ordinal).Select(listed => (listed.Key, listed.Value)));
+        Assert.Equal(["c_test.go", "d_test.go", "e_test.go", null], marked.Failures.Select(failure => failure.File));
+        Assert.Equal(("package:other/f.dart", false), (marked.Failures[3].Exception!.Stack[0].File, marked.Failures[3].Exception!.Stack[0].InTree));
+    }
+
+    /// <summary>The real file system, counting how often each directory is listed.</summary>
+    private sealed class CountedListings() : PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create()))
+    {
+        /// <summary>Each directory listed, with how many times.</summary>
+        public Dictionary<string, int> Listed { get; } = new(StringComparer.Ordinal);
+
+        public override IEnumerable<string> EnumerateDirectories(string path)
+        {
+            Listed[path] = Listed.GetValueOrDefault(path) + 1;
+            return base.EnumerateDirectories(path);
+        }
+    }
+
     /// <summary>The digest as one JSON document keeps everything: every diagnostic and failure whole, its counts, its unparsed lines.</summary>
     [Fact]
     public void TheDocument_KeepsEverythingWhole()

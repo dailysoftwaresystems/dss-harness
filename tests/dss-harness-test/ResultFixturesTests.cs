@@ -207,10 +207,12 @@ public sealed class ResultFixturesTests
     /// <paramref name="digest"/> with every place read against the tree its tool ran in, as a run reads it: the
     /// expectation's root, holding exactly the files its <c>tree</c> names - every project file the output names, each
     /// below the root with forward slashes, as a real tree holds them, and with its text where a file's text is read in
-    /// placing (<c>{"path": ..., "text": ...}</c>: a <c>go.mod</c>) - a relative path read from where the tool ran
-    /// (<c>workingDirectory</c>, the root where it names none), so the in-tree marks are what a real run gives, and the
-    /// same on every machine. The frames the expectation calls the tree's are among those files. A CI job's digest is
-    /// placed already, against the job's workspace on its runner.
+    /// placing (<c>{"path": ..., "text": ...}</c>: a <c>go.mod</c>, a <c>pubspec.yaml</c>) - a relative path read from
+    /// where the tool ran (<c>workingDirectory</c>, the root where it names none), so the in-tree marks are what a real run
+    /// gives, and the same on every machine. The frames the expectation calls the tree's that name a path are among those
+    /// files; one a runtime names by its own name for a project's file (<c>package:demo/store.dart</c>) is the tree's
+    /// through the declaration the tree holds, which the expectation's marks hold. A CI job's digest is placed already,
+    /// against the job's workspace on its runner.
     /// </summary>
     private static ResultDigest Placed(string fixture, JsonObject expect, ResultDigest digest)
     {
@@ -229,7 +231,14 @@ public sealed class ResultFixturesTests
 
         foreach (var frame in (expect["stack"]?["inTree"]?.AsArray() ?? []).Select(frame => frame!.GetValue<string>()))
         {
-            if (PlatformPaths.RelativeAsWritten(root, frame[..frame.LastIndexOf(':')], ranIn) is not { } file || !held.ContainsKey(file))
+            var named = frame[..frame.LastIndexOf(':')];
+
+            if (PlatformPaths.AsAPath(named) is null)
+            {
+                continue;
+            }
+
+            if (PlatformPaths.RelativeAsWritten(root, named, ranIn) is not { } file || !held.ContainsKey(file))
             {
                 throw new InvalidOperationException($"'{fixture}': '{frame}' is in the tree by its expectation, and names no file of its tree");
             }

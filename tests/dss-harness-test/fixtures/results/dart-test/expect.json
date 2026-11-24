@@ -4,7 +4,7 @@
   },
   "root": "D:\\a\\app\\app",
   "workingDirectory": "D:\\a\\app\\app\\dart",
-  "tree": ["dart/test/store_test.dart"],
+  "tree": [{ "path": "dart/pubspec.yaml", "text": "name: demo\nenvironment:\n  sdk: ^3.5.0\n" }, "dart/test/store_test.dart", "dart/lib/store.dart"],
   "failed": 2,
   "first": null,
   "failures": [

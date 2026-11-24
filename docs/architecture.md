@@ -9972,12 +9972,16 @@ ran in - is the tree's where the tree holds that file, named relative to its roo
 its own text in the form it is written in (`PlatformPaths.RelativeAsWritten`) and never by the reading machine's rules
 - a Windows path a tool wrote is in no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a bare name the
 tree has no file of (`Thread.java`) in none, a `file:` URI the path it names - and a failure's place is the top frame
-of its stack the tree holds, where one is. A Go test's place is read from its package's directory, for `go test` prints
+of its stack the tree holds, where one is. A runtime's own name for one of the project's files is read through the
+file the project declares that name in. A Go test's place is read from its package's directory, for `go test` prints
 it relative to that directory and names the package by its import path on its result line after the failures, which
 the parser gives each as its class: the import path less the module path of the `go.mod` nearest the tree's root that
-owns it - of two equally near, the longer module path - found by reading the tree a level at a time from its root and
-no deeper than the first level holding an owner, so a copy of the tree kept inside it never wins over the tree's own;
-where no `go.mod` of the tree owns the package the place stays as printed, never read from where the tool ran
+owns it - of two equally near, the longer module path - and where no `go.mod` of the tree owns the package the place
+stays as printed, never read from where the tool ran. A Dart frame's `package:demo/store.dart` is the `store.dart` of
+the `lib` directory beside the `pubspec.yaml` nearest the root that names the package `demo`, and stays as written
+where none does. The declarations are found by reading the tree a level at a time from its root, no deeper than a
+question needs and each level at most once for a digest however many of its places ask, so a copy of the tree kept
+inside it never wins over the tree's own and the placing stays linear in the tree and the places
 (`ResultDigest.WithInTree`, the one place a digest's paths ask the tree's file system).
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names

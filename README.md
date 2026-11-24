@@ -198,8 +198,9 @@ runner's parsers where they gave nothing, with `results.matchers` everywhere. Th
 red leg's first error in a block below its table; `--json` carries the whole digest as `digest` - every
 diagnostic and failure with its place, stack, causes and counts, each file inside the tree named
 relative to it (a Go test's, which `go test` prints relative to its package, read from the package's
-directory below the `go.mod` that owns its import path), each log range numbering the lines of that
-phase's log as the file numbers them - and
+directory below the `go.mod` that owns its import path; a Dart `package:` frame of the project's own
+package from the `lib` beside the `pubspec.yaml` that names it), each log range numbering the lines of
+that phase's log as the file numbers them - and
 a leg a host ran carries the host's own digest, every text in it naming the host as configured.
 
 ## Running legs at once

@@ -4,7 +4,7 @@
   },
   "root": "D:\\a\\app\\app",
   "workingDirectory": "D:\\a\\app\\app\\dart",
-  "tree": ["dart/bin/crash.dart"],
+  "tree": [{ "path": "dart/pubspec.yaml", "text": "name: demo\nenvironment:\n  sdk: ^3.5.0\n" }, "dart/bin/crash.dart", "dart/lib/store.dart"],
   "crashed": 1,
   "first": null,
   "failures": [
@@ -13,6 +13,7 @@
   "stack": {
     "frames": 4,
     "inTree": [
+      "package:demo/store.dart:14",
       "D:/a/app/app/dart/bin/crash.dart:7"
     ]
   }

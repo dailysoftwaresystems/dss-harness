@@ -319,12 +319,15 @@ public sealed record ResultDigest
     /// (<see cref="PlatformPaths.RelativeAsWritten"/>) - a relative one from the directory the tool ran in, a
     /// <c>file:</c> URI as the path it names - and is in the tree only where the tree holds that file: a frame that names
     /// no file, a runtime's own module (<c>dart:</c>, <c>node:</c>), a bare name the tree has no file of
-    /// (<c>Thread.java</c>), a path outside the root, are in none. A Go test's place is read from its package's directory,
-    /// for <c>go test</c> prints it relative to that directory and names the package by its import path: the import path
-    /// less the module path of the <c>go.mod</c> nearest the tree's root that owns it (<see cref="GoModules"/>); where no
-    /// <c>go.mod</c> of the tree owns it, the place stays as printed. Placed by the one owner of placing a digest's paths
-    /// (<see cref="WithInTree(Func{string, string?}, Func{string, string, string?})"/>), and the one place a digest's paths
-    /// ask the tree's file system.
+    /// (<c>Thread.java</c>), a path outside the root, are in none. A runtime's own name for one of the project's files is
+    /// read through the file the project declares that name in (<see cref="ProjectPackages"/>): a Go test's place, which
+    /// <c>go test</c> prints relative to its package's directory and names the package by its import path, from that
+    /// directory - the import path less the module path of the <c>go.mod</c> nearest the tree's root that owns it - and a
+    /// Dart <c>package:name/path</c> from the <c>lib</c> directory beside the <c>pubspec.yaml</c> nearest the root that
+    /// names the package; where no file of the tree declares the name, the place stays as written. Placed by the one owner
+    /// of placing a digest's paths (<see cref="WithInTree(Func{string, string?}, Func{string, string, string?})"/>), and the
+    /// one place a digest's paths ask the tree's file system: the tree's declarations are read once for the digest,
+    /// however many of its places ask.
     /// </summary>
     /// <param name="tree">The tree the phase ran in, and where its tool ran.</param>
     public ResultDigest WithInTree(DigestTree tree)
@@ -332,11 +335,13 @@ public sealed record ResultDigest
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentException.ThrowIfNullOrWhiteSpace(tree.Root);
 
-        var modules = new GoModules(tree);
+        var packages = new ProjectPackages(tree);
 
         return WithInTree(
-            file => Held(file, tree.WorkingDirectory),
-            (file, package) => modules.DirectoryOf(package) is { } directory ? Held(file, directory) : null);
+            file => ProjectPackages.DartPackageOf(file) is { } named
+                ? packages.DartLibraryOf(named.Package) is { } library ? Held(named.Path, library) : null
+                : Held(file, tree.WorkingDirectory),
+            (file, package) => packages.GoPackageDirectoryOf(package) is { } directory ? Held(file, directory) : null);
 
         // A path the tree holds, read from the directory a relative one was printed relative to, named as the tree's.
         string? Held(string file, string? from)
@@ -1053,84 +1058,153 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// Where a Go package's directory is in a tree: below the directory of the <c>go.mod</c> that owns the import path
-    /// <c>go test</c> names the package by, the import path less that module's path. A tree may hold several modules - and
-    /// the copies of the tree the harness keeps inside it hold the same ones again, deeper - so the owner is the
-    /// <c>go.mod</c> nearest the tree's root whose module path is the import path or begins it at a part's end; of two
-    /// equally near, the longer module path, as Go gives a package to the most specific module; of those, the first by its
-    /// directory's path. The tree is read a level at a time from its root - each level's <c>go.mod</c> files read before
-    /// the level below it is listed - and no deeper than the first level that holds an owner, so a tree whose root holds
-    /// the module is read no further than its root; each directory is read once, whatever is asked. A directory reached
-    /// through a link is never walked, and one that cannot be read, or a <c>go.mod</c> that cannot, owns nothing: the
-    /// places it would have given stay as printed.
+    /// What a runtime names a project's own files by, found where the project declares it in the tree: a Go package by the
+    /// import path of the <c>go.mod</c> that owns it - its directory below that file's, the import path less the module's
+    /// path - and a Dart package by the name its <c>pubspec.yaml</c> gives it, its files below the <c>lib</c> directory
+    /// beside that file. A tree may hold several of each - and the copies of the tree the harness keeps inside it hold the
+    /// same again, deeper - so the declaration that answers is the one nearest the tree's root; of two Go modules equally
+    /// near, the longer module path, as Go gives a package to the most specific module; of those, the first by its
+    /// directory's path. The tree is read a level at a time from its root - each level's declarations read before the
+    /// level below it is listed - and no deeper than a question needs, every level read at most once for the digest and
+    /// each answer kept: however many places ask, of whatever names, the tree is read once at most, so the whole placing
+    /// stays linear in the tree and the places. A directory reached through a link is never walked, and one that cannot be
+    /// read, or a declaration that cannot, declares nothing: the places it would have given stay as written.
     /// </summary>
-    private sealed class GoModules(DigestTree tree)
+    private sealed class ProjectPackages(DigestTree tree)
     {
         /// <summary>The file a Go module is declared in, at its directory's top.</summary>
-        private const string ModuleFile = "go.mod";
+        private const string GoModuleFile = "go.mod";
 
-        /// <summary>The directive that declares a module's path.</summary>
+        /// <summary>The directive of a <c>go.mod</c> that declares its module's path.</summary>
         private const string ModuleDirective = "module";
 
-        private readonly Dictionary<string, string?> _asked = new(StringComparer.Ordinal);
-        private readonly List<Module> _met = [];
+        /// <summary>The file a Dart package is declared in, at its directory's top.</summary>
+        private const string DartPackageFile = "pubspec.yaml";
+
+        /// <summary>The key of a <c>pubspec.yaml</c> that names its package.</summary>
+        private const string NameKey = "name:";
+
+        /// <summary>The directory beside a <c>pubspec.yaml</c> its package's <c>package:</c> URIs name files below.</summary>
+        private const string DartLibrary = "lib";
+
+        /// <summary>The scheme a Dart URI names a package's file with: <c>package:name/path</c>.</summary>
+        private const string DartScheme = "package:";
+
+        private readonly Dictionary<string, string?> _goAsked = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string?> _dartAsked = new(StringComparer.Ordinal);
+        private readonly List<Declared> _met = [];
         private List<TreeDirectory> _level = [new(tree.Root, string.Empty)];
         private bool _levelRead;
+        private bool _whole;
         private int _depth;
 
         /// <summary>
-        /// The directory of the package <paramref name="importPath"/> names, written as the tree's root is - the root, a
+        /// The package a Dart URI names and the file's path below the package's <c>lib</c> - <c>package:demo/store.dart</c>
+        /// is <c>demo</c>'s <c>store.dart</c> - or null where it is no such URI.
+        /// </summary>
+        /// <param name="file">The file as the runtime wrote it.</param>
+        public static (string Package, string Path)? DartPackageOf(string file)
+        {
+            if (!file.StartsWith(DartScheme, StringComparison.Ordinal) || file.IndexOf('/', DartScheme.Length) is not (var slash and > 0))
+            {
+                return null;
+            }
+
+            var package = file[DartScheme.Length..slash];
+            var path = file[(slash + 1)..];
+
+            return package.Length > 0 && path.Length > 0 ? (package, path) : null;
+        }
+
+        /// <summary>
+        /// The directory of the Go package <paramref name="importPath"/> names, written as the tree's root is - the root, a
         /// <c>/</c> and its path below it - or null where no <c>go.mod</c> of the tree owns it.
         /// </summary>
         /// <param name="importPath">The package's import path, as <c>go test</c> printed it.</param>
-        public string? DirectoryOf(string importPath)
+        public string? GoPackageDirectoryOf(string importPath)
         {
-            if (_asked.TryGetValue(importPath, out var known))
+            if (!_goAsked.TryGetValue(importPath, out var directory))
             {
-                return known;
+                directory = Answered(module => module.Kind == GoModuleFile
+                        && importPath.StartsWith(module.Name, StringComparison.Ordinal)
+                        && (importPath.Length == module.Name.Length || importPath[module.Name.Length] == '/'))
+                    is { } owner
+                        ? Written(owner.Relative, importPath[owner.Name.Length..].TrimStart('/'))
+                        : null;
+                _goAsked[importPath] = directory;
             }
 
-            var owner = OwnerOf(importPath);
-
-            while (owner is null && ReadOn())
-            {
-                owner = OwnerOf(importPath);
-            }
-
-            var directory = owner is null ? null : Written(owner.Relative, importPath[owner.Declared.Length..].TrimStart('/'));
-
-            _asked[importPath] = directory;
             return directory;
         }
 
-        /// <summary>The owner of <paramref name="importPath"/> among the modules of every level read so far; null where none is.</summary>
-        private Module? OwnerOf(string importPath)
+        /// <summary>
+        /// The <c>lib</c> directory of the Dart package named <paramref name="package"/>, written as the tree's root is, or
+        /// null where no <c>pubspec.yaml</c> of the tree names it.
+        /// </summary>
+        /// <param name="package">The package's name, as a <c>package:</c> URI gives it.</param>
+        public string? DartLibraryOf(string package)
+        {
+            if (!_dartAsked.TryGetValue(package, out var library))
+            {
+                library = Answered(declared => declared.Kind == DartPackageFile && string.Equals(declared.Name, package, StringComparison.Ordinal))
+                    is { } named
+                        ? Written(named.Relative, DartLibrary)
+                        : null;
+                _dartAsked[package] = library;
+            }
+
+            return library;
+        }
+
+        /// <summary>
+        /// The declaration nearest the root that <paramref name="answers"/>, the tree read further only while none of the
+        /// levels read so far holds one; null where the whole tree holds none.
+        /// </summary>
+        private Declared? Answered(Func<Declared, bool> answers)
+        {
+            var found = Nearest(answers);
+
+            while (found is null && !_whole)
+            {
+                ReadOn();
+                found = Nearest(answers);
+            }
+
+            return found;
+        }
+
+        /// <summary>The declaration nearest the root among those read that <paramref name="answers"/>; null where none does.</summary>
+        private Declared? Nearest(Func<Declared, bool> answers)
             => _met
-                .Where(module => importPath.StartsWith(module.Declared, StringComparison.Ordinal)
-                    && (importPath.Length == module.Declared.Length || importPath[module.Declared.Length] == '/'))
-                .OrderBy(module => module.Depth)
-                .ThenByDescending(module => module.Declared.Length)
-                .ThenBy(module => module.Relative, StringComparer.Ordinal)
+                .Where(answers)
+                .OrderBy(declared => declared.Depth)
+                .ThenByDescending(declared => declared.Name.Length)
+                .ThenBy(declared => declared.Relative, StringComparer.Ordinal)
                 .FirstOrDefault();
 
         /// <summary>
-        /// Reads the tree one step further - the <c>go.mod</c> files of the level listed last, or else the level below it -
-        /// and says whether there was anything left to read.
+        /// Reads the tree one step further: the declarations of the level listed last, or else the level below it - the
+        /// whole tree read once a level below holds no directory.
         /// </summary>
-        private bool ReadOn()
+        private void ReadOn()
         {
             if (!_levelRead)
             {
                 foreach (var directory in _level)
                 {
-                    if (ModuleOf(Path.Combine(directory.Path, ModuleFile)) is { } path)
+                    if (GoModulePathOf(Path.Combine(directory.Path, GoModuleFile)) is { } module)
                     {
-                        _met.Add(new Module(_depth, directory.Relative, path));
+                        _met.Add(new Declared(GoModuleFile, _depth, directory.Relative, module));
+                    }
+
+                    if (DartPackageNameOf(Path.Combine(directory.Path, DartPackageFile)) is { } package)
+                    {
+                        _met.Add(new Declared(DartPackageFile, _depth, directory.Relative, package));
                     }
                 }
 
                 _levelRead = true;
-                return true;
+                return;
             }
 
             var below = new List<TreeDirectory>();
@@ -1143,7 +1217,7 @@ public sealed record ResultDigest
             _level = below;
             _levelRead = false;
             _depth++;
-            return below.Count > 0;
+            _whole = below.Count == 0;
         }
 
         /// <summary>Adds to <paramref name="below"/> each directory directly beneath <paramref name="directory"/> that is no link; none where it cannot be read.</summary>
@@ -1169,8 +1243,8 @@ public sealed record ResultDigest
             below.AddRange(found);
         }
 
-        /// <summary>The module path the <c>go.mod</c> at <paramref name="file"/> declares; null where there is none, it cannot be read, or it declares none.</summary>
-        private string? ModuleOf(string file)
+        /// <summary>The lines of the file at <paramref name="file"/> read by <paramref name="read"/>; null where there is none or it cannot be read.</summary>
+        private string? Declaration(string file, Func<IEnumerable<string>, string?> read)
         {
             if (!tree.FileSystem.FileExists(file))
             {
@@ -1179,13 +1253,19 @@ public sealed record ResultDigest
 
             try
             {
-                return ModulePathOf(FileLines.Read(tree.FileSystem, file).Select(line => line.Text));
+                return read(FileLines.Read(tree.FileSystem, file).Select(line => line.Text));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 return null;
             }
         }
+
+        /// <summary>The module path the <c>go.mod</c> at <paramref name="file"/> declares; null where there is none, it cannot be read, or it declares none.</summary>
+        private string? GoModulePathOf(string file) => Declaration(file, ModulePathOf);
+
+        /// <summary>The package name the <c>pubspec.yaml</c> at <paramref name="file"/> gives; null where there is none, it cannot be read, or it gives none.</summary>
+        private string? DartPackageNameOf(string file) => Declaration(file, PackageNameOf);
 
         /// <summary>
         /// The path a <c>go.mod</c>'s <c>module</c> directive declares, read as Go reads the file's lines: a <c>//</c>
@@ -1244,25 +1324,55 @@ public sealed record ResultDigest
             return null;
         }
 
+        /// <summary>
+        /// The name a <c>pubspec.yaml</c> gives its package: its top-level <c>name:</c> key, a line that begins with it,
+        /// its value bare or quoted and a <c>#</c> comment after it taken off; null where the file gives none. The lines after
+        /// it are never read.
+        /// </summary>
+        /// <param name="lines">The file's lines, in order.</param>
+        private static string? PackageNameOf(IEnumerable<string> lines)
+        {
+            foreach (var line in lines)
+            {
+                if (!line.StartsWith(NameKey, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var value = line[NameKey.Length..];
+                var comment = value.IndexOf(" #", StringComparison.Ordinal);
+                var said = (comment >= 0 ? value[..comment] : value).Trim();
+
+                return said.Length >= 2 && said[0] is '"' or '\'' && said[^1] == said[0]
+                    ? said[1..^1].Trim() is { Length: > 0 } inner ? inner : null
+                    : said.Length > 0 ? said : null;
+            }
+
+            return null;
+        }
+
         /// <summary>A module path as written, its quotes taken off; null where nothing is inside them.</summary>
         private static string? Unquoted(string said)
             => said.Length >= 2 && ((said[0] == '"' && said[^1] == '"') || (said[0] == '`' && said[^1] == '`'))
                 ? said[1..^1].Trim() is { Length: > 0 } inner ? inner : null
                 : said;
 
-        /// <summary>The directory <paramref name="module"/> and <paramref name="package"/> name below the root, written as the root is.</summary>
-        private string Written(string module, string package)
+        /// <summary>The directory <paramref name="declared"/> and <paramref name="below"/> name below the root, written as the root is.</summary>
+        private string Written(string declared, string below)
         {
-            var below = string.Join('/', new[] { module, package }.Where(part => part.Length > 0));
+            var path = string.Join('/', new[] { declared, below }.Where(part => part.Length > 0));
 
-            return below.Length == 0 ? tree.Root : $"{tree.Root.TrimEnd('/', '\\')}/{below}";
+            return path.Length == 0 ? tree.Root : $"{tree.Root.TrimEnd('/', '\\')}/{path}";
         }
 
         /// <summary>A directory of the tree: as the file system names it, and its path below the root with <c>/</c>.</summary>
         private sealed record TreeDirectory(string Path, string Relative);
 
-        /// <summary>A <c>go.mod</c> met: how many levels below the root, its directory's path below the root, and the module path it declares.</summary>
-        private sealed record Module(int Depth, string Relative, string Declared);
+        /// <summary>
+        /// A declaration met: the file it is (<c>go.mod</c>, <c>pubspec.yaml</c>), how many levels below the root, its
+        /// directory's path below the root, and the name it declares - a module's path, a package's name.
+        /// </summary>
+        private sealed record Declared(string Kind, int Depth, string Relative, string Name);
     }
 
     /// <summary>
