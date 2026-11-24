@@ -1,3 +1,5 @@
+using DssHarness.Core.Text;
+
 namespace DssHarness.Core.Agents.Policy;
 
 /// <summary>
@@ -125,8 +127,7 @@ public static partial class CommandAnalysis
     public static IReadOnlyList<string> Detaching { get; } = [.. DetachingPrograms, .. DetachingCommands];
 
     /// <summary>A name PowerShell reads as a module's command (<c>Microsoft.PowerShell.Management\Start-Process</c>): a module's name, a backslash, the command.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_.\-]*\\[^\\/]+$")]
-    private static partial System.Text.RegularExpressions.Regex ModuleQualified();
+    private static readonly System.Text.RegularExpressions.Regex ModuleQualified = LinearRegex.Compile(@"^[A-Za-z_][A-Za-z0-9_.\-]*\\[^\\/]+$");
 
     /// <summary>The shells a command may be read by, each expanding its words in its own way.</summary>
     internal enum Reader
@@ -203,7 +204,7 @@ public static partial class CommandAnalysis
                 var word = words[at].TrimStart('@');
                 var segment = word.TrimEnd('/', '\\').Replace('\\', '/').Split('/')[^1];
                 var program = segment.Length > 4 && segment.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? segment[..^4] : segment;
-                var cmdlet = powerShell && (word.IndexOfAny(['/', '\\']) < 0 || ModuleQualified().IsMatch(word))
+                var cmdlet = powerShell && (word.IndexOfAny(['/', '\\']) < 0 || ModuleQualified.IsMatch(word))
                     && Is(PowerShellReader.CommandName(word), DetachingCmdlets);
 
                 if (Is(word, DetachingCommands) || cmdlet
@@ -318,14 +319,14 @@ public static partial class CommandAnalysis
                     ? placed.TakeWhile(each => each.Word != "--").Where(each => !each.Word.StartsWith('-') && !each.Word.StartsWith('/')).Take(1)
                         .Where(each => Expansion(AssignedName(each.Word), Within(each.Word, each.Quoted, AssignedName(each.Word))) is not null)
                 : items
-                    ? placed.Where(each => EnvironmentReference().Match(each.Word) is { Success: true } reference
+                    ? placed.Where(each => EnvironmentReference.Match(each.Word) is { Success: true } reference
                         && Expansion(reference.Groups["name"].Value, Within(each.Word, each.Quoted, reference.Groups["name"].Value)) is not null)
                 : [];
 
             if (named.Select(each => each.Word).FirstOrDefault() is { } unread)
             {
                 var name = setting ? AssignedName(unread)
-                    : EnvironmentReference().Match(unread) is { Success: true } reference ? reference.Groups["name"].Value
+                    : EnvironmentReference.Match(unread) is { Success: true } reference ? reference.Groups["name"].Value
                     : DeclaredName(unread)!;
 
                 throw new NotSupportedException($"'{unread}' declares a name {Expansion(name)} gives, which this does not read");
@@ -348,7 +349,7 @@ public static partial class CommandAnalysis
             // An item copied, moved or renamed onto the env: drive takes a value this cannot see.
             for (var index = 0; index < rest.Count; index++)
             {
-                if (EnvironmentItem().Match(rest[index]) is { Success: true } moved)
+                if (EnvironmentItem.Match(rest[index]) is { Success: true } moved)
                 {
                     declared.Add($"{moved.Groups["name"].Value}=${{PSVALUE}}");
 
@@ -360,7 +361,7 @@ public static partial class CommandAnalysis
             }
         }
         else if (Is(program, "Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac")
-            && rest.FindIndex(word => EnvironmentItem().IsMatch(word)) is var item and >= 0)
+            && rest.FindIndex(word => EnvironmentItem.IsMatch(word)) is var item and >= 0)
         {
             // Its value is -Value's (any prefix of it PowerShell takes, glued after a ':' too), else the next word given.
             var valued = rest.FindIndex(word => word.Length > 2 && word.Split(':', 2)[0] is var parameter
@@ -370,7 +371,7 @@ public static partial class CommandAnalysis
                 : valued + 1 < rest.Count ? rest[valued + 1]
                 : null;
 
-            declared.Add($"{EnvironmentItem().Match(rest[item]).Groups["name"].Value}={value}");
+            declared.Add($"{EnvironmentItem.Match(rest[item]).Groups["name"].Value}={value}");
         }
 
         return declared;
@@ -463,7 +464,7 @@ public static partial class CommandAnalysis
             _ when Is(program, "wmic") && rest.Any(word => word.Equals("create", StringComparison.OrdinalIgnoreCase)) => "has WMI start a command line",
             _ when (Is(program, "schtasks") && rest.Any(word => word.Equals("/create", StringComparison.OrdinalIgnoreCase) || word.Equals("/change", StringComparison.OrdinalIgnoreCase)))
                 || Is(program, "New-ScheduledTaskAction") => "schedules a command line of its own",
-            _ when Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers]) && rest.Any(word => CodeItem().IsMatch(word))
+            _ when Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers]) && rest.Any(word => CodeItem.IsMatch(word))
                 => "defines a function or an alias from a text",
             _ when Is(program, "ForEach-Object", "%", "foreach") && CallsByName(rest) => "calls a method by its name",
             _ when Is(program, [.. SessionPrograms]) && !AsksASessionNothing(program, rest)
@@ -515,8 +516,7 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>An item of PowerShell's function: or alias: drive, a parameter's name glued before it too: its text is code.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:-[A-Za-z]+:)?(?:function|alias):", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-    private static partial System.Text.RegularExpressions.Regex CodeItem();
+    private static readonly System.Text.RegularExpressions.Regex CodeItem = LinearRegex.Compile(@"^(?:-[A-Za-z]+:)?(?:function|alias):", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>The name a declaring command's word may set: before its <c>=</c>, or the word itself where it is no option.</summary>
     private static string? DeclaredName(string word)
@@ -528,16 +528,14 @@ public static partial class CommandAnalysis
     /// An item of PowerShell's <c>env:</c> drive - <c>env:NAME</c>, <c>Env:\NAME</c>, by its provider's name
     /// (<c>Environment::NAME</c>, <c>Microsoft.PowerShell.Core\Environment::NAME</c>) - a parameter's name glued before it too.
     /// </summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:-[A-Za-z]+:)?(?:env:|(?:Microsoft\.PowerShell\.Core\\)?Environment::)[\\/]?(?<name>[A-Za-z_][A-Za-z0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-    private static partial System.Text.RegularExpressions.Regex EnvironmentItem();
+    private static readonly System.Text.RegularExpressions.Regex EnvironmentItem = LinearRegex.Compile(@"^(?:-[A-Za-z]+:)?(?:env:|(?:Microsoft\.PowerShell\.Core\\)?Environment::)[\\/]?(?<name>[A-Za-z_][A-Za-z0-9_]*)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>
     /// A word that references PowerShell's <c>env:</c> drive, by the drive or its provider's name, its <c>name</c>
     /// whatever follows - a wildcard or an expansion among it, where an item cmdlet names an env: item by one this
     /// cannot see.
     /// </summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:-[A-Za-z]+:)?(?:env:|(?:Microsoft\.PowerShell\.Core\\)?Environment::)[\\/]?(?<name>.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-    private static partial System.Text.RegularExpressions.Regex EnvironmentReference();
+    private static readonly System.Text.RegularExpressions.Regex EnvironmentReference = LinearRegex.Compile(@"^(?:-[A-Za-z]+:)?(?:env:|(?:Microsoft\.PowerShell\.Core\\)?Environment::)[\\/]?(?<name>.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>How many of a command's first words are its environment: the assignments before its program.</summary>
     /// <param name="words">One command's words, as <see cref="AnalyzedCommand.Words"/> holds them.</param>
@@ -1741,7 +1739,7 @@ public static partial class CommandAnalysis
             }
         }
 
-        return DelayedVariable().IsMatch(BlankLiterals(word, classes)) ? "a variable" : null;
+        return DelayedVariable.IsMatch(BlankLiterals(word, classes)) ? "a variable" : null;
     }
 
     /// <summary><paramref name="word"/> with its literal characters blanked, so a pattern reads only what still expands.</summary>
@@ -1814,7 +1812,7 @@ public static partial class CommandAnalysis
                     executed.Add(words[at]);
                 }
 
-                yield return find ? Filled(executed, word => word.Contains("{}", StringComparison.Ordinal), adds: false) : Filled(executed, Placeholder().IsMatch, adds: true);
+                yield return find ? Filled(executed, word => word.Contains("{}", StringComparison.Ordinal), adds: false) : Filled(executed, Placeholder.IsMatch, adds: true);
             }
         }
         else if (Is(program, "rg"))
@@ -1848,9 +1846,9 @@ public static partial class CommandAnalysis
             // them, are read as words of the script: each is tried as the program of the words after it all the same.
             var command = words.Skip(1).TakeWhile(word => !word.StartsWith(":::", StringComparison.Ordinal)).ToList();
             var quoted = $"'{InputWord}'";
-            var script = string.Join(' ', command.Select(word => Placeholder().Replace(word, quoted)));
+            var script = string.Join(' ', command.Select(word => Placeholder.Replace(word, quoted)));
 
-            yield return ["sh", "-c", command.Any(Placeholder().IsMatch) ? script : $"{script} {quoted}"];
+            yield return ["sh", "-c", command.Any(Placeholder.IsMatch) ? script : $"{script} {quoted}"];
         }
         else if (GitWords(words) is { } git)
         {
@@ -2115,8 +2113,7 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>A word fd or parallel fills in: <c>{}</c>, <c>{/}</c>, <c>{//}</c>, <c>{.}</c>, <c>{/.}</c>, <c>{1}</c>, <c>{#}</c> and their kind.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"\{[^{},\s]*\}")]
-    private static partial System.Text.RegularExpressions.Regex Placeholder();
+    private static readonly System.Text.RegularExpressions.Regex Placeholder = LinearRegex.Compile(@"\{[^{},\s]*\}");
 
     /// <summary>
     /// The words <c>env -S</c> splits its string into, by env's own rules, not the shell's: apart at
@@ -2192,15 +2189,14 @@ public static partial class CommandAnalysis
     /// A variable cmd expands as it runs a line, where its delayed expansion is on: <c>!NAME!</c>, with its modifiers
     /// (<c>!P:~0!</c>, <c>!P:a=b!</c>) and whatever its name holds.
     /// </summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"![^!\r\n]+!")]
-    private static partial System.Text.RegularExpressions.Regex DelayedVariable();
+    private static readonly System.Text.RegularExpressions.Regex DelayedVariable = LinearRegex.Compile(@"![^!\r\n]+!");
 
     /// <summary>
     /// A tilde the shell takes from a variable at a word's start, before a separator or the word's end: <c>~+</c> and
-    /// <c>~-</c>, and the directory stack's <c>~N</c>, <c>~+N</c> and <c>~-N</c>.
+    /// <c>~-</c>, and the directory stack's <c>~N</c>, <c>~+N</c> and <c>~-N</c> - the tilde in its group, the separator
+    /// after it, where one stands, matched too.
     /// </summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^~(?:[+-]?[0-9]+|[+-])(?=$|[/\\])")]
-    private static partial System.Text.RegularExpressions.Regex TildeVariable();
+    private static readonly System.Text.RegularExpressions.Regex TildeVariable = LinearRegex.Compile(@"^(?<tilde>~(?:[+-]?[0-9]+|[+-]))(?:$|[/\\])");
 
     /// <summary>
     /// How long the tilde at <paramref name="word"/>'s start is that the shell takes from a variable's value
@@ -2210,7 +2206,8 @@ public static partial class CommandAnalysis
     /// <param name="word">The word, its quotes read as the shell reads them.</param>
     /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
     internal static int VariableTilde(string word, string? quoted)
-        => TildeVariable().Match(word) is { Success: true } tilde && ClassesOf(word, quoted)[..tilde.Length].All(character => character == WordQuoting.Open)
+        => TildeVariable.Match(word) is { Success: true } match && match.Groups["tilde"] is var tilde
+            && ClassesOf(word, quoted)[..tilde.Length].All(character => character == WordQuoting.Open)
             ? tilde.Length
             : 0;
 
@@ -2773,7 +2770,7 @@ public static partial class CommandAnalysis
     /// (<c>stdin</c>, <c>fd/3</c>) - or null.
     /// </summary>
     private static string? Unread(string file, string? quoted = null)
-        => Expansion(file, quoted) ?? (OpenDescriptor().IsMatch(Folded(file)) ? "an open descriptor" : null);
+        => Expansion(file, quoted) ?? (OpenDescriptor.IsMatch(Folded(file)) ? "an open descriptor" : null);
 
     /// <summary>A POSIX path with its doubled slashes, its '.' and its '..' folded away, as the system walks it.</summary>
     private static string Folded(string path)
@@ -2801,8 +2798,7 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>An open descriptor's own name: <c>stdin</c> and its kind, <c>fd/N</c>, under any directory - <c>/dev</c>, <c>/proc/&lt;process&gt;</c> - or none.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"(^|/)(stdin|stdout|stderr|fd/\d+)$")]
-    private static partial System.Text.RegularExpressions.Regex OpenDescriptor();
+    private static readonly System.Text.RegularExpressions.Regex OpenDescriptor = LinearRegex.Compile(@"(^|/)(stdin|stdout|stderr|fd/\d+)$");
 
     /// <summary>
     /// The script a program that reads one from its input is given: a here-string's or a
@@ -3178,13 +3174,13 @@ public static partial class CommandAnalysis
                     : 1;
             }
 
-            return at + 1 < words.Count && Duration().IsMatch(words[at]) ? at + 1 : at;
+            return at + 1 < words.Count && Duration.IsMatch(words[at]) ? at + 1 : at;
         }
 
         if (Is(name, "nice"))
         {
             return at < words.Count && (words[at] == "-n" || words[at] == "--adjustment") && at + 1 < words.Count ? at + 2
-                : at < words.Count && Niceness().IsMatch(words[at]) ? at + 1
+                : at < words.Count && Niceness.IsMatch(words[at]) ? at + 1
                 : at;
         }
 
@@ -3318,8 +3314,7 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>A duration as timeout takes it: digits, with a unit and a fraction.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^\d+(\.\d+)?[smhd]?$")]
-    private static partial System.Text.RegularExpressions.Regex Duration();
+    private static readonly System.Text.RegularExpressions.Regex Duration = LinearRegex.Compile(@"^\d+(\.\d+)?[smhd]?$");
 
     /// <summary>Whether <paramref name="name"/> is one of <paramref name="programs"/>, without regard to case, as a program's name is read here.</summary>
     private static bool Is(string name, params string[] programs)
@@ -3413,8 +3408,7 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>A niceness as nice takes it: a dash and digits, one word.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^-\d+$")]
-    private static partial System.Text.RegularExpressions.Regex Niceness();
+    private static readonly System.Text.RegularExpressions.Regex Niceness = LinearRegex.Compile(@"^-\d+$");
 
     /// <summary>
     /// The commands a script runs, read as the system's own shell reads it: split on its

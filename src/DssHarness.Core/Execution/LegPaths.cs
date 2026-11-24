@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Execution;
 
@@ -303,7 +304,7 @@ public enum PlaceholderPolicy
 /// nothing.
 /// </para>
 /// </remarks>
-public static partial class LegPathNames
+public static class LegPathNames
 {
     /// <summary>Names the leg's variant-keyed build directory.</summary>
     public const string BuildDirectory = "buildDir";
@@ -476,10 +477,7 @@ public static partial class LegPathNames
     /// The name is <see cref="NamePattern"/>; the first two shapes are <see cref="LiteralPattern"/>.
     /// </para>
     /// </remarks>
-    [GeneratedRegex(
-        LiteralPattern + @"|\{(?<name>" + NamePattern + @")\}",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex Placeholder { get; }
+    private static readonly Regex Placeholder = LinearRegex.Compile(LiteralPattern + @"|\{(?<name>" + NamePattern + @")\}");
 
     /// <summary>
     /// The brace groups every template the tool fills writes as text: a doubled brace, <c>{{</c> or
@@ -489,8 +487,8 @@ public static partial class LegPathNames
     /// </summary>
     private const string LiteralPattern = @"(?<doubled>\{\{|\}\})|(?<other>\$\{[^}]*\})";
 
-    [GeneratedRegex(@"\G(?:" + LiteralPattern + ")", RegexOptions.CultureInvariant)]
-    private static partial Regex LiteralHere { get; }
+    /// <summary>The brace group <see cref="LiteralPattern"/> names, where the reader stands (<see cref="LinearRegex.MatchFrom"/>).</summary>
+    private static readonly Regex LiteralHere = LinearRegex.Compile(@"\A(?:" + LiteralPattern + ")");
 
     /// <summary>
     /// The brace group <see cref="LiteralPattern"/> names that starts at <paramref name="at"/> of
@@ -503,7 +501,7 @@ public static partial class LegPathNames
     {
         ArgumentNullException.ThrowIfNull(template);
 
-        var match = LiteralHere.Match(template, at);
+        var match = LinearRegex.MatchFrom(LiteralHere, template, at);
 
         return !match.Success ? null : (match.Groups["doubled"].Success ? match.Value[..1] : match.Value, match.Length);
     }
@@ -526,8 +524,8 @@ public static partial class LegPathNames
     /// </summary>
     public const string NameRule = "starts with a letter or '_' and holds only letters, digits, '_', '-' and '.'";
 
-    [GeneratedRegex(@"\A" + NamePattern + @"\z", RegexOptions.CultureInvariant)]
-    private static partial Regex WholeName { get; }
+    /// <summary>A name in braces, whole (<see cref="NamePattern"/>).</summary>
+    private static readonly Regex WholeName = LinearRegex.Compile(@"\A" + NamePattern + @"\z");
 
     /// <summary>Whether a configured string can name <paramref name="name"/> in braces, as <c>{name}</c>.</summary>
     /// <param name="name">The name something declares.</param>

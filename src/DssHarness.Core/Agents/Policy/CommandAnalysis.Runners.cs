@@ -56,7 +56,7 @@ public static partial class CommandAnalysis
             return WslCommand(words, redirects, program, inputGiven);
         }
 
-        if (DistributionLauncher().IsMatch(name))
+        if (DistributionLauncher.IsMatch(name))
         {
             return LauncherCommand(words, redirects, program, inputGiven);
         }
@@ -202,8 +202,7 @@ public static partial class CommandAnalysis
     /// A WSL distribution's own launcher - <c>ubuntu</c>, <c>ubuntu2204.exe</c>, <c>debian</c>, <c>kali</c>,
     /// <c>opensuse-*</c>, <c>sles-*</c> and their kind - which starts the distribution's shell as wsl does.
     /// </summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:ubuntu[0-9.]*|debian|kali(?:-linux)?|opensuse[\w.-]*|sles[\w.-]*|oraclelinux[\w.]*|fedoraremix|almalinux[\w.-]*|pengwin)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
-    private static partial System.Text.RegularExpressions.Regex DistributionLauncher();
+    private static readonly System.Text.RegularExpressions.Regex DistributionLauncher = Text.LinearRegex.Compile(@"^(?:ubuntu[0-9.]*|debian|kali(?:-linux)?|opensuse[\w.-]*|sles[\w.-]*|oraclelinux[\w.]*|fedoraremix|almalinux[\w.-]*|pengwin)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>
     /// The command a distribution's own launcher (<see cref="DistributionLauncher"/>) has its shell run, read as wsl's:

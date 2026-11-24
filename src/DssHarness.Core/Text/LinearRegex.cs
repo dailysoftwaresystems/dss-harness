@@ -111,6 +111,23 @@ public static class LinearRegex
         }
     }
 
+    /// <summary>
+    /// The first match of <paramref name="regex"/> in <paramref name="input"/> read from <paramref name="at"/> to its end as
+    /// the whole of it: a <c>\A</c> of the pattern stands at <paramref name="at"/>, where .NET's <c>\G</c> stands for a match
+    /// sought from there - an anchor the linear engine lacks - so a pattern that begins with <c>\A</c> matches only where a
+    /// reader stands, and one that does not is sought from there, as from a text's start, nothing before it read.
+    /// </summary>
+    /// <param name="regex">A regular expression this made.</param>
+    /// <param name="input">The text.</param>
+    /// <param name="at">Where in <paramref name="input"/> the match is sought from.</param>
+    public static Match MatchFrom(Regex regex, string input, int at)
+    {
+        ArgumentNullException.ThrowIfNull(regex);
+        ArgumentNullException.ThrowIfNull(input);
+
+        return regex.Match(input, at, input.Length - at);
+    }
+
     /// <summary>The options asked that the linear engine lacks, named and joined by "and"; <see langword="null"/> where none is.</summary>
     private static string? OptionsLacked(RegexOptions options)
     {

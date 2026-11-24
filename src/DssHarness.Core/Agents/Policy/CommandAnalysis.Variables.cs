@@ -210,7 +210,7 @@ public static partial class CommandAnalysis
 
         if (Is(program, EnvironmentWriters) || (powerShell && Is(program, SharedEnvironmentWriters)))
         {
-            if (operands.FirstOrDefault(operand => EnvironmentReference().Match(operand.Word) is { Success: true } item && Names(item.Groups["name"].Value.TrimStart('\\', '/'))) is { Word: not null } item)
+            if (operands.FirstOrDefault(operand => EnvironmentReference.Match(operand.Word) is { Success: true } item && Names(item.Groups["name"].Value.TrimStart('\\', '/'))) is { Word: not null } item)
             {
                 return (item.Word, VariableTouch.Named);
             }
@@ -220,7 +220,7 @@ public static partial class CommandAnalysis
             // An env: item named by a wildcard that may match it, and - after a move into the env: drive - any path named so.
             foreach (var (word, _) in paths)
             {
-                var entry = EnvironmentReference().Match(word) is { Success: true } reference ? reference.Groups["name"].Value.TrimStart('\\', '/')
+                var entry = EnvironmentReference.Match(word) is { Success: true } reference ? reference.Groups["name"].Value.TrimStart('\\', '/')
                     : environmentDrive && !word.Contains(':', StringComparison.Ordinal) ? word.TrimStart('\\', '/')
                     : null;
 
@@ -298,11 +298,42 @@ public static partial class CommandAnalysis
     /// </summary>
     /// <param name="expression">The expression.</param>
     internal static IEnumerable<string> ArithmeticAssigned(string expression)
-        => ArithmeticAssignment().Matches(expression).Select(match => match.Groups["name"].Value);
+    {
+        var at = 0;
 
-    /// <summary>A name an arithmetic expression assigns (<see cref="ArithmeticAssigned"/>).</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![A-Za-z0-9_$])(?<name>\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)?(?:(?:[-+*/%&|^]|<<|>>)?=(?!=)|\+\+|--)|(?:\+\+|--)\s*(?<name>\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)")]
-    private static partial System.Text.RegularExpressions.Regex ArithmeticAssignment();
+        while (LinearRegex.MatchFrom(ArithmeticAssignment, expression, at) is { Success: true } assignment)
+        {
+            yield return assignment.Groups["name"].Value;
+
+            // An assignment's match takes the character after its operator, which it reads to know the '=' is no '==': the
+            // next is sought from the operator's end, so that character is read again.
+            at = assignment.Groups["operator"] is { Success: true } assigned
+                ? assigned.Index + assigned.Length
+                : assignment.Index + assignment.Length;
+        }
+    }
+
+    /// <summary>
+    /// A name an arithmetic expression assigns (<see cref="ArithmeticAssigned"/>), sought from where the last one's
+    /// operator ended (<see cref="LinearRegex.MatchFrom"/>): either a name and then its assignment's operator, in the group
+    /// <c>operator</c>, or a <c>++</c> or a <c>--</c> and then the name.
+    /// The first stands where no letter, digit, <c>_</c> or <c>$</c> is right before the name: that character is
+    /// matched, or the name begins what is read - the last match ended on an operator, a brace or a parenthesis, or on a
+    /// run of a name's characters it took whole, so none stands against it. Its <c>=</c> is one no second <c>=</c>
+    /// follows: the character after it is matched too, or the expression's end. After the second's unbraced name, the
+    /// rest of a run of a name's characters is matched too, since no name begins inside it.
+    /// </summary>
+    /// <remarks>
+    /// The <c>=</c>'s next character is matched as <c>[^=]|$</c>, not <c>[^=]|\z</c>: the first takes any line break, so
+    /// <c>$</c> stands only at the end, and .NET's linear matcher reports no group of a match a <c>\z</c> ends after a
+    /// final line break.
+    /// </remarks>
+    private static readonly System.Text.RegularExpressions.Regex ArithmeticAssignment = LinearRegex.Compile(
+        @"(?:\A|[^A-Za-z0-9_$])(?<name>" + ArithmeticName + @")\s*(?:\[[^\]]*\]\s*)?(?:(?<operator>(?:[-+*/%&|^]|<<|>>)?=)(?:[^=]|$)|(?<operator>\+\+|--))"
+        + @"|(?:\+\+|--)\s*(?:(?<name>\$\{[^}]*\}|\$\([^)]*\))|(?<name>\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)[A-Za-z0-9_$]*)");
+
+    /// <summary>A name as arithmetic spells one: <c>${...}</c>, <c>$(...)</c>, <c>$name</c> or a bare name.</summary>
+    private const string ArithmeticName = @"\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*";
 
     /// <summary>
     /// Whether PowerShell's wildcard <paramref name="pattern"/> - a star, a question mark, a bracket - may match

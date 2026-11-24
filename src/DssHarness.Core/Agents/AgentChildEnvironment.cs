@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Agents;
 
@@ -38,7 +39,7 @@ public sealed record AgentCommandSettings(IReadOnlyList<string> KeepEnvironment,
 /// appointed name is never given back. So another company's key or a deployment token is not handed to what an agent
 /// runs. The one rule of it.
 /// </summary>
-public static partial class AgentChildEnvironment
+public static class AgentChildEnvironment
 {
     /// <summary>What a secret-shaped name ends with, in any case: such a name is taken from a child unless it is given back.</summary>
     public static IReadOnlyList<string> SecretSuffixes { get; } = ["_API_KEY", "_SECRET", "_SECRET_KEY", "_ACCESS_KEY", "_PRIVATE_KEY", "_PASSWORD", "_TOKEN"];
@@ -145,7 +146,7 @@ public static partial class AgentChildEnvironment
 
         foreach (var (name, at) in (policy.KeepEnvironment ?? []).Select((name, at) => (name, at.ToString(CultureInfo.InvariantCulture))))
         {
-            if (name is null || !Name().IsMatch(name))
+            if (name is null || !Name.IsMatch(name))
             {
                 problems.Add($"agentPolicy.keepEnvironment[{at}] '{name}' is no variable's name ({NameShape})");
             }
@@ -171,6 +172,6 @@ public static partial class AgentChildEnvironment
         return problems;
     }
 
-    [GeneratedRegex("^" + NameShape + "$", RegexOptions.CultureInvariant)]
-    private static partial Regex Name();
+    /// <summary>A variable's name, whole (<see cref="NameShape"/>).</summary>
+    private static readonly Regex Name = LinearRegex.Compile("^" + NameShape + "$");
 }

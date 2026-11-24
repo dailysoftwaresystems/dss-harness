@@ -1,4 +1,5 @@
 using System.Text;
+using DssHarness.Core.Text;
 using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Agents.Policy;
@@ -42,7 +43,7 @@ public static partial class CommandAnalysis
     /// static method, an instance method off <see cref="PowerShellMethods"/>, a class, a <c>using</c>, the stop-parsing
     /// <c>--%</c>, a script Invoke-Expression is handed by no one string - and what PowerShell refuses to read, are refused.
     /// </summary>
-    private sealed partial class PowerShellReader
+    private sealed class PowerShellReader
     {
         /// <summary>The keywords a statement may begin with, read by any case.</summary>
         private static readonly string[] Keywords =
@@ -382,7 +383,7 @@ public static partial class CommandAnalysis
                 var begun = _at;
                 var variable = Variable();
 
-                if (CodeVariable().IsMatch(_script[begun.._at]))
+                if (CodeVariable.IsMatch(_script[begun.._at]))
                 {
                     throw CodeSetting();
                 }
@@ -567,14 +568,14 @@ public static partial class CommandAnalysis
         /// </summary>
         private static string? LiteralText(string word)
         {
-            if (!LiteralRuns().IsMatch(word))
+            if (!LiteralRuns.IsMatch(word))
             {
                 return null;
             }
 
             var text = new StringBuilder();
 
-            foreach (System.Text.RegularExpressions.Match run in LiteralRun().Matches(word))
+            foreach (System.Text.RegularExpressions.Match run in LiteralRun.Matches(word))
             {
                 text.Append(run.Value == "\\'" ? "'" : run.Value.Length == 1 ? run.Value : run.Value[1..^1]);
             }
@@ -583,12 +584,10 @@ public static partial class CommandAnalysis
         }
 
         /// <summary>A word that is quoted literal runs, escaped quotes and open wildcards alone, as <see cref="Literal"/> and <see cref="Bareword"/> write them.</summary>
-        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:'[^']*'|\\'|[*?\[\]])+$")]
-        private static partial System.Text.RegularExpressions.Regex LiteralRuns();
+        private static readonly System.Text.RegularExpressions.Regex LiteralRuns = LinearRegex.Compile(@"^(?:'[^']*'|\\'|[*?\[\]])+$");
 
         /// <summary>One quoted literal run, one escaped quote, or one open wildcard, of a word <see cref="LiteralRuns"/> matches.</summary>
-        [System.Text.RegularExpressions.GeneratedRegex(@"'[^']*'|\\'|[*?\[\]]")]
-        private static partial System.Text.RegularExpressions.Regex LiteralRun();
+        private static readonly System.Text.RegularExpressions.Regex LiteralRun = LinearRegex.Compile(@"'[^']*'|\\'|[*?\[\]]");
 
         /// <summary>
         /// Invoke-Expression's command, its name passed: the script it runs - its -Command's value, else its one argument -
@@ -1422,7 +1421,7 @@ public static partial class CommandAnalysis
                     case '$':
                         var begun = _at;
                         var named = Variable();
-                        code |= CodeVariable().IsMatch(_script[begun.._at]);
+                        code |= CodeVariable.IsMatch(_script[begun.._at]);
                         var variable = new StringBuilder(named);
                         Members(variable);
 
@@ -1485,8 +1484,7 @@ public static partial class CommandAnalysis
         private static NotSupportedException CodeSetting() => new("PowerShell's setting of a function's or an alias's text, which this does not read");
 
         /// <summary>A variable of PowerShell's function: or alias: drive: what is set to it is code.</summary>
-        [System.Text.RegularExpressions.GeneratedRegex(@"^\$\{?(?:function|alias):", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-        private static partial System.Text.RegularExpressions.Regex CodeVariable();
+        private static readonly System.Text.RegularExpressions.Regex CodeVariable = LinearRegex.Compile(@"^\$\{?(?:function|alias):", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         /// <summary>
         /// An assignment's operator, passed: <c>+=</c> or <c>=</c>; null where none stands here. Another's sign - <c>??=</c>'s,

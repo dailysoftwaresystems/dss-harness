@@ -496,7 +496,7 @@ public static partial class CommandAnalysis
                     return new WalkNode.Act(RemovalBy(executed, executed.Any(word => word.Contains("{}", StringComparison.Ordinal))), Holds: false);
             }
 
-            if (UnknownValued.Contains(token, StringComparer.Ordinal) || NewerThan().IsMatch(token))
+            if (UnknownValued.Contains(token, StringComparer.Ordinal) || NewerThan.IsMatch(token))
             {
                 _ = Value(token);
                 return new WalkNode.Test(new WalkTest.Unknown());
@@ -550,8 +550,7 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>find's <c>-newerXY</c>, which compares a time of the entry's with a time of a file's or a date.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex("^-newer[aBcmt][aBcmt]$")]
-    private static partial System.Text.RegularExpressions.Regex NewerThan();
+    private static readonly System.Text.RegularExpressions.Regex NewerThan = Text.LinearRegex.Compile("^-newer[aBcmt][aBcmt]$");
 
     /// <summary>fd's short options that take a value, in a cluster's rest or the next word.</summary>
     private const string FdShortValued = "tedESocjxX";

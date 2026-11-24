@@ -137,4 +137,22 @@ public sealed class LinearRegexTests
 
         Assert.Equal("options", thrown.ParamName);
     }
+
+    /// <summary>
+    /// A match sought from where a reader stands reads the text from there as the whole of it: the pattern's <c>\A</c>
+    /// stands there - the <c>\G</c> the linear engine lacks - so an anchored pattern matches only there, an unanchored
+    /// one is sought on from there, and nothing before it is read, so a word's boundary stands at its start.
+    /// </summary>
+    [Fact]
+    public void AMatchFromAPlace_ReadsTheTextFromThereAsTheWholeOfIt()
+    {
+        var anchored = LinearRegex.Compile(@"\Ab");
+
+        Assert.Equal((1, 1), Place(LinearRegex.MatchFrom(anchored, "ab", 1)));
+        Assert.Equal((-1, -1), Place(LinearRegex.MatchFrom(anchored, "abab", 0)));
+        Assert.Equal((3, 1), Place(LinearRegex.MatchFrom(LinearRegex.Compile("b"), "abab", 2)));
+        Assert.Equal((1, 1), Place(LinearRegex.MatchFrom(LinearRegex.Compile(@"\bb"), "ab", 1)));
+
+        static (int Index, int Length) Place(Match match) => match.Success ? (match.Index, match.Length) : (-1, -1);
+    }
 }

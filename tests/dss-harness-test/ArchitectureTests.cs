@@ -184,16 +184,17 @@ public sealed class ArchitectureTests
     }
 
     /// <summary>
-    /// No regex is made outside the one owner of the code's patterns: no instruction of any of Core's types but the
-    /// owner's own (<c>Text\LinearRegex.cs</c>) constructs a <see cref="Regex"/> - however its source spells the
-    /// construction, <c>new Regex(</c> or a target-typed <c>new(</c> - or calls one of <see cref="Regex"/>'s static
-    /// matches, each of which compiles its pattern by its own rule; and no line of the command line's source does either.
-    /// A pattern compiled by its own rule has a timeout or an engine of its own, and the linear engine's refusal of what
-    /// it cannot run in a line never reaches it. The owner compiles every pattern the code makes as <c>NonBacktracking</c>
-    /// with no timeout; nothing else constructs one, so the walk holds no exception - a regex made anywhere else goes red
-    /// here. Read from Core's own instructions, never from its source's text, which a target-typed construction hides from.
-    /// A source-generated pattern (<c>[GeneratedRegex]</c>) is compiled by the generator into a type of its own, which
-    /// derives from <see cref="Regex"/> and constructs none, so it is not one this walk sees.
+    /// No regex is made outside the one owner of the code's patterns: no member of any of Core's types but the owner's own
+    /// (<c>Text\LinearRegex.cs</c>) is a source-generated pattern (<c>[GeneratedRegex]</c>), and no instruction of theirs
+    /// reaches a <see cref="Regex"/>'s constructor - a construction, however its source spells it, <c>new Regex(</c> or a
+    /// target-typed <c>new(</c>, or a derived type's own constructor, as the type the generator makes of a pattern has -
+    /// calls one of <see cref="Regex"/>'s static matches, each of which compiles its pattern by its own rule, or hands a
+    /// <see cref="RegexOptions"/> to any member of .NET's regular expressions; and no line of the command line's source
+    /// does any of these or names <see cref="RegexOptions"/>. A pattern compiled by its own rule has a timeout or an engine
+    /// of its own - the generator's backtracks - and the linear engine's refusal of what it cannot run in a line never
+    /// reaches it. The owner compiles every pattern the code makes as <c>NonBacktracking</c> with no timeout; nothing else
+    /// constructs one, so the walk holds no exception - a regex made anywhere else goes red here. Read from Core's own
+    /// metadata and instructions, never from its source's text, which a target-typed construction hides from.
     /// </summary>
     [Fact]
     public void NoRegexIsMadeOutsideLinearRegex()
@@ -204,6 +205,11 @@ public sealed class ArchitectureTests
 
         foreach (var type in owner.Assembly.GetTypes().Where(type => OutermostOf(type) != owner))
         {
+            foreach (var generated in type.GetMembers(Everything).Where(member => member.IsDefined(typeof(GeneratedRegexAttribute), inherit: false)))
+            {
+                made.Add($"{Name(type)}.{generated.Name}: [GeneratedRegex]");
+            }
+
             foreach (var method in type.GetMethods(Everything).Cast<MethodBase>().Concat(type.GetConstructors(Everything)))
             {
                 if (method.GetMethodBody() is not { } body)
@@ -214,12 +220,14 @@ public sealed class ArchitectureTests
                 var typeArguments = type.IsGenericTypeDefinition ? type.GetGenericArguments() : null;
                 var methodArguments = method.IsGenericMethodDefinition ? method.GetGenericArguments() : null;
 
-                foreach (var (code, token) in OperandsIn(body.GetILAsByteArray() ?? []))
+                foreach (var (_, token) in OperandsIn(body.GetILAsByteArray() ?? []))
                 {
                     var compiles = type.Module.ResolveMember(token, typeArguments, methodArguments) switch
                     {
-                        ConstructorInfo constructed => code == OpCodes.Newobj && constructed.DeclaringType == typeof(Regex),
-                        MethodInfo { IsStatic: true } called => called.DeclaringType == typeof(Regex) && StaticMatches.Contains(called.Name),
+                        ConstructorInfo constructed when constructed.DeclaringType == typeof(Regex) => true,
+                        MethodInfo { IsStatic: true } called when called.DeclaringType == typeof(Regex) && StaticMatches.Contains(called.Name) => true,
+                        MethodBase handed => handed.DeclaringType?.Namespace == typeof(Regex).Namespace
+                            && handed.GetParameters().Any(parameter => parameter.ParameterType == typeof(RegexOptions)),
                         _ => false,
                     };
 
@@ -249,9 +257,12 @@ public sealed class ArchitectureTests
     private static readonly HashSet<string> StaticMatches =
         ["IsMatch", "Match", "Matches", "Replace", "Split", "Count", "EnumerateMatches", "EnumerateSplits"];
 
-    /// <summary>A line of source that makes a regex: <c>new Regex(</c>, a target-typed <c>new(</c> a regex is given, or one of its static matches.</summary>
+    /// <summary>
+    /// A line of source that makes a regex: <c>new Regex(</c>, a target-typed <c>new(</c> a regex is given, one of its
+    /// static matches, a source-generated pattern, or a <see cref="RegexOptions"/> named.
+    /// </summary>
     private static readonly Regex RegexMadeInText = DssHarness.Core.Text.LinearRegex.Compile(
-        @"new\s+(System\.Text\.RegularExpressions\.)?Regex\s*\(|\bRegex\??\s+\w+\s*(\{[^}]*\}\s*)?=\s*new\s*\(|(^|[^.\w])Regex\.(IsMatch|Match|Matches|Replace|Split|Count|EnumerateMatches|EnumerateSplits)\s*\(");
+        @"new\s+(System\.Text\.RegularExpressions\.)?Regex\s*\(|\bRegex\??\s+\w+\s*(\{[^}]*\}\s*)?=\s*new\s*\(|(^|[^.\w])Regex\.(IsMatch|Match|Matches|Replace|Split|Count|EnumerateMatches|EnumerateSplits)\s*\(|\bGeneratedRegex\b|\bRegexOptions\b");
 
     /// <summary>The type a nested type is nested in at the outermost; the type itself where it is nested in none.</summary>
     private static Type OutermostOf(Type type) => type.DeclaringType is { } outer ? OutermostOf(outer) : type;
