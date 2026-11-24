@@ -1301,6 +1301,41 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// Run without <c>-v</c>, <c>go test</c> prints a failed subtest's block under its parent's result line and a line the
+    /// parent logged after the subtest ran under that block, at the parent's own indent - its testing package writes a
+    /// parent's lines and its subtests' reports into one buffer as each comes. The failed tests open at once are held by
+    /// their indent, so that line is the parent's own: the parent, decided at its own end, is said with it beside its
+    /// subtest, and a parent that logged nothing of its own by its end is said by its subtest.
+    /// </summary>
+    [Fact]
+    public void AGoParentsOwnLineAfterItsSubtestsBlock_IsItsOwn_EachTestDecidedAtItsEnd()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestStore (0.00s)",
+                "    --- FAIL: TestStore/load (0.00s)",
+                "        store_test.go:2: load failed",
+                "    store_test.go:3: count = 1, want 2",
+                "--- FAIL: TestQuiet (0.00s)",
+                "    --- FAIL: TestQuiet/one (0.00s)",
+                "        quiet_test.go:7: one failed",
+                "FAIL",
+                "FAIL\texample.com/app\t0.002s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStore", (string?)"store_test.go:3: count = 1, want 2", (string?)"store_test.go", (int?)3, (1, 4)),
+                ("TestStore/load", "store_test.go:2: load failed", "store_test.go", 2, (2, 3)),
+                ("TestQuiet/one", "quiet_test.go:7: one failed", "quiet_test.go", 7, (6, 7)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
+        Assert.All(digest.Failures, failure => Assert.Equal("example.com/app", failure.Class));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
     /// What a test streamed is held only while it runs, never past its end: a subtest's lines are dropped at its nested
     /// result line - so a run of each test twice (<c>-count=2</c>) says the failing second run by its own lines alone, not
     /// the first run's - and every test's at its package's result line, so a package whose binary was killed before its

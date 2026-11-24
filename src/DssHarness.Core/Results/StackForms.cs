@@ -1111,8 +1111,11 @@ internal sealed class DartStackParser : IBuiltInParser
 /// <c>--- FAIL</c> opens that test's failure, its message and place the first line it logged that names its place - the
 /// stream's first, or the first under its result line where nothing streamed - and its log range from the first line it
 /// logged through the last read of it, so every line it logged is one read away and nothing held grows with how many it
-/// logs; a <c>--- PASS</c> or <c>--- SKIP</c> ends the test, and what was held of its stream is dropped. A test whose
-/// subtest failed and that logged nothing of its own is said by its subtest, whichever order Go prints their results in.
+/// logs; a <c>--- PASS</c> or <c>--- SKIP</c> ends the test, and what was held of its stream is dropped. The failed tests
+/// open at once are held by their indent, the innermost on top: a nested <c>--- FAIL</c> opens its subtest above its
+/// parent, a line indented past a test's result line is that test's - a parent's own line printed after its subtest's
+/// block among them - and a line at or above it ends it, so each test is decided at its own end. A test whose subtest
+/// failed and that logged nothing of its own by its end is said by its subtest, whichever order Go prints their results in.
 /// What is held of a test's stream - where it begins and its first line that names its place - is held only while it
 /// runs: dropped at its own result line, and at its package's result line (<c>ok</c>, <c>FAIL</c>, <c>?</c>), which ends
 /// every test of the package - one whose binary was killed before it said its result among them - so no hold outlives
@@ -1180,15 +1183,8 @@ internal sealed class GoPanicParser : IBuiltInParser
 
     private sealed class Reading : IResultReading
     {
-        private (string Name, int Indent, double? Seconds, int From)? _test;
-
-        /// <summary>Whether the open test logged a line of its own.</summary>
-        private bool _logs;
-
-        /// <summary>The first line the open test logged that names its place: its failure's message.</summary>
-        private string? _placed;
-        private string? _file;
-        private int? _line;
+        /// <summary>The tests whose result lines said they failed and that no line has ended yet, the innermost on top.</summary>
+        private readonly Stack<Failing> _tests = new();
         private string? _kind;
         private readonly List<string> _message = [];
         private bool _blank;
@@ -1226,43 +1222,42 @@ internal sealed class GoPanicParser : IBuiltInParser
             }
 
             var result = Result.Match(text);
+            var indent = text.Length - text.TrimStart().Length;
+            var blank = text.Trim().Length == 0;
 
-            if (_test is { } test)
+            if (!Panic.IsMatch(text))
             {
-                var indent = text.Length - text.TrimStart().Length;
-
-                if (result.Success && result.Groups["indent"].Length > test.Indent)
-                {
-                    if (result.Groups["result"].Value != "FAIL")
-                    {
-                        // A subtest that passed or was skipped, its result nested under its parent's: the end of the
-                        // subtest, and no line its parent logged.
-                        _streamed.Remove(result.Groups["name"].Value);
-                        _to = line.Last;
-                        return LineTaken.Took;
-                    }
-
-                    // A subtest that failed: its parent is said by it where the parent logged nothing of its own.
-                    if (!_logs)
-                    {
-                        _test = null;
-                    }
-                    else
-                    {
-                        CloseTest();
-                    }
-                }
-                else if (indent > test.Indent && text.Trim().Length > 0 && !result.Success)
-                {
-                    // A line the test logged, printed under its result line: in its failure's log range.
-                    Note(text);
-                    _to = line.Last;
-                    return LineTaken.Took;
-                }
-                else if (!Panic.IsMatch(text))
+                // Each open test this line is not inside has ended - the line is at or above its result line's indent, or
+                // blank - the innermost first, each decided at its own end; a panic is the innermost's.
+                while (_tests.TryPeek(out var ended) && (blank || indent <= ended.Indent))
                 {
                     CloseTest();
                 }
+            }
+
+            if (_tests.TryPeek(out var test) && !blank && indent > test.Indent)
+            {
+                if (!result.Success)
+                {
+                    // A line the test logged, printed under its result line - before a subtest's block or after it: in its
+                    // failure's log range.
+                    Note(test, text);
+                    test.To = line.Last;
+                    return LineTaken.Took;
+                }
+
+                if (result.Groups["result"].Value != "FAIL")
+                {
+                    // A subtest that passed or was skipped, its result nested under its parent's: the end of the
+                    // subtest, and no line its parent logged.
+                    _streamed.Remove(result.Groups["name"].Value);
+                    test.To = line.Last;
+                    return LineTaken.Took;
+                }
+
+                // A subtest that failed, open above its parent until its own end: the parent is decided at its own end,
+                // said by the subtest where it logged nothing of its own by then.
+                test.SubtestFailed = true;
             }
 
             if (result.Success)
@@ -1287,19 +1282,24 @@ internal sealed class GoPanicParser : IBuiltInParser
 
                 // The first line the stream logged under the test's === line that names its place is its failure's message
                 // and place, and its log range runs from the first line it logged, so every line it logged is one read away.
-                _test = (name, result.Groups["indent"].Length, double.TryParse(result.Groups["seconds"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds) ? seconds : null, streamed?.From ?? line.Number);
+                var failing = new Failing(
+                    name,
+                    result.Groups["indent"].Length,
+                    double.TryParse(result.Groups["seconds"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds) ? seconds : null,
+                    streamed?.From ?? line.Number,
+                    line.Last);
 
                 if (streamed is { } logged)
                 {
-                    _logs = true;
+                    failing.Logs = true;
 
                     if (logged.Placed is { } placed)
                     {
-                        Note(placed);
+                        Note(failing, placed);
                     }
                 }
 
-                _to = line.Last;
+                _tests.Push(failing);
                 return LineTaken.Took;
             }
 
@@ -1309,7 +1309,7 @@ internal sealed class GoPanicParser : IBuiltInParser
                 _message.Add(panic.Groups["message"].Value);
                 _dumped = false;
                 _goroutines = 0;
-                _from = _test?.From ?? line.Number;
+                _from = _tests.TryPeek(out var panicking) ? panicking.From : line.Number;
                 _to = line.Last;
                 return LineTaken.Held;
             }
@@ -1410,7 +1410,7 @@ internal sealed class GoPanicParser : IBuiltInParser
                 ClosePanic();
             }
 
-            CloseTest();
+            CloseTests();
             Said(sink, null);
             EndPackage();
             _blocks.Clear();
@@ -1517,67 +1517,77 @@ internal sealed class GoPanicParser : IBuiltInParser
         }
 
         /// <summary>
-        /// Notes a line the open test logged, as printed: the first that names its place is its failure's message and place,
-        /// and every other is one read away in its log range, never held.
+        /// Notes a line <paramref name="test"/> logged, as printed: the first that names its place is its failure's message
+        /// and place, and every other is one read away in its log range, never held.
         /// </summary>
-        private void Note(string text)
+        private static void Note(Failing test, string text)
         {
-            _logs = true;
+            test.Logs = true;
 
-            if (_placed is null && Logged.Match(text) is { Success: true } placed)
+            if (test.Placed is null && Logged.Match(text) is { Success: true } placed)
             {
-                _placed = text.Trim();
-                _file = placed.Groups["file"].Value;
-                _line = ParsedText.Whole(placed.Groups["line"]);
+                test.Placed = text.Trim();
+                test.File = placed.Groups["file"].Value;
+                test.Line = ParsedText.Whole(placed.Groups["line"]);
             }
         }
 
+        /// <summary>
+        /// The innermost open test has ended: said with what it logged - or, where it logged nothing of its own and a subtest
+        /// of it failed, said by that subtest.
+        /// </summary>
         private void CloseTest()
         {
-            if (_test is { } test)
+            var test = _tests.Pop();
+
+            if (!test.Logs && test.SubtestFailed)
             {
-                Pending(
-                    new TestFailure(
-                        Framework,
-                        test.Name,
-                        Message: _placed,
-                        File: _file,
-                        Line: _line,
-                        Duration: test.Seconds,
-                        Log: (test.From, Math.Max(_to, test.From))),
-                    test.Name);
+                return;
             }
 
-            ForgetTest();
+            Pending(
+                new TestFailure(
+                    Framework,
+                    test.Name,
+                    Message: test.Placed,
+                    File: test.File,
+                    Line: test.Line,
+                    Duration: test.Seconds,
+                    Log: (test.From, test.To)),
+                test.Name);
         }
 
-        /// <summary>The open test is said: nothing of it is held.</summary>
-        private void ForgetTest()
+        /// <summary>Every open test has ended, the innermost first.</summary>
+        private void CloseTests()
         {
-            _test = null;
-            _logs = false;
-            _placed = null;
-            _file = null;
-            _line = null;
+            while (_tests.Count > 0)
+            {
+                CloseTest();
+            }
         }
 
+        /// <summary>
+        /// Says the open panic, as the failure of the innermost open test where one is - which it ended, and with it every
+        /// test still open around it.
+        /// </summary>
         private void ClosePanic()
         {
             if (_kind is { } kind)
             {
                 var message = ParsedText.Joined(_message) ?? string.Empty;
+                var panicked = _tests.TryPop(out var test) ? test : null;
 
                 Pending(
                     new TestFailure(
                         Framework,
-                        _test?.Name ?? ParsedText.Headed(kind, _message[0]),
+                        panicked?.Name ?? ParsedText.Headed(kind, _message[0]),
                         Message: message,
                         Exception: new ExceptionRecord(kind, message, [.. _frames], []),
-                        Duration: _test?.Seconds,
+                        Duration: panicked?.Seconds,
                         Outcome: "crashed",
                         Log: (_from, _to)),
-                    _test?.Name);
-                ForgetTest();
+                    panicked?.Name);
+                CloseTests();
             }
 
             ResetPanic();
@@ -1592,6 +1602,42 @@ internal sealed class GoPanicParser : IBuiltInParser
             _dumped = false;
             _blank = false;
         }
+    }
+
+    /// <summary>
+    /// A test whose result line said it failed, open until a line at or above that line's indent ends it: what is held of
+    /// it - where its lines run, whether it logged one of its own, the first that names its place, and whether a subtest
+    /// of it failed - and never the lines themselves.
+    /// </summary>
+    /// <param name="name">The test's name, as its result line says it.</param>
+    /// <param name="indent">The indent its result line is printed at.</param>
+    /// <param name="seconds">How long it ran, as its result line says.</param>
+    /// <param name="from">The first line of its log range: the first it streamed, or its result line.</param>
+    /// <param name="to">The last line of its log range so far.</param>
+    private sealed class Failing(string name, int indent, double? seconds, int from, int to)
+    {
+        public string Name { get; } = name;
+
+        public int Indent { get; } = indent;
+
+        public double? Seconds { get; } = seconds;
+
+        public int From { get; } = from;
+
+        public int To { get; set; } = to;
+
+        /// <summary>Whether it logged a line of its own.</summary>
+        public bool Logs { get; set; }
+
+        /// <summary>The first line it logged that names its place, trimmed: its failure's message.</summary>
+        public string? Placed { get; set; }
+
+        public string? File { get; set; }
+
+        public int? Line { get; set; }
+
+        /// <summary>Whether a subtest of it failed, its result nested under this one's.</summary>
+        public bool SubtestFailed { get; set; }
     }
 }
 
