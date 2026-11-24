@@ -630,6 +630,7 @@ public sealed class ArchitectureTests
 
         // The owners of an option's values, which Core's own sentences name.
         ["DssHarness.Core.Codebase.GraphRelations"] = "the graph's own edge names, which the option that follows one lists as its values",
+        ["DssHarness.Core.Orchestration.Flow.FlowRunReport"] = "what a report's dollars may be grouped by (Groupings), which --by lists as its values and Core's own refusal of another names",
     };
 
     /// <summary>The application layer's namespace, its use cases and their machinery.</summary>

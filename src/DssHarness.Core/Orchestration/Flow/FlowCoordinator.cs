@@ -11597,9 +11597,9 @@ public sealed class FlowCoordinator
         IReadOnlyList<FlowClosureRecords.Step> closing = [.. _created.Select(instance
             => new FlowClosureRecords.Step(instance.Id, instance.Step.IsGroup ? null : instance.Step.Type, instance.State == FlowInstanceState.Done, instance.Output))];
         var records = FlowClosureRecords.RecordsOf(closing);
-        var closure = records.Select(record => new JsonArray([.. record.Select(entry => (JsonNode?)entry.DeepClone())]).ToJsonString(DssHarness.Core.Agents.AgentEnvelope.Written)).ToList();
-        var claims = records.SelectMany(record => record).Select(entry => $"'{TextOf(entry["class"])}': {TextOf(entry["claim"])}").ToList();
-        var hotspots = FlowClosureRecords.HotspotsOf(closing).Select(hotspot => $"'{hotspot.Class}' home '{hotspot.Path}' touched {hotspot.Touches.ToString(System.Globalization.CultureInfo.InvariantCulture)} times").ToList();
+        var closure = records.Select(record => new JsonArray([.. record.Record.Select(entry => (JsonNode?)entry.DeepClone())]).ToJsonString(DssHarness.Core.Agents.AgentEnvelope.Written)).ToList();
+        var claims = records.SelectMany(record => record.Record).Select(entry => $"'{TextOf(entry["class"])}': {TextOf(entry["claim"])}").ToList();
+        var hotspots = FlowClosureRecords.HotspotsOf(closing).Select(named => named.Hotspot).Select(hotspot => $"'{hotspot.Class}' home '{hotspot.Path}' touched {hotspot.Touches.ToString(System.Globalization.CultureInfo.InvariantCulture)} times").ToList();
         var reopened = FlowClosureRecords.ReopenedOf(closing).Select(@class => $"'{@class.Class}' reopened in {@class.Rounds.ToString(System.Globalization.CultureInfo.InvariantCulture)} round(s)").ToList();
         var counts = FlowClosureRecords.ItemsOf(closing).Select(item => item.Said()).ToList();
 

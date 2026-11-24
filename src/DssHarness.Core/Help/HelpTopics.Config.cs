@@ -43,7 +43,13 @@ public static partial class HelpTopics
         builder.AppendLine("                 ('help legs'), stallSeconds, the stall bound nothing more specific replaces");
         builder.AppendLine("                 ('help runners'), admission, how heavy legs share a machine");
         builder.AppendLine("                 ('help admission'), and report, the thresholds a run report's");
-        builder.AppendLine("                 signals are computed by ('help orchestrators')");
+        builder.AppendLine("                 signals are computed by ('help orchestrators'):");
+
+        foreach (var (key, shipped, takes) in Orchestration.Flow.FlowReportThresholds.Keys)
+        {
+            builder.AppendLine($"                   {key}: {takes}, {shipped} where none is given");
+        }
+
         builder.AppendLine("  results        matchers: a problem matcher for any other tool, in the shape editors");
         builder.AppendLine("                 and CI take, so its output is digested as every tool's is - name,");
         builder.AppendLine("                 unique, the tool its diagnostics name; pattern, a regex; severity,");

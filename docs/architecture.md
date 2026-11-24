@@ -3858,26 +3858,40 @@ reason. The machine a step's legs run on tells its holds as each wait of a leg's
 holds a slot (`LegStepRunner.StepHold`).
 
 The report of a run is built from its records alone by their one owner (`FlowRunReport`, from `flow.json`,
-`questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition): the same
-records give the same bytes in every form - text for a terminal, `--json` as one document, `--markdown` for a pull
-request or the clipboard - with the steps in one order of its own (by instance id), every number in one fixed form
-(durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word of now:
-a run still going is said so at the time of its last record, marked partial. Its sections are the run (its sessions,
-its wall and active and paused times, its waits for a person, its budget), the totals (tokens by kind, the cache's
-share of input, dollars by model, the retries and the fallbacks), one row per step (its state, attempts, waits by
-cause, run time, model, tokens, dollars, exit), the critical path (the longest road through the run's instances by
-wall time over the definition's `dependsOn`, each link with what it waited for - what a faster run must shorten), the
-failed attempts, the questions people answered with their waits and recommendations, the convergence (classes closed,
-each item's counts, classes reopened, hotspots, the issues carried to a later round, fixed there or left, what loops
-left) and the signals a reader starts from - the slowest and most expensive steps,
-the most retried, every fallback, the longest wait for a person, queue waits past a share of a step's own time, a
-cache share under its bound on an attempt whose input reaches past it, a review at its bound, a class reopened twice,
-a hotspot, spend that could not be counted - each naming its steps and its numbers, their thresholds keys of
-`defaults.report`. The session's end writes this same report (`FlowReports.Write` keeps its place; `report.json` is
-the document, `report.md` its sections with the session's own words at its head and its questions, updates, handoffs
-and what is left for a person said in full), and `read-orchestrator-report <run>` answers it any time - reads only,
-with `--steps` keeping the rows to named instances, `--by` regrouping the dollars and `--top` bounding the signal
-lists.
+`questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition, read for
+every report of the run in one place, `FlowService.SourceOf`): the same records give the same bytes in every form -
+text for a terminal, `--json` as one document, `--markdown` for a pull request or the clipboard - with the steps in the
+run's order (the instance order of `flow.json`), every row of a list with an id of its own (an error
+`<instance>@<attempt>`, a signal `<kind>#<n>`, a convergence row its list, the item, step or agent that said it and
+what it is of), every number in one fixed form (durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word
+of now: a run still going is said so at the time of its last record, marked partial. What the records cannot give is
+said in its `notes` - an events file whose last line was torn (the report is as of the event before it), a definition
+that does not read (no critical path is named). Its sections are the run (its sessions, its wall time, its active
+time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
+person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
+kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
+and each step's advice by its advisor's, or by provider, step, agent or type - the retries and the fallbacks), one row
+per step (its state, attempts, waits by cause, run time, model, tokens, dollars, exit, error, handler and why it did
+not run), the critical path (the longest road through the run's instances, each read as its declaration through
+`FlowInstanceId` and linked from the latest visit of each instance its declaration names in its own scope, a group as
+every instance inside it, the first in a scope from what its group came after, the first of an iteration from the
+iteration before it, a visit after the first from what sent it back, a handler from what raised it - walked once in
+the order of its links, each weighed by its runs and its waits for room, never a person's wait or a pause - what a
+faster run must shorten), the failed attempts (each with its cause, the exception it threw with its stack and causes,
+and its digest's first error), the questions people answered with their waits and recommendations, the convergence
+(classes closed, each item's counts, classes reopened, hotspots, the issues carried to a later round, fixed there or
+left, what loops left) and the signals a reader starts from - the slowest and most
+expensive steps, the most retried, every fallback, the longest wait for a person, queue waits past a share of a step's
+own time, a cache share under its bound on an attempt whose input reaches past it, output a digest held that no
+parser read, a review at its bound, a class reopened twice (by agent and class), a hotspot, spend that could not be
+counted - each naming its steps and its numbers, their thresholds keys of `defaults.report` read by one owner
+(`FlowReportThresholds.Of`) for every report of the run. The session's end writes this same report
+(`FlowReports.Write` keeps its place; `report.json` is the document with the session's own members - its line, its
+code, its end and its handoffs - beside it, `report.md` its sections with the session's own words at its head and its
+questions, updates, handoffs and what is left for a person said in full), and `read-orchestrator-report <run>`
+answers it any time - reads only, its `--json` the code, the line and the report on every exit (the report null where
+the read stopped early), with `--steps` keeping the rows to named instances (one the run does not hold refused,
+named), `--by` regrouping the dollars in every form and `--top` bounding the signal lists.
 
 A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the

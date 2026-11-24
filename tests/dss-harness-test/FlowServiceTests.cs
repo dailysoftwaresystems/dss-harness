@@ -757,6 +757,42 @@ public sealed class FlowServiceTests
         Assert.Single(steps, step => step.Step == "planning.planupdate" && step.RaisedByUpdate == "u1");
         Assert.Equal(2, steps.Count(step => step.Step == "planning.check"));
     }
+    /// <summary>
+    /// The report a session's end writes is the report <c>read-orchestrator-report</c> answers, computed by the same
+    /// thresholds - the configuration's <c>defaults.report</c> - so both name the same signals, bounded alike.
+    /// </summary>
+    [Fact]
+    public async Task TheSessionsReport_IsTheReadVerbsReport_ByTheConfiguredThresholds()
+    {
+        var (repository, runner) = await RepositoryAsync(
+            """
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+                dependsOn: [one]
+            """,
+            new HarnessConfig { Workflows = [Workflow], Defaults = new HarnessDefaults { Report = new FlowReportThresholds(Top: 1) } });
+        using var disposed = repository;
+
+        // Each step takes time the clock can tell, so each is among the slowest the signals could name.
+        var clock = new JumpingClock();
+        runner.OnStart("one", () => clock.Advance(TimeSpan.FromSeconds(10)));
+        runner.OnStart("two", () => clock.Advance(TimeSpan.FromSeconds(5)));
+        var service = Service(repository.Harness, runner, clock: clock);
+
+        Assert.Equal(HarnessExit.Success, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        var written = JsonNode.Parse(File.ReadAllText(RunOf(repository).ReportJsonFile))!["signals"]!;
+        var read = await service.ReadReportAsync(repository.Path, "r1", json: true, cancellationToken: Token);
+        var answered = JsonNode.Parse(read.Data[0])!["report"]!["signals"]!;
+
+        Assert.Equal(["slowestStep#1"], written.AsArray().Select(signal => signal!["id"]!.GetValue<string>()).Where(id => id.StartsWith("slowestStep", StringComparison.Ordinal)));
+        Assert.True(JsonNode.DeepEquals(written, answered), $"{written.ToJsonString()}\n{answered.ToJsonString()}");
+    }
+
     /// <summary>A run starts the next r-N, writes every record of the run, drives the session to its end, releases the owner, and names every record it wrote.</summary>
     [Fact]
     public async Task ARunStarts_RecordsAndDrivesTheSessionToItsEnd_NamingEveryRecord()

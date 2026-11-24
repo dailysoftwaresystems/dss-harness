@@ -1014,9 +1014,9 @@ public sealed class FlowService(
             return CommandOutcome.Usage(shape);
         }
 
-        if (by is not null && by is not ("step" or "agent" or "model" or "provider" or "type"))
+        if (by is not null && !FlowRunReport.Groupings.Contains(by, StringComparer.Ordinal))
         {
-            return CommandOutcome.Usage($"--by takes 'step', 'agent', 'model', 'provider' or 'type', not '{by}'");
+            return CommandOutcome.Usage($"--by takes {string.Join(", ", FlowRunReport.Groupings.Select(grouping => $"'{grouping}'"))}, not '{by}'");
         }
 
         if (top is < 1)
@@ -1039,32 +1039,56 @@ public sealed class FlowService(
             return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to report on");
         }
 
-        var thresholds = new FlowReportThresholds(
-            Top: top ?? context.Config.Defaults.Report?.Top ?? 5,
-            QueueSharePercent: context.Config.Defaults.Report?.QueueSharePercent ?? 10,
-            CacheSharePercent: context.Config.Defaults.Report?.CacheSharePercent ?? 30,
-            CacheInputTokens: context.Config.Defaults.Report?.CacheInputTokens ?? 50_000);
-        var report = FlowRunReport.Of(new FlowRunReportSource(
+        // A row asked of an instance the run does not hold is refused, named: an empty table would say the run ran none.
+        var wanted = steps is { Count: > 0 } named ? named.ToHashSet(StringComparer.Ordinal) : null;
+        var unknown = wanted?.Where(instance => !flow.Steps.Any(step => step.Instance == instance)).Order(StringComparer.Ordinal).ToList() ?? [];
+
+        if (unknown.Count > 0)
+        {
+            return CommandOutcome.Usage($"--steps names {string.Join(", ", unknown.Select(instance => $"'{instance}'"))}, which run '{run}' does not hold");
+        }
+
+        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config, top), _store.ReadDefinition(layout), by, wanted));
+
+        if (json)
+        {
+            return CommandOutcome.Ok($"the report of run '{run}'")
+                with { Data = [FlowReports.ReportDocument($"the report of run '{run}'", report)], Quiet = true };
+        }
+
+        var text = markdown ? FlowRunReport.Markdown(report) : FlowRunReport.Text(report);
+        return CommandOutcome.Ok(text);
+    }
+
+    /// <summary>
+    /// A run's records as they stand, for its report - the one place the read verb, the analysis and the session's end
+    /// read them: its state, questions, updates, events (a torn last line said in its notes), its item agents' closure
+    /// ledgers, the issues it owed a later round and its frozen definition, with the thresholds every report of the run
+    /// is computed by.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="flow">The run's state.</param>
+    /// <param name="thresholds">The thresholds its signals are computed by (<see cref="FlowReportThresholds.Of"/>).</param>
+    /// <param name="definition">The definition the run ran, as read; null where it does not read.</param>
+    /// <param name="by">What the dollars are grouped by; null for the model.</param>
+    /// <param name="steps">The instances whose rows alone the steps table keeps; null for every one.</param>
+    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowReportThresholds thresholds, WorkflowDefinition? definition, string? by = null, IReadOnlySet<string>? steps = null)
+    {
+        var (events, torn) = FlowEventLog.Read(_fileSystem, layout.EventsFile);
+
+        return new FlowRunReportSource(
             layout,
             flow,
             _store.ReadFlowQuestions(layout),
             _store.ReadFlowUpdates(layout),
-            FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
+            events,
             LedgersOf(layout, flow),
-            _store.ReadDefinition(layout),
+            definition,
             thresholds,
-            _store.ReadNextRound(layout)));
-        var wanted = steps is { Count: > 0 } named ? named.ToHashSet(StringComparer.Ordinal) : null;
-        var document = ReportOf(report, flow, wanted, by);
-
-        if (json)
-        {
-            return CommandOutcome.Ok("the report of run '" + run + "'")
-                with { Data = [document.ToJsonString(ReportJson.Options)], Quiet = true };
-        }
-
-        var text = markdown ? FlowRunReport.Markdown(document) : FlowRunReport.Text(document);
-        return CommandOutcome.Ok(text);
+            EventsTorn: torn is not null,
+            By: by,
+            Steps: steps,
+            NextRound: _store.ReadNextRound(layout));
     }
 
     /// <inheritdoc/>
@@ -1094,11 +1118,6 @@ public sealed class FlowService(
             return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to analyse");
         }
 
-        var thresholds = new FlowReportThresholds(
-            Top: context.Config.Defaults.Report?.Top ?? 5,
-            QueueSharePercent: context.Config.Defaults.Report?.QueueSharePercent ?? 10,
-            CacheSharePercent: context.Config.Defaults.Report?.CacheSharePercent ?? 30,
-            CacheInputTokens: context.Config.Defaults.Report?.CacheInputTokens ?? 50_000);
         var definition = _store.ReadDefinition(layout);
 
         if (definition is null)
@@ -1106,16 +1125,7 @@ public sealed class FlowService(
             return CommandOutcome.Refused($"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to analyse");
         }
 
-        var report = FlowRunReport.Of(new FlowRunReportSource(
-            layout,
-            flow,
-            _store.ReadFlowQuestions(layout),
-            _store.ReadFlowUpdates(layout),
-            FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
-            LedgersOf(layout, flow),
-            definition,
-            thresholds,
-            _store.ReadNextRound(layout)));
+        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config), definition));
         var said = report.ToJsonString(ReportJson.Options);
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
 
@@ -1183,53 +1193,6 @@ public sealed class FlowService(
                 ["analysis"] = analysis.Document(),
             });
         _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName), $"{analysis.Markdown()}\n\nThe report it read holds hash `{hash}`.\n");
-    }
-
-    /// <summary>
-    /// The report's document with the command's filters applied: the steps' rows kept to the instances it names, and
-    /// the dollars regrouped as it asks - the regrouping over the same attempts the report holds, nothing recomputed.
-    /// </summary>
-    /// <param name="report">The report as the builder answered it.</param>
-    /// <param name="flow">The run's state, whose steps name their agents and types.</param>
-    /// <param name="steps">The instances whose rows alone are wanted; null for every one.</param>
-    /// <param name="by">The grouping of the dollars; null for the model's, as the report holds it.</param>
-    private static JsonNode ReportOf(JsonNode report, FlowFile flow, IReadOnlySet<string>? steps, string? by)
-    {
-        if (steps is not null)
-        {
-            report["steps"] = new JsonArray([.. report["steps"]!.AsArray().Where(row => steps.Contains(row!["step"]!.GetValue<string>()))]);
-        }
-
-        if (by is null || by == "model")
-        {
-            return report;
-        }
-
-        var groups = flow.Steps
-            .SelectMany(step => (step.Measure?.Attempts ?? []).Select(attempt => (step, attempt)))
-            .Where(spent => spent.attempt.Usd > 0)
-            .GroupBy(spent => KeyOf(spent.step, spent.attempt, by))
-            .OrderBy(group => group.Key, StringComparer.Ordinal)
-            .Select(group => new JsonObject
-            {
-                ["key"] = group.Key,
-                ["usd"] = group.Sum(spent => spent.attempt.Usd ?? 0),
-                ["tokens"] = group.Sum(spent => spent.attempt.Tokens?.AllTokens ?? 0),
-            })
-            .ToList();
-        report["totals"]!["dollarsByModel"] = new JsonArray([.. groups]);
-
-        return report;
-
-        static string KeyOf(FlowStepRecord step, FlowStepAttempt attempt, string by)
-            => by switch
-            {
-                "step" => step.Instance,
-                "agent" => step.Agent ?? "-",
-                "provider" => attempt.Provider ?? "-",
-                "type" => step.Type ?? "-",
-                _ => attempt.Model ?? "-",
-            };
     }
 
     /// <inheritdoc/>
@@ -1786,21 +1749,10 @@ public sealed class FlowService(
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
 
             FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
-            var questions = _store.ReadFlowQuestions(layout);
+            var source = SourceOf(layout, flow, FlowReportThresholds.Of(context.Config), _store.ReadDefinition(layout));
+            var questions = source.Questions;
             var exit = ExitOf(end, flow);
-            var left = FlowReports.Write(
-                _fileSystem,
-                layout,
-                flow,
-                questions,
-                end.Summary,
-                exit,
-                _clock.GetUtcNow(),
-                _store.ReadFlowUpdates(layout),
-                FlowEventLog.Read(_fileSystem, layout.EventsFile).Events,
-                LedgersOf(layout, flow),
-                _store.ReadDefinition(layout),
-                _store.ReadNextRound(layout));
+            var left = FlowReports.Write(_fileSystem, source, end.Summary, exit, _clock.GetUtcNow());
             var named = RecordsOf(layout, inbox);
 
             var result = new FlowRunResult(

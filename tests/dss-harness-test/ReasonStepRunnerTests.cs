@@ -2331,7 +2331,18 @@ public sealed class ReasonStepRunnerTests
         Assert.True(later.Passed, later.Error);
         Assert.Equal("page 1 of 4 · 67 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
         Assert.Equal("page 2 of 4 · 67 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
-        Assert.NotEmpty(string.Join(" ||| ", first.Text.Split('\n').Skip(1).Where(line => line.Length > 0)) + " ||| " + string.Join(" ||| ", second.Text.Split('\n').Where(line => line.Length > 0)));
+
+        // The 67 results are the hub's 30 methods named M and the 37 symbols holding an M in the files init seeds, in
+        // one order - the hub's first, by name - 20 to a page: the later page is that one result's next 20, its first
+        // 10 the hub's last 10 methods, and no line is on both.
+        string[] hub = [.. Enumerable.Range(0, 30).Select(at => $"M{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal)];
+        string[] LinesOf(string page) => [.. page.Split('\n').Skip(1).Where(line => line.Length > 0)];
+        string[] MethodsOf(string page) => [.. LinesOf(page).Where(line => line.Contains(" void ", StringComparison.Ordinal)).Select(line => line[(line.IndexOf(" void ", StringComparison.Ordinal) + 6)..line.IndexOf("()", StringComparison.Ordinal)])];
+
+        Assert.Equal((20, 20), (LinesOf(first.Text).Length, LinesOf(second.Text).Length));
+        Assert.Equal(hub[..20], MethodsOf(first.Text));
+        Assert.Equal(hub[20..], MethodsOf(second.Text));
+        Assert.Empty(LinesOf(first.Text).Intersect(LinesOf(second.Text), StringComparer.Ordinal));
         Assert.Single(Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("again", "a9"), OrchestratorLayout.StepPagesDirectoryName)));
     }
 

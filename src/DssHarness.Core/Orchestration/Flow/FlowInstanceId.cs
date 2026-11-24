@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
@@ -263,6 +265,31 @@ public static class FlowInstanceId
 
         // The same instance, which comes neither before nor after itself.
         return false;
+    }
+
+    /// <summary>The iteration of a <c>repeat</c> the well-formed id <paramref name="id"/>'s own segment holds; null where it holds none.</summary>
+    /// <param name="id">The instance id, well formed.</param>
+    internal static int? IterationOf(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        return Marked(id[(id.LastIndexOf('.') + 1)..]).Iteration;
+    }
+
+    /// <summary>
+    /// The id of the same <c>repeat</c>'s instance at <paramref name="iteration"/>: <paramref name="id"/>, a well-formed id
+    /// whose own segment holds an iteration, with that iteration written anew - <c>rounds+2#1</c> of <c>rounds+2#3</c> at 1.
+    /// </summary>
+    /// <param name="id">The instance id, well formed, its own segment an iteration's.</param>
+    /// <param name="iteration">The iteration, from 1.</param>
+    internal static string WithIteration(string id, int iteration)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        var at = id.LastIndexOf('.') + 1;
+        var (name, visit, _, _) = Marked(id[at..]);
+
+        return $"{id[..at]}{name}{(visit > 1 ? $"+{visit.ToString(CultureInfo.InvariantCulture)}" : string.Empty)}#{iteration.ToString(CultureInfo.InvariantCulture)}";
     }
 
     /// <summary>One segment's name and its marks: its visit, from 1 where none is written, and the iteration or the item it holds, where it holds one.</summary>

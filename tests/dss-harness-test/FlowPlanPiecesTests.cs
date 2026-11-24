@@ -2098,7 +2098,7 @@ public sealed class FlowPlanPiecesTests
                 ],
                 pieces.Select(piece => (piece.Kind, piece.ItemName()!, piece.Placed, piece.Ended)));
 
-            _ = FlowReports.Write(harness.FileSystem, layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), end.Summary, 0, DateTimeOffset.UtcNow, UpdatesOf(harness, layout));
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), UpdatesOf(harness, layout)), end.Summary, 0, DateTimeOffset.UtcNow);
             Assert.Equal(
                 [
                     "  - added 'two': carried out by 'rounds.items[1].build', failed (20: the parser did not build)",

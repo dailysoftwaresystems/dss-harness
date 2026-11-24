@@ -1705,7 +1705,7 @@ public sealed class FlowHandlerRecordsTests
         Assert.Equal("fix", flow.Steps.Single(step => step.Instance == "build").HandledBy);
 
         // The report says what handled the failure, apart from the steps passed over.
-        var left = FlowReports.Write(harness.FileSystem, layout, flow, null, "done; 1 failure was handled: build, by fix", 0, clock.GetUtcNow());
+        var left = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, flow), "done; 1 failure was handled: build, by fix", 0, clock.GetUtcNow());
         var report = harness.FileSystem.ReadAllText(layout.ReportFile);
 
         Assert.Contains("## Errors", report, StringComparison.Ordinal);

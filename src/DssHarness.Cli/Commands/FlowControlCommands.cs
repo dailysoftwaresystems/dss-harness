@@ -95,20 +95,20 @@ internal static class ReadOrchestratorReportCommand
 
     private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run whose report is read.");
 
-    private static readonly Option<IReadOnlyList<string>> StepsOption = new("--steps")
+    private static readonly Option<string[]> StepsOption = new("--steps")
     {
-        Description = "The step instances whose rows alone are wanted, by their instance ids; every one where none is given.",
+        Description = "The step instances whose rows alone the steps table keeps, by their instance ids - one the run does not hold refused, named; every one where none is given.",
         AllowMultipleArgumentsPerToken = true,
     };
 
     private static readonly Option<string?> ByOption = new("--by")
     {
-        Description = "How the dollars are regrouped: step, agent, model, provider or type; the model where none is given.",
+        Description = $"What the totals' dollars are grouped by (totals.dollarsBy): {string.Join(", ", FlowRunReport.Groupings)}; {FlowRunReport.Groupings[0]} where none is given.",
     };
 
     private static readonly Option<int?> TopOption = new("--top")
     {
-        Description = "How many of the slowest, the most expensive and the most retried steps the signals name; the configured bound (5) where none is given.",
+        Description = $"How many of the slowest, the most expensive and the most retried steps the signals name; defaults.report.top where none is given ({new FlowReportThresholds().Top.ToString(System.Globalization.CultureInfo.InvariantCulture)} where the config says none).",
     };
 
     private static readonly Option<bool> MarkdownOption = new("--markdown")

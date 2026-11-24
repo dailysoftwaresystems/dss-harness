@@ -970,7 +970,7 @@ public sealed class FlowPlanToldTests
 
             // The report says every piece, where it was carried out and how that ended, and the iteration added; and
             // so does the listing.
-            _ = FlowReports.Write(harness.FileSystem, layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), end.Summary, 0, DateTimeOffset.UtcNow, harness.OrchestrationStore.ReadFlowUpdates(layout));
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
             var report = File.ReadAllText(layout.ReportFile);
 
             Assert.Equal(LoopReport, UpdatesSectionOf(report));
@@ -1177,7 +1177,7 @@ public sealed class FlowPlanToldTests
             Assert.Null(coordinator.Instances["rounds"].Leftover);
             Assert.Null(steps["rounds"].Leftover);
 
-            _ = FlowReports.Write(harness.FileSystem, layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), end.Summary, 0, DateTimeOffset.UtcNow, harness.OrchestrationStore.ReadFlowUpdates(layout));
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
             var report = File.ReadAllText(layout.ReportFile);
             Assert.DoesNotContain("## What the run's loops left", report, StringComparison.Ordinal);
             Assert.DoesNotContain("loop rounds left:", report, StringComparison.Ordinal);
@@ -1536,7 +1536,7 @@ public sealed class FlowPlanToldTests
                 (steps["rounds.items"].State, steps["rounds.items+2"].State, steps["rounds"].State));
 
             // The report and the listing say the round added.
-            _ = FlowReports.Write(harness.FileSystem, layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), end.Summary, 0, DateTimeOffset.UtcNow, harness.OrchestrationStore.ReadFlowUpdates(layout));
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
             var report = File.ReadAllText(layout.ReportFile);
 
             Assert.Equal(GroupReport, UpdatesSectionOf(report));
@@ -2127,7 +2127,7 @@ public sealed class FlowPlanToldTests
                 events.Where(written => written.Detail?.Contains("asks at its bound", StringComparison.Ordinal) == true).Select(written => written.Detail));
 
             // The report and the listing say the bound was asked for the work, which no iteration carried.
-            _ = FlowReports.Write(harness.FileSystem, layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), end.Summary, 0, DateTimeOffset.UtcNow, harness.OrchestrationStore.ReadFlowUpdates(layout));
+            _ = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, harness.OrchestrationStore.ReadFlow(layout)!, harness.OrchestrationStore.ReadFlowQuestions(layout), harness.OrchestrationStore.ReadFlowUpdates(layout)), end.Summary, 0, DateTimeOffset.UtcNow);
             Assert.Equal(AskedAtBoundReport, UpdatesSectionOf(File.ReadAllText(layout.ReportFile)));
 
             var listed = OrchestrationReports.List(

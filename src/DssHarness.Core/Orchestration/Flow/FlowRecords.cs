@@ -1120,21 +1120,21 @@ public static class FlowClosureRecords
     public readonly record struct Step(string Instance, string? Type, bool Done, JsonNode? Output);
 
     /// <summary>
-    /// Each item's record as the newest check that judged it read it, one list of its entries an item, in the order the
-    /// items' checks were first met; an item whose record names no class is left out.
+    /// Each item's record as the newest check that judged it read it, one list of its entries an item, with the item, in
+    /// the order the items' checks were first met; an item whose record names no class is left out.
     /// </summary>
     /// <param name="steps">The run's steps, in the order they were made.</param>
-    public static IReadOnlyList<IReadOnlyList<JsonObject>> RecordsOf(IEnumerable<Step> steps)
-        => [.. NewestOf(steps, CheckType)
-            .Select(check => (IReadOnlyList<JsonObject>)[.. (check["record"] as JsonArray ?? []).OfType<JsonObject>()])
-            .Where(record => record.Count > 0)];
+    public static IReadOnlyList<(string Item, IReadOnlyList<JsonObject> Record)> RecordsOf(IEnumerable<Step> steps)
+        => [.. NewestOfEach(steps, CheckType)
+            .Select(check => (check.Item, Record: (IReadOnlyList<JsonObject>)[.. (check.Output["record"] as JsonArray ?? []).OfType<JsonObject>()]))
+            .Where(item => item.Record.Count > 0)];
 
-    /// <summary>Each home the newest check of each item named a hotspot, with its class and how often the run touched it.</summary>
+    /// <summary>Each home the newest check of each item named a hotspot, with its class and how often the run touched it, and the item.</summary>
     /// <param name="steps">The run's steps, in the order they were made.</param>
-    public static IReadOnlyList<ClassClosureHotspot> HotspotsOf(IEnumerable<Step> steps)
-        => [.. NewestOf(steps, CheckType)
-            .SelectMany(check => (check["hotspots"] as JsonArray ?? []).OfType<JsonObject>())
-            .Select(hotspot => new ClassClosureHotspot(TextOf(hotspot["class"]), TextOf(hotspot["path"]), CountOf(hotspot["touches"])))];
+    public static IReadOnlyList<(string Item, ClassClosureHotspot Hotspot)> HotspotsOf(IEnumerable<Step> steps)
+        => [.. NewestOfEach(steps, CheckType)
+            .SelectMany(check => (check.Output["hotspots"] as JsonArray ?? []).OfType<JsonObject>()
+                .Select(hotspot => (check.Item, new ClassClosureHotspot(TextOf(hotspot["class"]), TextOf(hotspot["path"]), CountOf(hotspot["touches"])))))];
 
     /// <summary>
     /// Each class the run's reviews reopened, with how many rounds reopened it, as the newest routing of each item that
