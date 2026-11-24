@@ -124,6 +124,19 @@ public sealed record FlowUnit(string Kind, decimal Base)
         return CountryStarts.Contains(words);
     }
 
+    /// <summary>
+    /// Whether <paramref name="words"/>, one space apart, end the name of a country a currency is named after that starts
+    /// with more words before them (<c>Zealand</c> of <c>New Zealand</c>, <c>and Tobago</c> of <c>Trinidad and
+    /// Tobago</c>), as a name read back from the currency's name after it is.
+    /// </summary>
+    /// <param name="words">The words read so far, back from the currency's name.</param>
+    public static bool EndsCountry(string words)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+
+        return CountryEnds.Contains(words);
+    }
+
     /// <summary>The names of the dollar and its cent, which name the report's dollars where no other country's name qualifies them (<see cref="OfCountry"/>).</summary>
     private static readonly HashSet<string> DollarNames = new(StringComparer.OrdinalIgnoreCase) { "dollar", "dollars", "cent", "cents" };
 
@@ -155,6 +168,11 @@ public sealed record FlowUnit(string Kind, decimal Base)
     /// <summary>Every run of whole words a country's name of more than one word starts with (<see cref="StartsCountry"/>).</summary>
     private static readonly HashSet<string> CountryStarts = new(
         Countries.SelectMany(country => country.Split(' ') is var words ? Enumerable.Range(1, words.Length - 1).Select(count => string.Join(' ', words[..count])) : []),
+        StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every run of whole words a country's name of more than one word ends with (<see cref="EndsCountry"/>).</summary>
+    private static readonly HashSet<string> CountryEnds = new(
+        Countries.SelectMany(country => country.Split(' ') is var words ? Enumerable.Range(1, words.Length - 1).Select(count => string.Join(' ', words[count..])) : []),
         StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

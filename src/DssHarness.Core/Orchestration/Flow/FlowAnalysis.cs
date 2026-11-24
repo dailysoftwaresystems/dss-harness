@@ -174,10 +174,11 @@ public sealed record FlowNoted(string What, string Why);
 /// seconds - and one of a kind no member of the report is (<c>2x</c>, a size, another currency, by its sign, its ISO
 /// 4217 code or its name: <c>€0.02</c>, <c>R$0.02</c>, <c>0.02 EUR</c>, <c>0.02 euros</c>) never; numbers joined to
 /// units of one kind from the largest to the smallest (<c>1h 30m</c>, <c>1h30m</c>, <c>2 min 5 s</c>) are one value, held
-/// as their sum; a currency is a number's only by the number's own phrase - its code or sign directly before it, a colon
-/// between allowed (<c>EUR: 0.02</c>), or after it a currency's name, code or sign, in brackets or after <c>in</c>, behind
-/// a country's name of a closed list (<c>0.02 (EUR)</c>, <c>0.02 in euros</c>, <c>0.02 Canadian dollars</c>) - never a
-/// currency's word elsewhere in its sentence; and a word that starts as a number and reads as no one number (a date, a
+/// as their sum; a currency is a number's only by the number's own phrase - a currency's name, code or sign, behind a
+/// country's name of a closed list or not, directly before it, a colon between allowed (<c>EUR: 0.02</c>, <c>Canadian
+/// dollars: 0.02</c>), or after it, beside it, in brackets or after <c>in</c> (<c>0.02 (EUR)</c>, <c>0.02 in euros</c>,
+/// <c>0.02 Canadian dollars</c>) - never a currency's word farther from it in its sentence; and a word that starts as a
+/// number and reads as no one number (a date, a
 /// time of day, a range) is refused as such. The numbers are read by what the report and the citations say is an id,
 /// never by a guess at one (<see cref="NumbersIn"/>): a word is an id only where the report holds it as one - a row's id
 /// or a name it is made of, a section's or a member's name - or a citation writes it as its path, and is then read whole
@@ -380,9 +381,10 @@ public static class FlowAnalysisEvidence
     /// (<c>40-minute</c>), a scale joined to it multiplying it (<c>12k</c>); a number with no unit of its own takes the
     /// words written beside it that name one - a scale, then a unit after it, of one word or two (<c>30 s</c>, <c>1
     /// hour</c>, <c>1.2 million tokens</c>, <c>0.02 EUR</c>, <c>28 per cent</c>), or a sign alone (<c>28 %</c>) - and a
-    /// number with no unit of its own or a currency's the currency's code or sign just before it, a colon between allowed
-    /// (<c>EUR 0.02</c>, <c>EUR: 0.02</c>, <c>R$ 0.40</c>), never a currency's name, which says a number's currency only
-    /// after it; beside means with nothing between but space and Markdown's emphasis and code marks, which a word's reading
+    /// number with no unit of its own or a currency's the currency's name, code or sign just before it, behind a country's
+    /// name or not, a colon between allowed (<c>EUR 0.02</c>, <c>EUR: 0.02</c>, <c>R$ 0.40</c>, <c>Euros: 0.02</c>,
+    /// <c>Canadian dollars: 0.02</c>), and no word before those (<see cref="CurrencyBefore"/>); beside means with nothing
+    /// between but space and Markdown's emphasis and code marks, which a word's reading
     /// takes off its ends (<c>**1.5** hours</c>, <c>`3600` s</c>), a line's end space but where a list's item opens the
     /// next line (<see cref="Beside(string, int, int)"/>), so a comma or any other mark sets them apart. A number with no
     /// unit of its own, or a currency's, takes the currency written after it in its own phrase (<see
@@ -428,8 +430,9 @@ public static class FlowAnalysisEvidence
 
     /// <summary>
     /// The number the word at <paramref name="at"/> of <paramref name="text"/> starts, whose numeric head is <paramref
-    /// name="head"/> characters long, read with its unit (<see cref="NumbersIn"/>); a currency's code or sign before it
-    /// taken only where no number before it took that word, the words up to <paramref name="taken"/> being theirs.
+    /// name="head"/> characters long, read with its unit (<see cref="NumbersIn"/>); a currency's words before it
+    /// (<see cref="CurrencyBefore"/>) taken only where no number before it took them, the words up to <paramref
+    /// name="taken"/> being theirs.
     /// </summary>
     private static Reading ReadingOf(string text, IReadOnlyList<Word> words, int at, int head, int taken, FlowUnit? bare)
     {
@@ -460,8 +463,8 @@ public static class FlowAnalysisEvidence
         }
 
         // A number joined to no word, or to its scale alone, takes the words beside it that scale it and name its unit,
-        // and a number of no unit or a currency's the currency's code or sign just before it, a colon between allowed -
-        // a second currency making it no one number; a number joined to any other word is that word's.
+        // and a number of no unit or a currency's the currency's name, code or sign just before it, a colon between
+        // allowed - a second currency making it no one number; a number joined to any other word is that word's.
         if (glued.Length == 0 || scale is not null)
         {
             var next = at + 1;
@@ -480,11 +483,12 @@ public static class FlowAnalysisEvidence
                 last = after.Last;
             }
 
-            if (units.All(one => one.IsCurrency) && at - 1 > taken && (word.Joined || Beside(text, words[at - 1].End, word.Start, ':')) && words[at - 1].Lead is { } before)
+            if (units.All(one => one.IsCurrency) && at - 1 > taken && (word.Joined || Beside(text, words[at - 1].End, word.Start, ':'))
+                && CurrencyBefore(text, words, at - 1, taken) is { } before)
             {
-                units.Add(before);
-                said = $"{words[at - 1].Said} {said}";
-                first = at - 1;
+                units.Add(before.Unit);
+                said = $"{string.Join(" ", words.Skip(before.First).Take(at - before.First).Select(one => one.Said))} {said}";
+                first = before.First;
             }
         }
 
@@ -607,6 +611,55 @@ public static class FlowAnalysisEvidence
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The currency the word at <paramref name="name"/>, written directly before a number, names - a currency's name, code
+    /// or sign (<see cref="Word.Currency"/>), read with the longest country's name of the list written beside it before it
+    /// where one is (<see cref="FlowUnit.OfCountry"/>: <c>Canadian dollars: 0.02</c>, <c>U.S. dollars 0.02</c>, <c>South Korean
+    /// won: 20</c>) and alone where none is (<c>Wasted dollars: 0.02</c> the report's dollars, <c>Euros: 0.02</c>), the
+    /// country's words after <paramref name="taken"/> - with the first word it takes; null where it names none. No word
+    /// before those is read.
+    /// </summary>
+    private static (FlowUnit Unit, int First)? CurrencyBefore(string text, IReadOnlyList<Word> words, int name, int taken)
+    {
+        var currency = words[name];
+
+        if (currency.Id)
+        {
+            return null;
+        }
+
+        var country = string.Empty;
+        var pointed = name > 0 && words[name - 1].End < currency.Start && text[words[name - 1].End] == '.';
+        (FlowUnit Unit, int First)? longest = currency.Currency is { } alone ? (alone, name) : null;
+
+        // Read back word by word while the words read are a country's name or end one, the longest the list holds kept:
+        // South Korean won, never Korean won.
+        for (var first = name - 1; first > taken; first--)
+        {
+            var word = words[first];
+
+            // An abbreviation's last point is the country's own (U.S.), read with it where the country is so written.
+            if (word is not { Id: false, Core.Length: > 0 } || !Beside(text, first == name - 1 && pointed ? word.End + 1 : word.End, words[first + 1].Start))
+            {
+                break;
+            }
+
+            country = first == name - 1 ? word.Core : $"{word.Core} {country}";
+
+            if (FlowUnit.OfCountry(pointed ? $"{country}." : country, currency.Core) is { } named)
+            {
+                longest = (named, first);
+            }
+
+            if (!FlowUnit.EndsCountry(country))
+            {
+                break;
+            }
+        }
+
+        return longest;
     }
 
     /// <summary>
@@ -1020,13 +1073,6 @@ public static class FlowAnalysisEvidence
         /// </summary>
         public FlowUnit? Currency => Id ? null : Core.Length == 0 ? (Signs is [{ IsCurrency: true } sign] ? sign : null) : FlowUnit.Named(Core) is { IsCurrency: true } named ? named : Prefixed;
 
-        /// <summary>
-        /// The currency the word names where it stands before a number: its ISO 4217 code in capitals, or its sign, alone
-        /// or after its capitals (<c>EUR</c>, <c>€</c>, <c>R$</c>); never a name, which is a number's currency only after
-        /// it - <c>Wasted dollars: 0.02</c> says 0.02 bare.
-        /// </summary>
-        public FlowUnit? Lead => Id ? null : Core.Length == 0 ? (Signs is [{ IsCurrency: true } sign] ? sign : null) : FlowUnit.OfCode(Core) ?? Prefixed;
-
         /// <summary>The currency a word of capitals ending in a currency's sign names (<c>R$</c>, <c>US$</c>); null for any other word.</summary>
         private FlowUnit? Prefixed => Signs.Count == 1 && Trail is { } sign ? FlowUnit.OfSign(sign, Core) : null;
 
@@ -1305,14 +1351,14 @@ public static class FlowAnalysisEvidence
     /// <summary>
     /// One number a text says as it is read: the number; the words it takes, from its first to its last; the kind of the
     /// unit written against it, the base of the smallest unit it is said in and its value in its kind's base - none where
-    /// no unit is written; whether it is written with a sign, and with a minus; and whether it takes a currency's code or
-    /// sign before it.
+    /// no unit is written; whether it is written with a sign, and with a minus; and whether it takes a currency's words
+    /// before it.
     /// </summary>
     private readonly record struct Reading(SaidNumber Number, int First, int Last, string? Kind, decimal Smallest, decimal? Whole, bool Signed, bool Negative, bool Led)
     {
         /// <summary>
         /// This number and <paramref name="next"/> as one value, their sum, where next continues it: a number joined to a
-        /// smaller unit of its kind, with no sign and no currency's code or sign before it, written directly beside it
+        /// smaller unit of its kind, with no sign and no currency's words before it, written directly beside it
         /// (<see cref="Beside(string, int, int)"/>: <c>1h 30m</c>, <c>2 min 5 s</c>); null where it does not.
         /// </summary>
         public Reading? Continued(Reading next, IReadOnlyList<Word> words)

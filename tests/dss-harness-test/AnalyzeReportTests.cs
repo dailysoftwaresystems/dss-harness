@@ -667,7 +667,7 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
-    /// A currency written in a number's own phrase is its currency: its code or its sign directly before it, a colon
+    /// A currency written in a number's own phrase is its currency: its name, code or sign directly before it, a colon
     /// between allowed, and after it a currency's name or code - beside it, in brackets, after <c>in</c>, behind a
     /// country's name of a closed list - a dollar's name after a country's but the United States' naming that country's
     /// dollars, a name that is a sentence's word (real) read there alone. So Canadian dollars, Swiss francs, Japanese yen,
@@ -745,10 +745,10 @@ public sealed class AnalyzeReportTests
     /// <summary>
     /// Another country's dollars are named only by a closed list of the countries a currency is named after - Canadian,
     /// Australian, New Zealand, Hong Kong, Singapore - never by a word in capitals before a dollar's name (0.02 API
-    /// dollars), and a currency's name before a number is no currency of its: a cost written after a label or a sentence's
-    /// first word (Wasted dollars: 0.02, **Lost dollars:** 0.02, The dollars it burned: 0.02) is held as the report's cost
-    /// it is, as are US, U.S., United States and American dollars, while an amount in another country's dollars, beside the
-    /// number, after in or in brackets, is refused as a currency of its own.
+    /// dollars): a cost written after a label or a sentence's first word (Wasted dollars: 0.02, **Lost dollars:** 0.02,
+    /// The dollars it burned: 0.02) is held as the report's cost it is, as are US, U.S., United States and American
+    /// dollars, while an amount in another country's dollars, beside the number, after in or in brackets, is refused as a
+    /// currency of its own.
     /// </summary>
     [Fact]
     public void ADollarsNameAfterAWordOfNoCountryOfTheList_MakesNoCurrencyOfItsOwn()
@@ -774,6 +774,43 @@ public sealed class AnalyzeReportTests
             ],
             FlowAnalysisEvidence.Problems(
                 AnalysisOf(evidence, "the cold cache cost 0.02 Canadian dollars, 0.02 Australian dollars, 0.02 New Zealand dollars, 0.02 in Hong Kong dollars and 0.02 (Singapore dollars)."),
+                report));
+    }
+
+    /// <summary>
+    /// A currency's name written directly before a number, beside it or with a colon between, behind a country's name of
+    /// the list or not, is the number's currency, as its code or sign there is: Euros: 0.02, Canadian dollars: 0.02, **New
+    /// Zealand dollars:** 0.02 and South Korean won: 20 are refused against a cost the report holds in dollars, while a
+    /// dollar's name after a word that is no country's - Wasted dollars: 0.02, **Lost dollars:** 0.02 - and U.S. dollars:
+    /// 0.02 are the report's dollars and held; no word farther before the number is read, so the dollar cost of its 3
+    /// retries leaves the count as written.
+    /// </summary>
+    [Fact]
+    public void ACurrencysNameDirectlyBeforeANumber_IsItsCurrency()
+    {
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with { Flow = source.Flow with { Spent = source.Flow.Spent with { Tokens = 3 } } });
+        var evidence = string.Join(
+            ",",
+            Cited("totals", "model-y", "usd", "0.02"),
+            Cited("errors", "c@1", "exit", "20"),
+            Cited("theRun", string.Empty, "budget.tokens", "3"));
+        static string Other(string said, string kind)
+            => $"painPoints[0].impact: says {said}, an amount in {kind}, and no member of the report is one - write the report's own numbers, each cited, or leave it out";
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "Wasted dollars: 0.02; **Lost dollars:** 0.02; Dollars 0.02; U.S. dollars: 0.02; the dollar cost of its 3 retries was $0.02 and c@1 exited 20."),
+            report));
+        Assert.Equal(
+            [
+                Other("Euros 0.02", "euros"),
+                Other("Canadian dollars 0.02", "Canadian dollars"),
+                Other("New Zealand dollars 0.02", "New Zealand dollars"),
+                Other("euros 0.02", "euros"),
+                Other("South Korean won 20", "won"),
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "Euros: 0.02; Canadian dollars: 0.02; **New Zealand dollars:** 0.02; Lost euros 0.02; c@1 cost South Korean won: 20."),
                 report));
     }
 

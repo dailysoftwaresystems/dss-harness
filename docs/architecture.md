@@ -3986,11 +3986,12 @@ unit of a number written with none - a scale and a unit after it, of one word or
 between them but space and Markdown's emphasis and code marks (`**1.5** hours`), a line's end space but where a list's
 item opens the next line (`60` ending a line and `hours` starting the next are 60 hours, `* 1h` and `* 30m` on two
 lines two values), so a sentence's punctuation sets them apart. A currency is a number's only by the number's own
-phrase, a closed grammar: its code or sign directly before it, a colon between allowed (`EUR 0.02`, `EUR: 0.02`), or
-after it a currency's name, code or sign - beside it, after `in`, or in brackets that close on it - behind a country's
-name of the list (`0.02 EUR`, `0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`, `0.02 U.S. dollars`); never a
-currency's word elsewhere in its sentence, so in `c@1 exited 20 and cost time and dollars` 20 is bare and
-`Wasted dollars: 0.02` says the report's 0.02, and two currencies in a number's phrase read as no one number
+phrase, a closed grammar: a currency's name, code or sign, behind a country's name of the list or not (the longest the
+list holds), directly before it with a colon between allowed (`EUR 0.02`, `EUR: 0.02`, `Euros: 0.02`,
+`Canadian dollars: 0.02`) and no word farther before it read, or after it - beside it, after `in`, or in brackets that
+close on it (`0.02 EUR`, `0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`, `0.02 U.S. dollars`); never a
+currency's word farther from it in its sentence, so in `c@1 exited 20 and cost time and dollars` 20 is bare and
+`Wasted dollars: 0.02` is the report's dollars, and two currencies in a number's phrase read as no one number
 (`$0.02 CAD`, `CAD $0.02`). A number written bare is the cited value as written, a number joined to its unit (`3600s`,
 `1.5h`, `12k tokens`, `$0.02`, `28%`) is held where a cited member of its unit's kind holds it, converted exactly into
 that member's unit - `1.5h` is a budget's 90 minutes, and `60 hours` no wait's 60 seconds - numbers joined to units of

@@ -28,18 +28,18 @@ comes from it.
   another kind than its citation's is refused - `60 hours` is no wait of 60 seconds - and so is a multiple (`2x`), a
   size or another currency, which no member of the report is, by its sign, its code or its name alike (`€0.02`,
   `0.02 EUR`, `0.02 euros`): a currency's code in capitals beside a number or glued to it (`EUR0.40`) makes it an
-  amount in that currency, and so does a currency written in the number's own phrase - its code or sign before it
-  (`EUR: 0.02`), or after it its name, code or sign, in brackets or after `in`, behind a country's name
-  (`0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`); a currency's word elsewhere in the sentence is not the
-  number's (`c@1 exited 20 and cost time and dollars` says a bare 20), and `per cent` is a percent; a minus before a
-  currency's sign is the number's (`-$0.02`). Bold, backticks, a sign around a number, Markdown's marks or a line's end
-  between it and its unit (`**1.5** hours`) - but a list's item opening the next line - or a dash, `=`, `:`, `+`, `@`,
-  `#` or a slash joining it to a word change nothing: it is read and checked all the same. A word is read whole, its
-  digits unread, only where it is one of the report's ids - a row's id or a name it is made of, a section's or a
-  member's name - or a path one of your citations writes (`c@1.exit`); hyphens, points and underscores keep a word
-  whole (`windows-2022`, `net10.0`). A number you work out from the report - a sum, a ratio, a share - is not the
-  report's: cite where the report holds it, or leave it out. Write no date, time of day, ratio, range or other run of
-  numbers in it (`2026-11-24`, `10:30`, `1/2`, `3-5`).
+  amount in that currency, and so does a currency written in the number's own phrase - its name, code or sign, behind
+  a country's name or not, directly before it (`EUR: 0.02`, `Euros: 0.02`, `Canadian dollars: 0.02`), or after it, in
+  brackets or after `in` (`0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`); a currency's word farther from it
+  in the sentence is not the number's (`c@1 exited 20 and cost time and dollars` says a bare 20), and `per cent` is a
+  percent; a minus before a currency's sign is the number's (`-$0.02`). Bold, backticks, a sign around a number,
+  Markdown's marks or a line's end between it and its unit (`**1.5** hours`) - but a list's item opening the next
+  line - or a dash, `=`, `:`, `+`, `@`, `#` or a slash joining it to a word change nothing: it is read and checked all
+  the same. A word is read whole, its digits unread, only where it is one of the report's ids - a row's id or a name it
+  is made of, a section's or a member's name - or a path one of your citations writes (`c@1.exit`); hyphens, points and
+  underscores keep a word whole (`windows-2022`, `net10.0`). A number you work out from the report - a sum, a ratio, a
+  share - is not the report's: cite where the report holds it, or leave it out. Write no date, time of day, ratio,
+  range or other run of numbers in it (`2026-11-24`, `10:30`, `1/2`, `3-5`).
 - Order the pain points by what they cost: time and dollars, from the report. What you cannot put a number on goes
   under `noted`, with why you could not confirm it.
 - Name steps as the report's rows name them, by their instance ids. A recommendation names its change exactly: a

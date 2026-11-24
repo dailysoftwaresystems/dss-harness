@@ -387,10 +387,11 @@ public sealed partial class HelpTests
     /// The orchestrators topic says what an analysis's impact is held to: every number it says one of its citations',
     /// read in the unit the report holds the cited member in - bare as written, joined to its unit converted exactly into
     /// the member's, a compound duration as its sum, a kind no member is never, another currency by its sign, its code or
-    /// its name, a unit through Markdown's marks and a line's end, a currency only by the number's own phrase and never
-    /// by a word elsewhere in its sentence, a sign before a currency's sign the number's - a word an id only where the
-    /// report or a citation holds it as one and every other parted so no number goes unread, a colon or a slash between
-    /// digits kept, and a word that reads as no one number refused, as the evidence check holds it.
+    /// its name, a unit through Markdown's marks and a line's end, a currency only by the number's own phrase - its name,
+    /// code or sign directly before or after it - and never by a word farther from it, a sign before a currency's sign the
+    /// number's - a word an id only where the report or a citation holds it as one and every other parted so no number
+    /// goes unread, a colon or a slash between digits kept, and a word that reads as no one number refused, as the
+    /// evidence check holds it.
     /// </summary>
     [Fact]
     public void OrchestratorsTopic_SaysEveryNumberAnImpactSays_WithItsUnitOrNot_IsACitationsValue()
@@ -406,10 +407,11 @@ public sealed partial class HelpTests
                 + "€0.02, R$0.02, 0.02 EUR, 0.02 euros, 0.02 Canadian dollars) never. A unit is a number's through Markdown's "
                 + "emphasis and code marks (**1.5** hours) and through a line's end but where a list's item opens the next "
                 + "line, and never through a sentence's punctuation. A currency is a number's only by the number's own phrase - "
-                + "its code or sign directly before it, a colon between allowed (EUR: 0.02), or after it a currency's name, "
-                + "code or sign, in brackets or after the word in, behind a country's name of a closed list (0.02 (EUR), 0.02 "
-                + "in euros, 0.02 Canadian dollars, 0.02 US dollars) - and never by a currency's word elsewhere in its sentence "
-                + "(in 'exited 20 and cost time and dollars' 20 is bare); per cent is a share in percent, and a currency whose "
+                + "a currency's name, code or sign, behind a country's name of a closed list or not, directly before it, a colon "
+                + "between allowed (EUR: 0.02, Euros: 0.02, Canadian dollars: 0.02), or after it, beside it, in brackets or "
+                + "after the word in (0.02 (EUR), 0.02 in euros, 0.02 Canadian dollars, 0.02 US dollars) - and never by a "
+                + "currency's word farther from it in its sentence (in 'exited 20 and cost time and dollars' 20 is bare, and "
+                + "Wasted dollars: 0.02 is the report's dollars); per cent is a share in percent, and a currency whose "
                 + "name is an ordinary word (won, real) is read by its code, its sign or a country's name before it alone. A "
                 + "minus before a currency's sign is the number's sign (-$0.02), and a currency's code in capitals glued to a "
                 + "digit starts the number (USD0.40, EUR0.40). A word is an id only where the report holds it as one - a row's "
