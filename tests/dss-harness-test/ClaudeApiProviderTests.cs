@@ -6,6 +6,7 @@ using DssHarness.Core.Agents.ClaudeApi;
 using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Agents.Runtime;
+using DssHarness.Core.Codebase;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
@@ -606,6 +607,53 @@ public sealed class ClaudeApiProviderTests : IDisposable
             ("ephemeral", "ephemeral", "ephemeral"),
             (body["system"]![0]!["cache_control"]!["type"]!.GetValue<string>(), blocks[0]!["cache_control"]!["type"]!.GetValue<string>(), body["cache_control"]!["type"]!.GetValue<string>()));
         Assert.Equal(3, body.ToJsonString().Split("cache_control").Length - 1);
+    }
+
+    /// <summary>
+    /// A first message that begins with a repository map of several pages carries the map's first page - its last line
+    /// included, the bytes the run's making of the map laid, and no page after it - as its own block with the client's
+    /// cache mark on it alone, the three marks a request holds unchanged by the pages; and two steps of the run, each
+    /// given the map's first page, are sent the same map-part bytes, so the prefix the cache reads never moves with the
+    /// pages after it.
+    /// </summary>
+    [Fact]
+    public async Task AFirstMessageThatBeginsWithAMultiPageRunMap_CarriesTheSameMarksAndBytesForEveryStep()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        var view = await CodebaseGraphToolTests.QueriesAsync(tree);
+        var (pages, _) = CodebaseRepositoryMap.Make(view, "the shapes", 80);
+        var again = CodebaseRepositoryMap.Make(view, "the shapes", 80);
+
+        Assert.True(pages.Count > 1, string.Join('\n', pages));
+        Assert.Equal(pages, again.Pages);
+
+        var provider = Provider();
+        var mapPart = AgentPromptParts.MapPart(pages[0]);
+        const string Rest = "<codebase>\nthe pack of the step's work\n</codebase>\n\n<task>\ndo the work\n</task>";
+        string[] messages = [provider.UserMessage(mapPart, Rest)];
+        _endpoint.Then(ApiReply.Fixture("answer.sse")).Then(ApiReply.Fixture("answer.sse"));
+
+        await Sent(Request(messages.Length) with { Messages = messages });
+        await Sent(Request(messages.Length) with { Messages = messages });
+
+        var bodies = _endpoint.Asked.Select(asked => JsonNode.Parse(asked.Body)!).ToList();
+
+        Assert.All(bodies, body =>
+        {
+            var blocks = body["messages"]![0]!["content"]!.AsArray();
+
+            Assert.Equal([mapPart, Rest], blocks.Select(block => block!["text"]!.GetValue<string>()));
+            Assert.Equal(("ephemeral", "5m"), (blocks[0]!["cache_control"]!["type"]!.GetValue<string>(), blocks[0]!["cache_control"]!["ttl"]!.GetValue<string>()));
+            Assert.Null(blocks[1]!["cache_control"]);
+            Assert.Equal(3, body.ToJsonString().Split("cache_control").Length - 1);
+        });
+
+        // The map part ends with page 1's last line, and every step is sent the same bytes of it.
+        Assert.EndsWith(
+            $"map page 1 of {pages.Count} · the rest is on the pages after it, which a step whose graph is tools asks the graph for",
+            pages[0],
+            StringComparison.Ordinal);
+        Assert.Equal(bodies[0]["messages"]![0]!["content"]![0]!["text"]!.GetValue<string>(), bodies[1]["messages"]![0]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     /// <summary>
