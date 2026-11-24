@@ -709,7 +709,9 @@ internal sealed class CcParser : GnuFormParser
 
 /// <summary>
 /// The linkers' forms but link's own (which is MSBuild's canonical form): GNU ld's <c>file:(section): undefined reference
-/// to 'f'</c> under its <c>in function</c> line, its own <c>ld: ...</c> lines, gold's, lld's <c>ld.lld: error: undefined
+/// to 'f'</c> - with the line where the object holds it, <c>file:line:(section)</c>, and behind the object where ld names it
+/// first, as MinGW's does - under its <c>in function</c> line, its own <c>ld: ...</c> lines behind its path, a drive's
+/// among them, gold's, lld's <c>ld.lld: error: undefined
 /// symbol: f</c> with the <c>&gt;&gt;&gt; referenced by</c> lines that place it, mold's, and Apple ld's <c>Undefined
 /// symbols for architecture</c> list with its <c>ld: warning:</c>. A line that only says the link failed - collect2's
 /// <c>ld returned 1 exit status</c>, a compiler driver's <c>linker command failed</c>, Apple ld's <c>symbol(s) not
@@ -718,13 +720,21 @@ internal sealed class CcParser : GnuFormParser
 internal sealed class LinkerParser : IBuiltInParser
 {
     private static readonly Regex Own = LinearRegex.Compile(
-        @"^(?:[^\s:]*[/\\])?(?:[\w.]+-)?(?:ld(?:\.bfd|\.gold|\.lld)?|ld64(?:\.lld)?|lld-link|wasm-ld|mold|gold)(?:\.exe)?: (?<rest>.+)$");
+        @"^(?:(?:[A-Za-z]:)?[^\s:]*[/\\])?(?:[\w.]+-)?(?:ld(?:\.bfd|\.gold|\.lld)?|ld64(?:\.lld)?|lld-link|wasm-ld|mold|gold)(?:\.exe)?: (?<rest>.+)$");
 
     private static readonly Regex Severity = LinearRegex.Compile(@"^(?<severity>error|warning): (?<message>.+)$");
 
     private static readonly Regex InFunction = LinearRegex.Compile(@"^(?<object>.+): in function [`'‘](?<function>.+)['’]:$");
 
-    private static readonly Regex Reference = LinearRegex.Compile(@"^(?<file>.+?):\((?<section>[^)]*)\): (?<message>(?:undefined reference to|multiple definition of|relocation truncated) .+)$");
+    /// <summary>
+    /// A reference GNU ld places: <c>file:(section+offset): message</c>, <c>file:line:(section+offset): message</c> where the
+    /// object holds line information - a <c>-g</c> build's - and <c>file:line: message</c> as older binutils printed that,
+    /// each behind its object where ld names it first (<c>object:file:(section+offset)</c>, as a PE object's is). A
+    /// path may begin with a drive; the object holds a separator or a dot, the file a character no line number holds, so
+    /// each is read one way.
+    /// </summary>
+    private static readonly Regex Reference = LinearRegex.Compile(
+        @"^(?:(?<object>(?:[A-Za-z]:)?[^:]*[/\\.][^:]*):)?(?<file>(?:[A-Za-z]:)?[^:]*[^:\d][^:]*)(?::(?<line>\d+)(?::\([^)]*\))?|:\([^)]*\)): (?<message>(?:undefined reference to|multiple definition of|relocation truncated) .+)$");
 
     private static readonly Regex Referenced = LinearRegex.Compile(@"^>>> (?:referenced by|defined at) (?<file>.+?)(?::(?<line>\d+))?(?: \(.+\))?$");
 
@@ -792,7 +802,7 @@ internal sealed class LinkerParser : IBuiltInParser
             {
                 // A reference, behind the linker's name or with none ahead of it: under the function a line before named,
                 // the line its object's place begins.
-                Open(line, new Diagnostic("ld", "error", null, reference.Groups["message"].Value.Trim(), reference.Groups["file"].Value));
+                Open(line, new Diagnostic("ld", "error", null, reference.Groups["message"].Value.Trim(), reference.Groups["file"].Value, ParsedText.Whole(reference.Groups["line"])));
                 return LineTaken.Took;
             }
 

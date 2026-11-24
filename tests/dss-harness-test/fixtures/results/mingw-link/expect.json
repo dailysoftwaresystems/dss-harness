@@ -1,0 +1,22 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "GNU"
+  },
+  "root": "D:\\a\\app\\app",
+  "tree": ["link.c"],
+  "errors": 4,
+  "first": {
+    "tool": "ld",
+    "code": null,
+    "file": "link.c",
+    "line": null,
+    "column": null
+  },
+  "diagnostics": [
+    "error - link.c:-",
+    "error - link.c:-",
+    "error - D:/a/app/app/link.c:6",
+    "error - D:/a/app/app/link.c:7"
+  ]
+}

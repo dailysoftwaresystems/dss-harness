@@ -1,0 +1,7 @@
+C:/Strawberry/c/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: CMakeFiles/app.dir/link.c.obj:link.c:(.text+0x18): undefined reference to `parse_record'
+C:/Strawberry/c/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: CMakeFiles/app.dir/link.c.obj:link.c:(.text+0x20): undefined reference to `load_store'
+collect2.exe: error: ld returned 1 exit status
+C:/Strawberry/c/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: CMakeFiles/app.dir/link.c.obj: in function `main':
+D:/a/app/app/link.c:6:(.text+0x18): undefined reference to `parse_record'
+C:/Strawberry/c/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: D:/a/app/app/link.c:7:(.text+0x20): undefined reference to `load_store'
+collect2.exe: error: ld returned 1 exit status

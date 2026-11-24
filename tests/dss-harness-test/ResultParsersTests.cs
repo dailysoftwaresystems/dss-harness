@@ -651,6 +651,39 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// GNU ld's reference is read wherever it is placed: by its line where the object holds line information - with its
+    /// section after it, or with none as older binutils printed it - behind the object where ld names it first, and behind
+    /// a linker named by a drive's path; every reference is said, the first under its function's line included, and the
+    /// line that only says the link failed is taken with them.
+    /// </summary>
+    [Fact]
+    public void ALinkersReference_IsReadByItsLine_BehindItsObject_AndBehindADrivesLinker()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "/usr/bin/ld: /tmp/cc.o: in function `main':",
+                "/home/u/app/link.c:4: undefined reference to `parse_record'",
+                "/usr/bin/ld: /home/u/app/link.c:5: undefined reference to `load_store'",
+                "collect2: error: ld returned 1 exit status",
+                "C:/msys64/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: CMakeFiles/app.dir/main.c.obj:main.c:(.text+0x15): undefined reference to `parse_record'",
+                "C:/msys64/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: C:/a/app/main.c:9:(.text+0x20): undefined reference to `load_store'",
+                "collect2.exe: error: ld returned 1 exit status",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig { Toolchains = { ["gcc"] = new ToolchainConfig { CompilerId = { ["C"] = "GNU" } } } }, "cmake", "gcc"))!;
+
+        Assert.Equal(
+            [
+                ("undefined reference to `parse_record'", "/home/u/app/link.c", (int?)4, (1, 2)),
+                ("undefined reference to `load_store'", "/home/u/app/link.c", 5, (3, 3)),
+                ("undefined reference to `parse_record'", "main.c", null, (5, 5)),
+                ("undefined reference to `load_store'", "C:/a/app/main.c", 9, (6, 6)),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Message, diagnostic.File!, diagnostic.Line, diagnostic.Log!.Value)));
+        Assert.Equal(4, digest.Errors);
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
     /// A CMake error says the command that raised it ahead of the message CMake printed under it - never as its project,
     /// which is the project or target a build names - while a head with no message under it is its own message, the
     /// command in it already, and one CMake names no command for says its message alone.

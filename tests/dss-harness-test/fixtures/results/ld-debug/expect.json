@@ -1,0 +1,20 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "GNU"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["link.c"],
+  "errors": 2,
+  "first": {
+    "tool": "ld",
+    "code": null,
+    "file": "/home/runner/work/app/app/link.c",
+    "line": 6,
+    "column": null
+  },
+  "diagnostics": [
+    "error - /home/runner/work/app/app/link.c:6",
+    "error - /home/runner/work/app/app/link.c:7"
+  ]
+}
