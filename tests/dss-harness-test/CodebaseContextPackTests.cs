@@ -160,6 +160,48 @@ public sealed class CodebaseContextPackTests
         Assert.Contains("; packed from the task: 2 declaration(s) at the sites and homes of the classes it is to close", pack.Text.Split('\n')[0], StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A site naming a key by its last quoted place seeds that key, as a site naming a declaration with some of its scopes
+    /// does: a path's quoted name is one place, read by the name it quotes, where the pack matched a declaration's name only
+    /// where a dot stood before it - and the key fell back to its file alone.
+    /// </summary>
+    [Fact]
+    public async Task ASiteNamingAKeyByItsLastQuotedPlace_SeedsThatKey()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(DottedAppSettings);
+        var queries = await QueriesAsync(tree);
+        var key = Id(queries, "json:config/appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]");
+
+        var pack = CodebaseContextPack.Make(
+            queries,
+            new ContextPackRequest("Close the class.", All) { Closure = [new ContextPackClosure("config/appsettings.json", "[\"Microsoft.AspNetCore\"]", Home: false)] });
+
+        Assert.Equal("a site of a class the item closes", Assert.Single(pack.Seeds, seed => seed.Id == key).Why);
+    }
+
+    /// <summary>
+    /// A site written in single quotes seeds what the double quotes seed, with the place alone and with its whole path: the
+    /// pack reads a site's symbol as the writer writes a path.
+    /// </summary>
+    [Fact]
+    public async Task ASiteNamingAKeyInSingleQuotes_SeedsThatKey()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(DottedAppSettings);
+        var queries = await QueriesAsync(tree);
+        var key = Id(queries, "json:config/appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]");
+
+        foreach (var symbol in new[] { "['Microsoft.AspNetCore']", "Logging.LogLevel['Microsoft.AspNetCore']" })
+        {
+            var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Close the class.", All) { Closure = [new ContextPackClosure("config/appsettings.json", symbol, Home: false)] });
+
+            Assert.Equal("a site of a class the item closes", Assert.Single(pack.Seeds, seed => seed.Id == key).Why);
+        }
+    }
+
+    /// <summary>An appsettings file whose logging levels name one key with a dot of its own beside keys nested by the same dots.</summary>
+    private static readonly (string Path, string Text) DottedAppSettings =
+        ("config/appsettings.json", "{\n  \"Logging\": {\n    \"LogLevel\": {\n      \"Microsoft.AspNetCore\": \"Warning\",\n      \"Microsoft\": {\n        \"AspNetCore\": \"Error\"\n      }\n    }\n  }\n}\n");
+
     [Fact]
     public async Task TheSeeds_AreWhatThePromptNamesExactly_InBackquotesOrAsAQualifiedNameAHandleOrAPathAndLine()
     {

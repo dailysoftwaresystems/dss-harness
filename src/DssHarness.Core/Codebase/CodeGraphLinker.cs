@@ -83,7 +83,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 11;
+    public const int Revision = 12;
 
     /// <summary>
     /// Links <paramref name="files"/>, one tree's every file, into its symbols and edges. The keys of the configuration
@@ -3967,12 +3967,16 @@ public static class CodeGraphLinker
         /// The keys' join: each <c>uses</c> edge a key of a configuration file gains - from the declaration that holds a
         /// string literal naming the key, and from each value (a field, a property) whose name is the key's last segment as
         /// a declared naming policy writes it - of <see cref="CodeConfidences.Candidates"/>, for nothing says the code reads
-        /// that key. A literal names the keys of its last segment, of its whole path, and of the path it spells as .NET's
-        /// configuration does (<see cref="CodeKeyPaths.Dotted"/>), and the keys a path reaches through what its file repeats
-        /// by reference (<see cref="KeyPaths"/>); every key it names is joined, however many they are - a word every file of
-        /// data holds, <c>name</c>, <c>version</c>, joined to each - and the confidence says how sure each is. A key its
-        /// file keeps to itself - an MSBuild project's own property - is no other file's to read, so it joins none. A use is
-        /// recall and never a doubt, so none of it is counted anywhere.
+        /// that key. A literal names the keys of its last segment, of its whole path - read as the writer writes one
+        /// (<see cref="CodeKeyPaths.Canonical"/>), so a path in brackets is read in either quote mark,
+        /// <c>Logging.LogLevel['Microsoft.AspNetCore']</c> - and of the path it spells as .NET's configuration does
+        /// (<see cref="CodeKeyPaths.Dotted"/>), where a name holding a dot is one place: <c>Logging:LogLevel:Microsoft.AspNetCore</c>
+        /// names <c>Logging.LogLevel["Microsoft.AspNetCore"]</c>, never the nested keys of the same dots, which a dotted
+        /// literal names; and the keys a path reaches through what its file repeats by reference (<see cref="KeyPaths"/>);
+        /// every key it names is joined, however many they are - a word every file of data holds, <c>name</c>,
+        /// <c>version</c>, joined to each - and the confidence says how sure each is. A key its file keeps to itself - an
+        /// MSBuild project's own property - is no other file's to read, so it joins none. A use is recall and never a doubt,
+        /// so none of it is counted anywhere.
         /// </summary>
         private void Keys()
         {
@@ -4007,12 +4011,17 @@ public static class CodeGraphLinker
 
                 foreach (var literal in literals)
                 {
+                    // The literal's path as the writer writes it (CodeKeyPaths.Canonical): a path in brackets is read in either
+                    // quote mark, and every other value is left as it is. By its raw value alone a name is looked up (bySegment);
+                    // the loose form of a key path - its names' own dots as they are - is never read here, for code splits a
+                    // dotted literal into its places, as .NET's configuration and lodash do.
                     var spelt = CodeKeyPaths.Dotted(literal.Value);
+                    var path = CodeKeyPaths.Canonical(literal.Value);
                     var joined = Distinct(
                         (bySegment.TryGetValue(literal.Value, out var byName) ? byName : [])
-                            .Concat(byPath.TryGetValue(literal.Value, out var named) ? named : [])
+                            .Concat(byPath.TryGetValue(path, out var named) ? named : [])
                             .Concat(spelt is not null && byPath.TryGetValue(spelt, out var dotted) ? dotted : [])
-                            .Concat(through.Reached(literal.Value))
+                            .Concat(through.Reached(path))
                             .Concat(spelt is null ? [] : through.Reached(spelt))
                             .Where(key => key.Node.SubKind == CodeSubKinds.Key && !key.FileOnly));
 

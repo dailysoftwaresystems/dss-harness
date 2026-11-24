@@ -3187,6 +3187,94 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A literal names a key whose own name holds a dot by its name and by each spelling .NET's configuration reads it by -
+    /// a colon or a double underscore between the places, a dot inside a name staying a dot - and never the nested keys of
+    /// the same dots, which only their own spelling names: <c>Logging:LogLevel:Microsoft.AspNetCore</c> is the key
+    /// <c>Microsoft.AspNetCore</c> under <c>LogLevel</c>, as the ASP.NET Core template writes it, and
+    /// <c>Logging:LogLevel:Microsoft:AspNetCore</c> the nested one.
+    /// </summary>
+    [Fact]
+    public void ALiteral_NamesAKeyWhoseNameHoldsADot_ByItsNameAndEachSpellingDotNetReadsIt_NeverTheNestedKeyOfTheSameDots()
+    {
+        var json = new DssHarness.Core.Codebase.Languages.JsonExtractor().Extract(
+            new CodeFileInput("appsettings.json", """{"Logging":{"LogLevel":{"Microsoft.AspNetCore":"Warning","Microsoft":{"AspNetCore":"Error"}}}}"""));
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("appsettings.json", "json", json),
+            new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 4 }])
+            {
+                Literals = LiteralRow.Table(
+                    new LiteralRow("Logging:LogLevel:Microsoft.AspNetCore", 1),
+                    new LiteralRow("Logging__LogLevel__Microsoft.AspNetCore", 2),
+                    new LiteralRow("Logging:LogLevel:Microsoft:AspNetCore", 3),
+                    new LiteralRow("Microsoft.AspNetCore", 4)),
+            }),
+        ]);
+
+        Assert.Equal(
+            [("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 1), ("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 2), ("json:appsettings.json#Logging.LogLevel.Microsoft.AspNetCore", 3), ("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 4)],
+            linked.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => (edge.To, edge.Line)));
+    }
+
+    /// <summary>
+    /// A literal's path spelled with a colon names a key whose own name holds a dot through a YAML merge as directly as it
+    /// names a nested one: <c>job:a.b</c> reaches the merged mapping's key <c>a.b</c>, <c>job.a.b</c> the nested
+    /// <c>a</c> then <c>b</c> - where both spelled the same path, and one literal named both.
+    /// </summary>
+    [Fact]
+    public void ALiteralsPath_ThroughAYamlMerge_ReachesAKeyWhoseNameHoldsADot_AndNotTheNestedKeyOfItsDots()
+    {
+        const string Config = """
+            base: &base
+              "a.b": 1
+              a:
+                b: 2
+            job:
+              <<: *base
+            """;
+        var yaml = new DssHarness.Core.Codebase.Languages.YamlExtractor().Extract(new CodeFileInput("config.yml", Config));
+
+        string[] Reached(params string[] literals)
+            => [.. CodeGraphLinker.Link(
+                [
+                    new CodeGraphFile("config.yml", "yaml", yaml),
+                    new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = literals.Length }]) { Literals = LiteralRow.Table([.. literals.Select((literal, at) => new LiteralRow(literal, at + 1))]) }),
+                ]).Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => $"{edge.Line} {edge.To}")];
+
+        Assert.Equal(["1 yaml:config.yml#base[\"a.b\"]"], Reached("job:a.b"));
+        Assert.Equal(["1 yaml:config.yml#base.a.b"], Reached("job.a.b"));
+    }
+
+    /// <summary>
+    /// A literal writing a path in brackets - as lodash and JSONPath write one - names the key of that path in either quote
+    /// mark, and a path with each place quoted needlessly the keys of its places. The loose form, a path's quoted names
+    /// written with their own dots as they are, names none: code splits a dotted literal into its places, as .NET's
+    /// configuration and lodash do.
+    /// </summary>
+    [Fact]
+    public void ALiteralWritingAPathInBrackets_EitherQuoteMark_NamesTheKeyOfItsPath_AndTheLooseFormNone()
+    {
+        var json = new DssHarness.Core.Codebase.Languages.JsonExtractor().Extract(
+            new CodeFileInput("appsettings.json", """{"Logging":{"LogLevel":{"Default":"Information","Microsoft.AspNetCore":"Warning"}}}"""));
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("appsettings.json", "json", json),
+            new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 4 }])
+            {
+                Literals = LiteralRow.Table(
+                    new LiteralRow("Logging.LogLevel[\"Microsoft.AspNetCore\"]", 1),
+                    new LiteralRow("Logging.LogLevel['Microsoft.AspNetCore']", 2),
+                    new LiteralRow("""["Logging"]["LogLevel"]["Default"]""", 3),
+                    new LiteralRow("Logging.LogLevel.Microsoft.AspNetCore", 4)),
+            }),
+        ]);
+
+        Assert.Equal(
+            [("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 1), ("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 2), ("json:appsettings.json#Logging.LogLevel.Default", 3)],
+            linked.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => (edge.To, edge.Line)));
+    }
+
+    /// <summary>
     /// A literal's path that runs through what a YAML file repeats by reference reaches the key it runs on into: through a
     /// mapping's merge to the merged mapping's key, and through an alias to its anchor's - the longest part of the path the
     /// file holds deciding, so a key the merging mapping writes itself shadows the merged one's; and references that come

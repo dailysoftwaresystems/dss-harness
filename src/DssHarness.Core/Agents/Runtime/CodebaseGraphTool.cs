@@ -472,7 +472,7 @@ public sealed class CodebaseGraphTool(
             [GraphOp.Related] = $"related - the nodes a relation reaches, as many hops as you ask, {RelatedLines} a page",
             [GraphOp.Outline] = $"outline - a file's or a type's declarations, or the repository's, {OutlineLines} a page",
             [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
-            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted, or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
+            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
@@ -1999,7 +1999,11 @@ public sealed class CodebaseGraphTool(
     private static string EdgeLine(GraphEdge edge)
         => string.Equals(edge.Confidence, CodeConfidences.Exact, StringComparison.Ordinal) ? GraphLines.Of(edge.Card) : $"{GraphLines.Of(edge.Card)} | {edge.Confidence}";
 
-    /// <summary>The simple name <paramref name="symbol"/> ends with, a text search's word; null where it names a file or a line of one, which no word is.</summary>
+    /// <summary>
+    /// The simple name <paramref name="symbol"/> ends with, a text search's word; null where it names a file or a line of one, which no word is.
+    /// The separators a symbol is written with - a colon, a dot, a backslash - read as dots outside a quoted name alone, so a
+    /// key path's word is its last name, a quoted one's own text (<see cref="CodeKeyPaths.OutsideQuotedNames"/>).
+    /// </summary>
     private static string? Simple(string symbol)
     {
         if (CodebaseGraphQueries.NamesAFile(symbol))
@@ -2007,8 +2011,7 @@ public sealed class CodebaseGraphTool(
             return null;
         }
 
-        var cut = Math.Max(Math.Max(symbol.LastIndexOf(':'), symbol.LastIndexOf('.')), symbol.LastIndexOf('\\'));
-        return cut >= 0 && cut < symbol.Length - 1 ? symbol[(cut + 1)..] : symbol;
+        return CodeKeyPaths.LastName(CodeKeyPaths.OutsideQuotedNames(symbol, run => run.Replace(':', '.').Replace('\\', '.')));
     }
 
     private static IEnumerable<GraphOp> Ordered(IEnumerable<GraphOp> ops) => ops.Order();
@@ -2024,7 +2027,7 @@ public sealed class CodebaseGraphTool(
         ("depth", "integer", "how many hops, from 1; 1 where it is left out."),
         ("symbols", "array", "the nodes to read, one or more, each a handle, an id or a name."),
         ("full", "boolean", "whether a type's members' bodies are given too."),
-        ("data", "string", "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path, dotted or as .NET's configuration writes one (Payments:TimeoutSeconds, Payments__TimeoutSeconds), or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone."),
+        ("data", "string", "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path, dotted - a key whose own name holds a dot or a bracket quoted in brackets, in double or single quotes, Logging.LogLevel[\"Microsoft.AspNetCore\"] or Logging.LogLevel['Microsoft.AspNetCore'], or with its names' own dots as they are, Logging.LogLevel.Microsoft.AspNetCore, which asks of every key it may mean - or as .NET's configuration writes one (Payments:TimeoutSeconds, Payments__TimeoutSeconds, Logging:LogLevel:Microsoft.AspNetCore), or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone."),
         ("hash", "string", "the node's hash as you last saw it; the edit is refused where its lines moved since."),
         ("text", "string", "the node's new lines."),
         ("reason", "string", "why the whole file is needed."),

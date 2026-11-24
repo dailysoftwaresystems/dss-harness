@@ -267,4 +267,20 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
             ],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).Select(edge => (edge.From, edge.To, edge.Line, edge.Confidence)).OrderBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal));
     }
+
+    /// <summary>
+    /// A property whose name holds a dot is one place of its path, quoted in brackets and written by the one owner of the
+    /// join, and named as it is - MSBuild itself refuses such a name, and XML holds it, and the reader reads what XML parses.
+    /// </summary>
+    [Fact]
+    public void APropertyWhoseNameHoldsADot_IsOnePlaceQuotedInBrackets_NamedAsItIs()
+    {
+        const string Text = "<Project>\n  <PropertyGroup>\n    <My.Prop>1</My.Prop>\n    <Plain>2</Plain>\n  </PropertyGroup>\n</Project>\n";
+        var extract = Extractor.Extract(new CodeFileInput("Weird.csproj", Text));
+
+        Assert.Equal(
+            [("msbuild:Weird.csproj#[\"My.Prop\"]", "My.Prop", "[\"My.Prop\"]", "1"), ("msbuild:Weird.csproj#Plain", "Plain", "Plain", "2")],
+            extract.Nodes.Where(node => node.SubKind == CodeSubKinds.Key).Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary)));
+        Assert.Null(extract.WithDigests(Text).Problem("msbuild", 6));
+    }
 }

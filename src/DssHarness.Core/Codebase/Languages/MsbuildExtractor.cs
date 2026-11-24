@@ -30,7 +30,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
     public string Language => "msbuild";
 
     /// <inheritdoc/>
-    public int Version => 4;
+    public int Version => 5;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".csproj", ".slnx");
@@ -151,7 +151,9 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
                 // A property a project's own PropertyGroup declares - one of the root Project's - is a key of the project's alone.
                 if (!solution && open is ["Project", "PropertyGroup"])
                 {
-                    var key = new ExtractNode(ids.Next($"{id}#{ExtractText.Whole(element)}"), CodeNodeKinds.Member, element, element, line, line, ExtractText.Signature(element))
+                    var place = DataPlace.Named(element);
+                    var path = ExtractText.Whole(place.Written);
+                    var key = new ExtractNode(ids.Next($"{id}#{path}"), CodeNodeKinds.Member, place.NodeName, path, line, line, ExtractText.Signature(path))
                     {
                         SubKind = CodeSubKinds.Key,
                         Scope = OwnProperties,

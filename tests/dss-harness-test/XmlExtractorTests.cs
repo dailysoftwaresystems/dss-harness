@@ -126,7 +126,41 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         },
         new("app.manifest", Manifest),
         new("billing.nuspec", Nuspec),
+        new("web.config", Web)
+        {
+            Nodes = [new("xml:web.config#appSettings[\"Serilog.MinimumLevel\"]", CodeNodeKinds.Member, (3, 3))],
+        },
+        new("Form1.resx", Form)
+        {
+            Nodes =
+            [
+                new("xml:Form1.resx#[\"button1.Text\"]", CodeNodeKinds.Member, (2, 4)),
+                new("xml:Form1.resx#[\"Line\\nBreak\"]", CodeNodeKinds.Member, (5, 7)),
+            ],
+        },
     ];
+
+    /// <summary>A configuration file whose appSettings hold a key with a dot of its own beside one with a colon of its own.</summary>
+    private const string Web = """
+        <configuration>
+          <appSettings>
+            <add key="Serilog.MinimumLevel" value="Information" />
+            <add key="webpages:Version" value="3.0.0.0" />
+          </appSettings>
+        </configuration>
+        """;
+
+    /// <summary>A <c>.resx</c> whose names hold a dot and a line break, each as .NET's resources name a string.</summary>
+    private const string Form = """
+        <root>
+          <data name="button1.Text" xml:space="preserve">
+            <value>OK</value>
+          </data>
+          <data name="Line&#10;Break">
+            <value>x</value>
+          </data>
+        </root>
+        """;
 
     /// <summary>
     /// A <c>.props</c> or <c>.targets</c> file's <c>PropertyGroup</c> children are keys named by the property they are,
@@ -318,6 +352,54 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
 
         Assert.Equal(["xml:broken.xml#root", "xml:broken.xml#root/item/a"], broken.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal([new ExtractDynamic(3, "the file stops reading as XML here (The 'item' start tag on line 2 position 4 does not match the end tag of 'root'), and nothing after it is read", DataNodes.Stop)], broken.Dynamic);
+    }
+
+    /// <summary>
+    /// A configuration file's key or a <c>.resx</c>'s name holding a dot is one place of its path, quoted in brackets and
+    /// written by the one owner of the join - which the XML reader once bypassed, so <c>Serilog.MinimumLevel</c> under
+    /// <c>appSettings</c> read as three places, and a name holding a line break, as .NET's resources write one, made an
+    /// extract the core refused. A literal reading the key by its name is joined to it.
+    /// </summary>
+    [Fact]
+    public void AConfigKeyOrAResxNameHoldingADotOrALineBreak_IsOnePlaceQuotedInBrackets_AndCodeReadingItIsJoinedToIt()
+    {
+        var config = Read("web.config", Web);
+        var resx = Read("Form1.resx", Form);
+
+        Assert.Equal(
+            [
+                ("xml:web.config#appSettings[\"Serilog.MinimumLevel\"]", "Serilog.MinimumLevel", "appSettings[\"Serilog.MinimumLevel\"]", "Information", "xml:web.config#configuration"),
+                ("xml:web.config#appSettings.webpages:Version", "webpages:Version", "appSettings.webpages:Version", "3.0.0.0", "xml:web.config#configuration"),
+            ],
+            config.Nodes.Where(node => node.SubKind == CodeSubKinds.Key).Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary, node.Parent?.Whole())));
+
+        Assert.Equal(
+            [
+                ("xml:Form1.resx#[\"button1.Text\"]", "button1.Text", "[\"button1.Text\"]", "OK"),
+                ("xml:Form1.resx#[\"Line\\nBreak\"]", "[\"Line\\nBreak\"]", "[\"Line\\nBreak\"]", "x"),
+            ],
+            resx.Nodes.Where(node => node.SubKind == CodeSubKinds.Key).Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary)));
+
+        Assert.Null(resx.WithDigests(Form).Problem("xml", CodeFileText.Lines(Form).Count));
+
+        const string Logs = """
+            using System.Configuration;
+
+            namespace Shop;
+
+            public static class Logs
+            {
+                public static string Level() => ConfigurationManager.AppSettings["Serilog.MinimumLevel"];
+
+                public static string Ok() => Resources.ResourceManager.GetString("button1.Text");
+            }
+            """;
+        var code = new CSharpExtractor().Extract(new CodeFileInput("src/Logs.cs", Logs));
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("web.config", "xml", config), new CodeGraphFile("Form1.resx", "xml", resx), new CodeGraphFile("src/Logs.cs", "csharp", code)]);
+
+        Assert.Equal(
+            [("xml:Form1.resx#[\"button1.Text\"]", 9), ("xml:web.config#appSettings[\"Serilog.MinimumLevel\"]", 7)],
+            linked.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates } && edge.To.StartsWith("xml:", StringComparison.Ordinal)).Select(edge => (edge.To, edge.Line)).Order());
     }
 
     private static FileExtract Read(string path, string text) => new XmlExtractor().Extract(new CodeFileInput(path, text));

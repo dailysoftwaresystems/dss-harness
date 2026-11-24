@@ -638,12 +638,19 @@ public static partial class CodebaseContextPack
 
             var declared = Declarations(path).ToList();
             var why = closure.Home ? "the home of a class the item closes" : "a site of a class the item closes";
+            List<GraphCard> named = [];
 
-            var named = closure.Symbol is { Length: > 0 } written && SymbolNamed(written.Trim()) is { Length: > 0 } symbol
-                ? declared.Where(card => string.Equals(card.Name, symbol, StringComparison.Ordinal)
-                    || string.Equals(card.Qualified, symbol, StringComparison.Ordinal)
-                    || card.Qualified.EndsWith("." + symbol, StringComparison.Ordinal)).ToList()
-                : [];
+            if (closure.Symbol is { Length: > 0 } written && SymbolNamed(written.Trim()) is { Length: > 0 } symbol)
+            {
+                // The site's symbol as the writer writes a path, read once: a site written with a quoted place in single quotes
+                // names what the double quotes name, and one written with some of its scopes ends the declaration's name
+                // where one of its places begins.
+                var whole = CodeKeyPaths.Canonical(symbol);
+
+                named = declared.Where(card => string.Equals(card.Name, symbol, StringComparison.Ordinal)
+                    || string.Equals(card.Qualified, whole, StringComparison.Ordinal)
+                    || CodeKeyPaths.EndsWithPlaces(card.Qualified, symbol)).ToList();
+            }
 
             return named.Count > 0
                 ? named.Select(card => (card, NamedWeight, why))

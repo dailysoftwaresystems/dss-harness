@@ -54,7 +54,7 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<string> SitesOption = new("--sites")
     {
-        Description = "Every place that decides data - a name, a key path (dotted, or as .NET's configuration writes one: A:B, A__B), a diagnostic id, or a quoted literal asked by its value alone: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it and every key it names, with the coverage lines.",
+        Description = "Every place that decides data - a name, a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a diagnostic id, or a quoted literal asked by its value alone: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it and every key it names, with the coverage lines.",
     };
 
     private static readonly Option<int?> PageOption = new("--page")

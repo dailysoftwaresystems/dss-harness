@@ -8,7 +8,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// A YAML data file - <c>.yml</c> and <c>.yaml</c>, but a Dart package's <c>pubspec.yaml</c>, which its own extractor
 /// reads - read as the data it holds, its nodes made as every data file's are (<see cref="DataNodes"/>): each member that
 /// holds others a <c>section</c> over its lines inside the section that holds it, and each scalar key a <c>member</c>
-/// SubKind <c>key</c> named by its path, its value as its summary - every one, however deep. What the file repeats by
+/// SubKind <c>key</c> named by its path - a name holding a dot or a bracket quoted in brackets
+/// <c>metadata.annotations["nginx.ingress.kubernetes.io/rewrite-target"]</c>, <c>[".defaults"]</c> - its value as its
+/// summary, every one, however deep. What the file repeats by
 /// reference is read once, where it is written: an alias is a key whose value is the alias, with a reference to the node
 /// its anchor names; a mapping's merge key no key of its own, the mapping a reference to each mapping it merges, in order
 /// - its keys, a key the mapping writes itself shadowing a merged one's, reached through that reference - and a mapping
@@ -32,7 +34,7 @@ public sealed class YamlExtractor : ICodeGraphExtractor
     public string Language => "yaml";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".yml", ".yaml");
@@ -42,7 +44,7 @@ public sealed class YamlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "YAML data files (.yml, .yaml): each scalar key anywhere in the file, however deep, as a key node named by its path with its value as its summary, each member that holds others as a section over its lines inside the one that holds it, an alias as a key whose value is the alias with a uses edge to the node its anchor names, a mapping with a merge key as a uses edge to each mapping it merges - what an anchor names read once, where it is written - each document of a file of several as a section by its place ([0] the first), a GitHub Actions workflow's steps named by their name:, a step's uses: naming a local action as an import of its action.yml, and a job's uses: naming a reusable workflow of the repository as an import of its file",
+        "YAML data files (.yml, .yaml): each scalar key anywhere in the file, however deep, as a key node named by its path with its value as its summary (a name holding a dot or a bracket quoted in brackets, metadata.annotations[\"nginx.ingress.kubernetes.io/rewrite-target\"], [\".defaults\"]), each member that holds others as a section over its lines inside the one that holds it, an alias as a key whose value is the alias with a uses edge to the node its anchor names, a mapping with a merge key as a uses edge to each mapping it merges - what an anchor names read once, where it is written - each document of a file of several as a section by its place ([0] the first), a GitHub Actions workflow's steps named by their name:, a step's uses: naming a local action as an import of its action.yml, and a job's uses: naming a reusable workflow of the repository as an import of its file",
         [
             ("pubspec", "pubspec.yaml, which the pubspec extractor reads"),
             ("alias-keys", "a key reached only through an alias or a merge, as a node of its own where the alias is written: it is the anchor's node, which the uses edge reaches, and a key path written through the alias reaches it through that edge"),

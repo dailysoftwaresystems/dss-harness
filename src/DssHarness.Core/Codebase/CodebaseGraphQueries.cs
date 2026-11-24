@@ -26,6 +26,13 @@ public sealed class CodebaseGraphQueries
     private readonly IReadOnlyDictionary<string, IReadOnlyList<NodeAt>> _nodes;
     private readonly ILookup<string, string> _byQualified;
     private readonly ILookup<string, string> _bySimple;
+
+    /// <summary>
+    /// Each key whose path holds a quoted name, by its loose form (<see cref="CodeKeyPaths.Unescaped"/>) - the names' own
+    /// dots as they are - one entry per such key, made once a view: the last rule of <see cref="NamedBy"/>, which the
+    /// queries read alone and the linker never.
+    /// </summary>
+    private readonly ILookup<string, string> _byUnescaped;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _inFile;
     private readonly ILookup<string, CodeEdge> _out;
     private readonly ILookup<string, CodeEdge> _in;
@@ -65,6 +72,8 @@ public sealed class CodebaseGraphQueries
         var inFile = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var byQualified = new List<(string Name, string Id)>();
         var bySimple = new List<(string Name, string Id)>();
+
+        var byUnescaped = new List<(string Loose, string Id)>();
         var words = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
         // Each file's extract is read once: a view read from disk reads it from its record at each ask. A file whose entry
@@ -135,8 +144,16 @@ public sealed class CodebaseGraphQueries
             nodes[symbol.Id] = at;
 
             var representative = (_representatives[symbol.Id] = Representative(symbol, at)).Node;
-            byQualified.Add((representative.Qualified.Whole(), symbol.Id));
+            var qualified = representative.Qualified.Whole();
+            byQualified.Add((qualified, symbol.Id));
             bySimple.Add((representative.Name, symbol.Id));
+
+            // A key whose path holds a quoted name is asked for by its loose form too. Only keys: a section's or a code
+            // node's path is no key path, and code splits a dotted literal, so the linker never reads this form.
+            if (representative.SubKind == CodeSubKinds.Key && CodeKeyPaths.Unescaped(qualified) is var loose && loose != qualified)
+            {
+                byUnescaped.Add((loose, symbol.Id));
+            }
 
             // A component is named by each of its element selectors too, as markup writes them: app-cart reaches its component.
             foreach (var selector in representative.Selectors ?? [])
@@ -155,6 +172,7 @@ public sealed class CodebaseGraphQueries
         _inFile = inFile.ToDictionary(file => file.Key, file => (IReadOnlyList<string>)file.Value, StringComparer.Ordinal);
         _byQualified = byQualified.ToLookup(name => name.Name, name => name.Id, StringComparer.Ordinal);
         _bySimple = bySimple.ToLookup(name => name.Name, name => name.Id, StringComparer.Ordinal);
+        _byUnescaped = byUnescaped.ToLookup(key => key.Loose, key => key.Id, StringComparer.Ordinal);
         _words = words;
 
         // A word's weight is how rare it is among the view's names: a common word (Async, Service) parts few nodes, a rare one many.
@@ -385,9 +403,12 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// Every declaration the view holds that <paramref name="data"/> names: the one node it names by itself - its handle, its
     /// id, a <c>path:line</c> - or else every node any rule a name is read by finds, where <see cref="Resolve"/> takes the
-    /// first rule that finds one - by its qualified name, by its simple name, by one written with its language's own
-    /// separators (<see cref="Dotted"/>) or spelt as a key path is (<see cref="CodeKeyPaths.Dotted"/>), by a qualified name it
-    /// ends with at a dot, or, of a key path, by a key whose own name spells it (<see cref="NamedBy"/>) - each once, ordered by
+    /// first rule that finds one - by its qualified name (a key path as written, <c>Logging.LogLevel["Microsoft.AspNetCore"]</c>,
+    /// or in single quotes), by its simple name, by one written with its language's own separators (<see cref="Dotted"/>) or
+    /// spelt as a key path is (<see cref="CodeKeyPaths.Dotted"/>: <c>Logging:LogLevel:Microsoft.AspNetCore</c>), by a
+    /// qualified name it ends with at a place, by a key whose own name spells it (<see cref="NamedBy"/>), and, last, by the
+    /// loose form of a key path - a dotted text whose names' own dots are written as they are,
+    /// <c>Logging.LogLevel.Microsoft.AspNetCore</c>, asking of every key it may mean - each once, ordered by
     /// id then by path: the definers of the data, whose calls, uses, references, inheritors, implementations and overrides the
     /// <c>sites</c> operation answers beside them. A data the view holds no declaration of answers empty, which that answer says - the graph's
     /// silence is never read as the data's absence, for the text search answers beside it.
@@ -436,16 +457,25 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// The ids each rule a written name is read by finds, in the rules' order: its qualified name, its simple name, the
-    /// qualified name it is written as with its language's own separators (<see cref="Dotted"/>) and as .NET's configuration
-    /// spells a key path (<see cref="CodeKeyPaths.Dotted"/>: <c>Payments:TimeoutSeconds</c>, <c>Payments__TimeoutSeconds</c>),
-    /// the qualified names either ends at a dot - a name written with some of its scopes (Order.Total) names each node whose
-    /// qualified name ends with it - and, last, each key whose own name spells such a path as .NET's configuration reads a
-    /// key's name - an environment variable's (<c>Payments__TimeoutSeconds</c> under a compose file's <c>environment</c>), a
-    /// settings file's flat key - which names that path wherever it stands (<see cref="CodeKeyPaths.Spellings"/>). A key path
-    /// in any spelling so finds the same keys, and a name the earlier rules find resolves as it did. Each rule says whether it
-    /// reads the name as it is written - by itself, with its language's own separators as dots, and either with some of its
-    /// scopes - or as the key path it spells, the keys whose own names spell that path among them (<see cref="NamedRule"/>): the
-    /// one owner of which form found a definer, which a <c>sites</c> answer reads the data by (<see cref="SitesSearch"/>).
+    /// qualified names it is written as with its language's own separators (<see cref="Dotted"/>) and as the writer writes a
+    /// path with a quoted place (<see cref="CodeKeyPaths.Canonical"/>: one typed with single quotes, both marks or needless
+    /// quotes, <c>Logging.LogLevel['Microsoft.AspNetCore']</c>, is read as <c>Logging.LogLevel["Microsoft.AspNetCore"]</c>,
+    /// so every rule after reads the one written form), and as .NET's configuration spells a key path
+    /// (<see cref="CodeKeyPaths.Dotted"/>: <c>Payments:TimeoutSeconds</c>, <c>Payments__TimeoutSeconds</c>,
+    /// <c>Logging:LogLevel:Microsoft.AspNetCore</c>, each naming <c>Logging.LogLevel["Microsoft.AspNetCore"]</c>); the
+    /// qualified names either ends at where one of its places begins (<see cref="CodeKeyPaths.EndsWithPlaces"/>) - a name
+    /// written with some of its scopes (<c>Order.Total</c>, <c>LogLevel["Microsoft.AspNetCore"]</c>,
+    /// <c>LogLevel['Microsoft.AspNetCore']</c>) names each node whose qualified name ends with it; each key whose own name
+    /// spells such a path as .NET's configuration reads a key's name - an environment variable's
+    /// (<c>Payments__TimeoutSeconds</c> under a compose file's <c>environment</c>), a settings file's flat key - which names
+    /// that path wherever it stands (<see cref="CodeKeyPaths.Spellings"/>); and, last, the loose form
+    /// (<see cref="CodeKeyPaths.Unescaped"/>): a dotted text whose names' own dots are written as they are,
+    /// <c>Logging.LogLevel.Microsoft.AspNetCore</c>, asks of every key whose path so written is that text - the nested key and
+    /// the one named <c>Microsoft.AspNetCore</c> alike - each read as it is written. A key path in any spelling so finds the
+    /// same keys, and a name the earlier rules find resolves as it did. Each rule says whether it reads the name as it is
+    /// written - by itself, with its language's own separators as dots, and either with some of its scopes - or as the key
+    /// path it spells, the keys whose own names spell that path among them (<see cref="NamedRule"/>): the one owner of which
+    /// form found a definer, which a <c>sites</c> answer reads the data by (<see cref="SitesSearch"/>).
     /// </summary>
     private IEnumerable<NamedRule> NamedBy(string symbol)
     {
@@ -460,12 +490,13 @@ public sealed class CodebaseGraphQueries
         }
 
         // A name written with some of its scopes names each node named by its last place - as it is written, a data file's
-        // item with its brackets as its key is named - whose qualified name ends with it at a dot.
+        // item with its brackets as its key is named, a quoted name by the name it reads - whose qualified name ends with it
+        // where one of its places begins.
         foreach (var form in forms.Where(form => SelectorName(form.Text) is null))
         {
             if (CodeKeyPaths.Last(form.Text) is var last && last != form.Text)
             {
-                yield return new([.. _bySimple[last].Where(id => Card(id).Qualified.EndsWith("." + form.Text, StringComparison.Ordinal))], form.AsWritten);
+                yield return new([.. _bySimple[last].Where(id => CodeKeyPaths.EndsWithPlaces(Card(id).Qualified, form.Text))], form.AsWritten);
             }
         }
 
@@ -473,6 +504,12 @@ public sealed class CodebaseGraphQueries
         {
             yield return new([.. _bySimple[spelt].Where(id => string.Equals(Card(id).SubKind, CodeSubKinds.Key, StringComparison.Ordinal))], AsWritten: false);
         }
+
+        // Last: the loose form of the text as typed - its quoted names' dots as they are - beside the nested keys of the
+        // same dots the rules before name: every key the text may mean. Of the typed text as it is typed, never of a path
+        // it is spelt as and never with its quoted names unescaped: so a path typed in brackets, in either mark, finds by
+        // this rule a key alone whose loose form is that very text, and none of the keys its quoted names' dots would spell.
+        yield return new([.. _byUnescaped[forms[0].Text]], AsWritten: true);
     }
 
     /// <summary>The ids one rule a written name is read by finds (<see cref="NamedBy"/>), and whether it reads the name as it is written or as the key path it spells.</summary>
@@ -480,11 +517,31 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// The qualified names <paramref name="symbol"/> may be written as, each once: with its language's own separators written
-    /// as dots (<see cref="Dotted"/>), the name as it is written, and, where it is spelt as .NET's configuration spells a key path
-    /// (<see cref="SpeltAsAKeyPath"/>), that path, as the key's own reader writes it.
+    /// as dots (<see cref="Dotted"/>), the name as it is written; where that holds a place quoted in brackets, the path as the
+    /// writer writes it (<see cref="CodeKeyPaths.Canonical"/>) - one typed with single quotes, both marks or needless quotes
+    /// is read as <see cref="CodeKeyPaths.Name"/> writes it, so every rule after reads the one written form; and, where it is
+    /// spelt as .NET's configuration spells a key path (<see cref="SpeltAsAKeyPath"/>), that path, as the key's own reader
+    /// writes it.
     /// </summary>
     private static IReadOnlyList<(string Text, bool AsWritten)> Forms(string symbol)
-        => SpeltAsAKeyPath(symbol) is { } spelt && spelt != Dotted(symbol) ? [(Dotted(symbol), true), (spelt, false)] : [(Dotted(symbol), true)];
+    {
+        // The text as typed, its language's separators read as dots: always the first, the one the loose rule asks of.
+        var dotted = Dotted(symbol);
+        var forms = new List<(string Text, bool AsWritten)> { (dotted, true) };
+        var written = CodeKeyPaths.Canonical(dotted);
+
+        if (written != dotted)
+        {
+            forms.Add((written, true));
+        }
+
+        if (SpeltAsAKeyPath(symbol) is { } spelt && spelt != written)
+        {
+            forms.Add((spelt, false));
+        }
+
+        return forms;
+    }
 
     /// <summary>
     /// The key path <paramref name="symbol"/> spells as .NET's configuration spells one - its places parted by colons or by
@@ -500,7 +557,9 @@ public sealed class CodebaseGraphQueries
     /// (<see cref="DefinersOf"/>): the word code and data write it by, and each key path it names as an environment variable
     /// writes one. The word is the name of the node the data names by itself - its handle, its id, a <c>path:line</c> - else
     /// the selector it is written as, a rule's (<c>.btn</c>, <c>.card__title</c>), whole; else its last name
-    /// (<see cref="CodeKeyPaths.LastName"/>) - <c>Total</c> of <c>Order.Total</c> and of <c>Order::Total</c>, <c>this[]</c> of
+    /// (<see cref="CodeKeyPaths.LastName"/>) - <c>Total</c> of <c>Order.Total</c> and of <c>Order::Total</c>,
+    /// <c>Microsoft.AspNetCore</c> of <c>Logging.LogLevel["Microsoft.AspNetCore"]</c> and of
+    /// <c>Logging:LogLevel:Microsoft.AspNetCore</c>, <c>this[]</c> of
     /// <c>Canvas.this[]</c> - read as a key path where it is spelt as one (<see cref="SpeltAsAKeyPath"/>): where it names a key;
     /// where its definers, none a key, are found only by the path it spells - a member the options pattern binds a section to,
     /// <c>Api.JwtSettings.Secret</c> of <c>JwtSettings:Secret</c>; and where nothing names it and it is written as no node's id and
@@ -1738,10 +1797,12 @@ public sealed class CodebaseGraphQueries
     /// <paramref name="symbol"/> with its language's own separators - C++'s and PHP's <c>::</c>, PHP's <c>\</c> - written as
     /// the model's <c>.</c>, as every qualified name is held, a leading separator dropped where the name begins with one
     /// (<c>::Foo</c>, <c>\Foo\Bar</c>); a dot the name itself begins with - a rule's <c>.header</c> - is the name's own, and kept.
+    /// The separators part nothing inside a quoted place, in either quote mark (<see cref="CodeKeyPaths.OutsideQuotedNames"/>):
+    /// <c>Logging.LogLevel["a\b::c.d"]</c> is a path of two places, its second the name <c>a\b::c.d</c>.
     /// </summary>
     internal static string Dotted(string symbol)
     {
-        var dotted = symbol.Replace("::", ".", StringComparison.Ordinal).Replace('\\', '.');
+        var dotted = CodeKeyPaths.OutsideQuotedNames(symbol, run => run.Replace("::", ".", StringComparison.Ordinal).Replace('\\', '.'));
         return symbol.StartsWith("::", StringComparison.Ordinal) || symbol.StartsWith('\\') ? dotted.TrimStart('.') : dotted;
     }
 

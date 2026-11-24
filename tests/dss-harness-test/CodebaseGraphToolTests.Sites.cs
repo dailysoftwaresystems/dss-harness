@@ -11,7 +11,7 @@ namespace DssHarness.Tests;
 public sealed partial class CodebaseGraphToolTests
 {
     /// <summary>What a <c>sites</c> call's data is, as the tool's schema and every usage line about it say it.</summary>
-    internal const string DataDescription = "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path, dotted or as .NET's configuration writes one (Payments:TimeoutSeconds, Payments__TimeoutSeconds), or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone.";
+    internal const string DataDescription = "the data whose deciding places are asked: a symbol as symbol accepts one - a node's handle, its id, a path:line, or a qualified or simple name - a key path, dotted - a key whose own name holds a dot or a bracket quoted in brackets, in double or single quotes, Logging.LogLevel[\"Microsoft.AspNetCore\"] or Logging.LogLevel['Microsoft.AspNetCore'], or with its names' own dots as they are, Logging.LogLevel.Microsoft.AspNetCore, which asks of every key it may mean - or as .NET's configuration writes one (Payments:TimeoutSeconds, Payments__TimeoutSeconds, Logging:LogLevel:Microsoft.AspNetCore), or a diagnostic id, a rule's selector as a rule writes it (.btn, #main), asked by its name as a class list writes it too, or a quoted literal, asked by its value alone.";
 
     /// <summary>The coverage line every answer that searched a file the graph lists only ends its coverage with.</summary>
     private const string NoExtractor = "coverage: nothing is assumed of a language with no extractor; those files are read by text alone";
@@ -897,6 +897,135 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal(["Limits:1:Value", "Limits__1__Value"], CodeKeyPaths.Spellings("Limits[1].Value"));
         Assert.Equal(["environment:Payments__TimeoutSeconds"], CodeKeyPaths.Spellings("environment.Payments__TimeoutSeconds"));
     }
+
+    /// <summary>
+    /// A key whose own name holds a dot - <c>Microsoft.AspNetCore</c> under <c>Logging.LogLevel</c>, as the ASP.NET Core
+    /// template's appsettings writes it - is answered in every spelling: by its path with the name quoted in brackets, by
+    /// .NET's spellings of it, by the name with some of its scopes, and by the name alone; and it is searched by its whole
+    /// name, where a path read as four places searched for <c>LogLevel</c>. The nested keys of the same dots are another
+    /// key's answer.
+    /// </summary>
+    [Fact]
+    public async Task Sites_OfAKeyWhoseNameHoldsADot_AnswerThatKeyInEverySpelling_AndSearchItsWholeName()
+    {
+        using var tree = await DottedTreeAsync();
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+        var key = queries.Card("json:config/appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]");
+        var nested = queries.Card("json:config/appsettings.json#Logging.LogLevel.Microsoft.AspNetCore");
+        var variable = queries.AtLine("deploy/compose.yml", 2)!;
+
+        Assert.Equal(("Microsoft.AspNetCore", "Logging.LogLevel[\"Microsoft.AspNetCore\"]"), (key.Name, key.Qualified));
+        Assert.Equal(("Logging__LogLevel__Microsoft.AspNetCore", "environment[\"Logging__LogLevel__Microsoft.AspNetCore\"]"), (variable.Name, variable.Qualified));
+
+        Assert.Equal([key.Id, variable.Id], queries.DefinersOf("Logging:LogLevel:Microsoft.AspNetCore").Select(card => card.Id));
+        Assert.Equal([key.Id, variable.Id], queries.DefinersOf("Logging__LogLevel__Microsoft.AspNetCore").Select(card => card.Id));
+        Assert.Equal([key.Id, variable.Id], queries.DefinersOf("Logging.LogLevel[\"Microsoft.AspNetCore\"]").Select(card => card.Id));
+        Assert.Equal([key.Id], queries.DefinersOf("LogLevel[\"Microsoft.AspNetCore\"]").Select(card => card.Id));
+        Assert.Equal([key.Id], queries.DefinersOf("[\"Microsoft.AspNetCore\"]").Select(card => card.Id));
+        Assert.Equal([nested.Id, key.Id], queries.DefinersOf("Microsoft.AspNetCore").Select(card => card.Id));
+        Assert.Equal([nested.Id], queries.DefinersOf("Logging:LogLevel:Microsoft:AspNetCore").Select(card => card.Id));
+        Assert.Equal([nested.Id, key.Id], queries.DefinersOf("Logging.LogLevel.Microsoft.AspNetCore").Select(card => card.Id));
+
+        var search = queries.SitesSearch("Logging:LogLevel:Microsoft.AspNetCore", queries.DefinersOf("Logging:LogLevel:Microsoft.AspNetCore"));
+
+        Assert.Equal("Microsoft.AspNetCore", search.Word);
+        Assert.Equal(["Logging__LogLevel__Microsoft.AspNetCore"], search.Spellings.Order(StringComparer.Ordinal).ToArray());
+
+        var answer = await AskAsync(tool, """{"op":"sites","data":"Logging:LogLevel:Microsoft.AspNetCore"}""");
+        var lines = answer.Text.Split('\n');
+
+        Assert.Contains($"  {GraphLines.Of(key)} | holds the key, a line holds it", lines);
+        Assert.Contains("      config/appsettings.json:4 \"Microsoft.AspNetCore\": \"Warning\",", lines);
+        Assert.Contains("      src/Logs.cs:7 holds the literal 'Logging:LogLevel:Microsoft.AspNetCore'", lines);
+        Assert.Contains($"  {GraphLines.Of(variable)} | holds the key, a line holds it", lines);
+        Assert.Contains("      deploy/compose.yml:2 Logging__LogLevel__Microsoft.AspNetCore: Debug", lines);
+        Assert.Contains(KeyPathsSearched("Microsoft.AspNetCore", 1), lines);
+        Assert.DoesNotContain(lines, line => line.StartsWith($"  {GraphLines.Of(nested)}", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A key path with a place in single quotes answers the keys the double-quoted one answers - JavaScript's and Python's
+    /// habit - in every rule: by its path, with some of its scopes, with both marks in one path and with its own mark
+    /// escaped; the answers, ids and records show the double form alone.
+    /// </summary>
+    [Fact]
+    public async Task Sites_OfAKeyPathWithASingleQuotedPlace_AnswerTheKeysTheDoubleQuotedOneAnswers()
+    {
+        using var tree = await DottedTreeAsync(
+            (".vscode/settings.json", "{\n  \"[typescript]\": {\n    \"editor.defaultFormatter\": \"x\"\n  }\n}\n"),
+            ("config/flags.json", "{\n  \"Flags\": {\n    \"it's.on\": true\n  }\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+        var key = queries.Card("json:config/appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]");
+        var variable = queries.AtLine("deploy/compose.yml", 2)!;
+        const string formatter = "json:.vscode/settings.json#[\"[typescript]\"][\"editor.defaultFormatter\"]";
+
+        Assert.Equal([key.Id, variable.Id], queries.DefinersOf("Logging.LogLevel['Microsoft.AspNetCore']").Select(card => card.Id));
+        Assert.Equal([key.Id], queries.DefinersOf("LogLevel['Microsoft.AspNetCore']").Select(card => card.Id));
+        Assert.Equal([key.Id], queries.DefinersOf("['Microsoft.AspNetCore']").Select(card => card.Id));
+        Assert.Equal([formatter], queries.DefinersOf("[\"[typescript]\"]['editor.defaultFormatter']").Select(card => card.Id));
+        Assert.Equal([formatter], queries.DefinersOf("['[typescript]'][\"editor.defaultFormatter\"]").Select(card => card.Id));
+        Assert.Equal("Flags[\"it's.on\"]", Assert.Single(queries.DefinersOf("Flags['it\\'s.on']")).Qualified);
+
+        var search = queries.SitesSearch("Logging.LogLevel['Microsoft.AspNetCore']", queries.DefinersOf("Logging.LogLevel['Microsoft.AspNetCore']"));
+
+        Assert.Equal("Microsoft.AspNetCore", search.Word);
+        Assert.Equal(["Logging__LogLevel__Microsoft.AspNetCore"], search.Spellings.Order(StringComparer.Ordinal).ToArray());
+
+        Assert.StartsWith("'Logging.LogLevel['Nope.Missing']' is not a node the view holds\ntext: no line holds 'Nope.Missing'", (await AskAsync(tool, """{"op":"node","symbol":"Logging.LogLevel['Nope.Missing']"}""")).Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A key path written with its names' own dots as they are - as an agent composes it from the file it read, which is
+    /// how it found the key before the path was written exactly - asks of every key it may mean: the nested keys of the
+    /// same dots and the key whose name holds them. It resolves as the name the earlier rules find, the nested key, and a
+    /// path that names no nested key resolves as the key. The queries alone read it, in their last rule.
+    /// </summary>
+    [Fact]
+    public async Task Sites_OfAKeyPathWrittenWithItsNamesDotsAsTheyAre_AnswerEveryKeyItMayMean()
+    {
+        using var tree = await DottedTreeAsync(
+            ("config/serilog.json", "{\n  \"Serilog\": {\n    \"MinimumLevel.Default\": \"Information\"\n  }\n}\n"),
+            (".gitlab-ci.yml", ".defaults:\n  image: dotnet\n"));
+        var queries = await QueriesAsync(tree);
+        var key = queries.Card("json:config/appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]");
+        var nested = queries.Card("json:config/appsettings.json#Logging.LogLevel.Microsoft.AspNetCore");
+        var level = queries.Card("json:config/serilog.json#Serilog[\"MinimumLevel.Default\"]");
+
+        Assert.Equal([nested.Id, key.Id], queries.DefinersOf("Logging.LogLevel.Microsoft.AspNetCore").Select(card => card.Id));
+        Assert.Equal(nested.Hash, Assert.IsType<GraphResolve.Found>(queries.Resolve("Logging.LogLevel.Microsoft.AspNetCore")).Card.Hash);
+        Assert.Equal(level.Hash, Assert.IsType<GraphResolve.Found>(queries.Resolve("Serilog.MinimumLevel.Default")).Card.Hash);
+        Assert.Equal(["yaml:.gitlab-ci.yml#[\".defaults\"].image"], queries.DefinersOf(".defaults.image").Select(card => card.Id));
+        Assert.DoesNotContain(nested.Id, queries.DefinersOf("Logging.LogLevel['Microsoft.AspNetCore']").Select(card => card.Id));
+    }
+
+    /// <summary>
+    /// A symbol the view does not hold is searched for by its last name, a quoted one's own text whole: the separator a
+    /// path is cut at cuts nothing inside a quoted name, in either quote mark.
+    /// </summary>
+    [Fact]
+    public async Task ASymbolTheViewDoesNotHold_IsSearchedByItsLastName_AQuotedNameWhole()
+    {
+        using var tree = await TreeAsync();
+        var tool = Tool(tree, await QueriesAsync(tree));
+
+        Assert.StartsWith("'Logging.LogLevel[\"Nope.Missing\"]' is not a node the view holds\ntext: no line holds 'Nope.Missing'", (await AskAsync(tool, """{"op":"node","symbol":"Logging.LogLevel[\"Nope.Missing\"]"}""")).Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A tree holding a key whose own name holds a dot beside the nested keys of the same dots - the ASP.NET Core template's
+    /// logging levels - a literal spelling the key as .NET's configuration does, and an environment variable naming it; with
+    /// <paramref name="more"/> beside them.
+    /// </summary>
+    private static async Task<CodebaseGraphTree> DottedTreeAsync(params (string Path, string Text)[] more)
+        => await TreeAsync(
+        [
+            ("config/appsettings.json", "{\n  \"Logging\": {\n    \"LogLevel\": {\n      \"Microsoft.AspNetCore\": \"Warning\",\n      \"Microsoft\": {\n        \"AspNetCore\": \"Error\"\n      }\n    }\n  }\n}\n"),
+            ("src/Logs.cs", "namespace Demo;\n\npublic static class Logs\n{\n    public static string Level(System.Collections.Generic.IDictionary<string, string> config)\n    {\n        return config[\"Logging:LogLevel:Microsoft.AspNetCore\"];\n    }\n}\n"),
+            ("deploy/compose.yml", "environment:\n  Logging__LogLevel__Microsoft.AspNetCore: Debug\n"),
+            .. more,
+        ]);
 
     /// <summary>
     /// A file whose extract the graph no longer holds - its declarations in no answer - is searched by text and said by why,

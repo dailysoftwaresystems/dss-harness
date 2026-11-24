@@ -146,17 +146,36 @@ public static class ReportText
     /// Text in double quotes on one line, whatever it holds: a newline, a carriage return and a tab written as
     /// <c>\n</c>, <c>\r</c> and <c>\t</c>, a quote and a backslash escaped, every other control character as
     /// <c>\uXXXX</c>, and everything else as it is - what <see cref="Printable"/> gives text that holds a control character,
-    /// and what a name no plain spelling holds is written as wherever it is quoted.
+    /// and what a name no plain spelling holds is written as wherever it is quoted. The one rule of the escapes with the
+    /// double quote as its mark (QuotedBy), the only form ever written: a single-quoted one is read (<see cref="Unquoted"/>)
+    /// and never written, so every answer, id and record keeps one form.
     /// </summary>
     /// <param name="text">The text.</param>
-    public static string Quoted(string text)
+    public static string Quoted(string text) => QuotedBy(text, '"');
+
+    /// <summary>
+    /// The one rule of the quoted form (<see cref="Quoted"/>), with <paramref name="mark"/> as its quote mark: the text in
+    /// that mark on one line, a newline, a carriage return and a tab written as <c>\n</c>, <c>\r</c> and <c>\t</c>, a
+    /// backslash and the mark itself escaped, every other control character as <c>\uXXXX</c>, and everything else as it is
+    /// - the other mark among it. A single-quoted form is only ever read (<see cref="Unquoted"/>): <see cref="Quoted"/>
+    /// writes the double one alone.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="mark">The quote mark the form is written with.</param>
+    private static string QuotedBy(string text, char mark)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        var builder = new StringBuilder("\"");
+        var builder = new StringBuilder().Append(mark);
 
         foreach (var character in text)
         {
+            if (character == mark)
+            {
+                builder.Append('\\').Append(mark);
+                continue;
+            }
+
             switch (character)
             {
                 case '\n':
@@ -167,9 +186,6 @@ public static class ReportText
                     break;
                 case '\t':
                     builder.Append("\\t");
-                    break;
-                case '"':
-                    builder.Append("\\\"");
                     break;
                 case '\\':
                     builder.Append("\\\\");
@@ -188,37 +204,55 @@ public static class ReportText
             }
         }
 
-        return builder.Append('"').ToString();
+        return builder.Append(mark).ToString();
     }
 
     /// <summary>
-    /// The text <paramref name="printed"/> is the printable form of (<see cref="Printable"/>): the text a quoted form
-    /// stands for, where reading its escapes back gives text whose printable form it is - and else <paramref name="printed"/>
-    /// itself, so a name that only looks quoted, of no control character, is read as it is written.
+    /// The text <paramref name="quoted"/> is the quoted form of, in either quote mark - a double-quoted text as Quoted writes
+    /// it, or a single-quoted one as the same rule writes it with ' as its mark (QuotedBy): its escapes read back - \n, \r,
+    /// \t, \\, \uXXXX and the backslash before its own mark - and null where it is no form that rule writes with its mark: no
+    /// mark or two different marks around it, its own mark unescaped inside it, an escape the rule never writes (\" inside
+    /// single quotes among them), or a \u of a character the rule writes as it is. Read once, in time linear in it; the one
+    /// reader of the escapes.
     /// </summary>
-    /// <param name="printed">The text as a line writes it.</param>
-    public static string Unprinted(string printed)
+    /// <param name="quoted">The text as a quoted form writes it.</param>
+    public static string? Unquoted(string quoted)
     {
-        ArgumentNullException.ThrowIfNull(printed);
+        ArgumentNullException.ThrowIfNull(quoted);
 
-        if (printed.Length < 2 || printed[0] != '"' || printed[^1] != '"')
+        if (quoted.Length < 2 || quoted[0] is not ('"' or '\'') || quoted[^1] != quoted[0])
         {
-            return printed;
+            return null;
         }
 
-        var text = new StringBuilder();
+        var mark = quoted[0];
+        var text = new StringBuilder(quoted.Length);
 
-        for (var at = 1; at < printed.Length - 1; at++)
+        for (var at = 1; at < quoted.Length - 1; at++)
         {
-            if (printed[at] != '\\' || at + 1 >= printed.Length - 1)
+            if (quoted[at] == mark)
             {
-                text.Append(printed[at]);
+                return null;
+            }
+
+            if (quoted[at] != '\\')
+            {
+                text.Append(quoted[at]);
                 continue;
             }
 
-            at++;
+            if (++at >= quoted.Length - 1)
+            {
+                return null;
+            }
 
-            switch (printed[at])
+            if (quoted[at] == mark)
+            {
+                text.Append(mark);
+                continue;
+            }
+
+            switch (quoted[at])
             {
                 case 'n':
                     text.Append('\n');
@@ -229,17 +263,33 @@ public static class ReportText
                 case 't':
                     text.Append('\t');
                     break;
-                case 'u' when at + 4 < printed.Length - 1 && int.TryParse(printed.AsSpan(at + 1, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var code):
+                case '\\':
+                    text.Append('\\');
+                    break;
+                case 'u' when at + 4 < quoted.Length - 1 && int.TryParse(quoted.AsSpan(at + 1, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var code):
                     text.Append((char)code);
                     at += 4;
                     break;
                 default:
-                    text.Append(printed[at]);
-                    break;
+                    return null;
             }
         }
 
         var read = text.ToString();
-        return string.Equals(Printable(read), printed, StringComparison.Ordinal) ? read : printed;
+        return string.Equals(QuotedBy(read, mark), quoted, StringComparison.Ordinal) ? read : null;
+    }
+
+    /// <summary>
+    /// The text <paramref name="printed"/> is the printable form of (<see cref="Printable"/>): the text a quoted form
+    /// stands for, where reading its escapes back (<see cref="Unquoted"/>) gives text whose printable form it is - and else
+    /// <paramref name="printed"/> itself, so a name that only looks quoted, of no control character, is read as it is
+    /// written, and a single-quoted text, which is never the form <see cref="Printable"/> writes, too.
+    /// </summary>
+    /// <param name="printed">The text as a line writes it.</param>
+    public static string Unprinted(string printed)
+    {
+        ArgumentNullException.ThrowIfNull(printed);
+
+        return Unquoted(printed) is { } read && string.Equals(Printable(read), printed, StringComparison.Ordinal) ? read : printed;
     }
 }

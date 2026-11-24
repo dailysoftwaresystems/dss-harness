@@ -4549,9 +4549,14 @@ recursion - a summary and a signature put on one line and kept whole - a key's v
 whole, no sentence of it ending it (`ExtractText.Value`) - so no data file's extract is one the
 core refuses. A
 key's path is written, and read back, by one owner (`CodeKeyPaths`): each name joined by a dot, an item's place and a
-name empty, of white space or holding a control character in brackets, quoted as `ReportText.Quoted` writes it, so a
-path is always one line (`targets.x64.callingConvention`, `limits[1].value`, `packages[""].name`,
-`messages["Sure?\nIt cannot be undone."]`).
+name empty, of white space, holding a control character, or holding a dot or a bracket - the characters a path is parted
+by - in brackets, quoted as `ReportText.Quoted` writes it and read back by `ReportText.Unquoted`, so a path is one line
+and one sequence of places (`targets.x64.callingConvention`, `limits[1].value`, `packages[""].name`,
+`messages["Sure?\nIt cannot be undone."]`, `Logging.LogLevel["Microsoft.AspNetCore"]`); a place in single quotes is read
+as the same place (`['Microsoft.AspNetCore']`, its own mark and a backslash escaped as `Quoted` escapes a double quote -
+one escape rule, `ReportText.QuotedBy`, with the mark its parameter) and never written; a key node is named by its own
+name where it stands alone on a line (`Microsoft.AspNetCore`), every reader of data files - JSON, YAML, XML, MSBuild -
+writing its keys' paths through the owner.
 `json` (`.json`, `.jsonc`, `.json5`, the named manifests keeping their own extractors) and `yaml` (`.yml`, `.yaml`, but
 `pubspec.yaml`) each make every scalar key anywhere in the file a key named by its path, its value as its summary, and
 each member that holds others a section over its lines. JSON is read on a stack of the reader's own however deep it
@@ -4572,7 +4577,8 @@ and solutions `msbuild` keeps) reads every element however deep, makes its root 
 attribute (`name`, `key`, `id`, `x:Name`) an element named by its path and that attribute - the path told only where a
 node is named by it, so elements that name nothing cost no more than their reading - and keys of a `.resx`'s
 `data name=`, of a `.props` or `.targets`'s `PropertyGroup` children and of a `.config`'s `appSettings` `<add key>` and
-`connectionStrings` `<add name>` (`appSettings.Timeout`, `connectionStrings.Main`, the value or connection string the
+`connectionStrings` `<add name>` (`appSettings.Timeout`, `connectionStrings.Main`,
+`appSettings["Serilog.MinimumLevel"]`, the value or connection string the
 summary), a `.props` or `.targets`'s `Import Project` an import of the file it names. A `.xaml` view's elements it names
 by `x:Name` are fields of its `x:Class` type, of the element's type, as the build generates them, so the code-behind
 reaches one by the field's name as it reaches a field of its own. An MSBuild project's own `PropertyGroup` properties
@@ -4588,10 +4594,13 @@ use through an import's prefix, a use an import makes visible by a name the file
 one place that says what a reference may reach), so a PHP `$radius` reaches no SCSS `$radius` and a C# `Button()` no
 mixin `Button`. The linker joins each key to the code
 that names it: a string literal equal to the key's last segment, its whole path, the path as .NET's configuration spells
-it (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`, `Limits:1:Value`, read by `CodeKeyPaths.Dotted`) or a path
+it (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`, `Limits:1:Value`, `Logging:LogLevel:Microsoft.AspNetCore`
+naming `Logging.LogLevel["Microsoft.AspNetCore"]`, read by `CodeKeyPaths.Dotted`) or a path
 that runs through a YAML alias or merge to it - the longest part of the path its file holds deciding, a mapping's own
 key shadowing a merged one's, each place looked for once and a path that comes round to itself through its references
-ending there - and each field or property whose name is the segment as a naming policy the repository declares
+ending there - and a literal writing a path in brackets, in either quote mark (lodash's `"a['b.c']"`), names the key of
+the path the writer writes (`CodeKeyPaths.Canonical`), never the loose form of a key's path, its names' own dots as they
+are, which code splits as .NET's configuration does; and each field or property whose name is the segment as a naming policy the repository declares
 (`codebaseGraph.keyNaming`: `camelCase`, `snake_case`, `kebab-case` or `exact`, `camelCase` and `exact` the default)
 writes it - each a `uses` edge of `candidates`, for nothing says the code reads that key; every key a literal or a name
 names is joined, however many keys share it, and a key its file keeps to itself - an MSBuild project's own property -
@@ -5372,16 +5381,22 @@ nodes it reached and never reaches one again, so it is linear in the edges it fo
 reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
 found its lines moved, and reads a file whole whatever it holds. `sites` answers "every place that decides this" of one datum
 (`data`: a symbol as `symbol` takes one - a handle, an id or a `path:line`, which names its one node, or a qualified or simple
-name - a key path, dotted or as .NET's configuration spells one (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`), a
+name - a key path, dotted - a name holding a dot or a bracket quoted in brackets, `Logging.LogLevel["Microsoft.AspNetCore"]`
+or `Logging.LogLevel['Microsoft.AspNetCore']`, or with its names' own dots as they are - or as .NET's configuration spells
+one (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`), a
 diagnostic id, a rule's selector as a rule writes it, or a quoted literal, asked by its value alone and never by the symbols):
 every definer of it across files and languages (`CodebaseGraphQueries.DefinersOf`, by the one reading of what an agent writes
 `Resolve` reads too - the node a handle, an id or a `path:line` names alone, else every node any rule of a name finds, a
-qualified name, a simple one, one written with a language's `::` or `\`, one spelt as the one owner of a key path's spellings
-reads it (`CodeKeyPaths.Dotted`), or with some of its scopes, and, last, of a key path every key whose own name spells it as
-.NET's configuration reads a key's name - an environment variable's, a settings file's flat key (`CodeKeyPaths.Spellings`:
-`Payments__TimeoutSeconds` under a compose file's `environment`) - so a key path in any spelling finds the same keys, where
-`Resolve` takes the first rule that finds one - a selector's own leading dot kept, so `.header` is never the element rule
-`header` or a key of that name), then one hop off every definer's own edges, a definer the step's reads do not reach among
+qualified name, a simple one, one written with a language's `::` or `\` outside a quoted name, one spelt as the one owner of a
+key path's spellings reads it (`CodeKeyPaths.Dotted`) - a path typed with single quotes, with both quote marks or with quotes a
+name needs not read first as the writer writes it (`CodeKeyPaths.Canonical`), every rule after reading that form - or with some
+of its scopes, of a key path every key whose own name spells it as .NET's configuration reads a key's name - an environment
+variable's, a settings file's flat key (`CodeKeyPaths.Spellings`: `Payments__TimeoutSeconds` under a compose file's
+`environment`) - so a key path in any spelling finds the same keys, and, last of the rules, the loose form of a dotted path,
+its names' own dots written as they are, naming every key whose path so written is that text (`CodeKeyPaths.Unescaped`, one
+index built once a view, in the queries alone and never the linker, for code splits a dotted literal), where `Resolve` takes
+the first rule that finds one - a selector's own leading dot kept, so `.header` is never the element rule `header` or a key of
+that name), then one hop off every definer's own edges, a definer the step's reads do not reach among
 them, each place it reaches held to the reads where it stands (`CodebaseGraphQueries.SitesOf`, each way a group read from the
 relations' own edges - `GraphRelations.Edges` - and the `node` operation's): their callers, their users, what makes them, what
 names them by their kind - a type mention, an `isinstance`, an `instanceof`, a `catch` or an `except` - what inherits them or
@@ -5392,7 +5407,10 @@ it as a whole word (`CodebaseGraphQueries.LiteralSites`, read once an ask over t
 no node of the graph is a literal's, so the read is the one index of them) - the datum searched for by the name of the node it
 names by itself, by a selector whole, else by its last name (`CodebaseGraphQueries.SitesSearch`, `CodeKeyPaths.LastName`, a
 path's places read by `CodeKeyPaths.Places`, which reads a place in brackets only as a key's path writes one - an item's digits,
-a quoted name, whose dot parts nothing - so `this[]` of `Canvas.this[]` and `operator[]` of `Vec::operator[]` are names), for a
+a quoted name, whose dot parts nothing and whose own text is the last name (`Microsoft.AspNetCore` of
+`Logging.LogLevel["Microsoft.AspNetCore"]`) - so `this[]` of `Canvas.this[]` and `operator[]` of `Vec::operator[]` are names; and
+a name written with some of its places ends a path only where one of the path's places begins (`CodeKeyPaths.EndsWithPlaces`),
+as the context pack reads a class's site too - for a
 name written with its scopes and a key path in any spelling are written in code and in data by their last name (`shape.Area()`,
 `"TimeoutSeconds": 30`) - a datum spelt as .NET's configuration spells a key path read as one where it names a key, where
 only the path it spells finds its definers, code's members, none a key (`Secret` of `JwtSettings:Secret`, a member the

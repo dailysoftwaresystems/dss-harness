@@ -85,7 +85,37 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
                 new("yaml:.github/workflows/anchored.yml#jobs.copy", "yaml:.github/workflows/anchored.yml#jobs.again", CodeEdgeKinds.Uses, 16, CodeConfidences.Exact),
             ],
         },
+        new("deploy/ingress.yml", Ingress)
+        {
+            Nodes =
+            [
+                new("yaml:deploy/ingress.yml#metadata.annotations[\"nginx.ingress.kubernetes.io/rewrite-target\"]", CodeNodeKinds.Member, (3, 3)),
+                new("yaml:deploy/ingress.yml#[\".defaults\"]", CodeNodeKinds.Section, (5, 6)),
+                new("yaml:deploy/ingress.yml#environment[\"Logging__LogLevel__Microsoft.AspNetCore\"]", CodeNodeKinds.Member, (10, 10)),
+                new("yaml:deploy/ingress.yml#ratios[\"1.5\"]", CodeNodeKinds.Member, (12, 12)),
+            ],
+            Edges =
+            [
+                new("yaml:deploy/ingress.yml#job", "yaml:deploy/ingress.yml#[\".defaults\"]", CodeEdgeKinds.Uses, 8, CodeConfidences.Exact),
+            ],
+        },
     ];
+
+    /// <summary>A deployment file whose keys are written by whatever scalar names them - a dotted annotation, a hidden job, an environment variable, a float.</summary>
+    private const string Ingress = """
+        metadata:
+          annotations:
+            nginx.ingress.kubernetes.io/rewrite-target: /
+            app: billing
+        .defaults: &defaults
+          image: dotnet
+        job:
+          <<: *defaults
+        environment:
+          Logging__LogLevel__Microsoft.AspNetCore: Warning
+        ratios:
+          1.5: half
+        """;
 
     /// <summary>
     /// A workflow whose steps and jobs alias others - a step of one job named again in another, a job copied whole - each
@@ -283,7 +313,7 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         // The two templates and their keys, then each job's section and the two keys it writes itself.
         Assert.Equal(1 + 25 + 1 + 5 + (Jobs * 3), extract.Nodes.Count);
         Assert.Equal(
-            [.. Enumerable.Range(0, Jobs).SelectMany(at => new[] { ($"yaml:.gitlab-ci.yml#job{at}", "defaults", 34 + (at * 4), "yaml:.gitlab-ci.yml#.defaults"), ($"yaml:.gitlab-ci.yml#job{at}", "docker", 34 + (at * 4), "yaml:.gitlab-ci.yml#.docker") })],
+            [.. Enumerable.Range(0, Jobs).SelectMany(at => new[] { ($"yaml:.gitlab-ci.yml#job{at}", "defaults", 34 + (at * 4), "yaml:.gitlab-ci.yml#[\".defaults\"]"), ($"yaml:.gitlab-ci.yml#job{at}", "docker", 34 + (at * 4), "yaml:.gitlab-ci.yml#[\".docker\"]") })],
             References(extract));
         Assert.Empty(extract.Dynamic);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
@@ -440,6 +470,33 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         var extract = Read("sep.yml", "a: \"x\u2028 y\u2029 z\u0085 w\"\nb: 1\n");
 
         Assert.Equal([("a", 1), ("b", 2)], extract.Nodes.Select(node => (node.Name, node.Start)));
+    }
+
+    /// <summary>
+    /// A key whose name holds a dot is one place of its path, quoted in brackets, whatever scalar writes it - an annotation's
+    /// name, a hidden job's, an environment variable's, a float - and named by its own name, where a leading dot was lost
+    /// before, <c>.defaults</c> reading as <c>defaults</c>.
+    /// </summary>
+    [Fact]
+    public void AKeyWhoseNameHoldsADot_IsOnePlaceQuotedInBrackets_WhateverScalarWritesIt()
+    {
+        var extract = Read("deploy/ingress.yml", Ingress);
+
+        Assert.Equal(
+            [
+                ("yaml:deploy/ingress.yml#metadata", "metadata", "deploy/ingress.yml#metadata", (string?)null),
+                ("yaml:deploy/ingress.yml#metadata.annotations", "annotations", "deploy/ingress.yml#metadata.annotations", null),
+                ("yaml:deploy/ingress.yml#metadata.annotations[\"nginx.ingress.kubernetes.io/rewrite-target\"]", "nginx.ingress.kubernetes.io/rewrite-target", "metadata.annotations[\"nginx.ingress.kubernetes.io/rewrite-target\"]", "/"),
+                ("yaml:deploy/ingress.yml#metadata.annotations.app", "app", "metadata.annotations.app", "billing"),
+                ("yaml:deploy/ingress.yml#[\".defaults\"]", ".defaults", "deploy/ingress.yml#[\".defaults\"]", null),
+                ("yaml:deploy/ingress.yml#[\".defaults\"].image", "image", "[\".defaults\"].image", "dotnet"),
+                ("yaml:deploy/ingress.yml#job", "job", "deploy/ingress.yml#job", null),
+                ("yaml:deploy/ingress.yml#environment", "environment", "deploy/ingress.yml#environment", null),
+                ("yaml:deploy/ingress.yml#environment[\"Logging__LogLevel__Microsoft.AspNetCore\"]", "Logging__LogLevel__Microsoft.AspNetCore", "environment[\"Logging__LogLevel__Microsoft.AspNetCore\"]", "Warning"),
+                ("yaml:deploy/ingress.yml#ratios", "ratios", "deploy/ingress.yml#ratios", null),
+                ("yaml:deploy/ingress.yml#ratios[\"1.5\"]", "1.5", "ratios[\"1.5\"]", "half"),
+            ],
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary)));
     }
 
     private static FileExtract Read(string path, string text) => new YamlExtractor().Extract(new CodeFileInput(path, text));
