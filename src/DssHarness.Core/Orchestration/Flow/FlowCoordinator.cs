@@ -8879,10 +8879,6 @@ public sealed class FlowCoordinator
     private bool IsRecovery(FlowInstance instance)
         => instance.Step.Name == FlowScope.Recovery;
 
-    /// <summary>The declaration the recovery's instances are made of: its steps, under the reserved name.</summary>
-    private WorkflowStep RecoveryDeclaration()
-        => _definition.Recover!.Declaration;
-
     /// <summary>
     /// The recovery a failure in <paramref name="from"/> reaches, with the scope that declares it: the nearest used
     /// workflow's around it that declares one, walked as the workflow declares its scopes (<see cref="Scope.World"/>),

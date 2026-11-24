@@ -367,13 +367,6 @@ public sealed class CodebaseGraphTool(
     /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
     public bool Lifted(string path) => Held(path) is { } held && _lifted.ContainsKey(held);
 
-    /// <summary>
-    /// Whether a whole read of the file at <paramref name="path"/> may be narrowed at all - the view holds it as parsed and no
-    /// <c>wholeFile</c> lifted it - asked before the file is read, so a read nothing can narrow reads nothing for it.
-    /// </summary>
-    /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
-    public bool MayNarrow(string path) => Narrowable(path) is not null;
-
     /// <summary>The path the view holds a parsed file at that <paramref name="path"/> names, where no <c>wholeFile</c> lifted it; null otherwise.</summary>
     private string? Narrowable(string path)
         => Held(path) is { } held && _queries.Parsed(held) && !_lifted.ContainsKey(held) ? held : null;

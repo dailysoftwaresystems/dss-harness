@@ -699,10 +699,6 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string StepRecordFile(string instance) => Path.Combine(StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance)), StepRecordFileName);
 
-    /// <summary>The output of one step the run keeps and no agent owns, in the step's own directory.</summary>
-    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
-    public string StepOutputFile(string instance) => Path.Combine(StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance)), StepOutputFileName);
-
     /// <summary>The handoff of one step the run keeps and no agent owns, in the step's own directory.</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string StepHandoffFile(string instance) => Path.Combine(StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance)), HandoffFileName);
@@ -711,9 +707,4 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="agent">The agent's name.</param>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string AgentStepRecordFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance)), StepRecordFileName);
-
-    /// <summary>The output of one step <paramref name="agent"/> runs, in the step's own directory.</summary>
-    /// <param name="agent">The agent's name.</param>
-    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
-    public string AgentStepOutputFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance)), StepOutputFileName);
 }
