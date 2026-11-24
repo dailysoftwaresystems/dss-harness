@@ -1,0 +1,30 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "Clang"
+  },
+  "root": "/home/runner/work/app/app",
+  "errors": 6,
+  "first": {
+    "tool": "clang",
+    "code": null,
+    "file": "./include/types.h",
+    "line": 5,
+    "column": 5
+  },
+  "diagnostics": [
+    "error - ./include/types.h:5",
+    "error -Wimplicit-function-declaration main.c:6",
+    "error - templ.cpp:6",
+    "error - macro.cpp:6",
+    "error -Wunused-variable unused.c:3",
+    "error - missing.c:2"
+  ],
+  "stack": {
+    "frames": 2,
+    "inTree": [
+      "./include/util.h:3",
+      "main.c:2"
+    ]
+  }
+}

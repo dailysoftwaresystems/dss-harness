@@ -1,0 +1,19 @@
+{
+  "read": {
+    "file": true
+  },
+  "root": "/home/runner/work/app/app",
+  "errors": 1,
+  "warnings": 1,
+  "first": {
+    "tool": "GNU C17",
+    "code": "error",
+    "file": "include/types.h",
+    "line": 5,
+    "column": 5
+  },
+  "diagnostics": [
+    "error error include/types.h:5",
+    "warning -Wimplicit-function-declaration main.c:6"
+  ]
+}

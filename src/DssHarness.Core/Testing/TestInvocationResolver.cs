@@ -755,7 +755,8 @@ public static class TestInvocationResolver
             platform?.KeepOnFailure ?? all?.KeepOnFailure ?? [],
             platform?.KeepOnFailureCapBytes ?? all?.KeepOnFailureCapBytes,
             platform?.Results ?? all?.Results ?? [],
-            FilterJoin: platform?.FilterJoin ?? all?.FilterJoin);
+            FilterJoin: platform?.FilterJoin ?? all?.FilterJoin,
+            Matchers: platform?.Matchers ?? all?.Matchers ?? []);
 }
 
 /// <summary>One test invocation, with every field decided.</summary>
@@ -783,6 +784,7 @@ public static class TestInvocationResolver
 /// give each its own, and null where they declare none - the runner's own join then, where the harness knows the runner
 /// (<see cref="FilterUnits.JoinOf"/>), and each its own for any other.
 /// </param>
+/// <param name="Matchers">The problem matchers the invocation names, which read its tests beside those no runner or invocation names.</param>
 public sealed record ResolvedTestInvocation(
     string Runner,
     IReadOnlyList<string> Args,
@@ -803,7 +805,8 @@ public sealed record ResolvedTestInvocation(
     IReadOnlyList<string>? KeepOnFailure = null,
     long? KeepOnFailureCapBytes = null,
     IReadOnlyList<string>? Results = null,
-    string? FilterJoin = null);
+    string? FilterJoin = null,
+    IReadOnlyList<string>? Matchers = null);
 
 /// <summary>A test invocation ready to start.</summary>
 /// <param name="Program">The runner to start.</param>

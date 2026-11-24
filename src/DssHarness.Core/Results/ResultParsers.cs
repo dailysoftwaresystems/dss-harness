@@ -4,893 +4,1426 @@ using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Results;
 
-/// <summary>
-/// One parser of a tool's or a framework's output lines: it reads the lines a phase or a job printed and answers the
-/// diagnostics and test failures it holds, with the lines it left unheld - never a guess, for what it does not
-/// understand it says so by leaving the line. Found by scan, chosen by what the phase ran: the toolchain the leg
-/// resolved, the test runner of the invocation, and the matchers the configuration declares.
-/// </summary>
-public interface IResultParser
+/// <summary>What a reading made of one line it was offered.</summary>
+public enum LineTaken
 {
-    /// <summary>The parser's name, as a matcher or a runner names it.</summary>
-    string Name { get; }
+    /// <summary>
+    /// Not the reading's. Every line it held undecided before this one is not its either, and is given back to be
+    /// offered to the other readings; the record it held them for is no record. A record it took lines for may stay open
+    /// past it - a test a runner said began, whose own output other readings read - and is finished when the reading says.
+    /// </summary>
+    Left,
 
-    /// <summary>Reads <paramref name="lines"/> into what it holds.</summary>
-    /// <param name="lines">The output lines, in the order printed, each unmasked as the log held it.</param>
-    /// <returns>The diagnostics and failures it read, and the lines it left unheld.</returns>
-    (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines);
+    /// <summary>Held undecided: the reading is offered the next line first, and says with it whether the held lines are its.</summary>
+    Held,
+
+    /// <summary>The reading's, with every line it held undecided before it.</summary>
+    Took,
 }
 
 /// <summary>
-/// The built-in line parsers, one owner of the forms the tools the tool runs print at the versions its CI runs: the
-/// .NET and C compilers, the CMake and Ninja that drive them, the linkers, the TypeScript and Dart and ESLint
-/// checkers, and the stack traces the runtimes print wherever a test or a process throws. Each parser is chosen for
-/// the output it reads and never runs over another's.
+/// One parser of a tool's or a framework's output: it reads a log a line at a time as the log streams - never the log
+/// whole - and says of each line whether it is its, holding only the record it has open. What it does not understand
+/// it leaves, so the line is offered to the next parser or said unparsed: never a guess.
+/// </summary>
+public interface IResultParser
+{
+    /// <summary>The parser's name, as the choice of a phase's parsers names it.</summary>
+    string Name { get; }
+
+    /// <summary>A reading of one log, from its first line: the parser's state for that log alone.</summary>
+    IResultReading Begin();
+}
+
+/// <summary>One parser's reading of one log, fed the lines it is offered in the order they were printed.</summary>
+public interface IResultReading
+{
+    /// <summary>Offers the next line: the reading says whether it is its, and says what it finished into <paramref name="sink"/>.</summary>
+    /// <param name="line">The line, with its number in the log.</param>
+    /// <param name="sink">Where the reading says the diagnostics and failures it finishes.</param>
+    LineTaken Offer(NumberedLine line, ResultSink sink);
+
+    /// <summary>
+    /// The log ended: what the reading has open it finishes into <paramref name="sink"/>. <see cref="LineTaken.Took"/>
+    /// where the lines it held undecided were its after all, <see cref="LineTaken.Left"/> where they are given back.
+    /// Asked more than once, and fed lines again after it, a reading answers as from a fresh start.
+    /// </summary>
+    /// <param name="sink">Where the reading says what it finishes.</param>
+    LineTaken End(ResultSink sink);
+}
+
+/// <summary>A built-in parser: found by the core's one scan, made with no argument, and chosen by its name.</summary>
+public interface IBuiltInParser : IResultParser;
+
+/// <summary>
+/// Where one reading says what it read, in the order it finished each - and what every reading of one log shares: the
+/// build edge a log is in where a build tool said one, so a diagnostic printed inside it names it, and how many errors
+/// and failures the log has said so far, so a line that only says a build failed is said only where nothing said why.
+/// </summary>
+public sealed class ResultSink
+{
+    private readonly SharedReading _shared;
+
+    /// <summary>A sink of its own for one reading, over what every reading of the log shares.</summary>
+    internal ResultSink(SharedReading shared) => _shared = shared;
+
+    /// <summary>The diagnostics the reading said, in the order of the lines they begin at.</summary>
+    internal List<Diagnostic> Diagnostics { get; } = [];
+
+    /// <summary>The failures the reading said, in the order of the lines they begin at.</summary>
+    internal List<TestFailure> Failures { get; } = [];
+
+    /// <summary>
+    /// The build edge the log is in - the outputs a build tool said it was making where it printed what made them fail
+    /// - or null where it is in none. A diagnostic said while it is set, naming no project of its own, names it.
+    /// </summary>
+    public string? Target
+    {
+        get => _shared.Target;
+        set => _shared.Target = value;
+    }
+
+    /// <summary>How many errors and failures every reading of the log has said so far.</summary>
+    public int Said => _shared.Said;
+
+    /// <summary>Says <paramref name="diagnostic"/>, naming the build edge the log is in where it names no project of its own.</summary>
+    /// <param name="diagnostic">The diagnostic.</param>
+    public void Add(Diagnostic diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostic);
+
+        if (diagnostic.Severity == "error")
+        {
+            _shared.Said++;
+
+            if (diagnostic.Log is { } log)
+            {
+                _shared.SaidAt.Add(log.From);
+            }
+        }
+
+        Diagnostics.Add(diagnostic.Project is null && _shared.Target is { } target ? diagnostic with { Project = target } : diagnostic);
+    }
+
+    /// <summary>Says <paramref name="failure"/>.</summary>
+    /// <param name="failure">The failure.</param>
+    public void Add(TestFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+
+        _shared.Said++;
+
+        if (failure.Log is { } log)
+        {
+            _shared.SaidAt.Add(log.From);
+        }
+
+        Failures.Add(failure);
+    }
+
+    /// <summary>
+    /// Whether any reading of the log said an error or a failure that begins at a line from <paramref name="from"/> to
+    /// <paramref name="to"/>: what a summary of those lines - a runner's line for a test whose own output said why it
+    /// failed - asks before it says anything.
+    /// </summary>
+    /// <param name="from">The first line.</param>
+    /// <param name="to">The last line.</param>
+    public bool SaidWithin(int from, int to)
+    {
+        if (from > to)
+        {
+            return false;
+        }
+
+        using var said = _shared.SaidAt.GetViewBetween(from, to).GetEnumerator();
+        return said.MoveNext();
+    }
+}
+
+/// <summary>What every reading of one log shares.</summary>
+internal sealed class SharedReading
+{
+    /// <summary>The build edge the log is in, or null.</summary>
+    public string? Target { get; set; }
+
+    /// <summary>How many errors and failures have been said.</summary>
+    public int Said { get; set; }
+
+    /// <summary>The lines the errors and failures said begin at.</summary>
+    public SortedSet<int> SaidAt { get; } = [];
+}
+
+/// <summary>
+/// The built-in parsers, one owner of the forms the tools print at the versions the tool's CI runs, each a class found
+/// by the core's one scan and chosen by its name (<see cref="PhaseParsers"/>): the build tools' and compilers' forms
+/// here, the runtimes' stack traces (<see cref="StackForms"/>) and the test runners' consoles beside them.
 /// </summary>
 public static class ResultParsers
 {
     /// <summary>Every built-in parser, by its name.</summary>
-    public static readonly IReadOnlyList<IResultParser> BuiltIn =
-    [
-        new MsBuildParser(), new MsvcParser(), new GccParser(), new ClangParser(), new CMakeParser(), new NinjaParser(),
-        new LinkerParser(), new TscParser(), new DartAnalyserParser(), new DotNetStackParser(), new JvmStackParser(),
-        new PythonStackParser(), new V8StackParser(), new DartStackParser(), new GoPanicParser(), new RustPanicParser(),
-        new SanitizerParser(), new XUnitConsoleParser(), new GTestConsoleParser(), new CTestConsoleParser(),
-    ];
+    public static IReadOnlyList<IResultParser> BuiltIn => [.. CoreImplementations<IBuiltInParser>.OfThisBuild.OrderBy(parser => parser.Name, StringComparer.Ordinal)];
 
-    /// <summary>The parser named <paramref name="name"/>, where one of the built-ins is; null where none is (a configured matcher's, read by the configuration).</summary>
+    /// <summary>The built-in parser named <paramref name="name"/>; null where none is.</summary>
     /// <param name="name">The parser's name.</param>
     public static IResultParser? Of(string name)
-        => BuiltIn.FirstOrDefault(parser => string.Equals(parser.Name, name, StringComparison.Ordinal));
+        => CoreImplementations<IBuiltInParser>.OfThisBuild.FirstOrDefault(parser => string.Equals(parser.Name, name, StringComparison.Ordinal));
+
+    /// <summary>The built-in parser named <paramref name="name"/>, which the code itself names: its absence is a bug.</summary>
+    /// <param name="name">The parser's name.</param>
+    internal static IResultParser Named(string name)
+        => Of(name) ?? throw new InvalidOperationException($"No built-in parser is named '{name}'.");
 }
 
-/// <summary>Reads MSBuild's and csc's form: <c>path(line,col): error CS0103: message [project]</c>, folding the same error printed once per target framework.</summary>
-internal sealed class MsBuildParser : IResultParser
+/// <summary>What the parsers share in reading a line's parts: a captured number, a place a frame names.</summary>
+internal static class ParsedText
 {
-    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+)(?:,(?<col>\d+)(?:-(?<endline>\d+),(?<endcol>\d+))?)?\):\s+(?<severity>error|warning)\s+(?<code>[A-Z0-9]+):\s+(?<message>.+?)(?:\s+\[(?<project>[^\]]+)\])?$");
+    /// <summary>The whole number <paramref name="group"/> captured; null where it captured none, or one no line or column can be.</summary>
+    /// <param name="group">The group.</param>
+    public static int? Whole(Group group)
+        => group.Success && int.TryParse(group.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > 0 ? number : null;
 
-    public string Name => "msbuild";
+    /// <summary>The text <paramref name="group"/> captured, trimmed; null where it captured nothing.</summary>
+    /// <param name="group">The group.</param>
+    public static string? Text(Group group)
+        => group.Success && group.Value.Trim() is { Length: > 0 } text ? text : null;
 
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
+    /// <summary>
+    /// The file a frame or a diagnostic names, as the tool gave it: a <c>file:</c> URI as the path it names
+    /// (<see cref="Platform.PlatformPaths.AsAPath"/>), any other text as written - a runtime's own module
+    /// (<c>dart:core</c>, <c>node:internal/...</c>, <c>package:x/y.dart</c>) stays the name it is.
+    /// </summary>
+    /// <param name="location">The location as printed.</param>
+    public static string? FileOf(string? location)
+        => location is null ? null : Platform.PlatformPaths.AsAPath(location) ?? location;
+
+    /// <summary>The scheme-and-package a location names where it names one of a runtime's own: <c>dart:core</c>, <c>package:test_api</c>, <c>node:internal</c>.</summary>
+    /// <param name="location">The location as printed.</param>
+    public static string? ModuleOf(string? location)
     {
-        var diagnostics = new List<Diagnostic>();
-
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
+        if (location is null || Platform.PlatformPaths.AsAPath(location) is not null)
         {
-            if (Form.Match(line) is { Success: true } found)
-            {
-                diagnostics.Add(new(
-                    "msbuild",
-                    found.Groups["severity"].Value,
-                    found.Groups["code"].Value,
-                    found.Groups["message"].Value,
-                    found.Groups["file"].Value,
-                    int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
-                    found.Groups["col"].Success ? int.Parse(found.Groups["col"].Value, CultureInfo.InvariantCulture) : null,
-                    found.Groups["endline"].Success ? int.Parse(found.Groups["endline"].Value, CultureInfo.InvariantCulture) : null,
-                    found.Groups["endcol"].Success ? int.Parse(found.Groups["endcol"].Value, CultureInfo.InvariantCulture) : null,
-                    Project: found.Groups["project"].Success ? found.Groups["project"].Value : null,
-                    Log: (at + 1, at + 1)));
-            }
+            return null;
         }
 
-        return (diagnostics, [], UnparsedOf(lines, Form));
+        var end = location.IndexOfAny(['/', '\\'], location.IndexOf(':', StringComparison.Ordinal) + 1);
+        return end > 0 ? location[..end] : location;
     }
 
-    internal static IReadOnlyList<string> UnparsedOf(IReadOnlyList<string> lines, Regex form)
-        => [.. lines.Where(line => LooksLikeError(line) && !form.IsMatch(line))];
+    /// <summary>
+    /// A thrown error said in one line, as a failure's id says it: <c>Type: the message's first line</c>, or the type alone
+    /// where the error said no message.
+    /// </summary>
+    /// <param name="type">The error's type.</param>
+    /// <param name="message">Its message; empty where it said none.</param>
+    public static string Headed(string type, string message)
+        => message.Split('\n')[0].Trim() is { Length: > 0 } first ? $"{type}: {first}" : type;
 
-    private static bool LooksLikeError(string line)
-        => line.Contains("error", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("warning", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("Failed", StringComparison.Ordinal);
-}
-
-/// <summary>Reads MSVC's form: <c>path(line): error C2065: message</c>, and the linker's <c>LNK</c> errors beside it.</summary>
-internal sealed class MsvcParser : IResultParser
-{
-    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+)\):\s+(?<severity>error|warning|note)\s+(?<code>[A-Z]\d+):\s+(?<message>.*)$");
-
-    public string Name => "msvc";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
+    /// <summary>The lines of a message, each trimmed at its end, joined by newlines, the blank ones at either end left out; null where none holds anything.</summary>
+    /// <param name="lines">The message's lines.</param>
+    public static string? Joined(IEnumerable<string> lines)
     {
-        var diagnostics = new List<Diagnostic>();
-
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
-        {
-            if (Form.Match(line) is { Success: true } found)
-            {
-                diagnostics.Add(new(
-                    "msvc",
-                    found.Groups["severity"].Value,
-                    found.Groups["code"].Value,
-                    found.Groups["message"].Value,
-                    found.Groups["file"].Value,
-                    int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
-                    Log: (at + 1, at + 1)));
-            }
-        }
-
-        return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
-    }
-}
-
-/// <summary>Reads gcc's form: <c>path:line:col: error: message [-Wflag]</c>, with the include and macro chain as the error's stack.</summary>
-internal sealed class GccParser : IResultParser
-{
-    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$");
-
-    public string Name => "gcc";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var diagnostics = new List<Diagnostic>();
-
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
-        {
-            if (Form.Match(line) is { Success: true } found)
-            {
-                diagnostics.Add(new(
-                    "gcc",
-                    found.Groups["severity"].Value,
-                    found.Groups["code"].Success ? found.Groups["code"].Value : null,
-                    found.Groups["message"].Value,
-                    found.Groups["file"].Value,
-                    int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
-                    int.Parse(found.Groups["col"].Value, CultureInfo.InvariantCulture),
-                    Stack: CompilerChains.Before(lines, at),
-                    Log: (at + 1, at + 1)));
-            }
-        }
-
-        return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
-    }
-}
-
-/// <summary>Reads clang's form: gcc's, with the instantiation and macro chain as the error's stack.</summary>
-internal sealed class ClangParser : IResultParser
-{
-    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$");
-
-    public string Name => "clang";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var diagnostics = new List<Diagnostic>();
-
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
-        {
-            if (Form.Match(line) is { Success: true } found)
-            {
-                diagnostics.Add(new(
-                    "clang",
-                    found.Groups["severity"].Value,
-                    found.Groups["code"].Success ? found.Groups["code"].Value : null,
-                    found.Groups["message"].Value,
-                    found.Groups["file"].Value,
-                    int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
-                    int.Parse(found.Groups["col"].Value, CultureInfo.InvariantCulture),
-                    Stack: CompilerChains.Before(lines, at),
-                    Log: (at + 1, at + 1)));
-            }
-        }
-
-        return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
+        var said = string.Join('\n', lines.Select(line => line.TrimEnd())).Trim('\n');
+        return said.Trim().Length == 0 ? null : said;
     }
 }
 
 /// <summary>
-/// The chain that led a compiler's error to where it printed: the include lines above it (<c>In file included from</c>),
-/// and the template instantiation and macro expansion lines (<c>... requested from here</c>, <c>required from here</c>,
-/// <c>in expansion of macro</c>) - one owner of the reading, gcc's and clang's alike.
+/// MSBuild's canonical form, read for every tool that prints it: <c>origin : [fatal] error|warning CODE: text [project]</c>,
+/// the origin a file with its place - <c>path(line)</c>, <c>path(line,col)</c>, <c>path(line-line)</c>,
+/// <c>path(line,col-col)</c>, <c>path(line,col,line,col)</c> - or a tool's or a project's name. MSBuild and csc print it,
+/// and so do MSVC's cl and link, tsc with <c>--pretty false</c> and clang-cl; each diagnostic's tool is the one its code
+/// belongs to - <c>C</c> and <c>D</c> codes cl's (<c>msvc</c>), <c>LNK</c> link's, <c>TS</c> tsc's, every other MSBuild's.
+/// An MSVC note under an error is its: <c>see reference to ... being compiled</c> a frame of its instantiation chain,
+/// any other a line of its record. MSBuild's summary after <c>Build FAILED.</c> repeats what was said, and is taken
+/// with it; link's <c>LNK1120</c>, a count of the unresolved externals said before it, is said only where none was.
 /// </summary>
-internal static class CompilerChains
+internal sealed class MsBuildParser : IBuiltInParser
 {
-    private static readonly Regex Included = LinearRegex.Compile(@"^(?:In file included from|from)\s+(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:?,?\s*$");
-    private static readonly Regex Instantiated = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:\s+(?:note:\s+)?(?:in instantiation of |in expansion of macro )?.*?(?:requested from here|required from here|in expansion of macro)");
+    private static readonly Regex Placed = LinearRegex.Compile(
+        @"^\s*(?<file>.+)\((?<place>\d+(?:[,-]\d+){0,3})\)\s*:\s*(?<fatal>fatal\s+)?(?<severity>error|warning|note)(?:\s+(?<code>[A-Za-z]+\d+))?\s*:\s*(?<message>.*?)(?:\s+\[(?<project>[^\[\]]+)\])?\s*$",
+        RegexOptions.IgnoreCase);
 
-    /// <summary>The chain before the error at <paramref name="at"/>, innermost first, each frame marked by its kind.</summary>
-    /// <param name="lines">The compiler's output lines.</param>
-    /// <param name="at">The error line's index.</param>
-    public static IReadOnlyList<StackFrame> Before(IReadOnlyList<string> lines, int at)
+    private static readonly Regex Unplaced = LinearRegex.Compile(
+        @"^\s*(?<origin>(?:[A-Za-z]:)?[^:]+?)\s+:\s+(?<fatal>fatal\s+|command line\s+)?(?<severity>error|warning)(?:\s+(?<code>[A-Za-z]+\d+))?\s*:\s*(?<message>.*?)(?:\s+\[(?<project>[^\[\]]+)\])?\s*$",
+        RegexOptions.IgnoreCase);
+
+    private static readonly Regex Summary = LinearRegex.Compile(@"^\s*Build (?:FAILED|succeeded)\.\s*$");
+
+    private static readonly Regex SummaryLine = LinearRegex.Compile(@"^(?:\s+\d+ (?:Warning|Error)\(s\)|Time Elapsed [\d:.,]+|\s*""[^""]+"" \(.+\) \(\d+\) ->|\s*\(\w+ target\) ->)\s*$");
+
+    private static readonly Regex Instantiation = LinearRegex.Compile(@"^see reference to .* (?:instantiation|being compiled)");
+
+    private static readonly Regex WithBlock = LinearRegex.Compile(@"^\s+(?:with|and|\[|\]|[\w:<>]+\s*=.*)\s*$");
+
+    /// <summary>The code link gives the count of the unresolved externals it said before it.</summary>
+    private const string UnresolvedCount = "LNK1120";
+
+    public string Name => "msbuild";
+
+    public IResultReading Begin() => new Reading();
+
+    /// <summary>The tool a canonical diagnostic's code belongs to.</summary>
+    internal static string ToolOf(string? code)
+        => code is null ? "msbuild"
+            : code.StartsWith("LNK", StringComparison.OrdinalIgnoreCase) ? "link"
+            : code.StartsWith("TS", StringComparison.OrdinalIgnoreCase) && code.Length > 2 && char.IsAsciiDigit(code[2]) ? "tsc"
+            : code.Length > 1 && code[0] is 'C' or 'D' && char.IsAsciiDigit(code[1]) ? "msvc"
+            : "msbuild";
+
+    /// <summary>A place in parentheses as the canonical form writes it: its line, its column, its last line and its last column where given.</summary>
+    internal static (int? Line, int? Column, int? EndLine, int? EndColumn) PlaceOf(string place)
     {
-        var chain = new List<StackFrame>();
+        static int? Number(string text)
+            => int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > 0 ? number : null;
 
-        for (var back = at - 1; back >= 0 && chain.Count < StackTrace.FrameBound; back--)
+        var commas = place.Split(',');
+
+        return commas.Length switch
         {
-            if (Included.Match(lines[back]) is { Success: true } included)
+            1 when place.Split('-') is [var line, var last] => (Number(line), null, Number(last), null),
+            1 => (Number(place), null, null, null),
+            2 when commas[1].Split('-') is [var column, var lastColumn] => (Number(commas[0]), Number(column), null, Number(lastColumn)),
+            2 => (Number(commas[0]), Number(commas[1]), null, null),
+            4 => (Number(commas[0]), Number(commas[1]), Number(commas[2]), Number(commas[3])),
+            _ => (Number(commas[0]), null, null, null),
+        };
+    }
+
+    private sealed class Reading : IResultReading
+    {
+        private readonly HashSet<string> _said = new(StringComparer.Ordinal);
+        private Diagnostic? _open;
+        private List<StackFrame> _frames = [];
+        private int _to;
+        private bool _summary;
+        private bool _errorSaid;
+
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
+        {
+            if (_summary)
             {
-                chain.Add(new StackFrame(lines[back], included.Groups["file"].Value, int.Parse(included.Groups["line"].Value, CultureInfo.InvariantCulture), included.Groups["col"].Success ? int.Parse(included.Groups["col"].Value, CultureInfo.InvariantCulture) : null, Kind: "include"));
-                continue;
+                if (SummaryLine.IsMatch(line.Text) || line.Text.Trim().Length == 0)
+                {
+                    _summary = !line.Text.StartsWith("Time Elapsed", StringComparison.Ordinal);
+                    return LineTaken.Took;
+                }
+
+                if (Read(line) is { } repeated)
+                {
+                    // MSBuild's summary repeats what it said: a diagnostic said before is taken with it, one not said
+                    // before - its first printing lost - is said here.
+                    if (_said.Add(Key(repeated)))
+                    {
+                        sink.Add(repeated);
+                    }
+
+                    return LineTaken.Took;
+                }
+
+                _summary = false;
             }
 
-            if (Instantiated.Match(lines[back]) is { Success: true } instantiated)
+            if (Summary.IsMatch(line.Text))
             {
-                var kind = lines[back].Contains("macro", StringComparison.Ordinal) ? "macro" : "instantiation";
-                chain.Add(new StackFrame(lines[back], instantiated.Groups["file"].Value, int.Parse(instantiated.Groups["line"].Value, CultureInfo.InvariantCulture), instantiated.Groups["col"].Success ? int.Parse(instantiated.Groups["col"].Value, CultureInfo.InvariantCulture) : null, Kind: kind));
-                continue;
+                Close(sink);
+                _summary = true;
+                return LineTaken.Took;
             }
 
-            break;
+            if (_open is not null && Placed.Match(line.Text) is { Success: true } note && note.Groups["severity"].Value.Equals("note", StringComparison.OrdinalIgnoreCase))
+            {
+                var (noteLine, noteColumn, _, _) = PlaceOf(note.Groups["place"].Value);
+
+                if (Instantiation.IsMatch(note.Groups["message"].Value))
+                {
+                    _frames.Add(new StackFrame(line.Text.Trim(), note.Groups["file"].Value.Trim(), noteLine, noteColumn, Kind: "instantiation"));
+                }
+
+                _to = line.Last;
+                return LineTaken.Took;
+            }
+
+            if (_open is not null && WithBlock.IsMatch(line.Text))
+            {
+                _to = line.Last;
+                return LineTaken.Took;
+            }
+
+            Close(sink);
+
+            if (Read(line) is not { } read)
+            {
+                return LineTaken.Left;
+            }
+
+            if (read.Code is UnresolvedCount && _errorSaid)
+            {
+                // link's count of the unresolved externals it said already: no error of its own.
+                _errorSaid = false;
+                return LineTaken.Took;
+            }
+
+            _open = read;
+            _to = line.Last;
+            return LineTaken.Took;
         }
 
-        return chain;
+        public LineTaken End(ResultSink sink)
+        {
+            Close(sink);
+            _summary = false;
+            return LineTaken.Left;
+        }
+
+        private void Close(ResultSink sink)
+        {
+            if (_open is not { } open)
+            {
+                return;
+            }
+
+            var said = open with { Stack = _frames, Log = (open.Log!.Value.From, _to) };
+
+            _said.Add(Key(said));
+            sink.Add(said);
+            _errorSaid |= said.Severity == "error";
+            _open = null;
+            _frames = [];
+        }
+
+        private static string Key(Diagnostic diagnostic)
+            => string.Join('\u0001', diagnostic.Tool, diagnostic.Severity, diagnostic.Code, diagnostic.Message, diagnostic.File, diagnostic.Line, diagnostic.Column, diagnostic.Project);
+
+        private static Diagnostic? Read(NumberedLine line)
+        {
+            if (Placed.Match(line.Text) is { Success: true } placed)
+            {
+                var (at, column, endLine, endColumn) = PlaceOf(placed.Groups["place"].Value);
+                var code = ParsedText.Text(placed.Groups["code"]);
+
+                return new Diagnostic(
+                    ToolOf(code),
+                    placed.Groups["severity"].Value.ToLowerInvariant(),
+                    code,
+                    Message(placed),
+                    placed.Groups["file"].Value.Trim(),
+                    at,
+                    column,
+                    endLine,
+                    endColumn,
+                    Project: ParsedText.Text(placed.Groups["project"]),
+                    Log: (line.Number, line.Last));
+            }
+
+            if (Unplaced.Match(line.Text) is { Success: true } unplaced)
+            {
+                var code = ParsedText.Text(unplaced.Groups["code"]);
+
+                return new Diagnostic(
+                    ToolOf(code),
+                    unplaced.Groups["severity"].Value.ToLowerInvariant(),
+                    code,
+                    Message(unplaced),
+                    Project: ParsedText.Text(unplaced.Groups["project"]) ?? unplaced.Groups["origin"].Value.Trim(),
+                    Log: (line.Number, line.Last));
+            }
+
+            return null;
+
+            static string Message(Match found)
+                => ParsedText.Text(found.Groups["message"]) ?? found.Value.Trim();
+        }
     }
 }
 
-/// <summary>Reads CMake's form: <c>CMake Error at path:line (command):</c> with the message block under it.</summary>
-internal sealed class CMakeParser : IResultParser
+/// <summary>
+/// gcc's and clang's form, read as one: <c>path:line[:col]: [fatal] error|warning|note: message [-Wflag]</c>, and the
+/// driver's own <c>gcc: error: ...</c>. The chain that led to an error is its stack, innermost first, in the order
+/// printed: the include chain above it (<c>In file included from</c>, gcc's indented <c>from</c> lines), gcc's
+/// instantiation chain above it (<c>In instantiation of</c>, <c>required from</c>), and the notes under it that carry a
+/// chain - clang's <c>in instantiation of ... requested here</c> and <c>expanded from macro</c>, gcc's <c>in expansion of
+/// macro</c>. Every other note, the source and caret lines, and the trailers (<c>N errors generated.</c>,
+/// <c>compilation terminated.</c>) are lines of the record they follow, never diagnostics of their own. The flag that
+/// names a diagnostic is its code, <c>-Werror=x</c> and <c>-Werror,-Wx</c> read as the <c>-Wx</c> they promote.
+/// </summary>
+internal abstract class GnuFormParser : IBuiltInParser
 {
-    private static readonly Regex Form = LinearRegex.Compile(@"^CMake (?<severity>Error|Warning)(?: at (?<file>[^:\s][^:]*?):(?<line>\d+)(?: \((?<command>\w+)\))?)?");
+    private static readonly Regex Included = LinearRegex.Compile(@"^(?:In file included from|(?<from>\s+from)) (?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?[:,]$");
+
+    private static readonly Regex Context = LinearRegex.Compile(@"^(?<file>.+?): (?<context>In .+|At global scope|At top level):$");
+
+    private static readonly Regex Required = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<what>required (?:from|by) .+|recursively required .+|in .constexpr. expansion of .+)$");
+
+    private static readonly Regex Said = LinearRegex.Compile(
+        @"^(?<file>.+?):(?<line>\d+):(?:(?<col>\d+):)?\s+(?<severity>fatal error|error|warning|note):\s+(?<message>.*?)(?:\s+\[(?<flag>-W[^\]\s]*)\])?$");
+
+    private static readonly Regex Driver = LinearRegex.Compile(
+        @"^(?:\S*[/\\])?(?:[\w.]+-)*(?:gcc|g\+\+|cc|c\+\+|clang|clang\+\+|cc1|cc1plus|cc1obj|lto1)(?:-\d+(?:\.\d+)*)?(?:\.exe)?: (?<severity>fatal error|error|warning|note|internal compiler error): (?<message>.+)$");
+
+    private static readonly Regex Excerpt = LinearRegex.Compile(@"^(?:\s*\d*\s*\|.*|\s*\+\+\+ \|.*|\s+[\^~][\^~\s]*)$");
+
+    private static readonly Regex Trailer = LinearRegex.Compile(@"^(?:\d+ (?:error|warning)s? generated\.|compilation terminated\.|(?:\S*[/\\])?(?:cc1\w*|lto1)(?:\.exe)?: (?:some|all) warnings being treated as errors)$");
+
+    private static readonly Regex Chained = LinearRegex.Compile(@"(?:in instantiation of .* requested here|required from|expanded from macro|in expansion of macro)");
+
+    /// <summary>The tool every diagnostic this reading says is said to come from.</summary>
+    protected abstract string Tool { get; }
+
+    public abstract string Name { get; }
+
+    public IResultReading Begin() => new Reading(Tool);
+
+    private sealed class Reading(string tool) : IResultReading
+    {
+        private readonly List<StackFrame> _chain = [];
+        private int? _from;
+        private int? _included;
+        private int _includes;
+        private Diagnostic? _open;
+        private List<StackFrame> _frames = [];
+        private int _to;
+        private bool _saidSinceTrailer;
+
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
+        {
+            var text = line.Text;
+
+            if (_open is not null)
+            {
+                if (Excerpt.IsMatch(text))
+                {
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                if (Said.Match(text) is { Success: true } note && note.Groups["severity"].Value == "note")
+                {
+                    if (Chained.IsMatch(note.Groups["message"].Value))
+                    {
+                        _frames.Add(new StackFrame(
+                            text.Trim(),
+                            note.Groups["file"].Value,
+                            ParsedText.Whole(note.Groups["line"]),
+                            ParsedText.Whole(note.Groups["col"]),
+                            Kind: note.Groups["message"].Value.Contains("macro", StringComparison.Ordinal) ? "macro" : "instantiation"));
+                    }
+
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                if (Trailer.IsMatch(text))
+                {
+                    Close(sink);
+                    _saidSinceTrailer = false;
+                    return LineTaken.Took;
+                }
+
+                Close(sink);
+            }
+
+            if (Included.Match(text) is { Success: true } included)
+            {
+                // Innermost first, as every chain is held: gcc prints the include the file is in first and each
+                // includer after it (`from ...`), clang each includer before the include it holds.
+                var frame = new StackFrame(text.Trim(), included.Groups["file"].Value, ParsedText.Whole(included.Groups["line"]), ParsedText.Whole(included.Groups["col"]), Kind: "include");
+
+                _from ??= line.Number;
+                _included = included.Groups["from"].Success && _included is { } after ? after + 1 : _chain.Count - _includes;
+                _chain.Insert(_included.Value, frame);
+                _includes++;
+                return LineTaken.Held;
+            }
+
+            if (Context.Match(text) is { Success: true } context)
+            {
+                Chain(line, context.Groups["context"].Value.StartsWith("In instantiation of", StringComparison.Ordinal)
+                    ? new StackFrame(text.Trim(), context.Groups["file"].Value, Kind: "instantiation")
+                    : null);
+                return LineTaken.Held;
+            }
+
+            if (Required.Match(text) is { Success: true } required)
+            {
+                Chain(line, new StackFrame(text.Trim(), required.Groups["file"].Value, ParsedText.Whole(required.Groups["line"]), ParsedText.Whole(required.Groups["col"]), Kind: "instantiation"));
+                return LineTaken.Held;
+            }
+
+            if (Said.Match(text) is { Success: true } said)
+            {
+                Open(line, new Diagnostic(
+                    tool,
+                    said.Groups["severity"].Value == "fatal error" ? "error" : said.Groups["severity"].Value,
+                    CodeOf(said.Groups["flag"]),
+                    ParsedText.Text(said.Groups["message"]) ?? text.Trim(),
+                    said.Groups["file"].Value,
+                    ParsedText.Whole(said.Groups["line"]),
+                    ParsedText.Whole(said.Groups["col"])));
+                return LineTaken.Took;
+            }
+
+            if (Driver.Match(text) is { Success: true } driver && !driver.Groups["message"].Value.StartsWith("linker command failed", StringComparison.Ordinal))
+            {
+                Open(line, new Diagnostic(
+                    tool,
+                    driver.Groups["severity"].Value is "note" or "warning" ? driver.Groups["severity"].Value : "error",
+                    null,
+                    driver.Groups["message"].Value.Trim()));
+                return LineTaken.Took;
+            }
+
+            // A chain the compiler began and no diagnostic ended is not this reading's: it is given back.
+            Unchain();
+
+            if (_saidSinceTrailer && Trailer.IsMatch(text))
+            {
+                _saidSinceTrailer = false;
+                return LineTaken.Took;
+            }
+
+            return LineTaken.Left;
+        }
+
+        public LineTaken End(ResultSink sink)
+        {
+            Close(sink);
+            Unchain();
+            return LineTaken.Left;
+        }
+
+        private void Chain(NumberedLine line, StackFrame? frame)
+        {
+            _from ??= line.Number;
+            _included = null;
+            _includes = 0;
+
+            if (frame is not null)
+            {
+                _chain.Add(frame);
+            }
+        }
+
+        private void Unchain()
+        {
+            _chain.Clear();
+            _from = null;
+            _included = null;
+            _includes = 0;
+        }
+
+        private void Open(NumberedLine line, Diagnostic diagnostic)
+        {
+            _open = diagnostic with { Log = (_from ?? line.Number, line.Last) };
+            _frames = [.. _chain];
+            _to = line.Last;
+            Unchain();
+        }
+
+        private void Close(ResultSink sink)
+        {
+            if (_open is not { } open)
+            {
+                return;
+            }
+
+            sink.Add(open with { Stack = _frames, Log = (open.Log!.Value.From, _to) });
+            _saidSinceTrailer = true;
+            _open = null;
+            _frames = [];
+        }
+
+        /// <summary>The flag that names a diagnostic: <c>-Wx</c>, also where <c>-Werror=x</c> or <c>-Werror,-Wx</c> promoted it.</summary>
+        private static string? CodeOf(Group flag)
+        {
+            if (!flag.Success)
+            {
+                return null;
+            }
+
+            var named = flag.Value;
+
+            if (named.StartsWith("-Werror=", StringComparison.Ordinal))
+            {
+                return $"-W{named["-Werror=".Length..]}";
+            }
+
+            return named.StartsWith("-Werror,", StringComparison.Ordinal) ? named["-Werror,".Length..] : named;
+        }
+    }
+}
+
+/// <summary>gcc's form, its diagnostics gcc's: chosen where the leg's toolchain is GNU.</summary>
+internal sealed class GccParser : GnuFormParser
+{
+    protected override string Tool => "gcc";
+
+    public override string Name => "gcc";
+}
+
+/// <summary>clang's form, its diagnostics clang's: chosen where the leg's toolchain is Clang or AppleClang.</summary>
+internal sealed class ClangParser : GnuFormParser
+{
+    protected override string Tool => "clang";
+
+    public override string Name => "clang";
+}
+
+/// <summary>gcc's and clang's shared form where which of the two printed it is not known - a CI job's log, a toolchain that declares no compiler: their diagnostics <c>cc</c>'s.</summary>
+internal sealed class CcParser : GnuFormParser
+{
+    protected override string Tool => "cc";
+
+    public override string Name => "cc";
+}
+
+/// <summary>
+/// The linkers' forms but link's own (which is MSBuild's canonical form): GNU ld's <c>file:(section): undefined reference
+/// to 'f'</c> under its <c>in function</c> line, its own <c>ld: ...</c> lines, gold's, lld's <c>ld.lld: error: undefined
+/// symbol: f</c> with the <c>&gt;&gt;&gt; referenced by</c> lines that place it, mold's, and Apple ld's <c>Undefined
+/// symbols for architecture</c> list with its <c>ld: warning:</c>. A line that only says the link failed - collect2's
+/// <c>ld returned 1 exit status</c>, a compiler driver's <c>linker command failed</c>, Apple ld's <c>symbol(s) not
+/// found</c> - is said only where no error before it said why.
+/// </summary>
+internal sealed class LinkerParser : IBuiltInParser
+{
+    private static readonly Regex Own = LinearRegex.Compile(
+        @"^(?:[^\s:]*[/\\])?(?:[\w.]+-)?(?:ld(?:\.bfd|\.gold|\.lld)?|ld64(?:\.lld)?|lld-link|wasm-ld|mold|gold)(?:\.exe)?: (?<rest>.+)$");
+
+    private static readonly Regex Severity = LinearRegex.Compile(@"^(?<severity>error|warning): (?<message>.+)$");
+
+    private static readonly Regex InFunction = LinearRegex.Compile(@"^(?<object>.+): in function [`'‘](?<function>.+)['’]:$");
+
+    private static readonly Regex Reference = LinearRegex.Compile(@"^(?<file>.+?):\((?<section>[^)]*)\): (?<message>(?:undefined reference to|multiple definition of|relocation truncated) .+)$");
+
+    private static readonly Regex Referenced = LinearRegex.Compile(@"^>>> (?:referenced by|defined at) (?<file>.+?)(?::(?<line>\d+))?(?: \(.+\))?$");
+
+    private static readonly Regex Continued = LinearRegex.Compile(@"^>>> ");
+
+    private static readonly Regex Collect2 = LinearRegex.Compile(@"^(?:\S*[/\\])?collect2(?:\.exe)?: error: (?<message>.+)$");
+
+    private static readonly Regex DriverFailed = LinearRegex.Compile(@"^(?:\S*[/\\])?(?:[\w.]+-)*(?:clang|clang\+\+|gcc|g\+\+|cc|c\+\+)(?:-\d+(?:\.\d+)*)?(?:\.exe)?: error: (?<message>linker command failed.*)$");
+
+    private static readonly Regex Undefined = LinearRegex.Compile(@"^Undefined symbols for architecture (?<arch>\S+):$");
+
+    private static readonly Regex UndefinedSymbol = LinearRegex.Compile(@"^\s+""(?<symbol>[^""]+)"", referenced from:$");
+
+    private static readonly Regex ReferencedFrom = LinearRegex.Compile(@"^\s{6,}\S.*$");
+
+    private static readonly Regex NotFound = LinearRegex.Compile(@"^symbol\(s\) not found for architecture \S+$");
+
+    public string Name => "ld";
+
+    public IResultReading Begin() => new Reading();
+
+    private sealed class Reading : IResultReading
+    {
+        private Diagnostic? _open;
+        private int _to;
+        private bool _errorSaid;
+        private bool _apple;
+        private int? _held;
+
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
+        {
+            var text = line.Text;
+
+            if (_open is not null && Continued.IsMatch(text))
+            {
+                if (_open.File is null && Referenced.Match(text) is { Success: true } referenced)
+                {
+                    _open = _open with { File = referenced.Groups["file"].Value, Line = ParsedText.Whole(referenced.Groups["line"]) };
+                }
+
+                _to = line.Last;
+                return LineTaken.Took;
+            }
+
+            if (_apple && _open is not null && ReferencedFrom.IsMatch(text))
+            {
+                _to = line.Last;
+                return LineTaken.Took;
+            }
+
+            Close(sink);
+
+            if (_apple && UndefinedSymbol.Match(text) is { Success: true } symbol)
+            {
+                Open(line, new Diagnostic("ld", "error", null, $"undefined symbol: {symbol.Groups["symbol"].Value}"));
+                return LineTaken.Took;
+            }
+
+            _apple = false;
+
+            if (Undefined.IsMatch(text))
+            {
+                _apple = true;
+                return LineTaken.Took;
+            }
+
+            if (Collect2.Match(text) is { Success: true } collect2)
+            {
+                return Failed(line, collect2.Groups["message"].Value, sink);
+            }
+
+            if (DriverFailed.Match(text) is { Success: true } driver)
+            {
+                return Failed(line, driver.Groups["message"].Value, sink);
+            }
+
+            if (Own.Match(text) is not { Success: true } own)
+            {
+                // A reference the linker printed with no name of its own ahead of it: under the function a line before
+                // named, the line its object's place begins.
+                if (Reference.Match(text) is { Success: true } bare)
+                {
+                    Open(line, new Diagnostic("ld", "error", null, bare.Groups["message"].Value.Trim(), bare.Groups["file"].Value));
+                    return LineTaken.Took;
+                }
+
+                _held = null;
+                return LineTaken.Left;
+            }
+
+            var rest = own.Groups["rest"].Value;
+
+            if (InFunction.IsMatch(rest))
+            {
+                // The object and function the references under it are in: held until a reference says it.
+                _held ??= line.Number;
+                return LineTaken.Held;
+            }
+
+            if (Reference.Match(rest) is { Success: true } reference)
+            {
+                Open(line, new Diagnostic("ld", "error", null, reference.Groups["message"].Value.Trim(), reference.Groups["file"].Value));
+                return LineTaken.Took;
+            }
+
+            if (Severity.Match(rest) is { Success: true } severity)
+            {
+                if (severity.Groups["severity"].Value == "error" && NotFound.IsMatch(severity.Groups["message"].Value))
+                {
+                    return Failed(line, severity.Groups["message"].Value, sink);
+                }
+
+                Open(line, new Diagnostic("ld", severity.Groups["severity"].Value, null, severity.Groups["message"].Value.Trim()));
+                return LineTaken.Took;
+            }
+
+            if (NotFound.IsMatch(rest))
+            {
+                return Failed(line, rest, sink);
+            }
+
+            Open(line, new Diagnostic("ld", "error", null, rest.Trim()));
+            return LineTaken.Took;
+        }
+
+        public LineTaken End(ResultSink sink)
+        {
+            Close(sink);
+            _apple = false;
+            _held = null;
+            return LineTaken.Left;
+        }
+
+        /// <summary>A line that only says the link failed: taken with the errors before it, or said where none said why.</summary>
+        private LineTaken Failed(NumberedLine line, string message, ResultSink sink)
+        {
+            if (_errorSaid)
+            {
+                _errorSaid = false;
+                return LineTaken.Took;
+            }
+
+            sink.Add(new Diagnostic("ld", "error", null, message.Trim(), Log: (line.Number, line.Last)));
+            return LineTaken.Took;
+        }
+
+        private void Open(NumberedLine line, Diagnostic diagnostic)
+        {
+            _open = diagnostic with { Log = (_held ?? line.Number, line.Last) };
+            _to = line.Last;
+            _held = null;
+        }
+
+        private void Close(ResultSink sink)
+        {
+            if (_open is not { } open)
+            {
+                return;
+            }
+
+            sink.Add(open with { Log = (open.Log!.Value.From, _to) });
+            _errorSaid |= open.Severity == "error";
+            _open = null;
+        }
+    }
+}
+
+/// <summary>
+/// CMake's form: <c>CMake Error at path:line (command):</c>, <c>CMake Error in path:</c>, <c>CMake Error: message</c> and
+/// their warnings, with the message block under it - its indented lines, over the blank lines between its paragraphs, as
+/// one line - and the <c>Call Stack (most recent call first):</c> under it as the error's stack.
+/// <c>-- Configuring incomplete, errors occurred!</c>, said after what it counts, is taken with it.
+/// </summary>
+internal sealed class CMakeParser : IBuiltInParser
+{
+    private const string Severities = @"(?<severity>Error|Warning|Deprecation Warning|Deprecation Error|Warning \(dev\)|Error \(dev\))";
+
+    private static readonly Regex At = LinearRegex.Compile($@"^CMake {Severities} at (?<file>.+):(?<line>\d+) \((?<command>[^)]*)\):\s*$");
+
+    private static readonly Regex In = LinearRegex.Compile($@"^CMake {Severities} in (?<file>.+):\s*$");
+
+    private static readonly Regex Bare = LinearRegex.Compile($@"^CMake {Severities}:\s*(?<message>.*)$");
+
+    private static readonly Regex CallStack = LinearRegex.Compile(@"^Call Stack \(most recent call first\):$");
+
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+(?<file>.+):(?<line>\d+) \((?<command>[^)]*)\)$");
+
+    private static readonly Regex Incomplete = LinearRegex.Compile(@"^-- (?:Configuring|Generating) incomplete, errors occurred!$");
 
     public string Name => "cmake";
 
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
+    public IResultReading Begin() => new Reading();
+
+    private sealed class Reading : IResultReading
     {
-        var diagnostics = new List<Diagnostic>();
+        private Diagnostic? _open;
+        private readonly List<string> _message = [];
+        private readonly List<StackFrame> _frames = [];
+        private bool _stack;
+        private int _to;
+        private bool _errorSaid;
 
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
-            if (Form.Match(line) is { Success: true } found)
-            {
-                var message = at + 1 < lines.Count ? lines[at + 1].Trim() : found.Value;
+            var text = line.Text;
 
-                diagnostics.Add(new(
-                    "cmake",
-                    found.Groups["severity"].Value == "Error" ? "error" : "warning",
-                    Code: null,
-                    message.Length == 0 ? line : message,
-                    found.Groups["file"].Success ? found.Groups["file"].Value : null,
-                    found.Groups["line"].Success ? int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture) : null,
-                    Project: found.Groups["command"].Success ? found.Groups["command"].Value : null,
-                    Log: (at + 1, Math.Min(at + 2, lines.Count))));
+            if (_open is not null)
+            {
+                if (text.Trim().Length == 0)
+                {
+                    // A blank line between the block's paragraphs, or the block's end: the line after it says which.
+                    return LineTaken.Held;
+                }
+
+                if (CallStack.IsMatch(text))
+                {
+                    _stack = true;
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                if (_stack && Frame.Match(text) is { Success: true } frame)
+                {
+                    _frames.Add(new StackFrame(text.Trim(), frame.Groups["file"].Value, ParsedText.Whole(frame.Groups["line"]), Symbol: frame.Groups["command"].Value));
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                if (!_stack && text.StartsWith("  ", StringComparison.Ordinal))
+                {
+                    _message.Add(text.Trim());
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                Close(sink);
             }
+
+            if (_errorSaid && Incomplete.IsMatch(text))
+            {
+                _errorSaid = false;
+                return LineTaken.Took;
+            }
+
+            if (At.Match(text) is { Success: true } at)
+            {
+                Open(line, at, ParsedText.Text(at.Groups["file"]), ParsedText.Whole(at.Groups["line"]), ParsedText.Text(at.Groups["command"]));
+                return LineTaken.Took;
+            }
+
+            if (In.Match(text) is { Success: true } inFile)
+            {
+                Open(line, inFile, ParsedText.Text(inFile.Groups["file"]), null, null);
+                return LineTaken.Took;
+            }
+
+            if (Bare.Match(text) is { Success: true } bare)
+            {
+                Open(line, bare, null, null, null);
+
+                if (ParsedText.Text(bare.Groups["message"]) is { } inline)
+                {
+                    _message.Add(inline);
+                }
+
+                return LineTaken.Took;
+            }
+
+            return LineTaken.Left;
         }
 
-        return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
+        public LineTaken End(ResultSink sink)
+        {
+            Close(sink);
+            return LineTaken.Left;
+        }
+
+        private void Open(NumberedLine line, Match head, string? file, int? at, string? command)
+        {
+            _open = new Diagnostic(
+                "cmake",
+                head.Groups["severity"].Value.Contains("Error", StringComparison.Ordinal) ? "error" : "warning",
+                null,
+                head.Value.Trim(),
+                file,
+                at,
+                Project: command,
+                Log: (line.Number, line.Last));
+            _to = line.Last;
+        }
+
+        private void Close(ResultSink sink)
+        {
+            if (_open is not { } open)
+            {
+                return;
+            }
+
+            sink.Add(open with
+            {
+                Message = _message.Count > 0 ? string.Join(' ', _message) : open.Message,
+                Stack = [.. _frames],
+                Log = (open.Log!.Value.From, _to),
+            });
+            _errorSaid |= open.Severity == "error";
+            _open = null;
+            _message.Clear();
+            _frames.Clear();
+            _stack = false;
+        }
     }
 }
 
-/// <summary>Reads Ninja's <c>FAILED:</c> block, naming the output whose diagnostics follow.</summary>
-internal sealed class NinjaParser : IResultParser
+/// <summary>
+/// Ninja's form: a <c>FAILED: outputs</c> block, the command it ran on the line under it, and what that command printed -
+/// the edge every diagnostic said inside it names as its project. An edge is a diagnostic of its own only where nothing
+/// inside it said an error, for then it is all that says what failed. Ninja's own <c>ninja: error:</c> is an error;
+/// <c>ninja: build stopped</c> and its progress lines end an edge.
+/// </summary>
+internal sealed class NinjaParser : IBuiltInParser
 {
-    private static readonly Regex Form = LinearRegex.Compile(@"^FAILED:\s*(?<output>.+)$");
+    private static readonly Regex Failed = LinearRegex.Compile(@"^FAILED: (?:\[code=\d+\] )?(?<outputs>.+?)\s*$");
+
+    private static readonly Regex Own = LinearRegex.Compile(@"^ninja: (?<severity>error|fatal|warning): (?<message>.+)$");
+
+    private static readonly Regex Stopped = LinearRegex.Compile(@"^ninja: build stopped: .*$");
+
+    private static readonly Regex Progress = LinearRegex.Compile(@"^\[\d+/\d+\] ");
 
     public string Name => "ninja";
 
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var diagnostics = new List<Diagnostic>();
+    public IResultReading Begin() => new Reading();
 
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
+    private sealed class Reading : IResultReading
+    {
+        private string? _edge;
+        private int _from;
+        private int _to;
+        private int _saidBefore;
+        private bool _command;
+
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
-            if (Form.Match(line) is { Success: true } found)
+            if (_command)
             {
-                diagnostics.Add(new("ninja", "error", Code: null, $"build of '{found.Groups["output"].Value.Trim()}' failed", Log: (at + 1, at + 1)));
+                _command = false;
+                _to = line.Last;
+                return LineTaken.Took;
             }
+
+            if (Failed.Match(line.Text) is { Success: true } failed)
+            {
+                Close(sink);
+                _edge = failed.Groups["outputs"].Value;
+                _from = line.Number;
+                _to = line.Last;
+                _saidBefore = sink.Said;
+                _command = true;
+                sink.Target = _edge;
+                return LineTaken.Took;
+            }
+
+            if (Stopped.IsMatch(line.Text) || Progress.IsMatch(line.Text))
+            {
+                Close(sink);
+                return LineTaken.Took;
+            }
+
+            if (Own.Match(line.Text) is { Success: true } own)
+            {
+                sink.Add(new Diagnostic("ninja", own.Groups["severity"].Value == "warning" ? "warning" : "error", null, own.Groups["message"].Value.Trim(), Log: (line.Number, line.Last)));
+                return LineTaken.Took;
+            }
+
+            return LineTaken.Left;
         }
 
-        return (diagnostics, [], [.. lines.Where(line => line.StartsWith("FAILED:", StringComparison.Ordinal) || (line.StartsWith("ninja: build stopped", StringComparison.Ordinal) ? false : LooksLikeError(line)))]);
+        public LineTaken End(ResultSink sink)
+        {
+            Close(sink);
+            _command = false;
+            return LineTaken.Left;
+        }
 
-        static bool LooksLikeError(string line)
-            => line.Contains("error", StringComparison.OrdinalIgnoreCase) && !Form.IsMatch(line);
+        private void Close(ResultSink sink)
+        {
+            if (_edge is not { } edge)
+            {
+                return;
+            }
+
+            sink.Target = null;
+
+            if (sink.Said == _saidBefore)
+            {
+                sink.Add(new Diagnostic("ninja", "error", null, $"build of '{edge}' failed", Project: edge, Log: (_from, _to)));
+            }
+
+            _edge = null;
+        }
     }
 }
 
-/// <summary>Reads the linkers' forms: <c>undefined reference to</c>, <c>unresolved external symbol</c>, <c>ld: symbol(s) not found</c>.</summary>
-internal sealed class LinkerParser : IResultParser
+/// <summary>
+/// tsc's forms: its default, <c>path:line:col - error TS2304: message</c>, with the lines under it - the message's own
+/// continuation, the source excerpt and its tildes - as its record; <c>--pretty false</c>'s <c>path(line,col): error
+/// TS2304: message</c>; and a diagnostic of no file, <c>error TS5058: message</c>. <c>Found N errors</c> and the table of
+/// files after it are taken with what they count.
+/// </summary>
+internal sealed class TscParser : IBuiltInParser
 {
-    private static readonly Regex Form = LinearRegex.Compile(@"^(?:.*?(?<code>undefined reference to|unresolved external symbol|symbol\(s\) not found|duplicate symbol)\s*(?<message>.*)|ld:\s+(?<ldmessage>.*))$");
+    private static readonly Regex Pretty = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+) - (?<severity>error|warning|message) (?<code>TS\d+): (?<message>.*)$");
 
-    public string Name => "link";
+    private static readonly Regex Plain = LinearRegex.Compile(@"^(?<file>.+)\((?<line>\d+),(?<col>\d+)\): (?<severity>error|warning|message) (?<code>TS\d+): (?<message>.*)$");
 
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var diagnostics = new List<Diagnostic>();
+    private static readonly Regex Unplaced = LinearRegex.Compile(@"^(?<severity>error|warning|message) (?<code>TS\d+): (?<message>.*)$");
 
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
-        {
-            if (Form.Match(line) is { Success: true } found)
-            {
-                var message = found.Groups["message"].Success ? $"{found.Groups["code"].Value} {found.Groups["message"].Value}".Trim() : found.Groups["ldmessage"].Value;
+    private static readonly Regex Under = LinearRegex.Compile(@"^(?:\s.*|\d+\s.*|)$");
 
-                diagnostics.Add(new("link", "error", Code: found.Groups["code"].Success ? "LNK-undefined" : "ld", message, Log: (at + 1, at + 1)));
-            }
-        }
-
-        return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
-    }
-}
-
-/// <summary>Reads tsc's form: <c>path(line,col): error TS2304: message</c>.</summary>
-internal sealed class TscParser : IResultParser
-{
-    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+),(?<col>\d+)\):\s+(?<severity>error|warning)\s+(?<code>TS\d+):\s+(?<message>.*)$");
+    private static readonly Regex Found = LinearRegex.Compile(@"^(?:Found \d+ errors?(?: in (?:\d+ files|the same file, starting at: .+|.+:\d+))?\.|Errors\s+Files|\s+\d+\s+\S.*:\d+)$");
 
     public string Name => "tsc";
 
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var diagnostics = new List<Diagnostic>();
+    public IResultReading Begin() => new Reading();
 
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
+    private sealed class Reading : IResultReading
+    {
+        private Diagnostic? _open;
+        private int _to;
+        private bool _found;
+
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
-            if (Form.Match(line) is { Success: true } found)
+            if (Read(line) is { } read)
             {
-                diagnostics.Add(new(
-                    "tsc",
-                    found.Groups["severity"].Value,
-                    found.Groups["code"].Value,
-                    found.Groups["message"].Value,
-                    found.Groups["file"].Value,
-                    int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
-                    int.Parse(found.Groups["col"].Value, CultureInfo.InvariantCulture),
-                    Log: (at + 1, at + 1)));
+                Close(sink);
+                _open = read;
+                _to = line.Last;
+                return LineTaken.Took;
+            }
+
+            if (Found.IsMatch(line.Text) && (_open is not null || _found))
+            {
+                Close(sink);
+                _found = true;
+                return LineTaken.Took;
+            }
+
+            if (_open is not null && Under.IsMatch(line.Text))
+            {
+                _to = line.Last;
+                return LineTaken.Took;
+            }
+
+            Close(sink);
+            _found = false;
+            return LineTaken.Left;
+        }
+
+        public LineTaken End(ResultSink sink)
+        {
+            Close(sink);
+            _found = false;
+            return LineTaken.Left;
+        }
+
+        private void Close(ResultSink sink)
+        {
+            if (_open is { } open)
+            {
+                sink.Add(open with { Log = (open.Log!.Value.From, _to) });
+                _open = null;
             }
         }
 
-        return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
+        private static Diagnostic? Read(NumberedLine line)
+        {
+            var found = Pretty.Match(line.Text) is { Success: true } pretty ? pretty
+                : Plain.Match(line.Text) is { Success: true } plain ? plain
+                : Unplaced.Match(line.Text) is { Success: true } unplaced ? unplaced
+                : null;
+
+            return found is null
+                ? null
+                : new Diagnostic(
+                    "tsc",
+                    found.Groups["severity"].Value == "message" ? "note" : found.Groups["severity"].Value,
+                    found.Groups["code"].Value,
+                    ParsedText.Text(found.Groups["message"]) ?? line.Text.Trim(),
+                    ParsedText.Text(found.Groups["file"]),
+                    ParsedText.Whole(found.Groups["line"]),
+                    ParsedText.Whole(found.Groups["col"]),
+                    Log: (line.Number, line.Last));
+        }
     }
 }
 
-/// <summary>Reads the Dart analyser's form: <c>error • message • path:line:col • code</c>.</summary>
-internal sealed class DartAnalyserParser : IResultParser
+/// <summary>
+/// ESLint's two forms: stylish, its default - the file alone on a line, then each problem under it as
+/// <c>line:col  error|warning  message  rule</c> - and compact, <c>path: line N, col N, Error - message (rule)</c>. The
+/// rule is the code. Its counts (<c>✖ N problems</c>, <c>N problems</c>, what <c>--fix</c> could fix) are taken with what
+/// they count.
+/// </summary>
+internal sealed class EslintParser : IBuiltInParser
 {
-    private static readonly Regex Form = LinearRegex.Compile(@"^\s*(?<severity>error|warning|info)\s+•\s+(?<message>.+?)\s+•\s+(?<file>[^:•]+):(?<line>\d+):(?<col>\d+)\s+•\s+(?<code>[\w_]+)\s*$");
+    private static readonly Regex File = LinearRegex.Compile(@"^(?<file>(?:[A-Za-z]:[\\/]|/)\S.*?)\s*$");
+
+    private static readonly Regex Problem = LinearRegex.Compile(@"^\s+(?<line>\d+):(?<col>\d+)\s+(?<severity>error|warning)\s+(?<message>.+?)(?:\s{2,}(?<rule>[@\w/.-]+))?\s*$");
+
+    private static readonly Regex Compact = LinearRegex.Compile(@"^(?<file>.+?): line (?<line>\d+), col (?<col>\d+), (?<severity>Error|Warning) - (?<message>.+?)(?: \((?<rule>[@\w/.-]+)\))?$");
+
+    private static readonly Regex Counted = LinearRegex.Compile(@"^(?:✖ \d+ problems? \(\d+ errors?, \d+ warnings?\)|\s+\d+ errors? and \d+ warnings? potentially fixable with the `--fix` option\.|\d+ problems?)$");
+
+    public string Name => "eslint";
+
+    public IResultReading Begin() => new Reading();
+
+    private sealed class Reading : IResultReading
+    {
+        private string? _file;
+        private bool _said;
+
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
+        {
+            var text = line.Text;
+
+            if (_file is { } file && Problem.Match(text) is { Success: true } problem)
+            {
+                sink.Add(new Diagnostic(
+                    "eslint",
+                    problem.Groups["severity"].Value,
+                    ParsedText.Text(problem.Groups["rule"]),
+                    problem.Groups["message"].Value.Trim(),
+                    file,
+                    ParsedText.Whole(problem.Groups["line"]),
+                    ParsedText.Whole(problem.Groups["col"]),
+                    Log: (line.Number, line.Last)));
+                _said = true;
+                return LineTaken.Took;
+            }
+
+            _file = null;
+
+            if (Compact.Match(text) is { Success: true } compact)
+            {
+                sink.Add(new Diagnostic(
+                    "eslint",
+                    compact.Groups["severity"].Value.ToLowerInvariant(),
+                    ParsedText.Text(compact.Groups["rule"]),
+                    compact.Groups["message"].Value.Trim(),
+                    compact.Groups["file"].Value,
+                    ParsedText.Whole(compact.Groups["line"]),
+                    ParsedText.Whole(compact.Groups["col"]),
+                    Log: (line.Number, line.Last)));
+                _said = true;
+                return LineTaken.Took;
+            }
+
+            if (_said && Counted.IsMatch(text))
+            {
+                return LineTaken.Took;
+            }
+
+            if (File.Match(text) is { Success: true } named)
+            {
+                // A file alone on a line is stylish's heading only where a problem follows it: held until one does.
+                _file = named.Groups["file"].Value;
+                return LineTaken.Held;
+            }
+
+            _said &= text.Trim().Length == 0 || Counted.IsMatch(text);
+            return LineTaken.Left;
+        }
+
+        public LineTaken End(ResultSink sink)
+        {
+            _file = null;
+            _said = false;
+            return LineTaken.Left;
+        }
+    }
+}
+
+/// <summary>
+/// Dart's forms: the analyser's - <c>severity - path:line:col - message - code</c>, and its earlier
+/// <c>severity • message • path:line:col • code</c> - and the front end's that <c>dart compile</c> and <c>dart test</c>
+/// print, <c>path:line:col: Error: message</c>, with the lines under it (where the names it uses are from, the
+/// <c>Try ...</c> hint, the source and its carets) as its record and a <c>Context:</c> under it a line of it. The
+/// analyser's <c>info</c> and the front end's <c>Info</c> are notes. <c>Error: AOT compilation failed</c> and the
+/// analyser's counts are said only where nothing before them said why.
+/// </summary>
+internal sealed class DartParser : IBuiltInParser
+{
+    private static readonly Regex Analysed = LinearRegex.Compile(@"^\s*(?<severity>error|warning|info) - (?<file>.+?):(?<line>\d+):(?<col>\d+) - (?<message>.+) - (?<code>[a-z0-9_]+)$");
+
+    private static readonly Regex Bulleted = LinearRegex.Compile(@"^\s*(?<severity>error|warning|info|lint|hint) • (?<message>.+?) • (?<file>.+?):(?<line>\d+):(?<col>\d+) • (?<code>[a-z0-9_]+)$");
+
+    private static readonly Regex Compiled = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+): (?<severity>Error|Warning|Info|Context): (?<message>.+)$");
+
+    private static readonly Regex Under = LinearRegex.Compile(@"^(?:\s+\S.*|Try .+)$");
+
+    private static readonly Regex Unplaced = LinearRegex.Compile(@"^Error: (?<message>.+)$");
+
+    private static readonly Regex Failed = LinearRegex.Compile(@"^(?:Error: (?:AOT compilation failed|Compilation failed\.?)|Bad state: Generating AOT kernel dill failed!)$");
+
+    private static readonly Regex Counts = LinearRegex.Compile(@"^(?:Analyzing .+\.\.\.|\d+ issues? found\.|No issues found!)$");
 
     public string Name => "dart";
 
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var diagnostics = new List<Diagnostic>();
+    public IResultReading Begin() => new Reading();
 
-        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
+    private sealed class Reading : IResultReading
+    {
+        private Diagnostic? _open;
+        private int _to;
+        private bool _errorSaid;
+
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
-            if (Form.Match(line) is { Success: true } found)
+            var text = line.Text;
+
+            if (_open is not null)
             {
-                diagnostics.Add(new(
+                if (Compiled.Match(text) is { Success: true } context && context.Groups["severity"].Value == "Context")
+                {
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                if (Under.IsMatch(text))
+                {
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                Close(sink);
+            }
+
+            if (Analysed.Match(text) is { Success: true } analysed)
+            {
+                Say(sink, line, analysed, ParsedText.Text(analysed.Groups["code"]));
+                return LineTaken.Took;
+            }
+
+            if (Bulleted.Match(text) is { Success: true } bulleted)
+            {
+                Say(sink, line, bulleted, ParsedText.Text(bulleted.Groups["code"]));
+                return LineTaken.Took;
+            }
+
+            if (Compiled.Match(text) is { Success: true } compiled)
+            {
+                _open = new Diagnostic(
                     "dart",
-                    found.Groups["severity"].Value == "info" ? "note" : found.Groups["severity"].Value,
-                    found.Groups["code"].Value,
-                    found.Groups["message"].Value,
-                    found.Groups["file"].Value,
-                    int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture),
-                    int.Parse(found.Groups["col"].Value, CultureInfo.InvariantCulture),
-                    Log: (at + 1, at + 1)));
-            }
-        }
-
-        return (diagnostics, [], MsBuildParser.UnparsedOf(lines, Form));
-    }
-}
-
-/// <summary>Reads a .NET stack trace: <c>   at N.C.M() in path:line N</c>, with the exception line above and the inner-exception marker between.</summary>
-internal sealed class DotNetStackParser : IResultParser
-{
-    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w.]*Exception(?:\w*)?): (?<message>.*)$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+at (?<symbol>[\w.<>`+\[\],\s]+\([^)]*\))(?: in (?<file>.+?):line (?<line>\d+))?");
-    private static readonly Regex Inner = LinearRegex.Compile(@"^--- End of (?:inner exception )?stack trace(?: from previous location where the exception was thrown)? ---");
-
-    public string Name => "dotnet-stack";
-
-    /// <summary>
-    /// The .NET frames of a stack printed alone - a TRX record's <c>StackTrace</c>, held as data: every line the frame
-    /// form reads, in the order printed. The one owner of the form: the trace a console printed and the trace a file
-    /// hold are the same lines.
-    /// </summary>
-    /// <param name="lines">The stack's lines.</param>
-    internal static IReadOnlyList<StackFrame> FramesOf(IReadOnlyList<string> lines)
-    {
-        ArgumentNullException.ThrowIfNull(lines);
-
-        var frames = new List<StackFrame>();
-
-        foreach (var line in lines)
-        {
-            if (Frame.Match(line) is { Success: true } frame)
-            {
-                frames.Add(new(line, frame.Groups["file"].Success ? frame.Groups["file"].Value : null, frame.Groups["line"].Success ? int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture) : null, Symbol: frame.Groups["symbol"].Value.Trim()));
-            }
-        }
-
-        return frames;
-    }
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (Thrown.Match(lines[at]) is not { Success: true } thrown)
-            {
-                continue;
+                    SeverityOf(compiled.Groups["severity"].Value),
+                    null,
+                    compiled.Groups["message"].Value.Trim(),
+                    compiled.Groups["file"].Value,
+                    ParsedText.Whole(compiled.Groups["line"]),
+                    ParsedText.Whole(compiled.Groups["col"]),
+                    Log: (line.Number, line.Last));
+                _to = line.Last;
+                return LineTaken.Took;
             }
 
-            var record = ExceptionRecordOf(lines, ref at, thrown);
-            failures.Add(new("dotnet", $"{record.Type}: {record.Message}", Exception: record, Outcome: "errored"));
-        }
-
-        return ([], failures, []);
-    }
-
-    /// <summary>One thrown error and its causes, read from <paramref name="at"/> on; <paramref name="at"/> lands past the record.</summary>
-    internal static ExceptionRecord ExceptionRecordOf(IReadOnlyList<string> lines, ref int at, Match thrown)
-    {
-        var stack = new List<StackFrame>();
-        var causes = new List<ExceptionRecord>();
-        var depth = 0;
-        var last = at;
-
-        for (var inner = at + 1; inner < lines.Count; inner++)
-        {
-            if (Frame.Match(lines[inner]) is { Success: true } frame)
+            if (Failed.IsMatch(text))
             {
-                stack.Add(new(lines[inner], frame.Groups["file"].Success ? frame.Groups["file"].Value : null, frame.Groups["line"].Success ? int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture) : null, Symbol: frame.Groups["symbol"].Value.Trim()));
-                last = inner;
-                continue;
-            }
-
-            if (Inner.IsMatch(lines[inner]) && inner + 1 < lines.Count && Thrown.Match(lines[inner + 1]) is { Success: true } cause && depth < ExceptionRecord.CauseBound)
-            {
-                depth++;
-                last = inner;
-                var innerAt = inner + 1;
-                causes.Insert(0, ExceptionRecordOf(lines, ref innerAt, cause));
-                inner = innerAt;
-                last = Math.Max(last, innerAt);
-                continue;
-            }
-
-            break;
-        }
-
-        at = last;
-        return new ExceptionRecord(thrown.Groups["type"].Value, thrown.Groups["message"].Value, stack, causes);
-    }
-}
-
-/// <summary>Reads a JVM stack trace: <c>at p.C.m(File.java:12)</c>, with <c>Caused by:</c> chains.</summary>
-internal sealed class JvmStackParser : IResultParser
-{
-    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w.$]+(?:Exception|Error)): (?<message>.*)$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+at (?<symbol>[\w.$]+\.[\w$<>]+)\((?<file>[^)]*?)(?::(?<line>\d+))?\)");
-    private static readonly Regex Caused = LinearRegex.Compile(@"^Caused by: (?<type>[\w.$]+(?:Exception|Error)): (?<message>.*)$");
-
-    public string Name => "jvm-stack";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (Thrown.Match(lines[at]) is not { Success: true } thrown)
-            {
-                continue;
-            }
-
-            var stack = new List<StackFrame>();
-            var causes = new List<ExceptionRecord>();
-
-            for (var inner = at + 1; inner < lines.Count; inner++)
-            {
-                if (Frame.Match(lines[inner]) is { Success: true } frame)
+                if (_errorSaid)
                 {
-                    stack.Add(new(lines[inner], frame.Groups["file"].Value is { Length: > 0 } file ? file : null, frame.Groups["line"].Success ? int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture) : null, Symbol: frame.Groups["symbol"].Value));
-                    continue;
+                    return LineTaken.Took;
                 }
 
-                if (Caused.IsMatch(lines[inner]))
-                {
-                    break;
-                }
-
-                if (stack.Count > 0)
-                {
-                    break;
-                }
+                sink.Add(new Diagnostic("dart", "error", null, text.Trim(), Log: (line.Number, line.Last)));
+                _errorSaid = true;
+                return LineTaken.Took;
             }
 
-            failures.Add(new("jvm", $"{thrown.Groups["type"].Value}: {thrown.Groups["message"].Value}", Exception: new ExceptionRecord(thrown.Groups["type"].Value, thrown.Groups["message"].Value, stack, causes), Outcome: "errored"));
+            if (Counts.IsMatch(text))
+            {
+                return LineTaken.Took;
+            }
+
+            if (Unplaced.Match(text) is { Success: true } unplaced)
+            {
+                sink.Add(new Diagnostic("dart", "error", null, unplaced.Groups["message"].Value.Trim(), Log: (line.Number, line.Last)));
+                _errorSaid = true;
+                return LineTaken.Took;
+            }
+
+            return LineTaken.Left;
         }
 
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads a Python traceback: <c>Traceback (most recent call last):</c>, frames <c>File "path", line N, in f</c>, the error line last.</summary>
-internal sealed class PythonStackParser : IResultParser
-{
-    private static readonly Regex Head = LinearRegex.Compile(@"^Traceback \(most recent call last\):$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+File ""(?<file>[^""]+)"", line (?<line>\d+), in (?<symbol>\w+)");
-    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w.]+(?:Error|Exception|Interrupt|Exit)[\w.]*): (?<message>.*)$");
-
-    public string Name => "python-stack";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
+        public LineTaken End(ResultSink sink)
         {
-            if (!Head.IsMatch(lines[at]))
-            {
-                continue;
-            }
-
-            var stack = new List<StackFrame>();
-            int inner;
-
-            for (inner = at + 1; inner < lines.Count; inner++)
-            {
-                if (Frame.Match(lines[inner]) is { Success: true } frame)
-                {
-                    stack.Add(new(lines[inner], frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Value));
-                    continue;
-                }
-
-                // A frame's source line, printed under it: indented as the traceback indents it, and not the error.
-                if (lines[inner].Length > 0 && lines[inner][0] is ' ' or '\t')
-                {
-                    continue;
-                }
-
-                break;
-            }
-
-            var thrown = stack.Count > 0 && inner < lines.Count && Thrown.Match(lines[inner]) is { Success: true } error
-                ? new ExceptionRecord(error.Groups["type"].Value, error.Groups["message"].Value, [.. stack.Reverse<StackFrame>()], [])
-                : null;
-
-            if (thrown is { } record)
-            {
-                failures.Add(new("python", $"{record.Type}: {record.Message}", Exception: record, Outcome: "errored"));
-                at = inner;
-            }
+            Close(sink);
+            return LineTaken.Left;
         }
 
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads V8's stack trace (Node and the browsers): <c>at f (/path/file.js:12:34)</c>, with the error line above.</summary>
-internal sealed class V8StackParser : IResultParser
-{
-    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w]+(?:Error)?)?: (?<message>.*)$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+at (?<symbol>[\w.$<>]+)?\s*\(?(?<file>[^()\s]+?):(?<line>\d+):(?<col>\d+)\)?");
-
-    public string Name => "v8-stack";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
+        private void Say(ResultSink sink, NumberedLine line, Match found, string? code)
         {
-            if (at + 1 >= lines.Count || Frame.Match(lines[at + 1]) is not { Success: true })
-            {
-                continue;
-            }
+            var severity = SeverityOf(found.Groups["severity"].Value);
 
-            var thrown = Thrown.Match(lines[at]);
-
-            if (!thrown.Success)
-            {
-                continue;
-            }
-
-            var stack = new List<StackFrame>();
-
-            for (var inner = at + 1; inner < lines.Count && Frame.IsMatch(lines[inner]); inner++)
-            {
-                var frame = Frame.Match(lines[inner]);
-                stack.Add(new(lines[inner], frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), int.Parse(frame.Groups["col"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Success ? frame.Groups["symbol"].Value : null));
-            }
-
-            var type = thrown.Groups["type"].Success ? thrown.Groups["type"].Value : "Error";
-            var record = new ExceptionRecord(type, thrown.Groups["message"].Value, stack, []);
-
-            failures.Add(new("node", $"{type}: {thrown.Groups["message"].Value}", Exception: record, Outcome: "errored"));
-            at += stack.Count;
+            sink.Add(new Diagnostic(
+                "dart",
+                severity,
+                code,
+                found.Groups["message"].Value.Trim(),
+                found.Groups["file"].Value,
+                ParsedText.Whole(found.Groups["line"]),
+                ParsedText.Whole(found.Groups["col"]),
+                Log: (line.Number, line.Last)));
+            _errorSaid |= severity == "error";
         }
 
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads Dart's stack form: <c>#0 f (file:line:col)</c>, with the error line above.</summary>
-internal sealed class DartStackParser : IResultParser
-{
-    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?:Unhandled exception:\n)?(?<type>[\w.]+(?:Exception|Error))?:?\s*(?<message>.+)$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^#(?<n>\d+)\s+(?<symbol>[\w.<>]+)\s+\((?<file>.+?):(?<line>\d+):(?<col>\d+)\)");
-
-    public string Name => "dart-stack";
-
-    /// <summary>
-    /// The Dart frames of a stack printed alone - a JSON reporter event's <c>stackTrace</c>, held as data: every
-    /// <c>#n</c> line, in the order printed. The one owner of the form, as the console's and the file's are the same lines.
-    /// </summary>
-    /// <param name="lines">The stack's lines.</param>
-    internal static IReadOnlyList<StackFrame> FramesOf(IReadOnlyList<string> lines)
-    {
-        ArgumentNullException.ThrowIfNull(lines);
-
-        var frames = new List<StackFrame>();
-
-        foreach (var line in lines)
+        private void Close(ResultSink sink)
         {
-            if (Frame.Match(line) is { Success: true } frame)
+            if (_open is { } open)
             {
-                frames.Add(new(line, frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), int.Parse(frame.Groups["col"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Value));
+                sink.Add(open with { Log = (open.Log!.Value.From, _to) });
+                _errorSaid |= open.Severity == "error";
+                _open = null;
             }
         }
 
-        return frames;
-    }
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (at + 1 >= lines.Count || Frame.Match(lines[at + 1]) is not { Success: true })
+        private static string SeverityOf(string said)
+            => said.ToLowerInvariant() switch
             {
-                continue;
-            }
-
-            var thrown = Thrown.Match(lines[at]);
-
-            if (!thrown.Success)
-            {
-                continue;
-            }
-
-            var stack = new List<StackFrame>();
-
-            for (var inner = at + 1; inner < lines.Count && Frame.IsMatch(lines[inner]); inner++)
-            {
-                var frame = Frame.Match(lines[inner]);
-                stack.Add(new(lines[inner], frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), int.Parse(frame.Groups["col"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Value));
-            }
-
-            var type = thrown.Groups["type"].Success ? thrown.Groups["type"].Value : "Exception";
-            var record = new ExceptionRecord(type, thrown.Groups["message"].Value, stack, []);
-
-            failures.Add(new("dart", $"{type}: {thrown.Groups["message"].Value}", Exception: record, Outcome: "errored"));
-            at += stack.Count;
-        }
-
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads Go's panic: the <c>panic:</c> line with the goroutine's stack under it.</summary>
-internal sealed class GoPanicParser : IResultParser
-{
-    private static readonly Regex Thrown = LinearRegex.Compile(@"^panic:\s+(?<message>.*)$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^\s*(?<symbol>[\w./()+\[\]*]+\.(?:\(\*\w+\.)?\w+)\(.*?\)\s*$");
-    private static readonly Regex Place = LinearRegex.Compile(@"^\s*(?<file>[^:\s]+\.go):(?<line>\d+)\s");
-
-    public string Name => "go-panic";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (Thrown.Match(lines[at]) is not { Success: true } thrown)
-            {
-                continue;
-            }
-
-            var stack = new List<StackFrame>();
-            var symbol = (string?)null;
-
-            for (var inner = at + 1; inner < lines.Count; inner++)
-            {
-                if (Frame.Match(lines[inner]) is { Success: true } frame)
-                {
-                    symbol = frame.Groups["symbol"].Value;
-                    continue;
-                }
-
-                if (symbol is not null && Place.Match(lines[inner]) is { Success: true } place)
-                {
-                    stack.Add(new(lines[inner], place.Groups["file"].Value, int.Parse(place.Groups["line"].Value, CultureInfo.InvariantCulture), Symbol: symbol));
-                    symbol = null;
-                    continue;
-                }
-
-                if (stack.Count > 0)
-                {
-                    break;
-                }
-            }
-
-            var record = new ExceptionRecord("panic", thrown.Groups["message"].Value, stack, []);
-
-            failures.Add(new("go", $"panic: {thrown.Groups["message"].Value}", Exception: record, Outcome: "crashed"));
-        }
-
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads Rust's panic: <c>thread 'main' panicked at src/x.rs:12:5:</c> with its message and backtrace.</summary>
-internal sealed class RustPanicParser : IResultParser
-{
-    private static readonly Regex Thrown = LinearRegex.Compile(@"^thread '[^']+' panicked at (?<file>[^:]+):(?<line>\d+):(?<col>\d+):$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+\d+:\s+0x[0-9a-f]+\s+-\s+(?<symbol>[\w:<>*]+)");
-
-    public string Name => "rust-panic";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (Thrown.Match(lines[at]) is not { Success: true } thrown)
-            {
-                continue;
-            }
-
-            var message = at + 1 < lines.Count ? lines[at + 1].Trim() : thrown.Value;
-            var stack = new List<StackFrame>();
-
-            for (var inner = at + 2; inner < lines.Count && Frame.IsMatch(lines[inner]); inner++)
-            {
-                var frame = Frame.Match(lines[inner]);
-                stack.Add(new(lines[inner], Symbol: frame.Groups["symbol"].Value));
-            }
-
-            var record = new ExceptionRecord("panicked", message, stack, []);
-
-            failures.Add(new("rust", $"panicked at {thrown.Groups["file"].Value}:{thrown.Groups["line"].Value}: {message}", File: thrown.Groups["file"].Value, Line: int.Parse(thrown.Groups["line"].Value, CultureInfo.InvariantCulture), Exception: record, Outcome: "crashed"));
-        }
-
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads the sanitizers' report: <c>#0 0x55... in f /src/x.c:12</c>.</summary>
-internal sealed class SanitizerParser : IResultParser
-{
-    private static readonly Regex Head = LinearRegex.Compile(@"^==\d+==ERROR: (?<kind>[\w-]+): (?<message>.*)$");
-    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+#\d+\s+0x[0-9a-f]+\s+in (?<symbol>[\w:<>.~]+)?\s+(?<file>[^:\s]+):(?<line>\d+)");
-
-    public string Name => "sanitizer";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (Head.Match(lines[at]) is not { Success: true } head)
-            {
-                continue;
-            }
-
-            var stack = new List<StackFrame>();
-
-            for (var inner = at + 1; inner < lines.Count && Frame.IsMatch(lines[inner]); inner++)
-            {
-                var frame = Frame.Match(lines[inner]);
-                stack.Add(new(lines[inner], frame.Groups["file"].Value, int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture), Symbol: frame.Groups["symbol"].Success ? frame.Groups["symbol"].Value : null));
-            }
-
-            var record = new ExceptionRecord(head.Groups["kind"].Value, head.Groups["message"].Value, stack, []);
-
-            failures.Add(new("sanitizer", $"{head.Groups["kind"].Value}: {head.Groups["message"].Value}", Exception: record, Outcome: "crashed"));
-            at += stack.Count;
-        }
-
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads the xUnit console's failed-test form: <c>Failed DssHarness.Tests.X.Y [duration]</c> with its message and stack under it.</summary>
-internal sealed class XUnitConsoleParser : IResultParser
-{
-    private static readonly Regex Failed = LinearRegex.Compile(@"^\s+Failed\s+(?<id>[\w.+<>]+)\s+\[[\d.]+\s*(?<unit>ms|s)\]");
-    private static readonly Regex Message = LinearRegex.Compile(@"^\s+Error Message:\s*$");
-
-    public string Name => "xunit-console";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (Failed.Match(lines[at]) is not { Success: true } failed)
-            {
-                continue;
-            }
-
-            var message = (string?)null;
-
-            for (var inner = at + 1; inner < Math.Min(at + 6, lines.Count) && message is null; inner++)
-            {
-                if (Message.IsMatch(lines[inner]) && inner + 1 < lines.Count)
-                {
-                    message = lines[inner + 1].Trim();
-                }
-            }
-
-            var id = failed.Groups["id"].Value;
-            var parts = id.Split('.');
-            failures.Add(new(
-                "xunit",
-                id,
-                Name: parts.Length > 0 ? parts[^1] : id,
-                Class: parts.Length > 2 ? string.Join('.', parts.Take(parts.Length - 1)) : null,
-                Message: message,
-                Outcome: "failed",
-                Duration: failed.Groups["unit"].Value == "s" ? null : null));
-        }
-
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads gtest's failed-test form: <c>[  FAILED  ] Suite.Name (12 ms)</c> over its failure blocks.</summary>
-internal sealed class GTestConsoleParser : IResultParser
-{
-    private static readonly Regex Failed = LinearRegex.Compile(@"^\[\s+FAILED\s+\]\s+(?<suite>\w+)\.(?<name>\w+)");
-
-    public string Name => "gtest-console";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        foreach (var line in lines)
-        {
-            if (Failed.Match(line) is { Success: true } failed)
-            {
-                failures.Add(new("gtest", $"{failed.Groups["suite"].Value}.{failed.Groups["name"].Value}", failed.Groups["name"].Value, failed.Groups["suite"].Value));
-            }
-        }
-
-        return ([], failures, []);
-    }
-}
-
-/// <summary>Reads ctest's failed list: <c>The following tests FAILED:</c> with <c>N - Name (Failed)</c> under it.</summary>
-internal sealed class CTestConsoleParser : IResultParser
-{
-    private static readonly Regex Head = LinearRegex.Compile(@"^The following tests FAILED:");
-    private static readonly Regex One = LinearRegex.Compile(@"^\s*\d+\s+-\s+(?<name>.+?)\s+\((?<outcome>Failed|Timeout|Not Run)\)");
-
-    public string Name => "ctest-console";
-
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var failures = new List<TestFailure>();
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            if (!Head.IsMatch(lines[at]))
-            {
-                continue;
-            }
-
-            for (var inner = at + 1; inner < lines.Count && One.IsMatch(lines[inner]); inner++)
-            {
-                var one = One.Match(lines[inner]);
-                var outcome = one.Groups["outcome"].Value == "Timeout" ? "timedOut" : "failed";
-
-                failures.Add(new("ctest", one.Groups["name"].Value.Trim(), one.Groups["name"].Value.Trim(), Outcome: outcome));
-            }
-        }
-
-        return ([], failures, []);
+                "error" => "error",
+                "warning" => "warning",
+                _ => "note",
+            };
     }
 }

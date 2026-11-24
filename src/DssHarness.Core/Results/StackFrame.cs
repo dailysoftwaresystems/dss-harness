@@ -111,7 +111,7 @@ public sealed record ExceptionRecord(
             made = new ExceptionRecord(
                 exception.GetType().FullName ?? exception.GetType().Name,
                 exception.Message,
-                DotNetStackParser.FramesOf(ResultFiles.LinesOf(exception.StackTrace ?? string.Empty)),
+                StackForms.DotNetFramesOf(ResultFiles.LinesOf(exception.StackTrace ?? string.Empty)),
                 records);
 
             if (open.Count > 0)

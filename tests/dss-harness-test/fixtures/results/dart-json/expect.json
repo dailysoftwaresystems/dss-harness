@@ -1,0 +1,19 @@
+{
+  "read": {
+    "file": true
+  },
+  "root": "D:\\a\\app\\app",
+  "failed": 1,
+  "errored": 1,
+  "first": null,
+  "failures": [
+    "failed charge adds one",
+    "errored load finds its record"
+  ],
+  "stack": {
+    "frames": 2,
+    "inTree": [
+      "test\\store_test.dart:6"
+    ]
+  }
+}

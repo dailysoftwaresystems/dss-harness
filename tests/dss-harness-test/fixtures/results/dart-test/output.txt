@@ -1,0 +1,24 @@
+00:00 +0: loading test\store_test.dart
+00:00 +0: test\store_test.dart: charge adds one
+00:00 +0 -1: test\store_test.dart: charge adds one [E]
+  Expected: <4>
+    Actual: <3>
+  
+  package:matcher           expect
+  test\store_test.dart 6:5  main.<fn>
+  
+00:00 +0 -1: test\store_test.dart: load finds its record
+00:00 +0 -2: test\store_test.dart: load finds its record [E]
+  Bad state: no record named first
+  package:demo/store.dart 14:7  Store.load
+  test\store_test.dart 10:13    main.<fn>
+  
+00:00 +0 -2: test\store_test.dart: keeps its records
+00:00 +1 -2: Some tests failed.
+
+Failing tests:
+  test\store_test.dart: charge adds one
+  test\store_test.dart: load finds its record
+
+Consider enabling the flag chain-stack-traces to receive more detailed exceptions.
+For example, 'dart test --chain-stack-traces'.

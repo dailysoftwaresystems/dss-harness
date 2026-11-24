@@ -187,6 +187,24 @@ public static partial class HarnessConfigValidator
         }
     }
 
+    /// <summary>
+    /// Checks a runner's or an invocation's <c>matchers</c>: never given empty, and every name one <c>results.matchers</c>
+    /// declares, for a name no matcher answers to would read nothing and say nothing of it.
+    /// </summary>
+    /// <param name="config">The configuration.</param>
+    /// <param name="names">The names it gives, or null where it gives none.</param>
+    /// <param name="setting">Where they are, as a problem names it.</param>
+    /// <param name="problems">Where problems are added.</param>
+    private static void ValidateMatcherNames(HarnessConfig config, List<string>? names, string setting, List<string> problems)
+    {
+        RefuseGivenEmpty(names, setting, "name the matchers that read its output", "the matchers no runner or invocation names", problems);
+
+        foreach (var name in (names ?? []).Where(name => !config.Results.Matchers.Any(matcher => string.Equals(matcher.Name, name, StringComparison.Ordinal))))
+        {
+            problems.Add($"{setting} names matcher '{name}', which results.matchers does not declare");
+        }
+    }
+
     /// <summary>Checks one admission section: every field it declares is one a machine can admit legs by.</summary>
     /// <param name="admission">The section, or <see langword="null"/> where it is left out.</param>
     /// <param name="owner">Where it is, as a problem names it.</param>
@@ -1648,6 +1666,7 @@ public static partial class HarnessConfigValidator
         {
             RefuseGivenEmpty(runner.Legs, $"predefined runner '{name}' legs", "name the legs it runs", "every declared leg", problems);
             ValidateSetUpUses(config, runner.SetUp, $"predefined runner '{name}' setUp", problems);
+            ValidateMatcherNames(config, runner.Matchers, $"predefined runner '{name}' matchers", problems);
 
             foreach (var leg in (runner.Legs ?? []).Where(leg => !config.Legs.ContainsKey(leg)))
             {
@@ -2172,6 +2191,8 @@ public static partial class HarnessConfigValidator
             {
                 problems.Add($"{setting}.workingDirectory names '{{{LegPathNames.ResultsDirectory}}}', which is where the runner writes its results, never where it starts; name another directory");
             }
+
+            ValidateMatcherNames(config, invocation.Matchers, $"{setting}.matchers", problems);
         }
 
         // What runs on a platform is its own section merged over 'all', field by field. Every

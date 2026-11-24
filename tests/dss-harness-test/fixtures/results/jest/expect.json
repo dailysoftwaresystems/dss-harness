@@ -1,0 +1,18 @@
+{
+  "read": {
+    "tests": "npx"
+  },
+  "root": "/home/runner/work/app/app",
+  "failed": 2,
+  "first": null,
+  "failures": [
+    "failed Store › loads its record",
+    "failed Store › opens its file"
+  ],
+  "stack": {
+    "frames": 1,
+    "inTree": [
+      "src/store.test.js:7"
+    ]
+  }
+}

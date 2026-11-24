@@ -457,7 +457,7 @@ public sealed class RunnerRunService(
         {
             ContentionWarnings.Write(_output, CommandName, request.Leg, contention, config.Contention);
         }
-        var decided = await DecideAsync(request, state, values, cancellationToken).ConfigureAwait(false);
+        var decided = await DecideAsync(request, state, values, PhaseParsers.ForRun(config, request.Runner), cancellationToken).ConfigureAwait(false);
 
         // What the guards saw is folded in the same way every other verb folds it, so a step whose
         // tree moved reports the verdict a test leg would and not a sentence of its own.
@@ -585,13 +585,15 @@ public sealed class RunnerRunService(
 
     /// <summary>
     /// The thrown error the failing step's log printed, where it printed a stack: its type, message, stack and causes, held
-    /// to the bounds every record is, read by the stack parsers of every runtime through the one owner of a phase's
-    /// digest. Null where the log printed no stack, or could not be read back.
+    /// to the bounds every record is, read by the parsers chosen for the runner's steps - every runtime's stack form and
+    /// the matchers the runner reads - through the one owner of a phase's digest. Null where the log printed no stack, or
+    /// could not be read back.
     /// </summary>
     /// <param name="output">The failing step's output.</param>
+    /// <param name="parsers">The parsers chosen for the runner's steps (<see cref="PhaseParsers.ForRun"/>).</param>
     /// <param name="tree">The tree the step ran in.</param>
-    private static Results.ExceptionRecord? ExceptionIn(PhaseOutput output, DigestTree tree)
-        => PhaseDigest.Of(output, PhaseParsers.ForStacks([]), tree)
+    private static Results.ExceptionRecord? ExceptionIn(PhaseOutput output, IReadOnlyList<IResultParser> parsers, DigestTree tree)
+        => PhaseDigest.Of(output, parsers, tree)
             ?.Failures.FirstOrDefault(failure => failure.Exception is not null)
             ?.Exception;
 
@@ -1179,6 +1181,7 @@ public sealed class RunnerRunService(
         RunnerRunRequest request,
         RunState state,
         ActionValues values,
+        IReadOnlyList<IResultParser> parsers,
         CancellationToken cancellationToken)
     {
         if (state.Failure is not { } failed)
@@ -1206,7 +1209,7 @@ public sealed class RunnerRunService(
 
         // The thrown error as the log printed it, where it printed a stack: its type, message, whole stack and causes,
         // the record an entry is matched against - and the type name a first *Exception line gave, where it did not.
-        var thrown = ExceptionIn(failed.Output, new DigestTree(request.TreeRoot, null, _fileSystem));
+        var thrown = ExceptionIn(failed.Output, parsers, new DigestTree(request.TreeRoot, null, _fileSystem));
         var entry = _expectedExceptionMatcher.Find(
             scope,
             request.Leg,

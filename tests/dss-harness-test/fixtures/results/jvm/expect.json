@@ -1,0 +1,18 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "/home/runner/work/app/app",
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "crashed java.lang.IllegalStateException: The runner was not started"
+  ],
+  "stack": {
+    "frames": 3,
+    "inTree": []
+  },
+  "causes": [
+    "java.lang.NullPointerException"
+  ]
+}

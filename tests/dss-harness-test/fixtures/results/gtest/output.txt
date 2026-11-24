@@ -1,0 +1,34 @@
+Running main() from ./googletest/src/gtest_main.cc
+[==========] Running 4 tests from 2 test suites.
+[----------] Global test environment set-up.
+[----------] 2 tests from StoreTest
+[ RUN      ] StoreTest.LoadsItsRecords
+/home/runner/work/app/app/tests/store_test.cc:14: Failure
+Expected equality of these values:
+  store.size()
+    Which is: 3
+  2
+[  FAILED  ] StoreTest.LoadsItsRecords (0 ms)
+[ RUN      ] StoreTest.KeepsItsBounds
+[       OK ] StoreTest.KeepsItsBounds (0 ms)
+[----------] 2 tests from StoreTest (0 ms total)
+
+[----------] 2 tests from Sizes/ParserTest
+[ RUN      ] Sizes/ParserTest.ReadsItsForm/0
+[       OK ] Sizes/ParserTest.ReadsItsForm/0 (0 ms)
+[ RUN      ] Sizes/ParserTest.ReadsItsForm/1
+/home/runner/work/app/app/tests/parser_test.cc:22: Failure
+Value of: parser.Read(GetParam())
+  Actual: false
+Expected: true
+[  FAILED  ] Sizes/ParserTest.ReadsItsForm/1, where GetParam() = 3 (1 ms)
+[----------] 2 tests from Sizes/ParserTest (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 4 tests from 2 test suites ran. (1 ms total)
+[  PASSED  ] 2 tests.
+[  FAILED  ] 2 tests, listed below:
+[  FAILED  ] StoreTest.LoadsItsRecords
+[  FAILED  ] Sizes/ParserTest.ReadsItsForm/1, where GetParam() = 3
+
+ 2 FAILED TESTS

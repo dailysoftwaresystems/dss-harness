@@ -285,12 +285,16 @@ public static class PlatformPaths
             : null;
 
     /// <summary>
-    /// The path <paramref name="text"/> names: itself where it is no URI, the path a <c>file:</c> URI names, or
-    /// <see langword="null"/> for a URI of another scheme - a scheme being two or more of a URI scheme's characters before
-    /// a colon that begins the text, so a drive's letter is never read as one.
+    /// The path <paramref name="text"/> names: itself where it is no URI, the path a <c>file:</c> URI names, its escapes
+    /// decoded and a drive's form the same read on every machine, or <see langword="null"/> for a URI of another scheme -
+    /// a scheme being two or more of a URI scheme's characters before a colon that begins the text, so a drive's letter is
+    /// never read as one. The one reading of a file URI: a results file's, a stack frame's.
     /// </summary>
-    private static string? AsAPath(string text)
+    /// <param name="text">The path or URI, as whatever wrote it wrote it.</param>
+    public static string? AsAPath(string text)
     {
+        ArgumentNullException.ThrowIfNull(text);
+
         var colon = text.IndexOf(':', StringComparison.Ordinal);
 
         if (colon < 2 || !char.IsAsciiLetter(text[0]) || text.AsSpan(0, colon).ContainsAnyExcept(SchemeCharacters))

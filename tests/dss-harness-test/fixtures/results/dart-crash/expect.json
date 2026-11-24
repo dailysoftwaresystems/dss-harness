@@ -1,0 +1,17 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "D:\\a\\app\\app",
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "crashed Bad state: no record named first"
+  ],
+  "stack": {
+    "frames": 4,
+    "inTree": [
+      "D:/a/app/app/dart/bin/crash.dart:7"
+    ]
+  }
+}

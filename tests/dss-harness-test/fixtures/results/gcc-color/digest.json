@@ -1,0 +1,1 @@
+{"errors":0,"warnings":1,"notes":0,"failed":0,"errored":0,"timedOut":0,"crashed":0,"diagnostics":[{"tool":"gcc","severity":"warning","code":"-Wunused-variable","message":"unused variable \u2018unused_count\u2019","file":"unused.c","line":3,"column":9,"endLine":null,"endColumn":null,"symbol":null,"project":null,"count":1,"stack":null,"log":[1,4]}],"failures":[],"unparsed":[]}

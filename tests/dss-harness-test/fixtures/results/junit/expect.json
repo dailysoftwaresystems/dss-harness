@@ -1,0 +1,13 @@
+{
+  "read": {
+    "file": true
+  },
+  "root": "/home/runner/work/app/app",
+  "failed": 3,
+  "first": null,
+  "failures": [
+    "failed folds_duplicates.folds_duplicates",
+    "failed parses_input.parses_input",
+    "failed waits_for_lock.waits_for_lock"
+  ]
+}

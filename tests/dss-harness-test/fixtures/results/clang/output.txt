@@ -1,18 +1,34 @@
-In file included from C:/src/app.cc:2:
-In file included from C:/src/include/app.h:9:
-In file included from C:/src/include/template.h:3:
-C:/src/template.h:42:37: note: in instantiation of 'T max(const T&, const T&) [with T = int]' requested from here
-C:/src/template.h:30:22: note: in expansion of macro 'MAX'
-C:/src/template.h:30:22: error: no matching function for call to 'max(int, int)'
-   30 |   return MAX(a, b);
-      |          ^~~
-C:/src/template.h:22:5: note: candidate template ignored: deduced conflicting types for parameter 'T' ('int' vs 'double')
-   22 | T max(const T& left, const T& right);
+In file included from main.c:2:
+In file included from ./include/util.h:3:
+./include/types.h:5:5: error: unknown type name 'uint32_t'
+    5 |     uint32_t count;
       |     ^
+main.c:6:17: error: call to undeclared function 'undeclared_helper'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+    6 |     int total = undeclared_helper(3);
+      |                 ^
+2 errors generated.
+templ.cpp:6:18: error: invalid operands to binary expression ('const std::basic_string<char>' and 'int')
+    6 |     return value * 2;
+      |            ~~~~~ ^ ~
+templ.cpp:12:12: note: in instantiation of function template specialization 'twice<std::basic_string<char>>' requested here
+   12 |     return twice(value);
+      |            ^
+templ.cpp:18:12: note: in instantiation of function template specialization 'apply<std::basic_string<char>>' requested here
+   18 |     return apply(text).size();
+      |            ^
 1 error generated.
-[2/6] Building CXX object CMakeFiles/app.dir/src/main.cc.o
-[3/6] Building CXX object CMakeFiles/app.dir/src/store.cc.o
-[4/6] Building CXX object CMakeFiles/app.dir/src/runner.cc.o
-[5/6] Building CXX object CMakeFiles/app.dir/src/known.cc.o
-[6/6] Building CXX object CMakeFiles/app.dir/src/charges.cc.o
-ninja: build stopped: subcommand failed.
+macro.cpp:6:12: error: use of undeclared identifier 'check_value'
+    6 |     return CHECK(count);
+      |            ^
+macro.cpp:1:22: note: expanded from macro 'CHECK'
+    1 | #define CHECK(value) check_value(value)
+      |                      ^
+1 error generated.
+unused.c:3:9: error: unused variable 'unused_count' [-Werror,-Wunused-variable]
+    3 |     int unused_count = 3;
+      |         ^~~~~~~~~~~~
+1 error generated.
+missing.c:2:10: fatal error: 'nowhere/config.h' file not found
+    2 | #include "nowhere/config.h"
+      |          ^~~~~~~~~~~~~~~~~~
+1 error generated.

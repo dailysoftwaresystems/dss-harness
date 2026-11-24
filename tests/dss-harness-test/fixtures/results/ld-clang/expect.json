@@ -1,0 +1,19 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "Clang"
+  },
+  "root": "/home/runner/work/app/app",
+  "errors": 2,
+  "first": {
+    "tool": "ld",
+    "code": null,
+    "file": "link.c",
+    "line": null,
+    "column": null
+  },
+  "diagnostics": [
+    "error - link.c:-",
+    "error - link.c:-"
+  ]
+}

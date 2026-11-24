@@ -1,0 +1,19 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "/home/runner/work/app/app",
+  "crashed": 2,
+  "first": null,
+  "failures": [
+    "crashed SIGSEGV: Segmentation fault",
+    "crashed SIGABRT: Aborted"
+  ],
+  "stack": {
+    "frames": 2,
+    "inTree": [
+      "crash.c:5",
+      "crash.c:12"
+    ]
+  }
+}

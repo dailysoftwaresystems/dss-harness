@@ -1,0 +1,19 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "MSVC"
+  },
+  "root": "D:\\a\\app\\app",
+  "errors": 2,
+  "first": {
+    "tool": "msvc",
+    "code": "C1083",
+    "file": "D:\\a\\app\\app\\msvc\\compile\\src\\store.cpp",
+    "line": 1,
+    "column": null
+  },
+  "diagnostics": [
+    "error C1083 D:\\a\\app\\app\\msvc\\compile\\src\\store.cpp:1",
+    "error C2065 D:\\a\\app\\app\\msvc\\compile\\src\\main.cpp:7"
+  ]
+}

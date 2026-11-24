@@ -1,0 +1,50 @@
+Traceback (most recent call last):
+  File "/home/runner/work/app/app/py_chain.py", line 10, in run_all
+    load("")
+  File "/home/runner/work/app/app/py_chain.py", line 5, in load
+    return json.loads(text)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/runner/work/app/app/py_chain.py", line 15, in <module>
+    run_all()
+  File "/home/runner/work/app/app/py_chain.py", line 12, in run_all
+    open("/no/such/dir/state.json")
+FileNotFoundError: [Errno 2] No such file or directory: '/no/such/dir/state.json'
+Traceback (most recent call last):
+  File "/home/runner/work/app/app/py_cause.py", line 7, in read_config
+    return values["port"]
+           ~~~~~~^^^^^^^^
+KeyError: 'port'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/runner/work/app/app/py_cause.py", line 12, in <module>
+    read_config({})
+  File "/home/runner/work/app/app/py_cause.py", line 9, in read_config
+    raise ConfigError("the configuration names no port") from missing
+ConfigError: the configuration names no port
+Traceback (most recent call last):
+  File "/home/runner/work/app/app/py_assert.py", line 5, in <module>
+    check(3)
+  File "/home/runner/work/app/app/py_assert.py", line 2, in check
+    assert count == 2
+           ^^^^^^^^^^
+AssertionError
+Traceback (most recent call last):
+  File "/home/runner/work/app/app/py_module.py", line 2, in <module>
+    total = values[5]
+            ~~~~~~^^^
+IndexError: list index out of range

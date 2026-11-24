@@ -1,18 +1,32 @@
-In file included from C:/src/main.c:2:
-In file included from C:/src/include/util.h:9,
-                 from C:/src/include/stdint_compat.h:4:
-C:/src/include/util.h:14:3: error: unknown type name 'uint32_t'; did you mean 'uint64_t'? [-Werror=implicit]
-   14 |   uint32_t count;
-      |   ^~~~~~~~
-      |   uint64_t
-C:/src/include/util.h:15:1: note: 'uint64_t' is defined in header '<cstdint>'; did you forget to '#include <cstdint>'?
-   12 | #include <stddef.h>
-  +++ |+#include <cstdint>
-compilation terminated due to -Wfatal-errors.
-[2/7] Building C object CMakeFiles/app.dir/src/store.c.o
-[3/7] Building C object CMakeFiles/app.dir/src/runner.c.o
-[4/7] Building C object CMakeFiles/app.dir/src/known.c.o
-[5/7] Building C object CMakeFiles/app.dir/src/charges.c.o
-[6/7] Building C object CMakeFiles/app.dir/src/records.c.o
-[7/7] Building C object CMakeFiles/app.dir/src/lists.c.o
-ninja: build stopped: subcommand failed.
+In file included from include/util.h:3,
+                 from main.c:2:
+include/types.h:5:5: error: unknown type name ‘uint32_t’
+    5 |     uint32_t count;
+      |     ^~~~~~~~
+main.c: In function ‘main’:
+main.c:6:17: error: implicit declaration of function ‘undeclared_helper’ [-Werror=implicit-function-declaration]
+    6 |     int total = undeclared_helper(3);
+      |                 ^~~~~~~~~~~~~~~~~
+cc1: some warnings being treated as errors
+templ.cpp: In instantiation of ‘T twice(const T&) [with T = std::__cxx11::basic_string<char>]’:
+templ.cpp:12:17:   required from ‘T apply(const T&) [with T = std::__cxx11::basic_string<char>]’
+templ.cpp:18:17:   required from here
+templ.cpp:6:18: error: no match for ‘operator*’ (operand types are ‘const std::__cxx11::basic_string<char>’ and ‘int’)
+    6 |     return value * 2;
+      |            ~~~~~~^~~
+macro.cpp: In function ‘int main()’:
+macro.cpp:1:22: error: ‘check_value’ was not declared in this scope
+    1 | #define CHECK(value) check_value(value)
+      |                      ^~~~~~~~~~~
+macro.cpp:6:12: note: in expansion of macro ‘CHECK’
+    6 |     return CHECK(count);
+      |            ^~~~~
+unused.c: In function ‘main’:
+unused.c:3:9: error: unused variable ‘unused_count’ [-Werror=unused-variable]
+    3 |     int unused_count = 3;
+      |         ^~~~~~~~~~~~
+cc1: all warnings being treated as errors
+missing.c:2:10: fatal error: nowhere/config.h: No such file or directory
+    2 | #include "nowhere/config.h"
+      |          ^~~~~~~~~~~~~~~~~~
+compilation terminated.

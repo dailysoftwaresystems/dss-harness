@@ -1,0 +1,19 @@
+{
+  "read": {
+    "tests": "cargo"
+  },
+  "root": "/home/runner/work/app/app",
+  "failed": 2,
+  "first": null,
+  "failures": [
+    "failed store::tests::reads_records",
+    "failed parser::tests::reads_form"
+  ],
+  "stack": {
+    "frames": 6,
+    "inTree": [
+      "./src/store.rs:42",
+      "./src/store.rs:40"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "/home/runner/work/app/app",
+  "errored": 5,
+  "first": null,
+  "failures": [
+    "errored AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+    "errored TypeError [ERR_INVALID_ARG_VALUE]: The argument 'nope' is invalid encoding. Received 'encoding'",
+    "errored TypeError: a store needs a path",
+    "errored RangeError: no record named missing",
+    "errored Error: the queue was drained"
+  ],
+  "stack": {
+    "frames": 8,
+    "inTree": [
+      "/home/runner/work/app/app/node_assert.js:4",
+      "/home/runner/work/app/app/node_assert.js:7"
+    ]
+  }
+}

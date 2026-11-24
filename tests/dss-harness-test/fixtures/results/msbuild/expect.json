@@ -1,0 +1,19 @@
+{
+  "read": {
+    "build": "dotnet"
+  },
+  "root": "D:\\a\\app\\app",
+  "errors": 1,
+  "warnings": 1,
+  "first": {
+    "tool": "msbuild",
+    "code": "CS0103",
+    "file": "D:\\a\\app\\app\\net\\App\\Program.cs",
+    "line": 8,
+    "column": 16
+  },
+  "diagnostics": [
+    "error CS0103 D:\\a\\app\\app\\net\\App\\Program.cs:8 x2",
+    "warning CS0219 D:\\a\\app\\app\\net\\App\\Program.cs:7 x2"
+  ]
+}

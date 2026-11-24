@@ -1,0 +1,18 @@
+{
+  "read": {
+    "build": "cmake"
+  },
+  "root": "/home/runner/work/app/app",
+  "errors": 2,
+  "first": {
+    "tool": "cmake",
+    "code": null,
+    "file": "CMakeLists.txt",
+    "line": 3,
+    "column": null
+  },
+  "diagnostics": [
+    "error - CMakeLists.txt:3",
+    "error - CMakeLists.txt:4"
+  ]
+}

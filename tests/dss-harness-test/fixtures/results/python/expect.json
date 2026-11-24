@@ -1,0 +1,24 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "/home/runner/work/app/app",
+  "errored": 4,
+  "first": null,
+  "failures": [
+    "errored FileNotFoundError: [Errno 2] No such file or directory: '/no/such/dir/state.json'",
+    "errored ConfigError: the configuration names no port",
+    "errored AssertionError",
+    "errored IndexError: list index out of range"
+  ],
+  "stack": {
+    "frames": 2,
+    "inTree": [
+      "/home/runner/work/app/app/py_chain.py:12",
+      "/home/runner/work/app/app/py_chain.py:15"
+    ]
+  },
+  "causes": [
+    "json.decoder.JSONDecodeError"
+  ]
+}

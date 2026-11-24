@@ -1,0 +1,10 @@
+Unhandled exception. System.InvalidOperationException: The store could not be loaded.
+ ---> System.ArgumentException: An item with the same key has already been added. Key: first
+   at System.Collections.Generic.Dictionary`2.TryInsert(TKey key, TValue value, InsertionBehavior behavior)
+   at System.Collections.Generic.Dictionary`2.Add(TKey key, TValue value)
+   at Crash.Store.Load(String name) in D:\a\app\app\net\Crash\Program.cs:line 13
+   at Crash.Engine.SelectAsync(Store store) in D:\a\app\app\net\Crash\Program.cs:line 25
+   --- End of inner exception stack trace ---
+   at Crash.Engine.SelectAsync(Store store) in D:\a\app\app\net\Crash\Program.cs:line 29
+   at Crash.Program.Main() in D:\a\app\app\net\Crash\Program.cs:line 38
+   at Crash.Program.<Main>()

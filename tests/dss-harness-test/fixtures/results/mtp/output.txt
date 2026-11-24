@@ -1,0 +1,36 @@
+skipped Demo.Tests.ParserTests.SkipsItsFixture (0ms)
+  The fixture is not ready.
+failed Demo.Tests.ParserTests.NamesItsCount(count: 2, name: "two") (2ms)
+  Assert.Equal() Failure: Strings differ
+             ↓ (pos 0)
+  Expected: "one"
+  Actual:   "two"
+             ↑ (pos 0)
+    at Demo.Tests.ParserTests.NamesItsCount(Int32 count, String name) in D:\a\app\app\net\TestsV3\ParserTests.cs:40
+    at InvokeStub_ParserTests.NamesItsCount(Object, Span`1)
+    at System.Reflection.MethodBaseInvoker.InvokeWithFewArgs(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+failed Demo.Tests.ParserTests.FoldsDuplicates (7ms)
+  Assert.Equal() Failure: Collections differ
+  Expected: [1, 2]
+  Actual:   [1, 2, 3]
+                   ↑ (pos 2)
+    at Demo.Tests.ParserTests.FoldsDuplicates() in D:\a\app\app\net\TestsV3\ParserTests.cs:26
+    at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+    at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+failed Demo.Tests.ParserTests.LoadsItsStore (1ms)
+  Xunit.MicrosoftTestingPlatform.XunitException: System.InvalidOperationException : The store could not be loaded.
+  ---- System.ArgumentException : An item with the same key has already been added. Key: first
+    at Demo.Tests.ParserTests.LoadsItsStore() in D:\a\app\app\net\TestsV3\ParserTests.cs:54
+    --- End of stack trace from previous location ---
+    ----- Inner Stack Trace -----
+    at System.Collections.Generic.Dictionary`2.TryInsert(TKey key, TValue value, InsertionBehavior behavior)
+    at System.Collections.Generic.Dictionary`2.Add(TKey key, TValue value)
+    at Demo.Tests.Store.Load(String name) in D:\a\app\app\net\TestsV3\ParserTests.cs:15
+    at Demo.Tests.ParserTests.LoadsItsStore() in D:\a\app\app\net\TestsV3\ParserTests.cs:50
+
+Test run summary: Failed! - D:\a\app\app\net\TestsV3\bin\Debug\net10.0\TestsV3.dll (net10.0|x64)
+  total: 6
+  failed: 3
+  succeeded: 2
+  skipped: 1
+  duration: 208ms

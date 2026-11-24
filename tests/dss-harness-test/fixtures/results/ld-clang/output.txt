@@ -1,0 +1,4 @@
+/usr/bin/ld: /tmp/link-b2ec0d.o: in function `main':
+link.c:(.text+0x17): undefined reference to `parse_record'
+/usr/bin/ld: link.c:(.text+0x1f): undefined reference to `load_store'
+clang: error: linker command failed with exit code 1 (use -v to see invocation)

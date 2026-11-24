@@ -1,0 +1,21 @@
+{
+  "read": {
+    "build": "dart"
+  },
+  "root": "D:\\a\\app\\app",
+  "errors": 2,
+  "warnings": 2,
+  "first": {
+    "tool": "dart",
+    "code": "undefined_method",
+    "file": "bin\\broken.dart",
+    "line": 5,
+    "column": 15
+  },
+  "diagnostics": [
+    "error undefined_method bin\\broken.dart:5",
+    "error undefined_identifier bin\\broken.dart:6",
+    "warning unused_import lib\\store.dart:1",
+    "warning unused_local_variable lib\\store.dart:7"
+  ]
+}

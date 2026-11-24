@@ -1,0 +1,4 @@
+[01m[Kunused.c:[m[K In function ‘[01m[Kmain[m[K’:
+[01m[Kunused.c:3:9:[m[K [01;35m[Kwarning: [m[Kunused variable ‘[01m[Kunused_count[m[K’ [[01;35m[K-Wunused-variable[m[K]
+    3 |     int [01;35m[Kunused_count[m[K = 3;
+      |         [01;35m[K^~~~~~~~~~~~[m[K

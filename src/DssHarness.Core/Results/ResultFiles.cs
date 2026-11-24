@@ -192,7 +192,7 @@ public static class ResultFiles
             Name: split > 0 ? id[(split + 1)..] : null,
             Class: split > 0 ? id[..split] : null,
             Message: said is { Length: > 0 } message ? message : null,
-            Stack: stack is null ? [] : DotNetStackParser.FramesOf(LinesOf(stack)),
+            Stack: stack is null ? [] : StackForms.DotNetFramesOf(LinesOf(stack)),
             Duration: TimeSpan.TryParse((string?)result.Attribute("duration"), CultureInfo.InvariantCulture, out var took) && took >= TimeSpan.Zero ? took.TotalSeconds : null,
             Outcome: outcome);
     }
@@ -416,7 +416,7 @@ public static class ResultFiles
         /// </summary>
         private static TestFailure Failure((string Name, string? Url, int? Line) test, string result, (string Error, string? Stack, bool Failure) own)
         {
-            IReadOnlyList<StackFrame> frames = own.Stack is { } thrown ? DartStackParser.FramesOf(LinesOf(thrown)) : [];
+            IReadOnlyList<StackFrame> frames = own.Stack is { } thrown ? StackForms.DartFramesOf(LinesOf(thrown)) : [];
             var said = own.Error is { Length: > 0 } error ? error : null;
 
             return new TestFailure(

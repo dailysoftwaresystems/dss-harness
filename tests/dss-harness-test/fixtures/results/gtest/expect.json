@@ -1,0 +1,12 @@
+{
+  "read": {
+    "tests": "build/store_tests"
+  },
+  "root": "/home/runner/work/app/app",
+  "failed": 2,
+  "first": null,
+  "failures": [
+    "failed StoreTest.LoadsItsRecords",
+    "failed Sizes/ParserTest.ReadsItsForm/1"
+  ]
+}

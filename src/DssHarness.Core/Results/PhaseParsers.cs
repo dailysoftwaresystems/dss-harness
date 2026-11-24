@@ -6,80 +6,150 @@ using DssHarness.Core.Text;
 namespace DssHarness.Core.Results;
 
 /// <summary>
-/// Which parsers a phase's log is read by: one owner of the choice. A build's by the toolchain the leg resolved -
-/// MSVC, gcc or clang each with the CMake and Ninja that drive them and the linker, MSBuild for a build nothing more
-/// specific names - a test's by its runner, and a configured matcher everywhere, for <c>results.matchers</c> is the
-/// way a tool this build does not know is read. A parser never runs over output it was not chosen for.
+/// Which parsers a phase's log is read by, and the one pass that reads it: one owner of each. A build's parsers are
+/// chosen by what the leg builds - its project type, and for a CMake build the compiler its toolchain declares
+/// (<see cref="ToolchainConfig.CompilerId"/>) - a test's by its runner, a runner step's and a CI job's by every form
+/// their output may hold. A configured matcher reads the phases of the runners and invocations that name it, and one
+/// no runner or invocation names reads every phase: a parser never reads output it was not chosen for.
 /// </summary>
 public static class PhaseParsers
 {
-    /// <summary>The parsers a build phase's log is read by, for the toolchain the leg resolved.</summary>
-    /// <param name="toolchain">The toolchain the leg's variant resolved, or null where none did.</param>
-    /// <param name="matchers">The configured matchers, which apply to every phase.</param>
-    public static IReadOnlyList<IResultParser> ForBuild(string? toolchain, IReadOnlyList<ProblemMatcher> matchers)
-        => toolchain switch
-        {
-            "msvc" => With([ResultParsers.Of("msvc")!, ResultParsers.Of("link")!, ResultParsers.Of("cmake")!, ResultParsers.Of("ninja")!], matchers),
-            "gcc" => With([ResultParsers.Of("gcc")!, ResultParsers.Of("link")!, ResultParsers.Of("cmake")!, ResultParsers.Of("ninja")!], matchers),
-            "clang" => With([ResultParsers.Of("clang")!, ResultParsers.Of("link")!, ResultParsers.Of("cmake")!, ResultParsers.Of("ninja")!], matchers),
-            _ => With([ResultParsers.Of("msbuild")!, ResultParsers.Of("cmake")!, ResultParsers.Of("ninja")!], matchers),
-        };
+    /// <summary>The stack forms of every runtime, for output whose program is not known from the outside.</summary>
+    private static readonly string[] StackPlan = ["dotnet-stack", "jvm-stack", "python-stack", "v8-stack", "dart-stack", "go-panic", "rust-panic", "sanitizer", "backtrace"];
 
     /// <summary>
-    /// The parsers a test phase's log is read by, for the runner the invocation started: its console form where this
-    /// build knows it, and the stack form of the runtime its tests run on.
+    /// Every form a CI job's log may hold - the test consoles, the build tools and the stack forms: a job holds whatever
+    /// steps its workflow wrote.
     /// </summary>
-    /// <param name="runner">The runner the invocation started, as a path or a name.</param>
-    /// <param name="matchers">The configured matchers, which apply to every phase.</param>
-    public static IReadOnlyList<IResultParser> ForTests(string runner, IReadOnlyList<ProblemMatcher> matchers)
-    {
-        var name = Path.GetFileNameWithoutExtension(runner) is { Length: > 0 } file ? file.ToLowerInvariant() : runner.ToLowerInvariant();
+    private static readonly string[] CiPlan =
+    [
+        "dotnet-test", "gtest", "ctest", "dart-test", "jest", "vitest",
+        "msbuild", "cc", "ld", "cmake", "ninja", "tsc", "eslint", "dart",
+        .. StackPlan,
+    ];
 
-        var chosen = name switch
+    /// <summary>
+    /// The parsers a build phase's log is read by: MSBuild's for a .NET build, the Dart tools' for a Dart one, and for a
+    /// CMake build the compiler's its toolchain declares - MSVC's canonical form with CMake and Ninja, gcc's or clang's
+    /// with the linker, CMake and Ninja - or, where it declares none or more than one, every C compiler's form, the
+    /// diagnostics said as the C compiler's (<c>cc</c>). The configured matchers no runner or invocation names.
+    /// </summary>
+    /// <param name="config">The configuration the build runs under.</param>
+    /// <param name="projectType">The project's type: <c>cmake</c>, <c>dotnet</c> or <c>dart</c>.</param>
+    /// <param name="toolchain">The toolchain the leg's variant resolved, or null where none did.</param>
+    public static IReadOnlyList<IResultParser> ForBuild(HarnessConfig config, string projectType, string? toolchain)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(projectType);
+
+        string[] plan = projectType switch
         {
-            "ctest" => [ResultParsers.Of("ctest-console")!, ResultParsers.Of("cmake")!],
-            "dotnet" => [ResultParsers.Of("xunit-console")!, ResultParsers.Of("dotnet-stack")!],
-            "dart" => [ResultParsers.Of("dart-stack")!],
-            _ => Array.Empty<IResultParser>(),
+            "dotnet" => ["msbuild"],
+            "dart" => ["dart"],
+            _ => CompilerPlan(toolchain is not null && config.Toolchains.TryGetValue(toolchain, out var declared) ? declared.CompilerId.Values : []),
         };
 
-        return With([.. chosen], matchers);
+        return Chosen(plan, MatchersFor(config, []));
     }
 
     /// <summary>
-    /// The digest of lines no file holds - output made up rather than run, each line numbered by its place among them.
+    /// The parsers a test phase's log is read by, for the runner the invocation started: its console's form and the
+    /// stack form of the runtime its tests run on - CTest's with GoogleTest's console, the sanitizers' reports and
+    /// CMake's (which CTest prints where a test's script fails); <c>dotnet test</c>'s with .NET's stacks and MSBuild's,
+    /// for it builds before it runs; <c>dart test</c>'s and <c>flutter test</c>'s with Dart's stacks and its compiler's;
+    /// Python's, Node's (jest, vitest, V8's stacks, tsc, eslint), Go's, Rust's and the JVM's. A runner none of these is
+    /// - a test binary started directly, a script - is read by GoogleTest's console and every runtime's stack form. The
+    /// configured matchers the invocation names, and those no runner or invocation names.
     /// </summary>
-    /// <param name="lines">The output lines, in the order printed.</param>
-    /// <param name="parsers">The parsers chosen for them.</param>
-    public static ResultDigest? DigestOf(IReadOnlyList<string> lines, IReadOnlyList<IResultParser> parsers)
+    /// <param name="config">The configuration the tests run under.</param>
+    /// <param name="runner">The runner the invocation started, as a path or a name.</param>
+    /// <param name="matchers">The matchers the invocation names; null or empty where it names none.</param>
+    public static IReadOnlyList<IResultParser> ForTests(HarnessConfig config, string runner, IReadOnlyList<string>? matchers)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(runner);
+
+        string[] plan = ProgramOf(runner) switch
+        {
+            "ctest" => ["ctest", "gtest", "sanitizer", "backtrace", "cmake"],
+            "dotnet" => ["dotnet-test", "dotnet-stack", "msbuild"],
+            "dart" or "flutter" => ["dart-test", "dart-stack", "dart"],
+            "python" or "py" or "pytest" => ["python-stack"],
+            "node" or "npm" or "npx" or "yarn" or "pnpm" or "jest" or "vitest" => ["jest", "vitest", "v8-stack", "tsc", "eslint"],
+            "go" => ["go-panic"],
+            "cargo" => ["rust-panic"],
+            "mvn" or "mvnw" or "gradle" or "gradlew" or "java" => ["jvm-stack"],
+            _ => ["gtest", .. StackPlan],
+        };
+
+        return Chosen(plan, MatchersFor(config, matchers ?? []));
+    }
+
+    /// <summary>
+    /// The parsers a runner step's log is read by: every runtime's stack form, for the program a step starts is not known
+    /// from the outside; the configured matchers the runner names, and those no runner or invocation names.
+    /// </summary>
+    /// <param name="config">The configuration the runner runs under.</param>
+    /// <param name="runner">The runner.</param>
+    public static IReadOnlyList<IResultParser> ForRun(HarnessConfig config, RunnerConfig runner)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(runner);
+
+        return Chosen(StackPlan, MatchersFor(config, runner.Matchers ?? []));
+    }
+
+    /// <summary>
+    /// The parsers a CI job's log is read by: its steps are not known from the outside - a job holds whatever steps the
+    /// workflow wrote - so every built-in form a log holds is chosen, the test consoles first, then the build tools and
+    /// every runtime's stack form, and every configured matcher. The forge's own annotations are no form of the log's.
+    /// </summary>
+    /// <param name="matchers">The configured matchers: a CI job's log is read by every one.</param>
+    public static IReadOnlyList<IResultParser> ForCi(IReadOnlyList<ProblemMatcher> matchers)
+    {
+        ArgumentNullException.ThrowIfNull(matchers);
+
+        return Chosen(CiPlan, matchers);
+    }
+
+    /// <summary>
+    /// The digest of a log's lines, numbered from 1 as they stream, by the parsers chosen for it
+    /// (<see cref="DigestOf(IEnumerable{NumberedLine}, IReadOnlyList{IResultParser})"/>).
+    /// </summary>
+    /// <param name="lines">The log's lines, in the order printed.</param>
+    /// <param name="parsers">The parsers chosen for it.</param>
+    public static ResultDigest? DigestOf(IEnumerable<string> lines, IReadOnlyList<IResultParser> parsers)
     {
         ArgumentNullException.ThrowIfNull(lines);
 
-        return DigestOf([.. lines.Select((line, at) => new NumberedLine(at + 1, at + 1, line))], parsers);
+        return DigestOf(Numbered(lines), parsers);
     }
 
     /// <summary>
-    /// The digest of a log's lines by the parsers chosen for it (<see cref="FindingsOf"/>), folded and bounded as a digest
-    /// is (<see cref="ResultDigest.Of"/>); null where no parser was chosen or nothing was found.
+    /// The digest of a log by the parsers chosen for it (<see cref="FindingsOf"/>): null where no parser was chosen, or
+    /// where the log held nothing any of them said and nothing that looks like an error.
     /// </summary>
-    /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it (<see cref="Execution.PhaseOutput.NumberedLines"/>).</param>
-    /// <param name="parsers">The parsers chosen for the log.</param>
-    public static ResultDigest? DigestOf(IReadOnlyList<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
+    /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it.</param>
+    /// <param name="parsers">The parsers chosen for it.</param>
+    public static ResultDigest? DigestOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
         => FindingsOf(lines, parsers) is { } found && (found.Diagnostics.Count > 0 || found.Failures.Count > 0 || found.Unparsed.Count > 0)
             ? ResultDigest.Of(found.Diagnostics, found.Failures, found.Unparsed)
             : null;
 
     /// <summary>
-    /// What the parsers chosen for a log found in its lines, before any fold or bound: every chosen parser reads the same
-    /// lines, and the unparsed lines are what the parsers themselves left - each parser's own rule of a line that looks
-    /// like an error and matched nothing, with a line another parser's diagnostic already covers taken out, for one
-    /// finding is said once. Each diagnostic's log range names its lines by the numbers the file a reader opens gives
-    /// them - never by their place among the lines read, which a header above them or a line the reader counts as two
-    /// would move. Null where no parser was chosen, for a log no rule names is a log left as it stands.
+    /// What the parsers chosen for a log found in it, read in one pass as it streams - never held whole. Each line, its
+    /// terminal escapes taken off, is offered first to the reading that has a record open, then to each chosen parser's
+    /// reading in the order chosen, until one takes it or holds it undecided; a reading that gives held lines back has
+    /// them offered to the others, never to itself again, so every line is one reading's at most and is read a bounded
+    /// number of times. The findings of every reading are merged in the order of the lines they begin at, each with its
+    /// log range as the file numbers its lines. A line no reading took that holds an error's marker - <c>error:</c>,
+    /// <c>error CODE:</c>, <c>FAILED</c>, <c>fatal:</c>, <c>panic:</c>, a thrown error's <c>Type: </c> - is said
+    /// unparsed: what the parsers did not understand. Null where no parser was chosen, for a log no rule names is a log
+    /// left as it stands.
     /// </summary>
     /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it.</param>
-    /// <param name="parsers">The parsers chosen for the log.</param>
-    public static PhaseFindings? FindingsOf(IReadOnlyList<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
+    /// <param name="parsers">The parsers chosen for it.</param>
+    public static PhaseFindings? FindingsOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
     {
         ArgumentNullException.ThrowIfNull(lines);
         ArgumentNullException.ThrowIfNull(parsers);
@@ -89,73 +159,263 @@ public static class PhaseParsers
             return null;
         }
 
-        IReadOnlyList<string> texts = [.. lines.Select(line => line.Text)];
-        var diagnostics = new List<Diagnostic>();
-        var failures = new List<TestFailure>();
-        var left = new List<string>();
-        var covered = new HashSet<string>(StringComparer.Ordinal);
+        var pass = new OnePass(parsers);
 
-        foreach (var parser in parsers)
+        foreach (var line in lines)
         {
-            var (read, failed, held) = parser.Read(texts);
-
-            // A parser names a line by its place among those it was handed, from 1; the file names it by its own number.
-            diagnostics.AddRange(read.Select(diagnostic => diagnostic.Log is { } log && log.From >= 1 && log.To <= lines.Count
-                ? diagnostic with { Log = (lines[log.From - 1].Number, lines[log.To - 1].Last) }
-                : diagnostic));
-            failures.AddRange(failed);
-            left.AddRange(held);
-
-            // The lines a diagnostic's log range covers are said already - one finding, said once, whatever else a
-            // parser's own rule made of the same line.
-            foreach (var diagnostic in read)
-            {
-                if (diagnostic.Log is { } log)
-                {
-                    for (var at = log.From; at <= log.To && at <= texts.Count; at++)
-                    {
-                        covered.Add(texts[at - 1]);
-                    }
-                }
-            }
+            pass.Read(line with { Text = TerminalText.Plain(line.Text).TrimEnd('\r') });
         }
 
-        return new PhaseFindings(diagnostics, failures, [.. left.Distinct(StringComparer.Ordinal).Where(line => !covered.Contains(line))]);
+        return pass.Finish();
+    }
+
+    /// <summary>Whether <paramref name="line"/> holds an error's marker, as a line no parser took is judged.</summary>
+    /// <param name="line">The line, its terminal escapes taken off.</param>
+    internal static bool LooksLikeError(string line) => ErrorMarker.IsMatch(line);
+
+    /// <summary>
+    /// The markers of an error, as words and never as parts of a name: <c>error:</c>, <c>Error:</c> and <c>error CODE:</c>
+    /// after a separator; <c>FAILED</c>; <c>fatal:</c> and <c>fatal error:</c>; a <c>panic:</c> that begins its line; a
+    /// thrown error's <c>TypeError: </c> or <c>SomeException: </c>; and Python's traceback's head.
+    /// </summary>
+    private static readonly Regex ErrorMarker = LinearRegex.Compile(
+        @"(?:^|[\s:=\[\](])(?:error|Error|ERROR)(?: [A-Z]+\d+)?:|\bFAILED\b|(?:^|[\s:=])(?:fatal|Fatal|FATAL)(?: error)?:|^panic: |\w(?:Error|Exception)(?: \[[A-Z0-9_]+\])?: |^Traceback \(most recent call last\):$");
+
+    /// <summary>The parsers a CMake build's log is read by, for the compiler ids its toolchain declares.</summary>
+    /// <param name="ids">The CMake compiler ids the toolchain declares, by language.</param>
+    private static string[] CompilerPlan(IEnumerable<string> ids)
+    {
+        var declared = ids.Distinct(StringComparer.Ordinal).ToList();
+
+        return declared switch
+        {
+            ["MSVC"] => ["msbuild", "cmake", "ninja"],
+            ["GNU"] => ["gcc", "ld", "cmake", "ninja"],
+            _ when declared.Count > 0 && declared.All(id => id is "Clang" or "AppleClang") => ["clang", "ld", "cmake", "ninja"],
+            _ => ["msbuild", "cc", "ld", "cmake", "ninja"],
+        };
     }
 
     /// <summary>
-    /// The parsers a CI job's log is read by: its phases are not known from the outside - a job holds whatever steps
-    /// the workflow wrote - so every form a CI log holds is chosen, the compilers and their drivers, the linkers, the
-    /// TypeScript checker, the test consoles and .NET's stack traces. The configured matchers, as everywhere. The forge's
-    /// own annotations are no form of the log's: they are read from the forge (<see cref="Ci.CiDigest"/>).
+    /// The program a runner starts, as its name is matched: the last part of its path, either separator, lower-cased,
+    /// with a launcher's extension (<c>.exe</c>, <c>.cmd</c>, <c>.bat</c>, <c>.ps1</c>, <c>.sh</c>) taken off and a
+    /// Python's version (<c>python3.12</c>) read as <c>python</c>.
     /// </summary>
-    /// <param name="matchers">The configured matchers, which apply to every phase.</param>
-    public static IReadOnlyList<IResultParser> ForCi(IReadOnlyList<ProblemMatcher> matchers)
-        => With(
-            [
-                ResultParsers.Of("msbuild")!, ResultParsers.Of("msvc")!, ResultParsers.Of("gcc")!, ResultParsers.Of("clang")!,
-                ResultParsers.Of("cmake")!, ResultParsers.Of("ninja")!, ResultParsers.Of("link")!, ResultParsers.Of("tsc")!,
-                ResultParsers.Of("xunit-console")!, ResultParsers.Of("gtest-console")!, ResultParsers.Of("ctest-console")!,
-                ResultParsers.Of("dotnet-stack")!,
-            ],
-            matchers);
+    /// <param name="runner">The runner as an invocation names it.</param>
+    internal static string ProgramOf(string runner)
+    {
+        var name = runner[(runner.LastIndexOfAny(['/', '\\']) + 1)..].ToLowerInvariant();
+
+        foreach (var extension in (string[])[".exe", ".cmd", ".bat", ".ps1", ".sh"])
+        {
+            if (name.EndsWith(extension, StringComparison.Ordinal))
+            {
+                name = name[..^extension.Length];
+                break;
+            }
+        }
+
+        return name.StartsWith("python", StringComparison.Ordinal) && name["python".Length..].All(character => char.IsAsciiDigit(character) || character == '.') ? "python" : name;
+    }
 
     /// <summary>
-    /// The stack parsers of every runtime, for output whose program is not known from the outside - a runner's step,
-    /// a CI job's script: whichever runtime printed the stack, its form is chosen.
+    /// The configured matchers a phase is read by: those <paramref name="named"/> names, and every one no runner or test
+    /// invocation of the configuration names.
     /// </summary>
-    /// <param name="matchers">The configured matchers, which apply everywhere.</param>
-    public static IReadOnlyList<IResultParser> ForStacks(IReadOnlyList<ProblemMatcher> matchers)
-        => With(
-            [
-                ResultParsers.Of("dotnet-stack")!, ResultParsers.Of("jvm-stack")!, ResultParsers.Of("python-stack")!,
-                ResultParsers.Of("v8-stack")!, ResultParsers.Of("dart-stack")!, ResultParsers.Of("go-panic")!,
-                ResultParsers.Of("rust-panic")!, ResultParsers.Of("sanitizer")!,
-            ],
-            matchers);
+    /// <param name="config">The configuration.</param>
+    /// <param name="named">The matchers the phase's runner or invocation names.</param>
+    private static IEnumerable<ProblemMatcher> MatchersFor(HarnessConfig config, IReadOnlyCollection<string> named)
+    {
+        var namedAnywhere = config.PredefinedRunners.Values.SelectMany(runner => runner.Matchers ?? [])
+            .Concat(config.Projects.Select(project => project.Test).Concat(config.Legs.Values.Select(leg => leg.Test))
+                .OfType<TestConfig>()
+                .SelectMany(test => new[] { test.All, test.Windows, test.Linux, test.Macos })
+                .OfType<TestInvocation>()
+                .SelectMany(invocation => invocation.Matchers ?? []))
+            .ToHashSet(StringComparer.Ordinal);
 
-    private static IReadOnlyList<IResultParser> With(IReadOnlyList<IResultParser> chosen, IReadOnlyList<ProblemMatcher> matchers)
-        => [.. chosen, .. matchers.Where(matcher => matcher.Compiled is not null).Select(matcher => new MatcherParser(matcher))];
+        return config.Results.Matchers.Where(matcher => named.Contains(matcher.Name, StringComparer.Ordinal) || !namedAnywhere.Contains(matcher.Name));
+    }
+
+    /// <summary>The built-in parsers <paramref name="plan"/> names, in its order, then a parser of each compiled matcher.</summary>
+    private static IReadOnlyList<IResultParser> Chosen(IEnumerable<string> plan, IEnumerable<ProblemMatcher> matchers)
+        => [.. plan.Select(ResultParsers.Named), .. matchers.Where(matcher => matcher.Compiled is not null).Select(matcher => new MatcherParser(matcher))];
+
+    /// <summary>The lines numbered from 1, in the order they stream.</summary>
+    private static IEnumerable<NumberedLine> Numbered(IEnumerable<string> lines)
+    {
+        var number = 0;
+
+        foreach (var line in lines)
+        {
+            number++;
+            yield return new NumberedLine(number, number, line);
+        }
+    }
+
+    /// <summary>
+    /// One pass of the chosen parsers over one log: the reading with a record open, the lines it holds undecided, the
+    /// lines given back and waiting to be offered again, and the lines no reading took that look like errors.
+    /// </summary>
+    private sealed class OnePass
+    {
+        private readonly IResultReading[] _readings;
+        private readonly ResultSink[] _sinks;
+        private readonly List<Offered> _held = [];
+        private readonly Stack<Offered> _given = new();
+        private readonly List<string> _unparsed = [];
+        private int _active = -1;
+
+        public OnePass(IReadOnlyList<IResultParser> parsers)
+        {
+            var shared = new SharedReading();
+
+            _readings = [.. parsers.Select(parser => parser.Begin())];
+            _sinks = [.. parsers.Select(_ => new ResultSink(shared))];
+        }
+
+        /// <summary>Reads the next line of the log.</summary>
+        public void Read(NumberedLine line)
+        {
+            Offer(new Offered(line, null));
+            OfferGiven();
+        }
+
+        /// <summary>
+        /// The log ended: a reading that holds lines undecided says whether they are its - lines it gives back are offered
+        /// to the others, never to it again - and then every reading not yet ended finishes what it has open, the last
+        /// chosen first, so a reading chosen ahead of the forms it sums up (a runner's console ahead of its tests' own)
+        /// ends knowing what they said, whichever of them read the last line. Each reading ends once.
+        /// </summary>
+        public PhaseFindings Finish()
+        {
+            var ended = new bool[_readings.Length];
+
+            while (_active >= 0 && _held.Count > 0)
+            {
+                var ending = _active;
+
+                ended[ending] = true;
+
+                if (_readings[ending].End(_sinks[ending]) == LineTaken.Left && _held.Count > 0)
+                {
+                    GiveBack(null);
+                    OfferGiven();
+                }
+                else
+                {
+                    _held.Clear();
+                    _active = -1;
+                }
+            }
+
+            for (var at = _readings.Length - 1; at >= 0; at--)
+            {
+                if (!ended[at])
+                {
+                    _readings[at].End(_sinks[at]);
+                }
+            }
+
+            var diagnostics = InLogOrder(_sinks.Select(sink => (IReadOnlyList<Diagnostic>)sink.Diagnostics), diagnostic => diagnostic.Log);
+            var failures = InLogOrder(_sinks.Select(sink => (IReadOnlyList<TestFailure>)sink.Failures), failure => failure.Log);
+
+            return new PhaseFindings(diagnostics, failures, _unparsed);
+        }
+
+        /// <summary>
+        /// Offers one line: to the reading with a record open where it has not refused the line, and otherwise to every
+        /// reading that has not, in the order chosen, until one takes it or holds it.
+        /// </summary>
+        private void Offer(Offered offered)
+        {
+            if (_active >= 0)
+            {
+                var taken = offered.Refused?.Contains(_active) == true
+                    ? LineTaken.Left
+                    : _readings[_active].Offer(offered.Line, _sinks[_active]);
+
+                switch (taken)
+                {
+                    case LineTaken.Took:
+                        _held.Clear();
+                        return;
+                    case LineTaken.Held:
+                        _held.Add(offered);
+                        return;
+                    default:
+                        GiveBack(offered);
+                        return;
+                }
+            }
+
+            for (var at = 0; at < _readings.Length; at++)
+            {
+                if (offered.Refused?.Contains(at) == true)
+                {
+                    continue;
+                }
+
+                switch (_readings[at].Offer(offered.Line, _sinks[at]))
+                {
+                    case LineTaken.Took:
+                        _active = at;
+                        return;
+                    case LineTaken.Held:
+                        _active = at;
+                        _held.Add(offered);
+                        return;
+                }
+            }
+
+            if (_unparsed.Count < ResultDigest.Bound && LooksLikeError(offered.Line.Text))
+            {
+                _unparsed.Add(offered.Line.Text);
+            }
+        }
+
+        /// <summary>
+        /// The reading with a record open gave back what it held, and <paramref name="current"/> with it: each line waits to
+        /// be offered again, in the order printed and ahead of every line after it, refused by that reading.
+        /// </summary>
+        private void GiveBack(Offered? current)
+        {
+            var refusing = _active;
+            List<Offered> back = current is { } line ? [.. _held, line] : [.. _held];
+
+            _held.Clear();
+            _active = -1;
+
+            for (var at = back.Count - 1; at >= 0; at--)
+            {
+                _given.Push(back[at] with { Refused = [.. back[at].Refused ?? [], refusing] });
+            }
+        }
+
+        /// <summary>Offers again every line given back, in the order printed.</summary>
+        private void OfferGiven()
+        {
+            while (_given.TryPop(out var again))
+            {
+                Offer(again);
+            }
+        }
+
+        /// <summary>
+        /// The findings of every reading in the order of the lines they begin at: the readings' own orders kept where two
+        /// begin at one line, and a finding read from no line after every one that was.
+        /// </summary>
+        private static List<T> InLogOrder<T>(IEnumerable<IReadOnlyList<T>> read, Func<T, (int From, int To)?> log)
+            => [.. read
+                .SelectMany((found, reading) => found.Select((finding, order) => (Finding: finding, Reading: reading, Order: order)))
+                .OrderBy(entry => log(entry.Finding)?.From ?? int.MaxValue)
+                .ThenBy(entry => entry.Reading)
+                .ThenBy(entry => entry.Order)
+                .Select(entry => entry.Finding)];
+
+        /// <summary>A line offered, with the readings that refused it - those that gave it back.</summary>
+        private readonly record struct Offered(NumberedLine Line, HashSet<int>? Refused);
+    }
 }
 
 /// <summary>
@@ -163,89 +423,138 @@ public static class PhaseParsers
 /// bounds them: what a producer that reads more than the log - a forge's annotations beside a job's log - merges with
 /// before the one digest is made of them all.
 /// </summary>
-/// <param name="Diagnostics">The diagnostics, each with its log range as the file numbers its lines.</param>
-/// <param name="Failures">The test failures.</param>
-/// <param name="Unparsed">The lines that look like errors and no parser held, each once.</param>
+/// <param name="Diagnostics">The diagnostics, in the order of the lines they begin at, each with its log range as the file numbers its lines.</param>
+/// <param name="Failures">The test failures, in the order of the lines they begin at.</param>
+/// <param name="Unparsed">The lines that look like errors and no parser took, in the order printed.</param>
 public sealed record PhaseFindings(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed);
 
 /// <summary>
-/// One configured problem matcher as a parser reads: every line its pattern matches is a diagnostic - its severity a
-/// literal or a named group, its file, line, column, code and message the groups it names - and where the matcher
-/// says a frame pattern, the lines after its match are its stack until its end matches or a line matches no frame.
+/// One configured problem matcher as a parser reads: a line its pattern matches is a diagnostic - its severity a literal,
+/// or a named group's text mapped as editors map it, its file, line, column, code and message the groups it names - with,
+/// where the matcher says <c>end</c>, the lines after it to the one <c>end</c> matches as part of its record, and where it
+/// says <c>stack</c>, the lines after its match its frames, until <c>until</c> matches or a line matches no frame. Its log
+/// range runs from its match to the last line it read.
 /// </summary>
 internal sealed class MatcherParser(ProblemMatcher matcher) : IResultParser
 {
-    /// <summary>The matcher's own compiled pattern, for the unparsed rule.</summary>
-    public Regex Compiled => matcher.Compiled!;
-
     public string Name => matcher.Name;
 
-    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
-    {
-        var diagnostics = new List<Diagnostic>();
-        var frames = matcher.FrameCompiled!;
+    public IResultReading Begin() => new Reading(matcher);
 
-        for (var at = 0; at < lines.Count; at++)
+    /// <summary>
+    /// The severity a group's text says, as editors' problem matchers read it, case ignored: <c>error</c>, <c>err</c>,
+    /// <c>fatal</c>, <c>fatal error</c> and <c>critical</c> an error; <c>warning</c> and <c>warn</c> a warning; <c>note</c>,
+    /// <c>info</c>, <c>information</c>, <c>hint</c> and <c>notice</c> a note; any other text an error, as an editor reads it.
+    /// </summary>
+    /// <param name="said">The group's text.</param>
+    internal static string SeverityOf(string said)
+        => said.Trim().ToLowerInvariant() switch
         {
-            if (Compiled.Match(lines[at]) is not { Success: true } found)
-            {
-                continue;
-            }
+            "warning" or "warn" => "warning",
+            "note" or "info" or "information" or "hint" or "notice" => "note",
+            _ => "error",
+        };
 
-            var stack = new List<StackFrame>();
+    private sealed class Reading(ProblemMatcher matcher) : IResultReading
+    {
+        private Diagnostic? _open;
+        private readonly List<StackFrame> _frames = [];
+        private bool _ending;
+        private int _to;
 
-            if (matcher.Frame is not null)
+        public LineTaken Offer(NumberedLine line, ResultSink sink)
+        {
+            if (_open is not null)
             {
-                for (var inner = at + 1; inner < lines.Count; inner++)
+                if (_ending)
                 {
-                    var said = lines[inner];
-
-                    if (matcher.UntilCompiled is { } until && until.IsMatch(said))
-                    {
-                        break;
-                    }
-
-                    if (frames.Match(said) is { Success: true } frame)
-                    {
-                        stack.Add(new(
-                            said,
-                            frame.Groups["file"].Success ? frame.Groups["file"].Value : null,
-                            Whole(frame.Groups["line"]),
-                            Whole(frame.Groups["column"]),
-                            frame.Groups["module"].Success ? frame.Groups["module"].Value : null,
-                            frame.Groups["symbol"].Success ? frame.Groups["symbol"].Value : null));
-                        at = inner;
-                        continue;
-                    }
-
-                    break;
+                    _to = line.Last;
+                    _ending = !matcher.EndCompiled!.IsMatch(line.Text);
+                    return LineTaken.Took;
                 }
+
+                if (matcher.UntilCompiled?.IsMatch(line.Text) == true)
+                {
+                    _to = line.Last;
+                    Close(sink);
+                    return LineTaken.Took;
+                }
+
+                if (matcher.Stack is not null && FrameOf(line.Text) is { } frame)
+                {
+                    _frames.Add(frame);
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                Close(sink);
             }
 
-            string Group(string? name)
-                => name is not null && found.Groups[name].Success ? found.Groups[name].Value : string.Empty;
+            if (matcher.Compiled!.Match(line.Text) is not { Success: true } found)
+            {
+                return LineTaken.Left;
+            }
 
-            // A frame's line or column as the matcher's own pattern captured it: a whole number, or none - a group that
-            // captured anything else names no place, as a diagnostic's does, and never stops the digest.
-            static int? Whole(Group group)
-                => group.Success && int.TryParse(group.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : null;
+            string? Group(string? name)
+                => name is not null && found.Groups[name] is { Success: true } group && group.Value.Trim().Length > 0 ? group.Value.Trim() : null;
 
-            var severity = matcher.Severity is { } literal && Diagnostic.Severities.Contains(literal, StringComparer.Ordinal)
-                ? literal
-                : Group(matcher.Severity) is { Length: > 0 } byGroup ? byGroup : "error";
+            var severity = matcher.Severity is null ? "error"
+                : Diagnostic.Severities.Contains(matcher.Severity, StringComparer.Ordinal) ? matcher.Severity
+                : Group(matcher.Severity) is { } said ? SeverityOf(said)
+                : "error";
 
-            diagnostics.Add(new(
+            _open = new Diagnostic(
                 matcher.Name,
                 severity,
-                Group(matcher.Code) is { Length: > 0 } code ? code : null,
-                Group(matcher.Message) is { Length: > 0 } message ? message : found.Value,
-                Group(matcher.File) is { Length: > 0 } file ? file : null,
-                int.TryParse(Group(matcher.Line), NumberStyles.Integer, CultureInfo.InvariantCulture, out var line) ? line : null,
-                int.TryParse(Group(matcher.Column), NumberStyles.Integer, CultureInfo.InvariantCulture, out var column) ? column : null,
-                Stack: stack,
-                Log: (at + 1, at + 1)));
+                Group(matcher.Code),
+                Group(matcher.Message) ?? found.Value.Trim(),
+                Group(matcher.File),
+                Whole(Group(matcher.Line)),
+                Whole(Group(matcher.Column)),
+                Log: (line.Number, line.Last));
+            _to = line.Last;
+            _ending = matcher.EndCompiled is not null;
+
+            if (!_ending && matcher.Stack is null)
+            {
+                Close(sink);
+            }
+
+            return LineTaken.Took;
         }
 
-        return (diagnostics, [], []);
+        public LineTaken End(ResultSink sink)
+        {
+            Close(sink);
+            return LineTaken.Took;
+        }
+
+        private StackFrame? FrameOf(string text)
+        {
+            if (matcher.FrameCompiled!.Match(text) is not { Success: true } frame)
+            {
+                return null;
+            }
+
+            string? Group(string name) => frame.Groups[name] is { Success: true } group && group.Value.Trim().Length > 0 ? group.Value.Trim() : null;
+
+            return new StackFrame(text.Trim(), Group("file"), Whole(Group("line")), Whole(Group("column")), Group("module"), Group("symbol"));
+        }
+
+        private void Close(ResultSink sink)
+        {
+            if (_open is { } open)
+            {
+                sink.Add(open with { Stack = [.. _frames], Log = (open.Log!.Value.From, _to) });
+            }
+
+            _open = null;
+            _frames.Clear();
+            _ending = false;
+        }
+
+        /// <summary>A line or a column as the matcher's group captured it: a whole number from 1, or none.</summary>
+        private static int? Whole(string? said)
+            => said is not null && int.TryParse(said, NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > 0 ? number : null;
     }
 }

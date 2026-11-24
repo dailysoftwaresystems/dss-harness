@@ -392,7 +392,7 @@ public sealed class TestService(
             ? null
             : PhaseDigest.Of(
                 phase.Output,
-                PhaseParsers.ForTests(command.Program, config.Results.Matchers),
+                PhaseParsers.ForTests(config, command.Program, invocation.Matchers),
                 new DigestTree(request.TreeRoot, working, _fileSystem),
                 TestResults.Read(_fileSystem, invocation.Results, paths, paths.ResultsDirectory!, asked.Mask, cancellationToken));
 

@@ -45,9 +45,6 @@ internal static class Ninja
     /// </summary>
     private static readonly string[] Asides = ["warning: ", "Entering directory", "Leaving directory", "no work to do", "nothing to do", "explain "];
 
-    /// <summary>A terminal's colour codes, which ninja writes around what it says where something makes it colour its output.</summary>
-    private static readonly Regex Colour = LinearRegex.Compile(@"\x1B\[[0-9;]*m");
-
     /// <summary>What ninja 1.13 and later writes between <c>FAILED: </c> and a failed step's outputs: its exit code.</summary>
     private static readonly Regex FailedCode = LinearRegex.Compile(@"\A\[code=-?[0-9]+\] ");
 
@@ -211,7 +208,7 @@ internal static class Ninja
 
         foreach (var raw in lines)
         {
-            var line = Colour.Replace(raw, string.Empty).TrimEnd('\r');
+            var line = TerminalText.Plain(raw).TrimEnd('\r');
             var ownStatus = afterOwnStatus;
 
             afterOwnStatus = false;
@@ -479,7 +476,7 @@ internal static class Ninja
         {
             // Read from the log a line at a time, each divided however it divides itself, and no further than the line
             // that decides: a build's output can be larger than any text the harness could hold.
-            foreach (var line in phase.Output.Lines().SelectMany(line => TextLines.Split(Colour.Replace(line, string.Empty)).Select(part => part.Text)))
+            foreach (var line in phase.Output.Lines().SelectMany(line => TextLines.Split(TerminalText.Plain(line)).Select(part => part.Text)))
             {
                 if (line.StartsWith(FailedStep, StringComparison.Ordinal))
                 {
@@ -539,7 +536,7 @@ internal static class Ninja
 
         try
         {
-            foreach (var line in phase.Output.Lines().SelectMany(line => TextLines.Split(Colour.Replace(line, string.Empty)).Select(part => part.Text)))
+            foreach (var line in phase.Output.Lines().SelectMany(line => TextLines.Split(TerminalText.Plain(line)).Select(part => part.Text)))
             {
                 if (line.StartsWith(FailedStep, StringComparison.Ordinal))
                 {

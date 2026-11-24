@@ -1,0 +1,47 @@
+  TestsV2 -> D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll
+Test run for D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll (.NETCoreApp,Version=v10.0)
+VSTest version 18.0.2 (x64)
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.14]     Demo.Tests.ParserTests.NamesItsCount(count: 2, name: "two") [FAIL]
+[xUnit.net 00:00:00.14]     Demo.Tests.ParserTests.SkipsItsFixture [SKIP]
+[xUnit.net 00:00:00.14]     Demo.Tests.ParserTests.LoadsItsStore [FAIL]
+[xUnit.net 00:00:00.15]     Demo.Tests.ParserTests.FoldsDuplicates [FAIL]
+  Failed Demo.Tests.ParserTests.NamesItsCount(count: 2, name: "two") [1 ms]
+  Error Message:
+   Assert.Equal() Failure: Strings differ
+           ↓ (pos 0)
+Expected: "one"
+Actual:   "two"
+           ↑ (pos 0)
+  Stack Trace:
+     at Demo.Tests.ParserTests.NamesItsCount(Int32 count, String name) in D:\a\app\app\net\TestsV2\ParserTests.cs:line 40
+   at InvokeStub_ParserTests.NamesItsCount(Object, Span`1)
+   at System.Reflection.MethodBaseInvoker.InvokeWithFewArgs(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+  Skipped Demo.Tests.ParserTests.SkipsItsFixture [1 ms]
+  Failed Demo.Tests.ParserTests.LoadsItsStore [2 ms]
+  Error Message:
+   System.InvalidOperationException : The store could not be loaded.
+---- System.ArgumentException : An item with the same key has already been added. Key: first
+  Stack Trace:
+     at Demo.Tests.ParserTests.LoadsItsStore() in D:\a\app\app\net\TestsV2\ParserTests.cs:line 54
+--- End of stack trace from previous location ---
+----- Inner Stack Trace -----
+   at System.Collections.Generic.Dictionary`2.TryInsert(TKey key, TValue value, InsertionBehavior behavior)
+   at System.Collections.Generic.Dictionary`2.Add(TKey key, TValue value)
+   at Demo.Tests.Store.Load(String name) in D:\a\app\app\net\TestsV2\ParserTests.cs:line 15
+   at Demo.Tests.ParserTests.LoadsItsStore() in D:\a\app\app\net\TestsV2\ParserTests.cs:line 50
+  Failed Demo.Tests.ParserTests.FoldsDuplicates [7 ms]
+  Error Message:
+   Assert.Equal() Failure: Collections differ
+Expected: [1, 2]
+Actual:   [1, 2, 3]
+                 ↑ (pos 2)
+  Stack Trace:
+     at Demo.Tests.ParserTests.FoldsDuplicates() in D:\a\app\app\net\TestsV2\ParserTests.cs:line 26
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+Results File: D:\a\app\app\net\trx\runner_build-host_2026-11-23_20_09_23.trx
+
+Failed!  - Failed:     3, Passed:     2, Skipped:     1, Total:     6, Duration: 28 ms - TestsV2.dll (net10.0)

@@ -1,0 +1,21 @@
+{
+  "read": {
+    "ci": true
+  },
+  "root": "D:\\a\\app\\app",
+  "errors": 3,
+  "warnings": 1,
+  "first": {
+    "tool": "msbuild",
+    "code": "CS0103",
+    "file": "D:\\a\\app\\app\\src\\App\\Program.cs",
+    "line": 12,
+    "column": 35
+  },
+  "diagnostics": [
+    "error CS0103 D:\\a\\app\\app\\src\\App\\Program.cs:12",
+    "warning CS0219 D:\\a\\app\\app\\src\\App\\Service.cs:40",
+    "error - D:\\a\\app\\app\\native\\src\\store.c:12",
+    "error C2065 D:\\a\\app\\app\\native\\src\\store.cpp:7"
+  ]
+}

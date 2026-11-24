@@ -325,4 +325,11 @@ public sealed class TestInvocation
     /// <c>all</c>'s cap each system's that gives no cap of its own - it caps nothing, and is refused.
     /// </summary>
     public long? KeepOnFailureCapBytes { get; init; }
+
+    /// <summary>
+    /// The problem matchers of <c>results.matchers</c> that read this invocation's tests, by name, beside every matcher
+    /// no runner or invocation names. A matcher an invocation or a runner names reads only their output. Given empty in
+    /// the file, it is refused when the file is read; a name <c>results.matchers</c> does not declare is refused too.
+    /// </summary>
+    public List<string>? Matchers { get; init; }
 }

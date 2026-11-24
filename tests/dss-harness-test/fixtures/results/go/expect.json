@@ -1,0 +1,22 @@
+{
+  "read": {
+    "tests": "go"
+  },
+  "root": "/home/runner/work/app/app",
+  "failed": 2,
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "failed TestStoreLoads",
+    "failed TestParser/empty",
+    "crashed TestSum"
+  ],
+  "stack": {
+    "of": "TestSum",
+    "frames": 7,
+    "inTree": [
+      "/home/runner/work/app/app/sum/sum.go:12",
+      "/home/runner/work/app/app/sum/sum_test.go:9"
+    ]
+  }
+}

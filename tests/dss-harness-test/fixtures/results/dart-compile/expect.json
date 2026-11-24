@@ -1,0 +1,18 @@
+{
+  "read": {
+    "build": "dart"
+  },
+  "root": "D:\\a\\app\\app",
+  "errors": 2,
+  "first": {
+    "tool": "dart",
+    "code": null,
+    "file": "bin/broken.dart",
+    "line": 6,
+    "column": 9
+  },
+  "diagnostics": [
+    "error - bin/broken.dart:6",
+    "error - bin/broken.dart:5"
+  ]
+}

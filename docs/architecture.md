@@ -9736,22 +9736,62 @@ is held to 64 frames - the first 48 and the last 16, the middle cut and its coun
 (`stackCut`), which the log range still holds - and every cause chain to 8 deep, the records below
 counted (`causesCut`); and a finding that is not one a digest holds - a severity, an outcome or a
 line no tool means - is said among the unparsed lines with why, never held and never dropped
-unsaid. A digest says whether output the parsers did not understand remains: never a guess. The built-in parsers read the .NET and C compilers
-(MSBuild/csc, MSVC, gcc with its include chain, clang), CMake, Ninja's `FAILED:` block, the
-linkers, tsc, the Dart analyser, the stack traces the runtimes print (.NET with its
-inner-exception marker, the JVM with `Caused by:`, Python's traceback, V8's, Dart's `#n` frames,
-Go's panic, Rust's `panicked at`, the sanitizers' `#n 0x... in`), and the test consoles that print
-their failures (xUnit's, gtest's, ctest's list); each is chosen for the output it reads and never
-runs over another's. `results.matchers` in `config.json` declares one for any other tool - a regex
-with named groups saying where its file, line, column, code and message are, and optionally a frame
-pattern with an end, read as a stack - compiled and its groups checked at load
-(`Configuration\ProblemMatcher.cs`), each pattern by `LinearRegex` as every pattern of the file is,
-so one holding a construct that matcher lacks refuses the file, naming the matcher, the pattern and
-the construct. Where a step's runner throws an error the engine did not expect, the attempt's
-measure entry keeps its record (`FlowStepAttempt.Exception`, `ExceptionRecord.Of`): the live
-exception's own stack read by the one owner of the .NET frame form, each inner exception nested
-under the one it caused, held to the bounds every record is with its cuts counted - its frames the
-tool's own, in no tree of the run's.
+unsaid. A digest says whether output the parsers did not understand remains: never a guess.
+
+The built-in parsers (`Results\ResultParsers.cs` for the build tools' forms, `Results\StackForms.cs`
+for the runtimes' stacks, `Results\ConsoleParsers.cs` for the test consoles) read a log a line at a
+time as it streams - never held whole - in one pass (`PhaseParsers.FindingsOf`): each line, its
+terminal escapes taken off (`Text\TerminalText.cs`), is offered first to the parser with a record
+open, then to each chosen parser in the order chosen, until one takes it or holds it undecided; one
+that leaves what it held gives it back, and each held line is offered to the others, never to it
+again - so each line is one parser's at most, and a line no parser took is said unparsed only where
+it holds an error's marker as a word (`error:`, `error CODE:`, `FAILED`, `fatal:`, a line's own
+`panic:`, a thrown error's `Type: `). The findings are merged in the order of the lines they begin
+at, each with its log range as the log's file numbers its lines (`NumberedLine`), and at the end
+every parser finishes what it holds, the last chosen first, so a runner's console chosen ahead of
+its tests' own forms ends knowing what they said: a line that only says a build or a test run failed -
+collect2's, the compiler driver's, link's `LNK1120`, MSBuild's recap, Ninja's edge, CTest's status
+and list, cargo's `error: test failed` - is said only where nothing before it said why. The forms
+are read as the tools print them at the versions CI runs: MSBuild's canonical form wherever it is
+printed (MSBuild and csc, MSVC's cl and link, tsc with `--pretty false`, clang-cl), a Windows
+drive's path and cl's `fatal error` among them, each diagnostic named for the tool its code belongs
+to; gcc's and clang's form, the chain that led to an error its stack - the include chain, the
+instantiation chain, the macro expansions - handed whole, for the digest is the one owner of a
+stack's bound; the linkers (GNU ld, gold, lld, ld64, link); CMake's message blocks; Ninja's
+`FAILED:` edge; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
+the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries, the
+JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's, Dart's, Go's panic and
+`go test`'s console, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
+or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
+failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
+test`'s, jest's, vitest's). A frame whose runtime prints only its source file's name - the JVM's,
+lldb's - names no file, only its line: a base name is no path, and is never read as the tree's.
+
+The parsers a phase's log is read by are chosen by what the phase runs (`Results\PhaseParsers.cs`,
+the one owner of the choice): a .NET build's by MSBuild's form, a Dart build's by the Dart tools', a
+CMake build's by the compiler its toolchain declares (`compilerId`: MSVC's canonical form, gcc's or
+clang's with the linkers, every C compiler's form where it declares none or more than one) with
+CMake's and Ninja's; a test's by its runner - CTest's console with GoogleTest's, the sanitizers',
+the native crash's and CMake's; `dotnet test`'s with .NET's stacks and MSBuild's; `dart test`'s and
+`flutter test`'s; Python's; Node's runners with jest's, vitest's, V8's, tsc's and eslint's; Go's;
+Cargo's; the JVM's build tools - and a runner none of these is, a test binary run directly or a
+script, by GoogleTest's console and every runtime's stack form; a runner step's by every runtime's
+stack form; a CI job's by every form a log holds. `results.matchers` in `config.json` declares a
+parser for any other tool, in the shape editors and CI take: a regex whose named groups say where
+its severity, file, line, column, code and message are - a severity group's text read as editors
+read it, case ignored, `warn` a warning, `info`, `hint` and `notice` a note, anything else an error -
+an `end` where a diagnostic runs over the lines after its match, and a `stack` (`frame`, `until`)
+where the tool prints a chain under it; its log range runs from its match to the last line it read.
+A runner's or a test invocation's `matchers` names the matchers that read its output, and a matcher
+no runner or invocation names reads every build, test and runner phase; a CI job's log is read by
+all. Each is compiled and its groups checked at load (`Configuration\ProblemMatcher.cs`), each
+pattern by `LinearRegex` as every pattern of the file is, so one holding a construct that matcher
+lacks refuses the file, naming the matcher, the pattern and the construct; a name no matcher answers
+to is refused too.
+Where a step's runner throws an error the engine did not expect, the attempt's measure entry keeps its record
+(`FlowStepAttempt.Exception`, `ExceptionRecord.Of`): the live exception's own stack read by the one owner of the .NET
+frame form (`StackForms.DotNetFramesOf`), each inner exception nested under the one it caused, held to the bounds every
+record is with its cuts counted - its frames the tool's own, in no tree of the run's.
 
 Before any log line is parsed, what a tool wrote as data is read (`Results\ResultFiles.cs`). Each
 run of a test invocation has a results directory of its own, `{resultsDir}`
@@ -9806,8 +9846,8 @@ the names it was written under (`ResultDigest.Read`, the one owner of the shape 
 naming the host as the configuration declares it, never by an address its name resolved to, and a digest of no shape
 this build writes refused as a ledger it cannot read is. A phase is digested in one place (`Results\PhaseDigest.cs`)
 wherever its failure is the leg's verdict - a moving tree's or a shared directory's says nothing of the code - a
-build's failing phase by the parsers its toolchain chose and a test's by its runner's, with the configured matchers
-everywhere (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first, and its
+build's failing phase by the parsers its project and its toolchain's compiler chose and a test's by its runner's, each
+with the matchers that read it (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first, and its
 log only where they gave no finding, what they could not give said beside it. Every place is then read against the
 tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed): a path - relative ones read from the
 directory the tool ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by
@@ -9840,7 +9880,7 @@ holds every one under its marker, and a marked line no form read is said among t
 check with no log is said by its annotations alone. Every path is placed against the job's workspace on its runner,
 `<work>/<repository>/<repository>` on every runner GitHub hosts or not, the repository named by the job's own address
 (`PlatformPaths.DirectoryEndingAsWritten`), never against this machine's checkout. A run check's failure is read for the
-error it threw (`RunnerRunService.ExceptionIn`, by `PhaseParsers.ForStacks`): the thrown error's whole record - type,
+error it threw (`RunnerRunService.ExceptionIn`, by `PhaseParsers.ForRun`: every runtime's stack form and the runner's matchers): the thrown error's whole record - type,
 message, stack, causes - is what an expected exception is matched against, both halves of a match of one exception:
 the one that reached the log with the run's message or its own - a line the unit printed only where no stack was read,
 for a line under a stack may be a cause's - or a cause under it, however deep, with that cause's own message - never a
@@ -9848,12 +9888,18 @@ type from one exception of the chain and a message from another
 (`RunFailure.Exception`, `ExpectedExceptionMatcher`), so an excusal declared against a cause holds though the
 exception that reached the log wraps it, and excuses nothing else.
 
-Measured (`fixtures\results\`, `ResultFixturesTests`): real output from every tool the parsers read, each fixture with
-the digest it must produce stored beside it - the whole document, frames with their kinds and in-tree marks, causes
-and log ranges - and the bytes a model is handed held two ways: for every fixture, the digest said for a model costs
-no more than what the model was handed before - the fifty tail lines plus the log read the old instruction sent it on
-- and their total is pinned, so a change that grows them fails. Fixtures regenerate once with
-`DSSHARNESS_REGENERATE_RESULTS=1`; a stored digest is reviewed as any fixture is.
+Measured (`fixtures\results\`, `ResultFixturesTests`, `ResultParsersTests`): real output from every
+tool the parsers read - captured from the tool where it runs on a developer's machine, written from
+its documented form where it does not (tsc, GoogleTest, jest, vitest, Go, Rust, lldb, the CI log) -
+each read through the parsers the phase that printed it chooses, and held two ways. Its
+`expect.json`, written by hand from the tool's own words and never by the code, says what a person
+reads off the output - the counts, the first error and its place, each diagnostic and failure, the
+first stack's frames and which of them are the project's, the causes - and is asserted first; its
+`digest.json`, the whole document, pins everything else against drift, and only it is rewritten with
+`DSSHARNESS_REGENERATE_RESULTS=1`. The bytes a model is handed are held too: where a log is longer
+than the fifty lines a model was handed before, its digest costs no more than those lines and the
+log the old instruction sent it to read, and the total over every fixture is pinned exactly, so a
+change that grows or shrinks it is made on purpose.
 
 ## Reporting
 

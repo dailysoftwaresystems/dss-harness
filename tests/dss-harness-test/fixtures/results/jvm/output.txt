@@ -1,0 +1,8 @@
+Exception in thread "main" java.lang.IllegalStateException: The runner was not started
+	at com.example.runner.Runner.start(Runner.java:18)
+	at com.example.runner.Runner.lambda$main$0(Runner.java:23)
+	at com.example.runner.Runner.main(Runner.java:24)
+Caused by: java.lang.NullPointerException: Cannot invoke "String.trim()" because "<local2>" is null
+	at com.example.runner.Runner.config(Runner.java:11)
+	at com.example.runner.Runner.start(Runner.java:16)
+	... 2 more

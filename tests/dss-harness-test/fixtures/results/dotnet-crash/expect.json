@@ -1,0 +1,21 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "D:\\a\\app\\app",
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "crashed System.InvalidOperationException: The store could not be loaded."
+  ],
+  "stack": {
+    "frames": 3,
+    "inTree": [
+      "D:\\a\\app\\app\\net\\Crash\\Program.cs:29",
+      "D:\\a\\app\\app\\net\\Crash\\Program.cs:38"
+    ]
+  },
+  "causes": [
+    "System.ArgumentException"
+  ]
+}

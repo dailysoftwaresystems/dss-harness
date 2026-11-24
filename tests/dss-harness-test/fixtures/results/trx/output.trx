@@ -1,15 +1,152 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TestRun id="2ce50b0c-cc33-4785-92a6-9e0f4f5a3a06" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010" name="runner@ci 2026-11-23 00:40:00">
+<TestRun id="2b84b7e0-e232-4724-b0df-438bdb044bbe" name="runner@build-host 2026-11-23 20:09:23" runUser="build-host\runner" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-11-23T20:09:23.9042632-03:00" queuing="2026-11-23T20:09:23.9042633-03:00" start="2026-11-23T20:09:23.4519494-03:00" finish="2026-11-23T20:09:23.9077397-03:00" />
+  <TestSettings name="default" id="717ad3f4-e3b4-4e7f-abdf-2be436dcdc5d">
+    <Deployment runDeploymentRoot="runner_build-host_2026-11-23_20_09_23" />
+  </TestSettings>
   <Results>
-    <UnitTestResult executionId="11111111-1111-1111-1111-111111111111" testId="22222222-2222-2222-2222-222222222222" testName="DssHarness.Tests.ParserTests.FoldsDuplicates" computerName="ci" duration="00:00:00.0240000" startTime="2026-11-23T00:40:01.0000000+00:00" endTime="2026-11-23T00:40:01.0240000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc5a4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57aaf7b0e5e2">
+    <UnitTestResult executionId="73c2c010-cbd9-49c3-a36a-d7bc61e40c70" testId="1d5c19a8-5d8f-b258-2602-f51da2615944" testName="Demo.Tests.ParserTests.FoldsDuplicates" computerName="build-host" duration="00:00:00.0071367" startTime="2026-11-23T20:09:23.8356534-03:00" endTime="2026-11-23T20:09:23.8426998-03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="73c2c010-cbd9-49c3-a36a-d7bc61e40c70">
       <Output>
         <ErrorInfo>
-          <Message>Assert.Equal() Failure: Collections differ at index 0</Message>
-          <StackTrace>  at DssHarness.Tests.ParserTests.FoldsDuplicates() in D:/tests/ParserTests.cs:line 45&#xD;  at DssHarness.Tests.ParserTests.RunAll() in D:/tests/ParserTests.cs:line 12</StackTrace>
+          <Message>Assert.Equal() Failure: Collections differ&#xD;
+Expected: [1, 2]&#xD;
+Actual:   [1, 2, 3]&#xD;
+                 ↑ (pos 2)</Message>
+          <StackTrace>   at Demo.Tests.ParserTests.FoldsDuplicates() in D:\a\app\app\net\TestsV2\ParserTests.cs:line 26&#xD;
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
         </ErrorInfo>
       </Output>
     </UnitTestResult>
-    <UnitTestResult executionId="33333333-3333-3333-3333-333333333333" testId="44444444-4444-4444-4444-444444444444" testName="DssHarness.Tests.ParserTests.HoldsToItsBound" computerName="ci" duration="00:00:00.0080000" outcome="NotExecuted" />
-    <UnitTestResult executionId="55555555-5555-5555-5555-555555555555" testId="66666666-6666-6666-6666-666666666666" testName="DssHarness.Tests.ParserTests.ReadsItsForm" computerName="ci" duration="00:00:00.0110000" outcome="Passed" />
+    <UnitTestResult executionId="70ba0824-4a69-4d03-b5e0-e0bc4b558138" testId="0304f1fd-2ec7-c22e-6061-ad249c36de00" testName="Demo.Tests.ParserTests.LoadsItsStore" computerName="build-host" duration="00:00:00.0027477" startTime="2026-11-23T20:09:23.8341140-03:00" endTime="2026-11-23T20:09:23.8342292-03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="70ba0824-4a69-4d03-b5e0-e0bc4b558138">
+      <Output>
+        <ErrorInfo>
+          <Message>System.InvalidOperationException : The store could not be loaded.&#xD;
+---- System.ArgumentException : An item with the same key has already been added. Key: first</Message>
+          <StackTrace>   at Demo.Tests.ParserTests.LoadsItsStore() in D:\a\app\app\net\TestsV2\ParserTests.cs:line 54&#xD;
+--- End of stack trace from previous location ---&#xD;
+----- Inner Stack Trace -----&#xD;
+   at System.Collections.Generic.Dictionary`2.TryInsert(TKey key, TValue value, InsertionBehavior behavior)&#xD;
+   at System.Collections.Generic.Dictionary`2.Add(TKey key, TValue value)&#xD;
+   at Demo.Tests.Store.Load(String name) in D:\a\app\app\net\TestsV2\ParserTests.cs:line 15&#xD;
+   at Demo.Tests.ParserTests.LoadsItsStore() in D:\a\app\app\net\TestsV2\ParserTests.cs:line 50</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="1030427e-c558-437a-8354-53e58f73f8d8" testId="0d514112-3b0f-20cb-ae0a-830ddcf40700" testName="Demo.Tests.ParserTests.NamesItsCount(count: 2, name: &quot;two&quot;)" computerName="build-host" duration="00:00:00.0014081" startTime="2026-11-23T20:09:23.8272275-03:00" endTime="2026-11-23T20:09:23.8275978-03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1030427e-c558-437a-8354-53e58f73f8d8">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure: Strings differ&#xD;
+           ↓ (pos 0)&#xD;
+Expected: "one"&#xD;
+Actual:   "two"&#xD;
+           ↑ (pos 0)</Message>
+          <StackTrace>   at Demo.Tests.ParserTests.NamesItsCount(Int32 count, String name) in D:\a\app\app\net\TestsV2\ParserTests.cs:line 40&#xD;
+   at InvokeStub_ParserTests.NamesItsCount(Object, Span`1)&#xD;
+   at System.Reflection.MethodBaseInvoker.InvokeWithFewArgs(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="69d27f19-94bd-4c56-bc71-3bf2ed86b971" testId="29e271fa-5644-ad8a-b642-4e661cbdab6e" testName="Demo.Tests.ParserTests.ReadsItsForm" computerName="build-host" duration="00:00:00.0001720" startTime="2026-11-23T20:09:23.8352495-03:00" endTime="2026-11-23T20:09:23.8355006-03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="69d27f19-94bd-4c56-bc71-3bf2ed86b971" />
+    <UnitTestResult executionId="25ba88e6-86dd-46e4-ab62-d311c6007ae3" testId="f04b0117-b6be-7267-532d-a26bc61a742e" testName="Demo.Tests.ParserTests.NamesItsCount(count: 1, name: &quot;one&quot;)" computerName="build-host" duration="00:00:00.0030632" startTime="2026-11-23T20:09:23.8140498-03:00" endTime="2026-11-23T20:09:23.8213672-03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="25ba88e6-86dd-46e4-ab62-d311c6007ae3" />
+    <UnitTestResult executionId="8ed8969c-df62-4d15-8741-fb968853a6bd" testId="b80003dc-b760-05a2-29a0-72c3c225e613" testName="Demo.Tests.ParserTests.SkipsItsFixture" computerName="build-host" duration="00:00:00.0010000" startTime="2026-11-23T20:09:23.8329506-03:00" endTime="2026-11-23T20:09:23.8331058-03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="8ed8969c-df62-4d15-8741-fb968853a6bd">
+      <Output>
+        <ErrorInfo>
+          <Message>The fixture is not ready.</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
   </Results>
+  <TestDefinitions>
+    <UnitTest name="Demo.Tests.ParserTests.ReadsItsForm" storage="d:\a\app\app\net\testsv2\bin\debug\net10.0\testsv2.dll" id="29e271fa-5644-ad8a-b642-4e661cbdab6e">
+      <Execution id="69d27f19-94bd-4c56-bc71-3bf2ed86b971" />
+      <TestMethod codeBase="D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.Tests.ParserTests" name="ReadsItsForm" />
+    </UnitTest>
+    <UnitTest name="Demo.Tests.ParserTests.NamesItsCount(count: 2, name: &quot;two&quot;)" storage="d:\a\app\app\net\testsv2\bin\debug\net10.0\testsv2.dll" id="0d514112-3b0f-20cb-ae0a-830ddcf40700">
+      <Execution id="1030427e-c558-437a-8354-53e58f73f8d8" />
+      <TestMethod codeBase="D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.Tests.ParserTests" name="NamesItsCount" />
+    </UnitTest>
+    <UnitTest name="Demo.Tests.ParserTests.FoldsDuplicates" storage="d:\a\app\app\net\testsv2\bin\debug\net10.0\testsv2.dll" id="1d5c19a8-5d8f-b258-2602-f51da2615944">
+      <Execution id="73c2c010-cbd9-49c3-a36a-d7bc61e40c70" />
+      <TestMethod codeBase="D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.Tests.ParserTests" name="FoldsDuplicates" />
+    </UnitTest>
+    <UnitTest name="Demo.Tests.ParserTests.NamesItsCount(count: 1, name: &quot;one&quot;)" storage="d:\a\app\app\net\testsv2\bin\debug\net10.0\testsv2.dll" id="f04b0117-b6be-7267-532d-a26bc61a742e">
+      <Execution id="25ba88e6-86dd-46e4-ab62-d311c6007ae3" />
+      <TestMethod codeBase="D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.Tests.ParserTests" name="NamesItsCount" />
+    </UnitTest>
+    <UnitTest name="Demo.Tests.ParserTests.LoadsItsStore" storage="d:\a\app\app\net\testsv2\bin\debug\net10.0\testsv2.dll" id="0304f1fd-2ec7-c22e-6061-ad249c36de00">
+      <Execution id="70ba0824-4a69-4d03-b5e0-e0bc4b558138" />
+      <TestMethod codeBase="D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.Tests.ParserTests" name="LoadsItsStore" />
+    </UnitTest>
+    <UnitTest name="Demo.Tests.ParserTests.SkipsItsFixture" storage="d:\a\app\app\net\testsv2\bin\debug\net10.0\testsv2.dll" id="b80003dc-b760-05a2-29a0-72c3c225e613">
+      <Execution id="8ed8969c-df62-4d15-8741-fb968853a6bd" />
+      <TestMethod codeBase="D:\a\app\app\net\TestsV2\bin\Debug\net10.0\TestsV2.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.Tests.ParserTests" name="SkipsItsFixture" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="1d5c19a8-5d8f-b258-2602-f51da2615944" executionId="73c2c010-cbd9-49c3-a36a-d7bc61e40c70" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0304f1fd-2ec7-c22e-6061-ad249c36de00" executionId="70ba0824-4a69-4d03-b5e0-e0bc4b558138" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0d514112-3b0f-20cb-ae0a-830ddcf40700" executionId="1030427e-c558-437a-8354-53e58f73f8d8" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="29e271fa-5644-ad8a-b642-4e661cbdab6e" executionId="69d27f19-94bd-4c56-bc71-3bf2ed86b971" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f04b0117-b6be-7267-532d-a26bc61a742e" executionId="25ba88e6-86dd-46e4-ab62-d311c6007ae3" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="b80003dc-b760-05a2-29a0-72c3c225e613" executionId="8ed8969c-df62-4d15-8741-fb968853a6bd" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="6" executed="5" passed="2" failed="3" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.5+1b188a7b0a (64-bit .NET 10.0.15)&#xD;
+[xUnit.net 00:00:00.06]   Discovering: TestsV2&#xD;
+[xUnit.net 00:00:00.10]   Discovered:  TestsV2&#xD;
+[xUnit.net 00:00:00.11]   Starting:    TestsV2&#xD;
+[xUnit.net 00:00:00.14]       Assert.Equal() Failure: Strings differ&#xD;
+[xUnit.net 00:00:00.14]                  ↓ (pos 0)&#xD;
+[xUnit.net 00:00:00.14]       Expected: "one"&#xD;
+[xUnit.net 00:00:00.14]       Actual:   "two"&#xD;
+[xUnit.net 00:00:00.14]                  ↑ (pos 0)&#xD;
+[xUnit.net 00:00:00.14]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.14]         D:\a\app\app\net\TestsV2\ParserTests.cs(40,0): at Demo.Tests.ParserTests.NamesItsCount(Int32 count, String name)&#xD;
+[xUnit.net 00:00:00.14]            at InvokeStub_ParserTests.NamesItsCount(Object, Span`1)&#xD;
+[xUnit.net 00:00:00.14]            at System.Reflection.MethodBaseInvoker.InvokeWithFewArgs(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)&#xD;
+[xUnit.net 00:00:00.14]       The fixture is not ready.&#xD;
+[xUnit.net 00:00:00.15]       System.InvalidOperationException : The store could not be loaded.&#xD;
+[xUnit.net 00:00:00.15]       ---- System.ArgumentException : An item with the same key has already been added. Key: first&#xD;
+[xUnit.net 00:00:00.15]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.15]         D:\a\app\app\net\TestsV2\ParserTests.cs(54,0): at Demo.Tests.ParserTests.LoadsItsStore()&#xD;
+[xUnit.net 00:00:00.15]         --- End of stack trace from previous location ---&#xD;
+[xUnit.net 00:00:00.15]         ----- Inner Stack Trace -----&#xD;
+[xUnit.net 00:00:00.15]            at System.Collections.Generic.Dictionary`2.TryInsert(TKey key, TValue value, InsertionBehavior behavior)&#xD;
+[xUnit.net 00:00:00.15]            at System.Collections.Generic.Dictionary`2.Add(TKey key, TValue value)&#xD;
+[xUnit.net 00:00:00.15]         D:\a\app\app\net\TestsV2\ParserTests.cs(15,0): at Demo.Tests.Store.Load(String name)&#xD;
+[xUnit.net 00:00:00.15]         D:\a\app\app\net\TestsV2\ParserTests.cs(50,0): at Demo.Tests.ParserTests.LoadsItsStore()&#xD;
+[xUnit.net 00:00:00.15]       Assert.Equal() Failure: Collections differ&#xD;
+[xUnit.net 00:00:00.15]       Expected: [1, 2]&#xD;
+[xUnit.net 00:00:00.15]       Actual:   [1, 2, 3]&#xD;
+[xUnit.net 00:00:00.15]                        ↑ (pos 2)&#xD;
+[xUnit.net 00:00:00.15]       Stack Trace:&#xD;
+[xUnit.net 00:00:00.15]         D:\a\app\app\net\TestsV2\ParserTests.cs(26,0): at Demo.Tests.ParserTests.FoldsDuplicates()&#xD;
+[xUnit.net 00:00:00.15]            at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)&#xD;
+[xUnit.net 00:00:00.15]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)&#xD;
+[xUnit.net 00:00:00.16]   Finished:    TestsV2&#xD;
+Test 'Demo.Tests.ParserTests.SkipsItsFixture' was skipped in the test run.&#xD;
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="build-host" outcome="Error" timestamp="2026-11-23T20:09:23.8301855-03:00">
+        <Text>[xUnit.net 00:00:00.14]     Demo.Tests.ParserTests.NamesItsCount(count: 2, name: "two") [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="build-host" outcome="Warning" timestamp="2026-11-23T20:09:23.8337333-03:00">
+        <Text>[xUnit.net 00:00:00.14]     Demo.Tests.ParserTests.SkipsItsFixture [SKIP]</Text>
+      </RunInfo>
+      <RunInfo computerName="build-host" outcome="Error" timestamp="2026-11-23T20:09:23.8345002-03:00">
+        <Text>[xUnit.net 00:00:00.14]     Demo.Tests.ParserTests.LoadsItsStore [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="build-host" outcome="Error" timestamp="2026-11-23T20:09:23.8429201-03:00">
+        <Text>[xUnit.net 00:00:00.15]     Demo.Tests.ParserTests.FoldsDuplicates [FAIL]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
 </TestRun>
