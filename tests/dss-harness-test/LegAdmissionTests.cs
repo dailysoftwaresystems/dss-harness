@@ -9,9 +9,11 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// A heavy leg waits for its machine to take it: one of the machine's slots, in the dispatch queue's fair order, then the memory
-/// in use below the limit - read again after a settle where another leg holds a slot. Four worktrees' builds on one machine
-/// drove its committed memory to 81 of 113.7 GiB and the process that started them died; the limit of 76% is the one
-/// the consumer's own scripts kept, and a slot is held by the process that asked for it, so one that crashed never keeps it.
+/// in use below the limit - read again after a settle where another leg holds a slot. An entry a build before the queue's own
+/// record wrote is that build's to admit, in the order the line was asked; a unit this build asks for is served by the fair
+/// order. Four worktrees' builds on one machine drove its committed memory to 81 of 113.7 GiB and the process that started
+/// them died; the limit of 76% is the one the consumer's own scripts kept, and a slot is held by the process that asked
+/// for it, so one that crashed never keeps it.
 /// </summary>
 public sealed class LegAdmissionTests
 {
@@ -1160,11 +1162,12 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
-    /// Legs are taken in the order they asked: one that asked later never passes one waiting ahead of it, and each
-    /// waiting line says how many are ahead and who holds the slots.
+    /// An entry a build before the queue's own record wrote is that build's to admit, in the order the line was asked:
+    /// a leg this build admits - which the fair order would serve by its tenant's turn - waits behind an older build's
+    /// waiting entry, never passing it, and each waiting line says how many are ahead and who holds the slots.
     /// </summary>
     [Fact]
-    public async Task ALegThatAskedLater_NeverPassesOneWaitingAhead()
+    public async Task AnOlderBuildsWaitingEntry_HoldsALegThisBuildAdmits_BehindIt()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -1193,15 +1196,16 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
-    /// Commands of repositories declaring different counts share one record: a leg starts only while it is fewer legs
-    /// from the front than every count up to it allows. So a leg allowing three waits while one allowing one runs, one
-    /// allowing one waits while two others run, and a later leg never passes an earlier one whose count holds it back.
+    /// An older build admits its own entries while each is fewer legs from the front of the line than every count up to
+    /// it allows, and a leg this build admits is held to the same counts: it starts only where every count ahead of it
+    /// allows, though the fair order - not that build's - would place it. So a leg allowing three waits while entries
+    /// allowing one run, and one allowing one waits while two run, never passing an earlier one whose count holds it back.
     /// </summary>
     [Theory]
     [InlineData(new[] { 1 }, 3, 1, 1)]
     [InlineData(new[] { 3, 3 }, 1, 1, 2)]
     [InlineData(new[] { 1, 1 }, 3, 1, 2)]
-    public async Task LegsOfCommandsDeclaringDifferentCounts_StartOnlyWhereEveryCountAheadAllows(int[] ahead, int mine, int inForce, int legsAhead)
+    public async Task AnOlderBuildsEntries_HoldALegToEveryCountUpToIt(int[] ahead, int mine, int inForce, int legsAhead)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -1216,6 +1220,60 @@ public sealed class LegAdmissionTests
         Assert.False(refused.Fact.Admitted);
         Assert.StartsWith($"waits for one of this machine's {inForce} heavy-leg slot(s) as tenant 'local/src/mine', {legsAhead} leg(s) ahead", said[0], StringComparison.Ordinal);
         Assert.Equal(ahead.Length, AdmissionKit.Read(record).Count);
+    }
+
+    /// <summary>
+    /// A leg this build admits is served by the dispatch queue's fair order, not the order the line was asked in: the
+    /// first tenant's second unit - its first charged for the slot it holds - is passed by a unit of a second tenant
+    /// waiting ahead of it and by the leg itself, of a third, which is admitted once the holder ends and the second
+    /// tenant's unit has taken its turn, its line counting the two ahead of it.
+    /// </summary>
+    [Fact]
+    public async Task ALegThisBuildAdmits_IsServedByTheFairOrder_PassingAChargedTenantsNextUnit()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => 1, clock: clock);
+        var holding = slots.Ask("run-a", "build", "a-1", "local", "/src/a", null, 1, repository: "/src/a");
+
+        Assert.True(slots.Look(holding).Holding);
+
+        var charged = slots.Ask("run-a", "build", "a-2", "local", "/src/a", null, 1, repository: "/src/a");
+        var ahead = slots.Ask("run-b", "build", "b-1", "local", "/src/b", null, 1, repository: "/src/b");
+        var said = new List<string>();
+        var waits = 0;
+
+        // The holder ends at the first wait, and the unit ahead of the leg at the second: the leg looks after each.
+        var admission = AdmissionKit.Admission(slots, new ScriptedGauge(10), clock, settle: TimeSpan.Zero, onWait: () =>
+        {
+            switch (++waits)
+            {
+                case 1:
+                    holding.Dispose();
+                    break;
+                case 2:
+                    ahead.Dispose();
+                    break;
+            }
+        });
+
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, settleLeast: 0, settleMost: 0), said),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(2 * AdmissionSettings.DefaultPollSeconds, admitted.Fact.WaitedSeconds);
+        Assert.StartsWith(
+            $"waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/mine', 2 leg(s) ahead; held by {holding.Entry.Describe()}",
+            said[0],
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            $"waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/mine', 1 leg(s) ahead; held by {ahead.Entry.Describe()}",
+            said[1],
+            StringComparison.Ordinal);
+        Assert.False(slots.Look(charged).Holding);
     }
 
     /// <summary>A leg taking a slot beside others whose counts allow it starts at once, its own count keeping theirs.</summary>
