@@ -25,16 +25,25 @@ public sealed record QueuedUnit(SlotEntry Holder, string Tenant, int Priority, d
 }
 
 /// <summary>
-/// A waiting tenant's deficit in the queue's round-robin (<see cref="DispatchOrder"/>): the credit its units' costs are
-/// weighed against, kept while it has a unit waiting and reset to nothing once it has none.
+/// A tenant's deficit in the queue's round-robin (<see cref="DispatchOrder"/>): the credit the costs of its units are
+/// charged against - below nothing by what the unit it last started cost beyond the credit its tenant had - and the share
+/// that pays a debt back, each round, while the tenant has no unit waiting.
 /// </summary>
 /// <param name="Tenant">The tenant.</param>
-/// <param name="Deficit">Its credit, in minutes of cost; below nothing where a unit started on a credit it had not earned.</param>
-public sealed record TenantDeficit(string Tenant, double Deficit);
+/// <param name="Deficit">
+/// Its credit, in minutes of cost. A debt is kept after the tenant's last unit has gone and paid back by its share each
+/// round; a credit is kept only while the tenant has a unit waiting, and is spent on the next unit it starts.
+/// </param>
+/// <param name="Share">
+/// The unaged share (<see cref="DispatchOrder.UnagedShareOf"/>) a debt is paid back at while the tenant has no unit
+/// waiting: the share of the unit it last started. The share of a row a build before this one kept, where it kept none:
+/// a weight and a priority of 1.
+/// </param>
+public sealed record TenantDeficit(string Tenant, double Deficit, double Share = DispatchOrder.LocalWeight * DispatchOrder.LeastPriority);
 
-/// <summary>What the dispatch queue keeps beside the slots' record: a row of each unit, and each waiting tenant's deficit.</summary>
+/// <summary>What the dispatch queue keeps beside the slots' record: a row of each unit, and each tenant's deficit.</summary>
 /// <param name="Units">A row of each unit this build asked, in the order they asked.</param>
-/// <param name="Tenants">Each tenant with a unit waiting that has a deficit kept.</param>
+/// <param name="Tenants">Each tenant whose deficit the record keeps, waiting or not: a debt outlives its unit, a credit does not.</param>
 public sealed record DispatchRecord(IReadOnlyList<QueuedUnit> Units, IReadOnlyList<TenantDeficit> Tenants)
 {
     /// <summary>The record where no unit has asked.</summary>
@@ -44,13 +53,14 @@ public sealed record DispatchRecord(IReadOnlyList<QueuedUnit> Units, IReadOnlyLi
 /// <summary>
 /// The dispatch queue's one order, and the slots it grants: deficit round-robin over the tenants of the units waiting, as
 /// plan 2.0 part 06 sets it. Each round, every tenant with a unit waiting is credited its share - its unit's weight times
-/// its run's priority, doubled for each whole period of the unit's aging bound it has waited - and a unit is served once
-/// its tenant's deficit covers its estimated cost, which is then debited: so a tenant with a burst of short units and a
-/// tenant with one long unit each get the machine in proportion, and a long unit - a WSL sweep, sent whole - leaves its
-/// tenant that much behind before its next. The rounds are counted, never stepped: a tenant's turn comes after as many
-/// rounds as its deficit is short of its unit's cost, over its share, so a decision is linear in the units waiting
-/// whatever their costs. Ties go to the unit that asked first; within a tenant, its units are served in the order they
-/// asked. A tenant's deficit is kept while it has a unit waiting, and reset to nothing once it has none.
+/// its run's priority, doubled for each whole period of the unit's aging bound it has waited - and a unit starts once its
+/// tenant owes nothing, charged its estimated cost as it starts: so a tenant with a burst of short units and a tenant
+/// with one long unit each get the machine in proportion, and a long unit - a WSL sweep, sent whole - leaves its tenant
+/// that much behind before its next, the debt paid back by its share each round. The rounds are counted, never stepped: a
+/// tenant's turn comes after as many rounds as its debt is short of nothing, over its share, and never fewer than one -
+/// a share past any cost, an aging bound of no minutes, still takes the one round, so its tenant's units go one a round
+/// and no tenant's setting starves another. Ties go to the unit that asked first; within a tenant, its units are served
+/// in the order they asked.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -77,10 +87,22 @@ internal static class DispatchOrder
     public const int LeastPriority = 1;
 
     /// <summary>
-    /// What a tenant is credited each round for <paramref name="row"/> waiting at <paramref name="now"/>: its weight times its
-    /// priority, doubled for each whole period of its aging bound it has waited since it asked - every period counted, so an
-    /// aging bound of no minutes credits a waiting unit past any cost at once, and the units are served in the order they
-    /// asked.
+    /// What a tenant is credited each round for <paramref name="row"/> waiting, before its waiting ages it: its weight
+    /// times its run's priority - the share a debt is paid back at, and the one a credit is never carried past.
+    /// </summary>
+    /// <param name="row">The unit.</param>
+    public static double UnagedShareOf(QueuedUnit row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return row.Weight * Math.Max(LeastPriority, row.Priority);
+    }
+
+    /// <summary>
+    /// What a tenant is credited each round for <paramref name="row"/> waiting at <paramref name="now"/>: its unaged
+    /// share (<see cref="UnagedShareOf"/>), doubled for each whole period of its aging bound it has waited since it
+    /// asked - every period counted, so an aging bound of no minutes makes the share past any cost, and a debt is gone in
+    /// one round.
     /// </summary>
     /// <param name="row">The unit.</param>
     /// <param name="now">When the queue is read.</param>
@@ -91,7 +113,7 @@ internal static class DispatchOrder
         var waited = Math.Max(0, (now - row.Holder.AskedUtc).TotalMinutes);
         var periods = row.AgeAfterMinutes > 0 ? Math.Floor(waited / row.AgeAfterMinutes) : double.PositiveInfinity;
 
-        return row.Weight * Math.Max(LeastPriority, row.Priority) * Math.Pow(2, periods);
+        return UnagedShareOf(row) * Math.Pow(2, periods);
     }
 
     /// <summary>
@@ -101,7 +123,7 @@ internal static class DispatchOrder
     /// </summary>
     /// <param name="line">The entries of the slots' record still standing, in the order they asked.</param>
     /// <param name="rows">The row of each entry this build asked; an entry with none is an older build's.</param>
-    /// <param name="tenants">The waiting tenants' deficits, as the record keeps them.</param>
+    /// <param name="tenants">The tenants' deficits, as the record keeps them.</param>
     /// <param name="machine">The machine's own count of heavy legs, where its settings file declares one.</param>
     /// <param name="now">When the queue is read: what the waits are counted to, and what a grant is marked with.</param>
     /// <param name="comparer">How two tenants are told apart.</param>
@@ -160,7 +182,7 @@ internal static class DispatchOrder
             }
         }
 
-        var kept = tenants.GroupBy(tenant => tenant.Tenant, comparer).ToDictionary(group => group.Key, group => group.Last().Deficit, comparer);
+        var kept = tenants.GroupBy(tenant => tenant.Tenant, comparer).ToDictionary(group => group.Key, group => group.Last(), comparer);
         var turns = candidates
             .GroupBy(waiter => waiter.Row.Tenant, comparer)
             .Select(group => new Turn(group.Key, [.. group], kept.GetValueOrDefault(group.Key), now))
@@ -229,26 +251,34 @@ internal static class DispatchOrder
                 ? holders.Count < count
                 : holders.Count < holders.Select(holder => holder.Entry.Slots).Append(entry.Slots).Min();
 
-        // The deficit of every tenant with a unit still waiting, counted to the round the granting stopped at; a tenant with
-        // none waiting is reset, and one whose units wait only behind an older build's keeps what it had.
+        // The deficit of every tenant the order counted, to the round the granting stopped at. A tenant with a unit
+        // waiting keeps its credit with its debt; one with none keeps a debt - paid back at the share the record holds -
+        // and drops a credit, spent already on the unit it started; one whose units wait only behind an older build's
+        // keeps what it had, its debt paid back the same way and its credit held for the units that wait.
         IReadOnlyList<TenantDeficit> Deficits(double at)
         {
-            var waiting = new Dictionary<string, double>(comparer);
+            var counted = new Dictionary<string, TenantDeficit>(comparer);
 
-            foreach (var turn in turns.Where(turn => turn.Waiting))
+            foreach (var turn in turns)
             {
-                waiting[turn.Tenant] = turn.DeficitAt(at);
+                counted[turn.Tenant] = turn.Kept(at);
             }
 
-            foreach (var entry in behind)
+            var waitingBehind = new HashSet<string>(behind.Where(rows.ContainsKey).Select(entry => rows[entry].Tenant), comparer);
+
+            foreach (var standing in kept.Values)
             {
-                if (rows.TryGetValue(entry, out var row) && !waiting.ContainsKey(row.Tenant))
+                if (counted.ContainsKey(standing.Tenant))
                 {
-                    waiting[row.Tenant] = kept.GetValueOrDefault(row.Tenant);
+                    continue;
                 }
+
+                var paid = standing.Deficit < 0 ? Math.Min(0, standing.Deficit + (at * standing.Share)) : standing.Deficit;
+
+                counted[standing.Tenant] = standing with { Deficit = waitingBehind.Contains(standing.Tenant) ? paid : Math.Min(0, paid) };
             }
 
-            return [.. waiting.Where(tenant => tenant.Value != 0).Select(tenant => new TenantDeficit(tenant.Key, tenant.Value))];
+            return [.. counted.Where(entry => entry.Value.Deficit != 0).Select(entry => entry.Value)];
         }
     }
 
@@ -282,13 +312,20 @@ internal static class DispatchOrder
 
     /// <summary>
     /// One tenant's turn in the round-robin: its units waiting, in the order they asked, and its deficit as counted at the
-    /// round it was last served at - credited lazily, its share times the rounds since, as each is asked.
+    /// round it was last served at - credited lazily, its share times the rounds since, as each is asked. A unit starts
+    /// once its tenant owes nothing and is charged its cost as it starts, so a long unit leaves its tenant that much in
+    /// debt; the debt is paid back by the share of the unit now waiting - aged, where it has waited - but no credit is
+    /// ever carried past what the unaged share would give.
     /// </summary>
-    private sealed class Turn(string tenant, IReadOnlyList<Waiter> waiting, double deficit, DateTimeOffset now)
+    private sealed class Turn(string tenant, IReadOnlyList<Waiter> waiting, TenantDeficit? kept, DateTimeOffset now)
     {
         private int _next;
-        private double _deficit = deficit;
+        private double _deficit = kept?.Deficit ?? 0;
         private double _round;
+
+        // The share a debt is paid back at once the tenant has nothing waiting: the share the record kept, where it kept
+        // one, else the unaged share of the unit now at its head.
+        private double _owedAt = kept?.Share ?? UnagedShareOf(waiting[0].Row);
 
         public string Tenant { get; } = tenant;
 
@@ -296,27 +333,49 @@ internal static class DispatchOrder
 
         public bool Waiting => _next < waiting.Count;
 
-        /// <summary>The round its head is covered at, and where its head stands in the line: what the order is kept by.</summary>
-        public (double Round, int At) Due => (_round + RoundsShort(_deficit, Head.Row.Cost, Share), Head.At);
+        /// <summary>The round its head's tenant is owed nothing at, and where its head stands in the line: what the order is kept by.</summary>
+        public (double Round, int At) Due => (_round + RoundsShort(_deficit, Share), Head.At);
 
         private double Share => ShareOf(Head.Row, now);
 
-        /// <summary>Its deficit counted to <paramref name="round"/>: credited its share for each round since its last.</summary>
-        public double DeficitAt(double round)
-            => Waiting && round > _round ? _deficit + ((round - _round) * Share) : _deficit;
+        private double Unaged => UnagedShareOf(Head.Row);
 
-        /// <summary>Serves its head at <paramref name="round"/>: credited to it, and debited its cost.</summary>
+        /// <summary>
+        /// Its deficit counted to <paramref name="round"/>: while it has a unit waiting, its share for each round since its
+        /// last, never carrying a credit past what the unaged share gives; once it has none waiting, its debt paid back at
+        /// the share the record keeps.
+        /// </summary>
+        public double DeficitAt(double round)
+        {
+            if (round <= _round)
+            {
+                return _deficit;
+            }
+
+            var rounds = round - _round;
+
+            return Waiting
+                ? Math.Min(_deficit + (rounds * Share), Math.Max(0, _deficit + (rounds * Unaged)))
+                : _deficit + (rounds * _owedAt);
+        }
+
+        /// <summary>Serves its head at <paramref name="round"/>: its tenant owing nothing, the unit starts and is charged its cost.</summary>
         public void Serve(double round)
         {
             _deficit = DeficitAt(round) - Head.Row.Cost;
+            _owedAt = Unaged;
             _round = round;
             _next++;
         }
 
-        // How many rounds a deficit is short of a cost by, at a share a round: none where it covers it, or the share is past
-        // any cost.
-        private static double RoundsShort(double deficit, double cost, double share)
-            => deficit >= cost || double.IsPositiveInfinity(share) ? 0 : Math.Ceiling((cost - deficit) / share);
+        /// <summary>What the record keeps of it at <paramref name="round"/>: its deficit, and the share a debt is paid back at while it has no unit waiting.</summary>
+        public TenantDeficit Kept(double round)
+            => new(Tenant, Waiting ? DeficitAt(round) : Math.Min(0, DeficitAt(round)), _owedAt);
+
+        // How many rounds a tenant is in debt for, at a share a round: none where it owes nothing, and never fewer than
+        // one - a share past any cost takes the one round, so its tenant's units go one a round.
+        private static double RoundsShort(double deficit, double share)
+            => deficit >= 0 ? 0 : Math.Max(1, Math.Ceiling(-deficit / share));
     }
 
     /// <summary>The queue as one look read it.</summary>

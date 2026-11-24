@@ -230,11 +230,12 @@ public sealed record DispatchClass(
 /// <param name="Share">
 /// What its tenant is credited each round it waits (<see cref="DispatchOrder.ShareOf"/>): its weight times its priority,
 /// doubled for each whole aging period it has waited - past any number where its aging bound is no minutes or its
-/// doublings pass what a number holds, and then its cost is covered at once; <see langword="null"/> where it holds, or an
+/// doublings pass what a number holds, and then a debt is gone in one round; <see langword="null"/> where it holds, or an
 /// older build asked it.
 /// </param>
 /// <param name="Deficit">
-/// Its tenant's deficit, the credit a unit's cost is weighed against, as the queue last kept it; <see langword="null"/>
+/// Its tenant's deficit, the credit a unit's cost is charged against as it starts, as the queue last kept it - below
+/// nothing where its tenant still owes for a unit it started; <see langword="null"/>
 /// where it holds, or an older build asked it.
 /// </param>
 public sealed record DispatchUnit(SlotEntry Entry, QueuedUnit? Queued, TimeSpan? Waited, double? Share, double? Deficit)
@@ -249,9 +250,10 @@ public sealed record DispatchUnit(SlotEntry Entry, QueuedUnit? Queued, TimeSpan?
 /// tenant. A unit holds a slot once the queue grants it one - a mark written in the same change of the record that
 /// grants it (<see cref="QueuedUnit.HeldSinceUtc"/>) - and the units waiting are granted the slots left, in the fair
 /// order (<see cref="DispatchOrder"/>): deficit round-robin over their tenants, each tenant's deficit credited its
-/// share each round and a unit started where its tenant's deficit covers its estimated cost, which is then debited, so
+/// share each round and a unit started once its tenant owes nothing, charged its estimated cost as it starts, so
 /// a tenant with a burst of short arms and a tenant with one long build each get the machine in proportion, and neither
-/// waits for the other's whole burst. The unit the fair order puts first and that does not fit beside the holders holds
+/// waits for the other's whole burst - a long unit leaves its tenant owing what it cost, paid back by its share each
+/// round. The unit the fair order puts first and that does not fit beside the holders holds
 /// back every unit behind it, so no unit is passed for ever. Each slot is given back when its unit's work ends.
 /// </summary>
 /// <remarks>
@@ -277,7 +279,7 @@ public sealed record DispatchUnit(SlotEntry Entry, QueuedUnit? Queued, TimeSpan?
 /// <para>
 /// The slots' record keeps the members every build sharing it reads, and nothing more: a build that found a member it
 /// does not know would refuse the record whole, and with it every heavy leg it runs. What the queue keeps of each unit
-/// beyond them - its tenant, weight, priority, cost, aging bound and its hold mark - and each waiting tenant's deficit
+/// beyond them - its tenant, weight, priority, cost, aging bound and its hold mark - and each tenant's deficit
 /// are kept in a record of their own beside it (<see cref="QueuePathFor"/>), read and written only while the slots'
 /// record is held, so the two change as one; a row whose entry has left the slots' record counts for nothing, and goes
 /// with the next change. An entry with no row is an older build's, which admits its own leg while the leg is fewer from

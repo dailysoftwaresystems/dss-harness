@@ -11,25 +11,26 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The machine's dispatch queue: a unit holds a slot once the queue grants it one, a mark written in the same change of the
 /// record; the units waiting are granted the slots left by deficit round-robin over their tenants - each tenant's deficit
-/// credited its weight times its priority, aged, each round, and a unit started once its tenant's deficit covers its cost -
-/// with each unit's own room rule kept whole and the first unit of the order that does not fit holding back every unit
-/// behind it. A unit's cost is the median of the newest runs of its name the queue measured; an older build's entries are
-/// counted where that build holds them, and the slots' record keeps the shape that build reads.
+/// credited its weight times its priority, aged, each round, and a unit started once its tenant owes nothing, charged its
+/// cost as it starts, its debt paid back by its share each round - with each unit's own room rule kept whole and the first
+/// unit of the order that does not fit holding back every unit behind it. A unit's cost is the median of the newest runs
+/// of its name the queue measured; an older build's entries are counted where that build holds them, and the slots' record
+/// keeps the shape that build reads.
 /// </summary>
 public sealed class MachineDispatchQueueTests
 {
     /// <summary>
     /// A tenant with a burst of short arms and a tenant with one long build each get the machine in proportion to their
-    /// costs: on one slot, the build - four minutes, as its runs measured it - asked after the whole burst of one-minute arms
-    /// starts once the arms' tenant has had four minutes of the machine, before the burst's last arm, where the order they
-    /// asked in would keep it behind the whole burst.
+    /// costs: on one slot, the build - four minutes, as its last run took - asked after the whole burst of one-minute arms
+    /// starts after the burst's first arm and before its last, where the order they asked in would keep it behind the
+    /// whole burst.
     /// </summary>
     [Fact]
     public void TwoTenantsOfUnequalBursts_StartInTheOrderTheirCostsShareTheMachineBy()
     {
         using var machine = new Machine(slots: 1);
 
-        machine.Measure("/src/b", "build", TimeSpan.FromMinutes(4));
+        machine.RanBefore("/src/b", "build", TimeSpan.FromMinutes(4));
 
         var waiting = new List<SlotPlace>
         {
@@ -41,7 +42,7 @@ public sealed class MachineDispatchQueueTests
             machine.Ask("build", "/src/b"),
         };
 
-        Assert.Equal(["arm-1", "arm-2", "arm-3", "arm-4", "build", "arm-5"], machine.Starts(waiting));
+        Assert.Equal(["arm-1", "build", "arm-2", "arm-3", "arm-4", "arm-5"], machine.Starts(waiting));
     }
 
     /// <summary>
@@ -65,8 +66,8 @@ public sealed class MachineDispatchQueueTests
     }
 
     /// <summary>
-    /// A heavier tenant is credited its weight each round, so it is served in proportion: two of its units to the lighter
-    /// tenant's one, where equal weights take turns.
+    /// A heavier tenant is credited its weight each round, so it is served in proportion: two of its units run between
+    /// the lighter tenant's second and its last, where equal weights take turns.
     /// </summary>
     [Fact]
     public void AHeavierTenant_IsServedInProportionToItsWeight()
@@ -83,7 +84,7 @@ public sealed class MachineDispatchQueueTests
             machine.Ask("heavy-3", "/src/heavy", weight: 2),
         };
 
-        Assert.Equal(["light-1", "heavy-1", "heavy-2", "light-2", "heavy-3", "light-3"], machine.Starts(waiting));
+        Assert.Equal(["light-1", "heavy-1", "light-2", "heavy-2", "heavy-3", "light-3"], machine.Starts(waiting));
     }
 
     /// <summary>A run its workflow marks with a higher priority is credited it each round, as a weight is.</summary>
@@ -102,45 +103,54 @@ public sealed class MachineDispatchQueueTests
             machine.Ask("urgent-3", "/src/urgent", priority: 2),
         };
 
-        Assert.Equal(["later-1", "urgent-1", "urgent-2", "later-2", "urgent-3", "later-3"], machine.Starts(waiting));
+        Assert.Equal(["later-1", "urgent-1", "later-2", "urgent-2", "urgent-3", "later-3"], machine.Starts(waiting));
     }
 
     /// <summary>
-    /// A unit waiting past its aging bound has its tenant's share doubled for each whole period: an eight-minute build that
-    /// has waited 25 minutes on a bound of 10 - two periods, four times the share - starts after one short arm of the
-    /// tenant asking after it, where unaged it would wait for all three.
+    /// A unit waiting past its aging bound has its tenant's share doubled for each whole period, so its debt is paid back
+    /// the sooner the longer it has waited: an eight-minute build, granted once and asked again while 25 minutes past a
+    /// bound of 10 - two periods, four times the share - is served after two short arms of the tenant asking after it,
+    /// where a bound no wait doubles under leaves it behind all three. Aging never carries a credit past the debt: the
+    /// arms' tenant, owing nothing of its own, is never pushed behind by the build's aging.
     /// </summary>
     [Theory]
-    [InlineData(10, new[] { "arm-1", "build", "arm-2", "arm-3" })]
-    [InlineData(100_000, new[] { "arm-1", "arm-2", "arm-3", "build" })]
+    [InlineData(10, new[] { "arm-1", "arm-2", "build-2", "arm-3" })]
+    [InlineData(100_000, new[] { "arm-1", "arm-2", "arm-3", "build-2" })]
     public void AUnitWaitingPastItsAgingBound_HasItsTenantsShareDoubledForEachPeriod(double ageAfterMinutes, string[] starts)
     {
         using var machine = new Machine(slots: 1);
         var ageAfter = TimeSpan.FromMinutes(ageAfterMinutes);
 
-        machine.Measure("/src/old", "build", TimeSpan.FromMinutes(8));
+        machine.RanBefore("/src/old", "build-1", TimeSpan.FromMinutes(8));
 
-        var build = machine.Ask("build", "/src/old", ageAfter: ageAfter);
+        var build1 = machine.Ask("build-1", "/src/old", ageAfter: ageAfter);
+
+        Assert.True(machine.Queue.Look(build1).Holding);
+
+        var build2 = machine.Ask("build-2", "/src/old", ageAfter: ageAfter);
 
         machine.Clock.Advance(TimeSpan.FromMinutes(25));
 
         List<SlotPlace> waiting =
         [
-            build,
+            build2,
             machine.Ask("arm-1", "/src/new", ageAfter: ageAfter),
             machine.Ask("arm-2", "/src/new", ageAfter: ageAfter),
             machine.Ask("arm-3", "/src/new", ageAfter: ageAfter),
         ];
 
+        build1.Dispose();
+
         Assert.Equal(starts, machine.Starts(waiting));
     }
 
     /// <summary>
-    /// An aging bound of no minutes ages every waiting unit's share past any cost at once, so the units are served in the
-    /// order they asked: the second tenant's unit, which would take its turn second, waits for the first's whole burst.
+    /// An aging bound of no minutes makes the share past any cost, and a share past any cost still takes a round: each
+    /// tenant's units go one a round, in the order they asked, the tenants in turn - so the second tenant's unit is served
+    /// between the first's two, where a share due in no rounds would serve the first's whole burst before it.
     /// </summary>
     [Fact]
-    public void AnAgingBoundOfNoMinutes_ServesTheUnitsInTheOrderTheyAsked()
+    public void AnAgingBoundOfNoMinutes_ServesEachTenantsUnitsOneARound_InTheOrderTheyAsked()
     {
         using var machine = new Machine(slots: 1);
 
@@ -151,7 +161,108 @@ public sealed class MachineDispatchQueueTests
             machine.Ask("b-1", "/src/b", ageAfter: TimeSpan.Zero),
         };
 
-        Assert.Equal(["a-1", "a-2", "b-1"], machine.Starts(waiting));
+        Assert.Equal(["a-1", "b-1", "a-2"], machine.Starts(waiting));
+    }
+
+    /// <summary>
+    /// No tenant's setting starves another: a tenant whose aging bound is no minutes - its share past any cost - asks a
+    /// stream of units against one waiting at the default bound with a three-minute build behind it, and still gets one
+    /// round in two once the other's turn comes, its stream held to a unit a round. Under the pre-paid order the
+    /// unbounded tenant's units were due in no rounds at all, and the other tenant waited behind the whole stream.
+    /// </summary>
+    [Fact]
+    public void AnUnboundedTenantsStream_DoesNotStarveATenantOfTheDefaultBound()
+    {
+        using var machine = new Machine(slots: 1);
+
+        machine.RanBefore("/src/b", "b-1", TimeSpan.FromMinutes(3));
+        machine.RanBefore("/src/b", "b-2", TimeSpan.FromMinutes(3));
+
+        var waiting = new List<SlotPlace>
+        {
+            machine.Ask("a-1", "/src/a", ageAfter: TimeSpan.Zero),
+            machine.Ask("a-2", "/src/a", ageAfter: TimeSpan.Zero),
+            machine.Ask("a-3", "/src/a", ageAfter: TimeSpan.Zero),
+            machine.Ask("a-4", "/src/a", ageAfter: TimeSpan.Zero),
+            machine.Ask("a-5", "/src/a", ageAfter: TimeSpan.Zero),
+            machine.Ask("a-6", "/src/a", ageAfter: TimeSpan.Zero),
+            machine.Ask("b-1", "/src/b"),
+            machine.Ask("b-2", "/src/b"),
+        };
+
+        Assert.Equal(["a-1", "b-1", "a-2", "a-3", "a-4", "b-2", "a-5", "a-6"], machine.Starts(waiting));
+    }
+
+    /// <summary>
+    /// A blocked head is not passed for ever by an unbounded tenant's arrivals: two units whose own rule allows three
+    /// hold, a third allowing one asks behind them, and a unit of the unbounded tenant asking after it - which a share
+    /// due in no rounds would have passed it - is not granted while the head waits, for its share too takes a round.
+    /// </summary>
+    [Fact]
+    public void ABlockedHead_IsNotPassedByAnUnboundedTenantsArrivals()
+    {
+        using var machine = new Machine(slots: null);
+        var first = machine.Ask("a-1", "/src/a", slots: 3, ageAfter: TimeSpan.Zero);
+        var second = machine.Ask("a-2", "/src/a", slots: 3, ageAfter: TimeSpan.Zero);
+
+        Assert.True(machine.Queue.Look(first).Holding);
+        Assert.True(machine.Queue.Look(second).Holding);
+
+        var blocked = machine.Ask("b-1", "/src/b", slots: 1);
+        var arrival = machine.Ask("a-3", "/src/a", slots: 3, ageAfter: TimeSpan.Zero);
+
+        Assert.False(machine.Queue.Look(blocked).Holding);
+        Assert.False(machine.Queue.Look(arrival).Holding);
+
+        first.Dispose();
+        second.Dispose();
+
+        Assert.True(machine.Queue.Look(blocked).Holding);
+        Assert.False(machine.Queue.Look(arrival).Holding);
+    }
+
+    /// <summary>
+    /// A WSL sweep, sent whole as one unit, is charged its whole cost as it starts, and its tenant's charge outlives it:
+    /// a four-minute sweep granted on an idle machine leaves its tenant four minutes in debt, so the four one-minute
+    /// builds the other tenant asked while it held start before its next unit - which asks before two more of that
+    /// tenant's, and behind none of the four it owes. Under the pre-paid order the sweep's tenant owed nothing, its next
+    /// unit starting at once against the other tenant's turn.
+    /// </summary>
+    [Fact]
+    public void AWslSweep_IsChargedWhole_ItsTenantsNextUnitWaitingForTheOtherTenantsUnitsOfThatCost()
+    {
+        using var machine = new Machine(slots: 1);
+
+        machine.Measure("/src/a", "sweep", TimeSpan.FromMinutes(4));
+        machine.Measure("/src/b", "build", TimeSpan.FromMinutes(1));
+
+        var sweep = machine.Ask("sweep", "/src/a");
+
+        Assert.True(machine.Queue.Look(sweep).Holding);
+
+        List<SlotPlace> waiting =
+        [
+            machine.Ask("b-1", "/src/b"),
+            machine.Ask("b-2", "/src/b"),
+            machine.Ask("b-3", "/src/b"),
+            machine.Ask("b-4", "/src/b"),
+        ];
+
+        foreach (var build in waiting)
+        {
+            Assert.False(machine.Queue.Look(build).Holding);
+        }
+
+        sweep.Dispose();
+
+        waiting.AddRange(
+        [
+            machine.Ask("a-next", "/src/a"),
+            machine.Ask("b-5", "/src/b"),
+            machine.Ask("b-6", "/src/b"),
+        ]);
+
+        Assert.Equal(["b-1", "b-2", "b-3", "b-4", "a-next", "b-5", "b-6"], machine.Starts(waiting));
     }
 
     /// <summary>
@@ -169,8 +280,9 @@ public sealed class MachineDispatchQueueTests
         => Assert.Equal(tenant, MachineDispatchQueue.TenantOf(repository));
 
     /// <summary>
-    /// A share past any number - an aging bound of no minutes, or more doublings than a number holds - covers its unit's
-    /// cost at once: the queue says it as past any cost, and its document holds no number for it, which no JSON could.
+    /// A share past any number - an aging bound of no minutes, or more doublings than a number holds - is said as past
+    /// any cost, and its tenant's debt is gone in one round: the queue says it as past any cost, and its document holds
+    /// no number for it, which no JSON could.
     /// </summary>
     [Fact]
     public void AShareNoNumberHolds_IsSaidAsPastAnyCost()
@@ -256,8 +368,9 @@ public sealed class MachineDispatchQueueTests
 
     /// <summary>
     /// The heavy legs admitted through the admission's own wait are those the queue grants: on one slot, a leg of a second
-    /// tenant asked after two units of the first is admitted once the first tenant has had its turn - after one of its units,
-    /// not both - its line naming its tenant and the one unit served before it.
+    /// tenant asked after two units of the first is the first of the order - the first's earlier unit has left its tenant
+    /// in debt, and this one's owes nothing - so it waits on the holder alone, one unit ahead of it, and is admitted once
+    /// that holder ends, not after the first tenant's whole burst.
     /// </summary>
     [Fact]
     public async Task ALegOfASecondTenant_IsAdmittedInItsTurn_BeforeTheFirstTenantsLaterUnit()
@@ -272,17 +385,12 @@ public sealed class MachineDispatchQueueTests
         var said = new List<string>();
         var waits = 0;
 
-        // The holder ends at the first wait, and the unit then granted at the second: the leg looks after each.
+        // The holder ends at the first wait, and the leg is granted at the look after it.
         var admission = AdmissionKit.Admission(machine.Queue, new ScriptedGauge(10), machine.Clock, settle: TimeSpan.Zero, onWait: () =>
         {
-            switch (++waits)
+            if (++waits == 1)
             {
-                case 1:
-                    holding.Dispose();
-                    break;
-                case 2:
-                    next.Dispose();
-                    break;
+                holding.Dispose();
             }
         });
 
@@ -291,12 +399,13 @@ public sealed class MachineDispatchQueueTests
             TestContext.Current.CancellationToken);
 
         Assert.True(admitted.Fact.Admitted);
-        Assert.Equal(2 * AdmissionSettings.DefaultPollSeconds, admitted.Fact.WaitedSeconds);
+        Assert.Equal(AdmissionSettings.DefaultPollSeconds, admitted.Fact.WaitedSeconds);
         Assert.StartsWith(
-            $"waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/b', 2 leg(s) ahead; held by {holding.Entry.Describe()}",
+            $"waits for one of this machine's 1 heavy-leg slot(s) as tenant 'local/src/b', 1 leg(s) ahead; held by {holding.Entry.Describe()}",
             said[0],
             StringComparison.Ordinal);
         Assert.False(machine.Queue.Look(later).Holding);
+        Assert.False(machine.Queue.Look(next).Holding);
     }
 
     /// <summary>
@@ -493,12 +602,12 @@ public sealed class MachineDispatchQueueTests
         Assert.Equal(
             [("older", (string?)null), ("a-1", "local/src/a")],
             heavy.Holders.Select(unit => (unit.Entry.Leg, unit.Queued?.Tenant)));
-        // Each costing one quantum, each tenant's first unit is covered after one round, and the earlier asked goes first;
-        // the priority shows in the share, which tells how fast that tenant's deficit grows.
+        // The waiting order serves b-1 first: it asked after a-1, but a-1's cost has left its tenant a quantum in debt
+        // and b-1's owes nothing; the priority shows in the share, which tells how fast that deficit grows.
         (string Leg, string Tenant, double Cost, double? Share, double? Deficit, TimeSpan? Waited)[] waiting =
         [
-            ("a-2", "local/src/a", 1, 1, 0, TimeSpan.FromMinutes(3)),
             ("b-1", "local/src/b", 1, 2, 0, TimeSpan.FromMinutes(3)),
+            ("a-2", "local/src/a", 1, 1, -1, TimeSpan.FromMinutes(3)),
         ];
 
         Assert.Equal(waiting, heavy.Waiting.Select(unit => (unit.Entry.Leg, unit.Queued!.Tenant, unit.Queued.Cost, unit.Share, unit.Deficit, unit.Waited)));
@@ -618,6 +727,15 @@ public sealed class MachineDispatchQueueTests
         /// <summary>A unit of <paramref name="repository"/> asking for a slot.</summary>
         public SlotPlace Ask(string leg, string repository, int slots = 2, int priority = 1, double weight = 1, TimeSpan? ageAfter = null, string command = "build")
             => Queue.Ask($"run-{leg}", command, leg, "local", repository, null, slots, null, repository, priority, ageAfter, weight);
+
+        /// <summary>
+        /// A unit of <paramref name="leg"/> that ran on this machine before the scene begins, its duration kept as the
+        /// queue itself keeps one (<see cref="UnitDurations.Record"/>): what the next unit of its name is charged. Its
+        /// tenant's charge for it is not part of the scene - a past run's debt was paid back as other tenants were served.
+        /// </summary>
+        public void RanBefore(string repository, string leg, TimeSpan held, string command = "build")
+            => new UnitDurations(Harness.FileSystem, Harness.Output, MachineDispatchQueue.DurationsPathFor(Record))
+                .Record(repository, command, leg, held, Clock.GetUtcNow());
 
         /// <summary>A unit of <paramref name="leg"/> asked, granted and run for <paramref name="held"/>, its run kept as the queue keeps it; a minute later.</summary>
         public void Measure(string repository, string leg, TimeSpan held, string command = "build")

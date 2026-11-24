@@ -102,9 +102,10 @@ public static partial class HelpTopics
         builder.AppendLine("  agents            the agent class's capacity: reasoning agents the machine runs at");
         builder.AppendLine($"                    once, at least 1 ({AdmissionSettings.DefaultAgents}); shown by queue, asked by no agent yet");
         builder.AppendLine("  ageAfterMinutes   minutes a waiting unit's tenant's share holds before it doubles,");
-        builder.AppendLine("                    and doubles again each such period after; from 0, where every");
-        builder.AppendLine("                    unit is served in the order it asked, to the most minutes a span");
-        builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"                    of time holds, {AdmissionSettings.MostAgeAfterMinutes} ({AdmissionSettings.DefaultAgeAfterMinutes})"));
+        builder.AppendLine("                    and doubles again each such period after; from 0, where the share");
+        builder.AppendLine("                    is past any cost and each tenant's units go one a round, in the");
+        builder.AppendLine("                    order they asked, to the most minutes a span of time holds,");
+        builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"                    {AdmissionSettings.MostAgeAfterMinutes} ({AdmissionSettings.DefaultAgeAfterMinutes})"));
         builder.AppendLine();
         builder.AppendLine($"Seconds are at most {AdmissionSettings.MostSeconds}, and the wait at most {AdmissionSettings.MostWaitMinutes} minutes.");
         builder.AppendLine();
@@ -118,9 +119,10 @@ public static partial class HelpTopics
         builder.AppendLine("worktree or copy the leg works in - until environments name a finer one. Each round,");
         builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"a tenant with a unit waiting is credited its share: its weight ({DispatchOrder.LocalWeight}) times its run's"));
         builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"priority (a workflow's priority key, {DispatchOrder.LeastPriority} where none), doubled for each whole period"));
-        builder.AppendLine("of ageAfterMinutes its unit has waited, so no weight setting starves a tenant; its");
-        builder.AppendLine("unit starts once the tenant's credit covers the unit's cost, which is then debited.");
-        builder.AppendLine("A tenant's credit is kept while it has a unit waiting, and dropped once it has none.");
+        builder.AppendLine("of ageAfterMinutes its unit has waited, so no weight setting starves a tenant; a");
+        builder.AppendLine("unit starts once its tenant owes nothing, charged its cost as it starts. A debt");
+        builder.AppendLine("is kept after the tenant's last unit has gone and paid back by its share each round,");
+        builder.AppendLine("and a credit is kept only while it has a unit waiting.");
         builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"A unit's cost is the median of the newest {UnitDurations.Kept} times a unit of its name - its"));
         builder.AppendLine("repository, its command and its leg, or a sweep's worker or arm - held its slot on");
         builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"this machine, in minutes, and {UnitDurations.Quantum} where none is kept: so a tenant with a burst of short"));
@@ -135,7 +137,7 @@ public static partial class HelpTopics
         builder.AppendLine("one such waits no unit behind it is granted a slot. A machine shared by several users");
         builder.AppendLine($"is not seen whole: each user's queue is their own. '{ToolPackage.Command} queue' shows this");
         builder.AppendLine("machine's - each class's capacity, its holders, and its waiting units in the order");
-        builder.AppendLine("served with each one's tenant, cost and share and its tenant's credit; nothing is");
+        builder.AppendLine("served with each one's tenant, cost and share and its tenant's deficit; nothing is");
         builder.AppendLine("changed by looking.");
         builder.AppendLine();
         builder.AppendLine("Declared in the machine's own settings file, under defaults, or under hosts.local or");

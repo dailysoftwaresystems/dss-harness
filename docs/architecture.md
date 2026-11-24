@@ -1144,13 +1144,15 @@ once is never passed for ever - the holders end, none is granted beside them mea
 every tenant with a unit waiting is credited its share - its weight (`DispatchOrder.LocalWeight`, 1 for every tenant
 of a local command) times its run's priority (a workflow's `priority`, a limit a use that governs itself declares for
 its steps, `FlowUse.PriorityOf`; 1 where none), doubled for each whole period of `ageAfterMinutes` its head unit has
-waited (`DispatchOrder.ShareOf`) - and a unit starts once its tenant's deficit covers its cost, which is then debited.
-The rounds are counted, never stepped: a tenant's turn comes after as many rounds as its deficit is short of its unit's
-cost, over its share, so one decision is linear in the units waiting whatever their costs. Within a tenant its units go
-in the order they asked; a tie between tenants goes to the unit that asked first. A tenant's deficit is kept in the
-record while it has a unit waiting, and dropped once it has none. An `ageAfterMinutes` of 0 counts every period at
-once - a share past any cost - and so serves the units in the order they asked; a wait of more doublings than a number
-holds is the same.
+waited (`DispatchOrder.ShareOf`) - and a unit starts once its tenant owes nothing, charged its cost as it starts. The
+rounds are counted, never stepped: a tenant's turn comes after as many rounds as its debt is short of nothing, over
+its share, and never fewer than one, so one decision is linear in the units waiting whatever their costs. Within a
+tenant its units go in the order they asked; a tie between tenants goes to the unit that asked first. A tenant's debt
+is kept in the record after its last unit has gone - paid back, for each round another tenant is served, at the
+unaged share of the unit it last started (`TenantDeficit.Share`) - and a credit is kept only while it has a unit
+waiting, never carried past what the unaged share gives. An `ageAfterMinutes` of 0 counts every period at once - a
+share past any cost - and so serves each tenant's units one a round, the tenants in turn; a wait of more doublings
+than a number holds is the same.
 
 **The cost.** A unit's cost is the median of the newest ten times a unit of its name held its slot on this machine, in
 minutes, by when each ended, and one quantum (a minute) where none is kept (`UnitDurations`): the queue measures each
@@ -1177,11 +1179,16 @@ part 06's `local` tenant with the repository its sub-tenant, the round-robin ser
 environment every local command is of the one tenant `local`. The cost is the queue's own measure of each unit, not a
 reading of the ledgers and `step.json`: a ledger's duration is a whole leg's, waits included, never a sweep's worker or
 arm, and kept per tree, where the slot a unit holds is what the machine gives it, and one history a name is read in
-constant time where the records would be scanned at every ask. The rule that the first unit of the order that does not
-fit holds back the units behind it, the older builds' rule, and an aging bound of 0 serving the units in the order they
-asked are this build's, which part 06 does not say. A server holding the queue in memory, the process and agent
-classes' askers and an environment's weight arrive with their parts. A machine shared by several users is not seen
-whole: each user's queue is their own.
+constant time where the records would be scanned at every ask. A unit is charged its cost as it starts, against part
+06's "a unit starts when its tenant's deficit covers its estimated cost", for that is the reading under which the same
+part's WSL sentence holds - a sweep charged whole leaves its tenant owing what it cost, where credit earned before a
+start would leave a tenant that runs alone owing nothing; and a tenant's debt is thereby bounded by what its last unit
+cost. Aging repays a debt at the doubled share but never carries a credit past the unaged share, and no debt clears in
+fewer than one round. The rule that the first unit of the order that does not
+fit holds back the units behind it, the older builds' rule, and an aging bound of 0 serving each tenant's units one a
+round, in the order they asked, are this build's, which part 06 does not say. A server holding the queue in memory, the
+process and agent classes' askers and an environment's weight arrive with their parts. A machine shared by several
+users is not seen whole: each user's queue is their own.
 
 ## Orchestrators and agents
 

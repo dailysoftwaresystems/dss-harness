@@ -115,7 +115,7 @@ public static class QueueReports
     /// <summary>
     /// One unit as the document says it: its entry's own fields, and what the fair order weighs it by - its share null where
     /// it holds, an older build asked it, or the share is past any number a document holds: an aging bound of no minutes,
-    /// or more doublings than a number holds, under which its cost is covered at once.
+    /// or more doublings than a number holds, under which a debt is gone in one round.
     /// </summary>
     private static JsonObject Unit(DispatchUnit unit) => new()
     {

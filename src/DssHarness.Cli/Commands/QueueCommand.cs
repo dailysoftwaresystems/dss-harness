@@ -23,7 +23,8 @@ internal static class QueueCommand
             + "serves them, each with its cost, the share its tenant is credited each round and its tenant's deficit. Heavy "
             + "legs are granted their slots by deficit round-robin over their tenants: each round a waiting tenant is "
             + "credited its weight times its run's priority, doubled for each period a unit of its waits past the aging "
-            + "bound, and a unit starts once its tenant's credit covers its cost. Nothing is pre-empted, and nothing is "
+            + "bound, and a unit starts once its tenant owes nothing, charged its cost as it starts - a debt outliving its "
+            + "unit, paid back by its share each round. Nothing is pre-empted, and nothing is "
             + "changed by looking; the machine steps and reasoning agents are shown, and asked by no unit yet. A machine "
             + "shared by several users is not seen whole: each user's queue is their own.");
         command.Options.Add(JsonOption);

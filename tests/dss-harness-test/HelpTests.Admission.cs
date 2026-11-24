@@ -92,7 +92,7 @@ public sealed partial class HelpTests
             "The unit the order puts first that does not fit - its own count allows fewer legs at once than hold slots - holds back every unit behind it until it fits, so none is passed for ever.",
             string.Create(
                 CultureInfo.InvariantCulture,
-                $"from 0, where every unit is served in the order it asked, to the most minutes a span of time holds, {AdmissionSettings.MostAgeAfterMinutes} ({AdmissionSettings.DefaultAgeAfterMinutes})"),
+                $"from 0, where the share is past any cost and each tenant's units go one a round, in the order they asked, to the most minutes a span of time holds, {AdmissionSettings.MostAgeAfterMinutes} ({AdmissionSettings.DefaultAgeAfterMinutes})"),
             "admission-<machine id>.queue.json, the times units of each name held their slots in admission-<machine id>.durations",
             $"once, at least 1 ({AdmissionSettings.MachinesProcessors}); shown by queue, asked by no step yet",
             $"once, at least 1 ({AdmissionSettings.DefaultAgents}); shown by queue, asked by no agent yet",
