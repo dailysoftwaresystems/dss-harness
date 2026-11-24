@@ -493,10 +493,21 @@ public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPl
     /// <inheritdoc/>
     protected override async Task<FlowStepTree?> TreeOfAsync(FlowStepRun run, FlowRunPlace place, HarnessContext context, OrchestratorLayout layout, string tree, CancellationToken cancellationToken)
     {
-        if (run.Step.Base is not { Length: > 0 } named)
+        if (run.Step.Base is not { } written)
         {
             return null;
         }
+
+        // A base the step writes and that names nothing as it starts - a template whose value is blank - is refused, never
+        // read as no base at all: that would sweep the main tree as other items' folds move it, not the bytes it names.
+        if (string.IsNullOrWhiteSpace(written))
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{run.Instance}' sweeps a copy of the commit its base names, and its base named none as it started: it was blank. Nothing was swept.");
+        }
+
+        var named = written.Trim();
 
         // The item's own newest commit, as the run's ledger attributes its commits to the item the step is one of: a
         // rearm's refold and its commit are the bytes a re-run sweeps, never the first checkpoint alone.

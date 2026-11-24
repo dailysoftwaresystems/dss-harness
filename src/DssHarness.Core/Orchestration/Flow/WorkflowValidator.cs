@@ -703,9 +703,14 @@ public static class WorkflowValidator
                                 Expression(entry, arms, "arms");
                             }
 
-                            if (entry.Step.Base is { Length: 0 })
+                            // A base written empty is refused as every empty template is; 'item' is the work item of the
+                            // nearest forEach around the step, the forEach of a workflow that uses this one among them, as
+                            // the run's ledger attributes an item's commits (FlowInstanceId.ItemOf): a sweep no forEach
+                            // holds has no item whose commit it could sweep.
+                            if (string.Equals(entry.Step.Base?.Trim(), SweepStepRunner.ItemBase, StringComparison.Ordinal)
+                                && Nearest(entry, group => group.ForEach is not null) is null)
                             {
-                                _problems.Add($"{where}: base is empty; it names the commit whose copy the sweep runs on - a template naming one, or 'item', the newest commit the run's ledger gives this item");
+                                _problems.Add($"{where}: base is 'item', the newest commit the run's ledger gives the work item the step is one of, and no group holding '{entry.Path}' runs a forEach; sweep a commit a template names, or move the step into the forEach whose items it sweeps");
                             }
                         }
 

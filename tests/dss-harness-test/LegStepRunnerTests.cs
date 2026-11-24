@@ -588,6 +588,17 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal(HarnessExit.Refused, none.Exit);
         Assert.Equal("'rounds#2.items[0].item-arms' sweeps the arms of the item's own newest commit, and the run's ledger holds no commit of item 'rounds#2.items[0]' that was made. Nothing was swept.", none.Error);
         Assert.Single(legs.Asked);
+
+        // A base that names nothing as the step starts - a template whose value was blank - is refused, never read as no
+        // base and swept on the main tree.
+        var blank = await runner.RunAsync(
+            Run(new WorkflowStep { Name = "sweep", Type = "check-mutations", Base = " " }, repository.Path, instance: "rounds#1.items[0].item-arms"),
+            Token);
+
+        Assert.False(blank.Passed);
+        Assert.Equal(HarnessExit.Refused, blank.Exit);
+        Assert.Equal("'rounds#1.items[0].item-arms' sweeps a copy of the commit its base names, and its base named none as it started: it was blank. Nothing was swept.", blank.Error);
+        Assert.Single(legs.Asked);
     }
 
     /// <summary>

@@ -666,6 +666,32 @@ public sealed class WorkflowFileParserTests
         Assert.Equal(["line 3, column 5: closing names no 'in'; a class-closure step is refused without it."], problems);
     }
 
+    /// <summary>
+    /// A route-findings step routes a review's findings by the item's classes and the record its builder answered, into
+    /// the ledger of the item's agent: one that leaves out any of the four is refused as the file is read, one sentence
+    /// for each - a route that read no classes or no record would send every reopened finding back as unknown.
+    /// </summary>
+    [Fact]
+    public void ARouteFindingsStepWithoutItsAgentFindingsClassesOrRecord_IsRefused()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: route
+                type: route-findings
+            """);
+
+        Assert.Equal(
+            [
+                "line 3, column 5: route names no 'in'; a route-findings step is refused without it.",
+                "line 3, column 5: route names no 'findings'; a route-findings step is refused without it.",
+                "line 3, column 5: route names no 'classes'; a route-findings step is refused without it.",
+                "line 3, column 5: route names no 'record'; a route-findings step is refused without it.",
+            ],
+            problems);
+    }
+
     [Fact]
     public void AValueOfTheWrongShape_IsRefusedNamingTheKeyItWasReadFor()
     {

@@ -3372,7 +3372,10 @@ copy an earlier attempt left at the path, directory and git's record of it - a s
 runs whatever ended the legs, never cancelled, by the same forced removal a worktree's deletion uses, and the step's
 `copy` says its path and what could not be taken away; `delete-orchestrator` takes away each copy git still records
 under the run's directory (`RemoveCopiesUnderAsync`). An item whose ledger holds no commit that was made is refused with
-nothing swept. An arm that is not as it should be - violated (1), survived (2) or unattributed (8), the codes only an
+nothing swept, and so is a base that names nothing as the step starts - a template whose value is blank is never read as
+no base, which would sweep the main tree as it moves; `base: item` in a step no `forEach` holds - the forEach of a
+workflow that uses its file among them, as the ledger attributes an item's commits (`FlowInstanceId.ItemOf`) - is
+refused where the file is read (`WorkflowValidator`). An arm that is not as it should be - violated (1), survived (2) or unattributed (8), the codes only an
 arm reaches - raises `rearm`, a group that goes on with the implementation on `prompts/rearm.md` and carries its change
 the way a rework's does - `rearm-verify`, `rearm-closure`, `rearm-fold`, `rearm-checkpoint` - before the sweep runs
 again; any other failure of the sweep is the machine's and goes to the pipeline's `failTo`. Only the item's own release

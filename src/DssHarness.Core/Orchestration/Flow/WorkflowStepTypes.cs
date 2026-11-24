@@ -211,7 +211,7 @@ public static class WorkflowStepTypes
                 .. LegKeys,
                 new("arms", "the arms it runs, by id, written out or as an expression yielding them - the item's own, from the record its builder answered; absent, every arm"),
                 new("pending", "drive only the arms with no recorded passed that still holds"),
-                new("base", "the commit whose copy the sweep runs on, other items folding into the main tree as it moves: a template naming one, or 'item', the newest commit the run's ledger gives this item; absent, the tree the step works in"),
+                new("base", "the commit whose copy the sweep runs on, other items folding into the main tree as it moves: a template naming one, or 'item', the newest commit the run's ledger gives the item of the forEach that holds the step; absent, the tree the step works in"),
             ],
             ["base"],
             "red",

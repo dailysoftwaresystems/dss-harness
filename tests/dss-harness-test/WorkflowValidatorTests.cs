@@ -3193,6 +3193,78 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// The keys of the closure's machine steps are refused where they cannot be read: a sweep's base written empty, as
+    /// every empty template is, and 'item' where no forEach holds the step - an item's own commit is the commit of the
+    /// item the step is one of, and inside a forEach it is taken; an arms expression of a sweep or of a class-closure
+    /// check written broken; and a route's findings, classes and record written broken, reading a name nothing
+    /// provides, or empty. One that leaves a key out is refused as the file is read (WorkflowFileParserTests).
+    /// </summary>
+    [Fact]
+    public void TheClosuresMachineSteps_RefuseKeysThatCannotBeRead_AndAnItemBaseOutsideAForEach()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: prompts/plan.md
+                outputs: schemas/plan.json
+              - name: check
+                type: validate-plan
+                items: 'plan.items'
+              - name: item-agent
+                type: create-agent
+                agent: implementer
+              - name: blank-base
+                type: check-mutations
+                base: ' '
+              - name: stray-item
+                type: check-mutations
+                base: item
+              - name: broken-arms
+                type: check-mutations
+                arms: 'check.items &&'
+              - name: closing
+                type: class-closure
+                in: item-agent
+                dependsOn: [item-agent, check]
+                classes: 'check.items'
+                record: 'check.items'
+                arms: '(check.items'
+              - name: route
+                type: route-findings
+                in: item-agent
+                dependsOn: [item-agent, check]
+                findings: 'check.items ||'
+                classes: 'review.findings'
+                record: ''
+              - name: items
+                forEach: 'check.items'
+                steps:
+                  - name: own
+                    type: check-mutations
+                    base: item
+            """);
+
+        string[] expected =
+        [
+            "'blank-base.base' is empty; a template is the text a step hands on, and an empty one hands on nothing",
+            "step 'stray-item': base is 'item', the newest commit the run's ledger gives the work item the step is one of, and no group holding 'stray-item' runs a forEach; sweep a commit a template names, or move the step into the forEach whose items it sweeps",
+            "'broken-arms.arms' is not written whole: the expression ends at column 15 where a value was to be read, and nothing past there would be checked",
+            "'closing.arms' is not written whole: 1 parenthesis is opened and never closed, and nothing it reads past there would be checked",
+            "'route.findings' is not written whole: the expression ends at column 15 where a value was to be read, and nothing past there would be checked",
+            "'route.classes' reads 'review.findings', which no step before 'route', no input and no param provides",
+            "'route.record' is empty; an expression is read for what it says, and an empty one says nothing",
+        ];
+
+        Assert.Equal(
+            [.. expected.Order(StringComparer.Ordinal)],
+            [.. problems.Order(StringComparer.Ordinal)]);
+    }
+
+    /// <summary>
     /// A handler's keys are whole: it is raised by another step, by codes from 1 to 255 given once each and never beside
     /// a success, waits for nothing but its source, is never always, and is visited from 1 to 20 times; only a handler
     /// says then or maxVisits, and its then goes to a step it sees - outward too - never to itself. A group is held to

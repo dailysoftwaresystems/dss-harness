@@ -60,9 +60,10 @@ public sealed class ImplementationFlowTests
     /// A repository whose init wrote the shipped implementation workflow and declared it, whose configuration holds the
     /// providers and tiers init seeds and whatever of <paramref name="ground"/> it asks, and whose slot holds the keys
     /// of both providers - over the engine's own step runners with every machine step the flow's mechanics do not
-    /// reach answered by <see cref="MachineSteps"/>.
+    /// reach answered by <see cref="MachineSteps"/> - the class-closure check among them, save where
+    /// <paramref name="closures"/> asks the engine's own.
     /// </summary>
-    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
+    private static async Task<Kit> PrepareAsync(TempDirectory temp, Action<Scripted>? script = null, string? keys = null, Ground? ground = null, Action<MachineSteps>? machine = null, Action<HarnessConfig>? adjust = null, IFileSystem? files = null, Func<HarnessFactory, IAgentRunner>? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, bool closures = false)
     {
         var harness = new HarnessFactory();
         var template = AgentProviderTemplates.Read();
@@ -119,11 +120,11 @@ public sealed class ImplementationFlowTests
         script?.Invoke(agents);
         machine?.Invoke(steps);
 
-        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness), commits, updates));
+        return new Kit(harness, temp, agents, steps, Service(harness, agents, steps, files, walking?.Invoke(harness), commits, updates, closures));
     }
 
     /// <summary>The service over the engine's own runners: every type the flow's head works through for real, the rest answered by the machine script - over <paramref name="files"/> where one is given, so a test stands between the engine and its records, and reasoning worked by <paramref name="walking"/> where one is given, so the engine's own fallback walk runs over a client a test scripts, and its commits worked by the engine's own commit runner where <paramref name="commits"/> says so, and its Claude Code made ready by <paramref name="updates"/> where one is given.</summary>
-    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null)
+    private static FlowService Service(HarnessFactory harness, Scripted agents, MachineSteps machine, IFileSystem? files = null, IAgentRunner? walking = null, bool commits = false, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null, bool closures = false)
     {
         var fileSystem = files ?? harness.FileSystem;
         var store = files is null ? harness.OrchestrationStore : new OrchestrationStore(fileSystem, harness.Output);
@@ -146,9 +147,14 @@ public sealed class ImplementationFlowTests
             harness.GitClient,
             updates);
 
-        var machineTypes = "build test run check-mutations anchor-balance anchor-citations class-closure ci-read ci-wait fold delete-agent refresh rebase"
+        var machineTypes = "build test run check-mutations anchor-balance anchor-citations ci-read ci-wait fold delete-agent refresh rebase"
             .Split(' ')
             .ToList();
+
+        if (!closures)
+        {
+            machineTypes.Add("class-closure");
+        }
 
         if (!commits)
         {
@@ -159,6 +165,19 @@ public sealed class ImplementationFlowTests
         machineTypes.Add("pull-request");
 
         var own = new List<IFlowStepTypeRunner>();
+
+        if (closures)
+        {
+            own.Add(new ClassClosureStepRunner(
+                harness.ContextLoader,
+                harness.Platform,
+                store,
+                fileSystem,
+                harness.AgentService,
+                harness.CodebaseGraph,
+                harness.GitClient,
+                new DssHarness.Core.Mutations.ArmListingReader(SyncKit.Service(harness), fileSystem, harness.Platform)));
+        }
 
         if (commits)
         {
@@ -2122,12 +2141,13 @@ public sealed class ImplementationFlowTests
         }
 
         /// <summary>
-        /// The proof run of the whole class closure, end to end (part 01, section 12): a fixture repository with one
-        /// defect decided at three sites over two formats - the plan that patches one site is refused by the round's
-        /// check, the plan with all three passes - the builder that closes two of the three is refused by the
-        /// class-closure check, its close-class handler extends the record to the third - a reviewer that finds a fourth
-        /// site sends the class back whole as one send-back, the builder sweeps it, and a second reopening asks for the
-        /// home audit - and the run converges with the counts in its report.
+        /// The proof run of the whole class closure, end to end (part 01, section 12), over the engine's own checks: a
+        /// fixture repository with one defect decided at three sites over two formats - the plan that patches one site
+        /// is refused by the plan's check and the planner, asked again with the check's problems, names all three - the
+        /// builder that closes two of the three is refused by the real class-closure check, its close-class handler
+        /// extends the record to the third - a reviewer that finds a fourth site sends the class back whole as one
+        /// send-back, the builder sweeps it, and a second reopening asks for the home audit, which the builder's record
+        /// carries - and the run converges with the counts in its report.
         /// </summary>
         [Fact]
         public async Task TheProofRun_ConvergesFromThreeSitesOverTwoFormats_WithTheCountsInItsReport()
@@ -2139,7 +2159,7 @@ public sealed class ImplementationFlowTests
                 ["title"] = "t",
                 ["instructions"] = "Close the rate class.",
                 ["done"] = "the rate holds",
-                ["ownedPaths"] = new JsonArray("src/**"),
+                ["ownedPaths"] = new JsonArray("src/**", "docs/**"),
                 ["forbiddenPaths"] = new JsonArray(),
                 ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/tool.cs", ["what"] = "it" }),
                 ["creates"] = new JsonArray(),
@@ -2200,16 +2220,32 @@ public sealed class ImplementationFlowTests
                 ["structural"] = new JsonArray("Home holds it; every reader reads Home"),
             };
 
-            // The one-site plan: the class names its home alone but says consolidate, which a class with one site never
-            // does - the plan's own check refuses it, and the planner asked again answers with all three sites.
+            // The one-site plan: it patches the old reader, where the defect was seen, and fixes the rate at its home - one
+            // site that is not its home, which the plan's own check refuses, for the home decides and every other site
+            // reads it; the planner asked again answers with all three sites, consolidated.
             var oneSite = Planned();
-            ((JsonArray)oneSite["classes"]![0]!["sites"]!).RemoveAt(1);
-            ((JsonArray)oneSite["classes"]![0]!["sites"]!).RemoveAt(1);
+            var patched = (JsonObject)oneSite["classes"]![0]!;
+            patched["sites"] = new JsonArray(new JsonObject { ["path"] = "src/Old.cs", ["symbol"] = "Old", ["decides"] = "the rate", ["then"] = "reads-home" });
+            patched["action"] = "fix-at-home";
 
             var kit = await PrepareAsync(
                 temp,
                 agents =>
                 {
+                    // The builder's work in its worktree, as its record says it: the home decides the rate, the two other
+                    // sites are deleted, and the pin's test is written beside the home.
+                    agents.Answer = step =>
+                    {
+                        if (step.AgentDefinition == "implementer" && step.Workspace.Worktree is { } tree)
+                        {
+                            OrchestrationKit.Write(tree, Path.Combine("src", "Home.cs"), "namespace Tool;\npublic static class Home { public static decimal Rate(string format) => 1m; }\n");
+                            OrchestrationKit.Write(tree, Path.Combine("src", "ReportTests.cs"), "namespace Tool;\npublic static class ReportTests { }\n");
+                            File.Delete(Path.Combine(tree, "src", "Old.cs"));
+                            File.Delete(Path.Combine(tree, "docs", "old.md"));
+                        }
+
+                        return null;
+                    };
                     agents.Queue(
                         "planner",
                         Completed(Plan(oneSite)),
@@ -2226,24 +2262,36 @@ public sealed class ImplementationFlowTests
                         Completed(Review(Finding(text: "the rate is decided again in docs/third.md", @class: "reopened", reopens: "c-rate"))),
                         Completed(Review()));
                 },
-                machine: steps =>
-                {
-                    // The class-closure check refuses the builder that closed two of three (exit 1), passes the complete
-                    // record, and demands a home audit of the class the item's ledger says a review reopened twice
-                    // (exit 2) - the ledger the real route-findings step keeps.
-                    steps.Answer = run => run.Step.Type switch
-                    {
-                        "class-closure" => run.Read is not null && run.Read.TryGetValue("record", out var record) && record.ToNode() is JsonArray entries
-                            ? ClosureOf(steps, run, entries)
-                            : null,
-                        _ => null,
-                    };
-                });
+                closures: true);
 
-            // The plan check refused the one-site plan, the person said continue, and the three-site plan passed.
+            // The defect as the main tree holds it: the rate decided at its home, again in an old reader, and again in a
+            // document.
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("src", "Home.cs"), "namespace Tool;\npublic static class Home { }\n");
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("src", "Old.cs"), "namespace Tool;\npublic static class Old { public static decimal Rate => 1m; }\n");
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "old.md"), "The rate is one.\n");
+            await kit.Harness.CommitAllAsync(kit.Tree.Path, "the rate, decided at three sites", Token);
+
             var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
 
             Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+
+            // The plan's check refused the plan that patched one site, and the planner was asked again with its
+            // problem: the second plan, all three sites, passed.
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var planChecks = flow.Steps.Where(step => step.Step == "planning.check").ToList();
+
+            Assert.Equal(2, kit.Agents.Of("planner").Count);
+            Assert.Equal([false, true], planChecks.Select(step => step.Output!["ok"]!.GetValue<bool>()));
+            Assert.Contains(PlanProblem, kit.Agents.Of("planner")[1].Prompt, StringComparison.Ordinal);
+
+            // The engine's own class-closure check refused the record that closed two of the three sites, naming the
+            // third, and passed every record after it: the complete one, the swept one, and the one that carries the
+            // home audit its second reopening asked.
+            var checks = flow.Steps.Where(step => step.Type == FlowClosureRecords.CheckType).ToList();
+
+            Assert.Equal(
+                [(ClassClosureExit.Findings, ClosureProblem), (HarnessExit.Success, ""), (HarnessExit.Success, ""), (HarnessExit.Success, "")],
+                [.. checks.Select(step => (step.Exit ?? HarnessExit.Success, string.Join(" | ", (step.Output?["problems"] as JsonArray ?? []).Select(problem => problem!.GetValue<string>()))))]);
 
             // The builder was asked four times: the partial (two of three), the complete (close-class extended), the
             // rework after the first reopening, and the rework after the second (the home audit).
@@ -2257,46 +2305,20 @@ public sealed class ImplementationFlowTests
             var reopened = Assert.Single(ledger.Classes);
             Assert.Equal(("c-rate", 2), (reopened.Class, reopened.Reopens));
 
-            // The report carries the counts.
-            Assert.True(File.Exists(kit.RunOf().ReportFile), "the report was written");
+            // The report carries the counts: its convergence, the class's claim as its last check judged the record and the
+            // class reopened twice, whole - no home touched often enough by the run's commits to be named a hotspot - and the
+            // signal of the reopening.
+            var report = File.ReadAllText(kit.RunOf().ReportFile).Replace("\r\n", "\n");
+
+            Assert.Contains("\n## Convergence\n\n- 'c-rate': the rate holds over every format\n- 'c-rate', reopened 2 time(s)\n\n## Questions\n", report, StringComparison.Ordinal);
+            Assert.Contains("\n- kind classReopenedTwice; steps ; said 'c-rate' was reopened 2 times\n", report, StringComparison.Ordinal);
         }
 
-        /// <summary>Answers a class-closure run as the real check would over the record it was handed: two of three sites refused (1), a complete record passed, and a home audit (2) where the item's ledger says the class was reopened twice.</summary>
-        private static FlowStepResult? ClosureOf(MachineSteps steps, FlowStepRun run, JsonArray entries)
-        {
-            var entry = entries.OfType<JsonObject>().FirstOrDefault();
+        /// <summary>What the plan's check says of the proof run's plan that patches one site of the class, not its home.</summary>
+        private const string PlanProblem = "work item 'one''s c-rate holds one site, which is not its home, and its action is 'fix-at-home': consolidate - the home decides, every other site reads it";
 
-            if (entry is null)
-            {
-                return null;
-            }
-
-            var sites = (entry["sites"] as JsonArray) ?? [];
-            var problems = new JsonArray();
-
-            foreach (var (path, _, _) in new[] { ("src/Home.cs", "Home", "home"), ("src/Old.cs", "Old", "deleted"), ("docs/old.md", "", "deleted") })
-            {
-                if (!sites.Any(site => string.Equals((site as JsonObject)?["path"]?.GetValue<string>(), path, StringComparison.Ordinal)))
-                {
-                    problems.Add($"class 'c-rate': the site '{path}' has no after in the record");
-                }
-            }
-
-            var repository = run.Place?.Repository ?? throw new InvalidOperationException("the run names no repository");
-            var layout = OrchestratorLayout.Of(new HarnessLayout(repository, repository), run.Place.Run);
-            var reopenedTwice = steps.Store?.ReadClosureLedger(layout, run.WorksIn ?? "a1")?.Classes.Any(@class => @class.Reopens >= 2) == true;
-
-            if (problems.Count > 0)
-            {
-                return FlowStepResult.Ended(passed: false, ClassClosureExit.Findings, output: new JsonObject { ["passed"] = false, ["problems"] = problems, ["hotspots"] = new JsonArray(), ["touches"] = new JsonArray() }) with { Red = true };
-            }
-
-            var audited = entry["homeAudit"] is JsonObject;
-
-            return reopenedTwice && !audited
-                ? FlowStepResult.Ended(passed: false, ClassClosureExit.HomeAudit, output: new JsonObject { ["passed"] = false, ["problems"] = new JsonArray("class 'c-rate' reopened twice"), ["hotspots"] = new JsonArray(), ["touches"] = new JsonArray() }) with { Red = true }
-                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["passed"] = true, ["problems"] = new JsonArray(), ["hotspots"] = new JsonArray(), ["touches"] = new JsonArray() });
-        }
+        /// <summary>What the class-closure check says of the proof run's record that closes two of the class's three sites.</summary>
+        private const string ClosureProblem = "class 'c-rate': the site 'docs/old.md' has no after in the record";
 
         /// <summary>
         /// A finding the loop counts - critical, high or medium, in production code or out of it - keeps the loop going
