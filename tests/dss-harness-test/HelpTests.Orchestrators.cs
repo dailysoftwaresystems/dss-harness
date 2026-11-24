@@ -385,16 +385,21 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The orchestrators topic says what an analysis's impact is held to: every number it says one of its citations',
-    /// a number joined to its unit as well - as written or converted exactly to the report's unit - and a word that reads
-    /// as no one number refused, as the evidence check holds it.
+    /// read in the unit the report holds the cited member in - bare as written, joined to its unit converted exactly into
+    /// the member's, a kind no member is never - whatever wraps it, and a word that reads as no one number refused, as the
+    /// evidence check holds it.
     /// </summary>
     [Fact]
     public void OrchestratorsTopic_SaysEveryNumberAnImpactSays_WithItsUnitOrNot_IsACitationsValue()
     {
         Assert.Contains(
-            "and every number its impact says is one of its citations' - one joined to its unit too (3600s, 1.5h, 12k, 2x), as "
-                + "written or converted exactly from its unit to the report's (seconds for a time, ones for a count in thousands "
-                + "or millions), and a word that starts as a number and reads as no one number (a date, a range) refused. An "
+            "and every number its impact says is one of its citations', read in the unit the report holds the cited member in (a "
+                + "time in seconds, the budget's reasoning in minutes, a cost in dollars, a cache share in percent, the rest a "
+                + "count): a number written bare is the cited value as written, one joined to its unit (3600s, 1.5h, 12k tokens, "
+                + "$0.02, 28%) is held where a cited member of its unit's kind holds it, converted exactly into that member's "
+                + "unit - 1.5h is a budget's 90 minutes, and 60 hours no wait's 60 seconds - and one of a kind no member is (2x, "
+                + "a size, another currency) never; a number is read whatever wraps it (Markdown, a comparison, a currency's "
+                + "sign), and a word that starts as a number and reads as no one number (a date, a range) is refused. An "
                 + "analysis cannot invent a measurement.",
             Prose.Words(HelpText.Of("orchestrators").StandardOutput),
             StringComparison.Ordinal);

@@ -108,7 +108,7 @@ public sealed record FlowRunReportSource(
 /// marked partial. Every form - text, JSON, Markdown - holds every section. No step type writes it and no model words it; the session's end writes it
 /// (<see cref="FlowReports.Write"/>) and <c>read-orchestrator-report</c> answers it.
 /// </summary>
-public static class FlowRunReport
+public static partial class FlowRunReport
 {
     /// <summary>The report's own schema: what a reader of its document, the analyst among them, reads it by.</summary>
     public const int Schema = 2;

@@ -3947,12 +3947,21 @@ cost the person's. The analyst's answer is held to the report by the structured-
 analyst's own conversation under the schema's one count of repairs - never a run asked anew: each citation names a
 section of the report (the schema's enum), the row by its `id`, the member by its path and the value the report holds
 there, read by its JSON kind - a number for its value, a text and a truth word for word - each step a point names is a
-row of the report's steps, and every number its impact says is one of its citations' - a number joined to its unit
-too (`3600s`, `1.5h`, `12k`, `2x`), read for its numeric head and held as written or converted exactly from its unit
-to the report's (`FlowAnalysisEvidence.FactorOf`: seconds for a time, ones for a count in thousands or millions), a
-word that starts as a number and reads as no one number (a date, a range, `1h30m`) refused as such. Every rule a text must keep is
-the schema's (a pattern for every text, an enum for every closed list), and a run with nothing to change is analysed
-as one, no pain point named. What a run of the analyst leaves is kept under `analysis/<stamp>/` whatever it answered -
+row of the report's steps, and every number its impact says is one of its citations', read in the unit the report
+holds the cited member in. One owner holds the unit of every number the cited sections hold, beside the builder that
+writes them: `FlowRunReport.Units`, keyed by the member's path (`theRun.wallSeconds`, `theRun.budget.minutes`,
+`steps[].usd`, `totals.cacheSharePercent`; an entry of an object covering every number inside it, an entry of a text
+the unit of each number it writes bare, as a step's `ran` in seconds) and held to every number the builder writes by
+`FlowRunReportTests`. A word of the impact is read once every character at its ends that is neither a letter nor a
+digit is read off it - Markdown's marks, a comparison, a currency's sign, a sign directly before a digit kept - for its
+numeric head and its unit (`FlowUnit`: its kind and how many of the kind's base one of it is); a number written bare
+is the cited value as written, a number joined to its unit (`3600s`, `1.5h`, `12k tokens`, `$0.02`, `28%`) is held
+where a cited member of its unit's kind holds it, converted exactly into that member's unit - `1.5h` is a budget's 90
+minutes, and `60 hours` no wait's 60 seconds - one of a kind no member is (`2x`, a size, another currency) is
+refused, and a word that starts as a number and reads as no one number (a date, a range, `1h30m`) is refused as such.
+Every rule a text must keep is the schema's (a pattern for every text, an enum for every closed list), and a run with
+nothing to change is analysed as one, no pain point named. What a run of the analyst leaves is kept under
+`analysis/<stamp>/` whatever it answered -
 `report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis or why it was refused
 and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
 it cost, the `--json` document's `record` the same directory the text's lines name wherever any record is; where no

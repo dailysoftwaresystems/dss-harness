@@ -310,7 +310,7 @@ public sealed class AnalyzeReportTests
                 "painPoints[0].evidence[5]: 'steps', c.tokens holds nothing in the report",
                 "painPoints[0].evidence[6]: 'steps', b.state is \"Done\", not 'done'",
                 "painPoints[0].evidence[7]: 'signals', classReopenedTwice#1.said is \"'c-rate' of agent 'item-1' was reopened 2 times\", not 'reopened'",
-                "painPoints[0].impact: says 7, which none of its citations holds - cite where the report holds it, or leave it out",
+                $"painPoints[0].impact: says 7 USD, an amount in USD {NoneHolds}",
             ],
             FlowAnalysisEvidence.Problems(
                 Analysis(
@@ -330,12 +330,12 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
-    /// Every number an impact says is held to its citations, one joined to its unit too: read for its numeric head, it is
-    /// held as written or converted exactly from its unit to the report's - seconds for a time, ones for a count in
-    /// thousands or millions - so a wait of 3600s, 1.5h or 12k tokens no citation holds is refused as a bare number is, a
-    /// cited value written in another unit is held, and a word that starts as a number and reads as no one number - a
-    /// date, a compound duration - is refused as such: an analyst writes no measurement past the check by gluing it to
-    /// its unit.
+    /// Every number an impact says is held to its citations, one joined to its unit too: read for its numeric head and
+    /// its unit, it is held where a cited member of its unit's kind holds it, converted exactly into that member's unit -
+    /// a wait of 60 seconds said as 60s, 1min or a 1-minute wait - so a wait of 3600s, 1.5h or 12k tokens no citation
+    /// holds is refused as a bare number is, a multiple is refused for no member of the report is one, and a word that
+    /// starts as a number and reads as no one number - a date, a compound duration - is refused as such: an analyst
+    /// writes no measurement past the check by gluing it to its unit.
     /// </summary>
     [Fact]
     public void ANumberJoinedToItsUnit_IsHeldToTheCitations_AsWrittenOrConvertedExactly()
@@ -358,11 +358,11 @@ public sealed class AnalyzeReportTests
 
         Assert.Equal(
             [
-                "painPoints[0].impact: says 3600s, which none of its citations holds - cite where the report holds it, or leave it out",
-                "painPoints[0].impact: says 1.5h, which none of its citations holds - cite where the report holds it, or leave it out",
-                "painPoints[0].impact: says 12k, which none of its citations holds - cite where the report holds it, or leave it out",
-                "painPoints[0].impact: says 2x, which none of its citations holds - cite where the report holds it, or leave it out",
-                "painPoints[0].impact: says 61s, which none of its citations holds - cite where the report holds it, or leave it out",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 1.5h, a time {NoneHolds}",
+                $"painPoints[0].impact: says 12k tokens, a count {NoneHolds}",
+                "painPoints[0].impact: says 2x, a multiple, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                $"painPoints[0].impact: says 61s, a time {NoneHolds}",
                 "painPoints[0].impact: says 2026-11-24, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
                 "painPoints[0].impact: says 1h30m, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
             ],
@@ -370,6 +370,102 @@ public sealed class AnalyzeReportTests
                 Analysis(evidence, "the gate waited 3600s, 1.5h and 12k tokens, cost 2x the build and 61s more since 2026-11-24, 1h30m in all"),
                 report));
     }
+
+    /// <summary>
+    /// A number is read whatever wraps it: Markdown's emphasis and code, a comparison and any currency's sign are read off
+    /// a word's ends before its head is, a sign directly before a digit kept - so a measurement in bold, in backticks,
+    /// after a sign or in another currency is held to the citations as a bare one is, refused where none holds it and
+    /// held where one does, and an id is still never read.
+    /// </summary>
+    [Fact]
+    public void ANumberInMarkdownAfterASignOrInACurrency_IsReadAndHeldToTheCitations()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = string.Join(
+            ",",
+            Cited("people", "q1", "waitedSeconds", "60"),
+            Cited("totals", "model-y", "usd", "0.02"),
+            Cited("errors", "c@1", "exit", "20"));
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "q1 waited **60s**, `1min` and >60 s - “60s” in all - for `$0.02`; c@1 exited (20), **-** b's id b@2 is no number."),
+            report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                "painPoints[0].impact: says €12, an amount in €, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                "painPoints[0].impact: says -7, which none of its citations holds - cite where the report holds it, or leave it out",
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "the gate waited **3600s**, then `3600s`, then >3600s, and cost €12 - a change of **-7**."), report));
+    }
+
+    /// <summary>
+    /// A number is held in the unit its citation's member is in, as the report's one table of units names it: written bare
+    /// it is the cited value as written, in the member's unit; joined to its unit it is converted exactly into the member's
+    /// - 1.5h is a budget's 90 minutes, 28% a cache share of 28 percent, $0.02 a cost of 0.02 dollars - and a unit of
+    /// another kind or another measure is refused: 60 hours is no wait of 60 seconds, 90 s no budget of 90 minutes, 2x
+    /// no count of 2 tries, €0.02 no cost in dollars.
+    /// </summary>
+    [Fact]
+    public void ANumber_IsHeldInTheUnitItsCitedMemberIsIn()
+    {
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with { Flow = source.Flow with { Spent = source.Flow.Spent with { Minutes = 90 } } });
+        var evidence = string.Join(
+            ",",
+            Cited("people", "q1", "waitedSeconds", "60"),
+            Cited("theRun", string.Empty, "budget.minutes", "90"),
+            Cited("steps", "b", "tries", "2"),
+            Cited("totals", string.Empty, "cacheSharePercent", "28.0"),
+            Cited("totals", "model-y", "usd", "0.02"));
+
+        Assert.Equal(
+            (90.0, 28.0),
+            (report["theRun"]!["budget"]!["minutes"]!.GetValue<double>(), report["totals"]!["cacheSharePercent"]!.GetValue<double>()));
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "the run reasoned 1.5h - 90 minutes, 90 in the budget's own unit - b ran 2 tries; q1 waited 60, 1min; 28% of the input came from the cache; it cost $0.02, 2 cents."),
+            report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 60 hours, a time {NoneHolds}",
+                $"painPoints[0].impact: says 90 s, a time {NoneHolds}",
+                "painPoints[0].impact: says 2x, a multiple, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                $"painPoints[0].impact: says 28 s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 0.02 hours, a time {NoneHolds}",
+                "painPoints[0].impact: says €0.02, an amount in €, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                $"painPoints[0].impact: says 3 tokens, a count {NoneHolds}",
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "q1 waited 60 hours, the budget 90 s; b cost 2x the build, 28 s, 0.02 hours or €0.02 - and 3 tokens."),
+                report));
+    }
+
+    /// <summary>What every refusal of a number joined to its unit says after its unit's kind, where the report has members of that kind.</summary>
+    private const string NoneHolds = "none of its citations holds - a number joined to its unit is held where a cited member of its kind holds it, converted exactly into that member's unit; cite where the report holds it, or leave it out";
+
+    /// <summary>An analysis of one pain point, of step b, resting on <paramref name="evidence"/>, whose impact says <paramref name="impact"/>.</summary>
+    private static JsonNode AnalysisOf(string evidence, string impact)
+        => new JsonObject
+        {
+            ["summary"] = "s",
+            ["painPoints"] = new JsonArray(new JsonObject
+            {
+                ["title"] = "t",
+                ["severity"] = "high",
+                ["where"] = new JsonArray("b"),
+                ["evidence"] = JsonNode.Parse($"[{evidence}]"),
+                ["impact"] = impact,
+                ["cause"] = "c",
+                ["recommendation"] = "r",
+            }),
+            ["noted"] = new JsonArray(),
+        };
+
+    /// <summary>One citation, as an analysis writes it.</summary>
+    private static string Cited(string section, string row, string of, string said)
+        => $$"""{"section":"{{section}}","row":"{{row}}","of":"{{of}}","said":"{{said}}"}""";
 
     /// <summary>
     /// The sections a citation may name are the schema's one list, and each is a section of the report that holds rows or

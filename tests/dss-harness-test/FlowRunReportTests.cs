@@ -591,6 +591,109 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
+    /// Every number the sections an analysis may cite hold has its unit in the report's one table of units, and every
+    /// entry of the table is a member the report writes: a number the builder writes with no unit would be held to a
+    /// citation as written alone, never converted, and an entry no member is names a unit for nothing - so a member added,
+    /// renamed or moved without its unit is caught here. A duration is in seconds but the budget's reasoning in minutes,
+    /// a cost in dollars, a cache share in percent, a text's bare numbers in its member's unit, and the rest a count.
+    /// </summary>
+    [Fact]
+    public void EveryNumberACitedSectionHolds_HasItsUnitInTheReportsOneTable()
+    {
+        const string Record = """
+            [{"class":"c-rate","claim":"the rate holds over every format",
+              "sites":[{"path":"src/Rates/Home.cs","after":"home"},{"path":"src/Old.cs","after":"reads-home"}],
+              "universe":{"axes":[],"cellsPinned":4,"cellsArmed":0},
+              "neighbours":[{"cell":"json","result":"passed"}]}]
+            """;
+        var source = Source();
+        var steps = source.Flow.Steps;
+        var thrown = new ExceptionRecord("InvalidOperationException", "the node has a parent", [new StackFrame("at Rows.Keep()", File: "src/Rows.cs", Line: 12, Column: 3, InTree: true)], []);
+
+        // A run that holds every member the report can write: a step's graph figures and its run, an attempt's exception
+        // and first error, a step's exit, a pause between sessions, the budget's minutes and an item's closure counts.
+        var held = source with
+        {
+            Flow = source.Flow with
+            {
+                Spent = source.Flow.Spent with { Minutes = 1.5 },
+                Steps =
+                [
+                    steps[0] with
+                    {
+                        Graph = JsonNode.Parse("""{"mode":"tools","calls":3,"servedTokens":1200,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3}}"""),
+                        Measure = steps[0].Measure! with { Ran = 10 },
+                    },
+                    steps[1],
+                    steps[2] with
+                    {
+                        Exit = 20,
+                        Measure = steps[2].Measure! with
+                        {
+                            Attempts = [steps[2].Measure!.Attempts![0] with { Exception = thrown, FirstError = JsonNode.Parse("""{"code":"CS1002","file":"src/a.cs","line":3,"column":9,"count":1}""")!.AsObject() }],
+                        },
+                    },
+                    Step("d", FlowClosureRecords.CheckType, "Done", Began.AddSeconds(60), Began.AddSeconds(70), output: JsonNode.Parse($$"""{"passed":true,"problems":[],"hotspots":[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}],"touches":[],"record":{{Record}}}""")),
+                ],
+            },
+            Events = [.. source.Events!, new FlowEvent(3, Began.AddSeconds(200), FlowEvent.KindOf(FlowChangeKind.Resumed), null, null, null, null, null, null)],
+        };
+
+        var report = FlowRunReport.Of(held);
+        var schema = JsonNode.Parse(WorkflowTemplates.TextOf($"schemas/{WorkflowTemplates.AnalystSchema}.schema.json")!)!;
+        var sections = schema["properties"]!["painPoints"]!["items"]!["properties"]!["evidence"]!["items"]!["properties"]!["section"]!["enum"]!.AsArray().Select(name => name!.GetValue<string>());
+        var numbers = new List<string>();
+        var texts = new List<string>();
+
+        void Walk(JsonNode? node, string path)
+        {
+            switch (node)
+            {
+                case JsonObject members:
+                    foreach (var (name, member) in members)
+                    {
+                        Walk(member, $"{path}.{name}");
+                    }
+
+                    break;
+
+                case JsonArray rows:
+                    foreach (var row in rows)
+                    {
+                        Walk(row, $"{path}[]");
+                    }
+
+                    break;
+
+                case JsonValue value when value.GetValueKind() == System.Text.Json.JsonValueKind.Number:
+                    numbers.Add(path);
+                    break;
+
+                case JsonValue value when value.GetValueKind() == System.Text.Json.JsonValueKind.String:
+                    texts.Add(path);
+                    break;
+            }
+        }
+
+        foreach (var section in sections)
+        {
+            Walk(report[section], section);
+        }
+
+        bool Under(string path, string entry) => path == entry || path.StartsWith($"{entry}.", StringComparison.Ordinal) || path.StartsWith($"{entry}[", StringComparison.Ordinal);
+
+        Assert.DoesNotContain(numbers, path => FlowRunReport.UnitOf(path) is null);
+        Assert.All(FlowRunReport.Units.Keys, entry => Assert.Contains(numbers.Concat(texts), path => Under(path, entry)));
+
+        string[] pinned = ["theRun.pausedSeconds", "theRun.budget.minutes", "totals.dollarsBy.groups[].usd", "totals.cacheSharePercent", "steps[].graph.pack.tokens", "steps[].ran", "errors[].exception.stack[].line", "convergence.items[].classes[].cellsPinned"];
+
+        Assert.All(pinned, path => Assert.Contains(path, numbers.Concat(texts)));
+        Assert.Equal(
+            [FlowUnit.Seconds, FlowUnit.Minutes, FlowUnit.Dollars, FlowUnit.Percent, FlowUnit.Count, FlowUnit.Seconds, FlowUnit.Count, FlowUnit.Count],
+            pinned.Select(FlowRunReport.UnitOf));
+    }
+
+    /// <summary>
     /// The records of a run that exercises every signal: three steps in a chain, one retried, one cold, one that asked a
     /// person, one whose leg printed lines no parser read; two item agents, each with a class reopened twice.
     /// </summary>

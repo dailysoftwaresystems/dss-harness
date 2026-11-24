@@ -100,7 +100,7 @@
           "impact": {
             "type": "string",
             "pattern": "\\S",
-            "description": "The time and dollars it cost: every number written here, alone or joined to its unit (3600s, 1.5h, 12k, 2x), is the value of one of this point's citations, as written or converted exactly from its unit to the report's (seconds for a time, ones for thousands or millions) - a number none of them holds, or a word that reads as no one number (a date, a range), is refused and you are asked again."
+            "description": "The time and dollars it cost: every number written here is the value of one of this point's citations, in the unit the report holds the cited member in - written bare as the citation holds it, or joined to its unit (3600s, 1.5h, 12k tokens, $0.02, 28%) and converted exactly into the cited member's unit (1.5h for a budget of 90 minutes, never 60 hours for a wait of 60 seconds). A number of a kind no member of the report is (2x, a size, another currency), a number none of them holds, or a word that reads as no one number (a date, a range), is refused and you are asked again - whatever wraps it, Markdown or a sign."
           },
           "cause": {
             "type": "string",
