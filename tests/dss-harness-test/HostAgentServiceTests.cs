@@ -1427,7 +1427,9 @@ public sealed class HostAgentServiceTests
             Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
             Assert.Equal(["ended"], error.Notes);
 
+            // The stream takes them in its own time - the agent has not waited for it - and the test waits for the writer.
             error.Take();
+            await error.Taken.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
 
             Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
         }
@@ -1540,6 +1542,8 @@ public sealed class HostAgentServiceTests
 
         private readonly TaskCompletionSource _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private readonly TaskCompletionSource _taken = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private readonly object _kept = new();
 
         private readonly List<string> _writes = [];
@@ -1548,6 +1552,9 @@ public sealed class HostAgentServiceTests
 
         /// <summary>Completes once a write has been handed to it, and is held.</summary>
         public Task Held => _held.Task;
+
+        /// <summary>Completes once the write held has been taken - on the writer's own thread, so nothing is read of the write before it is done, be that thread ever so slow to come back.</summary>
+        public Task Taken => _taken.Task;
 
         /// <summary>Every text handed to it as one write, and each line asked for, in order.</summary>
         public string[] Writes
@@ -1605,6 +1612,7 @@ public sealed class HostAgentServiceTests
             _held.TrySetResult();
             _take.Wait();
             Note("taken");
+            _taken.TrySetResult();
 
             return base.WriteAsync(value);
         }
