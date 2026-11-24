@@ -9880,7 +9880,11 @@ JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's, Dar
 `go test`'s console, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
 or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
 failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
-test`'s, jest's, vitest's). A frame whose runtime prints only its source file's name - the JVM's,
+test`'s, jest's, vitest's). An error that ended its program has `crashed` it, on every runtime - .NET's
+`Unhandled exception.`, the JVM's `Exception in thread`, Node's printed under the header of where it
+was thrown, Python's whose traceback runs through a module's top level, Dart's `Unhandled exception:`,
+Go's panic, Rust's on `main` - and one a program caught and printed, the program going on, has
+`errored`. A frame whose runtime prints only its source file's name - the JVM's,
 lldb's - names no file, only its line: a base name is no path, and is never read as the tree's.
 
 The parsers a phase's log is read by are chosen by what the phase runs (`Results\PhaseParsers.cs`,

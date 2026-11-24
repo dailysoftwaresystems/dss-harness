@@ -154,6 +154,78 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// An error that ended its program has crashed it, on every runtime: Node's, printed under the header of where it was
+    /// thrown, and Python's, whose traceback runs through a module's top level - as a script's or <c>-m</c>'s does - while
+    /// one a program caught and printed has errored, the program going on: Node's logged with no header, Python's printed
+    /// by a handler inside a function. The lines are each tool's own output, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void AnErrorThatEndedItsProgram_HasCrashedIt_AndOneItCaughtAndPrintedHasErrored()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "TypeError: a store needs a path",
+                "    at load (/home/runner/work/app/app/logged.js:1:25)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/logged.js:2:7)",
+                "    at Module._compile (node:internal/modules/cjs/loader:1356:14)",
+                "    at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)",
+                "    at Module.load (node:internal/modules/cjs/loader:1197:32)",
+                "    at Module._load (node:internal/modules/cjs/loader:1013:12)",
+                "    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)",
+                "    at node:internal/main/run_main_module:28:49",
+                "went on",
+                "/home/runner/work/app/app/cause.js:2",
+                "  try { JSON.parse('{'); } catch (err) { throw new Error('the store could not be read', { cause: err }); }",
+                "                                         ^",
+                string.Empty,
+                "Error: the store could not be read",
+                "    at load (/home/runner/work/app/app/cause.js:2:48)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/cause.js:4:1)",
+                "    ... 5 lines matching cause stack trace ...",
+                "    at node:internal/main/run_main_module:28:49 {",
+                "  [cause]: SyntaxError: Unexpected end of JSON input",
+                "      at JSON.parse (<anonymous>)",
+                "      at load (/home/runner/work/app/app/cause.js:2:14)",
+                "      at Object.<anonymous> (/home/runner/work/app/app/cause.js:4:1)",
+                "      at Module._compile (node:internal/modules/cjs/loader:1356:14)",
+                "      at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)",
+                "      at Module.load (node:internal/modules/cjs/loader:1197:32)",
+                "      at Module._load (node:internal/modules/cjs/loader:1013:12)",
+                "      at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)",
+                "      at node:internal/main/run_main_module:28:49",
+                "}",
+                string.Empty,
+                "Node.js v18.19.1",
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/handled.py\", line 8, in main",
+                "    load()",
+                "  File \"/home/runner/work/app/app/handled.py\", line 4, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+                "went on",
+                "Traceback (most recent call last):",
+                "  File \"<frozen runpy>\", line 198, in _run_module_as_main",
+                "  File \"<frozen runpy>\", line 88, in _run_code",
+                "  File \"/home/runner/work/app/app/pkg/run.py\", line 3, in <module>",
+                "    main()",
+                "  File \"/home/runner/work/app/app/pkg/run.py\", line 2, in main",
+                "    raise RuntimeError(\"run failed\")",
+                "RuntimeError: run failed",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        Assert.Equal(
+            [
+                ("node", "errored", "TypeError: a store needs a path", 8, (1, 9)),
+                ("node", "crashed", "Error: the store could not be read", 3, (15, 30)),
+                ("python", "errored", "KeyError: 'port'", 2, (33, 38)),
+                ("python", "crashed", "RuntimeError: run failed", 4, (40, 47)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
     /// A phase's log is digested as it streams, through to the digest: each line is offered to the readings before the
     /// next is read from the log - never the whole log read first and parsed after - and every line no reading took that
     /// looks like an error is counted as the pass meets it, the last fifty held - the nearest the failure - and the rest

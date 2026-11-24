@@ -538,10 +538,16 @@ internal sealed class JvmStackParser : IBuiltInParser
 /// lines, and the error line last, <c>Type: message</c> or the type alone where the error says no message; frames read
 /// innermost first. Tracebacks chained by <c>During handling of the above exception</c> or <c>The above exception was
 /// the direct cause</c> are one error: the last printed the one raised, each before it the cause of the one after. A
-/// traceback no error line ends is given back.
+/// traceback no error line ends is given back. The error raised has <c>crashed</c> the program where its traceback runs
+/// through a module's top level (<c>&lt;module&gt;</c>) - an error no handler caught on its way out, which is how Python
+/// reports the one that ended it, run as a script, with <c>-m</c> or <c>-c</c> - and has <c>errored</c> where it does
+/// not: one a handler caught and printed inside a function, or a thread's.
 /// </summary>
 internal sealed class PythonStackParser : IBuiltInParser
 {
+    /// <summary>The function Python names a module's top level by, in a frame: what an error that left the program ran through.</summary>
+    private const string ModuleLevel = "<module>";
+
     private static readonly Regex Head = LinearRegex.Compile(@"^Traceback \(most recent call last\):$");
 
     private static readonly Regex Frame = LinearRegex.Compile(@"^  File ""(?<file>[^""]+)"", line (?<line>\d+)(?:, in (?<symbol>.+))?$");
@@ -672,7 +678,7 @@ internal sealed class PythonStackParser : IBuiltInParser
                 ParsedText.Headed(cause!.Type, cause.Message),
                 Message: cause.Message.Length > 0 ? cause.Message : null,
                 Exception: cause,
-                Outcome: "errored",
+                Outcome: cause.Stack.Any(frame => frame.Symbol == ModuleLevel) ? "crashed" : "errored",
                 Log: (_from, _to)));
             _chain.Clear();
         }
@@ -686,9 +692,9 @@ internal sealed class PythonStackParser : IBuiltInParser
 /// properties Node prints after it in braces, the line that says which frames it shares with its cause, and its
 /// <c>Node.js vN</c> line, are part of the record. An error that ended Node is printed under its header - where it was
 /// thrown, the source line, a caret under it and a blank line - which says the line after it is that error's head: its
-/// message's further lines are read up to its first frame. A logged error line, with no header above it, is decided by the
-/// line after it alone - a frame makes it a stack trace, any other line gives it back - so the reading never holds more
-/// than that one line.
+/// message's further lines are read up to its first frame, and it has <c>crashed</c> the program. A logged error line,
+/// with no header above it, has <c>errored</c>; it is decided by the line after it alone - a frame makes it a stack trace,
+/// any other line gives it back - so the reading never holds more than that one line.
 /// </summary>
 internal sealed class V8StackParser : IBuiltInParser
 {
@@ -863,7 +869,7 @@ internal sealed class V8StackParser : IBuiltInParser
                     ParsedText.Headed(_code is null ? type : $"{type} [{_code}]", message),
                     Message: message.Length > 0 ? message : null,
                     Exception: new ExceptionRecord(type, message, [.. _frames], []),
-                    Outcome: "errored",
+                    Outcome: _uncaught ? "crashed" : "errored",
                     Log: (_from, _to)));
                 _closed = true;
             }
