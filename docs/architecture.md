@@ -9849,8 +9849,9 @@ there, never twice. A `StackFrame` carries its line as printed, its place, its s
 the output met them, and applies every bound there, each said: a diagnostic printed again is
 folded into the one held where it stands, its count grown, so the first error is the first the
 tool met and the fold is linear; the first 50 diagnostics of each severity are held - an error is
-never displaced by warnings - with the first 50 failures and the first 50 unparsed lines, and the
-rest are counted by severity, by outcome, by code and by file over the whole output; every stack
+never displaced by warnings - with the first 50 failures and the last 50 unparsed lines - the ones
+nearest the failure, as a log's tail is, with how many the bound left out said - and the rest are
+counted by severity, by outcome, by code and by file over the whole output; every stack
 is held to 64 frames - the first 48 and the last 16, the middle cut and its count kept
 (`stackCut`), which the log range still holds - and every cause chain to 8 causes below its
 outermost error, the records below them counted (`causesCut`); and a finding that is not one a digest holds - a severity, an outcome or a
@@ -9968,11 +9969,12 @@ rendered to the frames inside the tree (the crossing frame on each side, a line 
 held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the
 rest - every printing the four do not say - counted by code and by file, the lines no parser held; each thing said once,
 the first problem's message in its saying alone, and a member that says nothing - a count of none, an empty list, a
-null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`) - and where the
-digest holds an error or a failure the entry's
-tail holds only those lines, for a model reads either the typed errors or the raw lines, never both repeated; a digest
-of warnings alone leaves the tail as it is (`ResultDigest.TailBeside`, the one owner of what accompanies a digest, a
-red job's failing page as well); and in `log` the log that phase wrote (`FlowStepLegs.LogOf`: the copy the step kept in
+null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`); and what
+raw lines go beside it is one owner's to say (`ResultDigest.Handed`): where the digest holds an error or a failure it
+says the lines no parser held - the last 50, the nearest the failure, with how many the bound left out - and the entry's
+tail holds none, and where it holds neither the tail goes whole - a red job's failing page as well - and the digest says
+those of its lines no parser held that the tail does not, each tail line read as the digest's were answering for one, so
+every line reaches a model once; and in `log` the log that phase wrote (`FlowStepLegs.LogOf`: the copy the step kept in
 an agent's worktree, else the run's own, none for a leg a host ran). Each diagnostic's log range names the lines as the
 file a reader opens numbers them, by the one rule of where lines end (`PhaseOutput.NumberedLines` over
 `Text\LineEnds.cs`): counted below the header the harness wrote above the child's lines, a carriage return the child
@@ -10018,8 +10020,9 @@ The model surfaces read it the same way: `mend.md` starts from the digest's `fir
 the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and
 `rediagnose.md` say the same, and the continuation record carries each red leg's ledger line, its digest - written as
 every JSON an agent reads is (`AgentEnvelope.Written`: JSON's own escapes alone), so an apostrophe or an angle bracket a
-tool printed reads as it printed it - the raw lines its entry carries beside it - the phase's last lines where nothing
-was digested, so a leg no parser read is never said by its line alone - and a copy of the log its entry names, put with
+tool printed reads as it printed it - the raw lines its entry carries beside it, each line once as the entry holds
+them - none where the digest holds a problem and says the lines no parser held itself, the phase's last lines where it
+holds none or there is no digest, so a leg no parser read is never said by its line alone - and a copy of the log its entry names, put with
 the record's other copies (`ReasonStepRunner.RedLegsOf`, `AgentContinuation`), so a step that goes on starts from the
 first error with its log one read away. Red legs are read only from a step whose output the engine wrote of the legs it
 ran (`WorkflowStepTypes.StepType.AnswersLegs`), never from a model's answer: a path a model wrote there would have the

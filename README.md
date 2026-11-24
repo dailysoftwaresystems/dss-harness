@@ -2300,8 +2300,10 @@ steps `build`, `test`, `run` and `check-mutations`, which run their legs as the 
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass, what it printed digested and said for a model (`digest`: the first
 error whole with its stack and its log range, the next ones a line each, the rest - what those do not say - counted by
-code and by file, a count of none and an empty list left out), the raw lines beside it
-(`tail`: the lines no parser held where the digest holds typed errors, the phase's last lines where it holds none),
+code and by file, a count of none and an empty list left out, the lines no parser held said in it - the last 50, the
+nearest the failure, with how many the bound left out - so every line reaches a model once), the raw lines beside it
+(`tail`: none where the digest holds a typed error or failure, for it says the lines no parser held itself; the phase's
+last lines whole where it holds none, the digest saying only those the tail does not),
 the log whose lines the digest's ranges number (`log`: the copy kept in the step's directory in an agent's worktree,
 else the run's own, null for a leg a host ran), and for `build`, `test` and `run` the units its build
 failed as `failedUnits` (null where its own tool failed no build of it), a sweep's arm with its arm - a leg in a copy letting the
@@ -2317,7 +2319,9 @@ last pushed where it names none - ends at the first red one with its job's faili
 log, given by reference with the page of it where the job failed (`failing`) and its lines counted
 (`lines`), and what the check digested to (`digest`): its annotations, read from the forge's check-runs API, and
 its job's log, read by every form a CI log holds, each finding said once and every file placed against the job's
-workspace on its runner, `failing` holding only the lines no parser held where the digest holds typed errors; and
+workspace on its runner, every line reaching a model once: `failing` holding none where the digest holds a typed error
+or failure, for it says the lines no parser held itself, the page whole where it holds none, the digest saying only
+those the page does not; and
 asks where
 none appeared, some are still running, or one ended neither green nor red; and the fold family - `fold`, `delete-agent`,
 `refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
