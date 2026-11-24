@@ -331,6 +331,21 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic says the error rows of a run's report read each failed attempt's own first error and the
+    /// question its ending raised, from its measure entry - never the last attempt's error nor the step's newest
+    /// question - so a reader knows an attempt before the last keeps what it broke on and asked.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysEachFailedAttemptKeepsItsOwnFirstErrorAndItsOwnQuestion()
+    {
+        Assert.Contains(
+            "every attempt that failed, with why it ended, what it threw, the first error its digests read and the question "
+                + "its ending raised - each the attempt's own, kept by its measure entry, never the last attempt's",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic says what an analysis's impact is held to: every number it says one of its citations',
     /// a number joined to its unit as well - as written or converted exactly to the report's unit - and a word that reads
     /// as no one number refused, as the evidence check holds it.

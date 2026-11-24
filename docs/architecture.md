@@ -3855,7 +3855,9 @@ counted (`parts[]`: a price changed in the configuration later never changes wha
 reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns, the tool calls
 by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, and
 for a machine step what each leg did (`legs[]`: its verdict, its time, how long its machine held it before it let it
-start, each phase's time and its digest's counts); the failed attempt the engine runs again carries its backoff
+start, each phase's time and its digest's counts), the first error its digests read as it ended and the question raised
+of the step while it was its own - kept after the question is answered, so each attempt says its own and never the
+step's newest; the failed attempt the engine runs again carries its backoff
 (`retryAfter`). What an attempt spends is counted once, at the one place a token is counted
 (`FlowCoordinator.TakeMessage`'s usage branch, `Charge`): every turn charges the run's budget and the attempt's entry
 with the same numbers, so the run's `spent` is the sum of its instances' - and is summed from them again at a resume,
@@ -3894,7 +3896,8 @@ every instance inside it, the first in a scope from what its group came after, t
 iteration before it, a visit after the first from what sent it back, a handler from what raised it - walked once in
 the order of its links, each weighed by its runs and its waits for room, never a person's wait or a pause - what a
 faster run must shorten), the failed attempts (each with its cause, the exception it threw with its stack and causes,
-and its digest's first error), the questions people answered with their waits and recommendations, the convergence
+its digest's first error and the question its ending raised - each the attempt's own, read from its measure entry,
+never the last attempt's), the questions people answered with their waits and recommendations, the convergence
 (classes closed, each item's counts, classes reopened, hotspots, the issues carried to a later round, fixed there or
 left, what loops left) and the signals a reader starts from - the slowest and most
 expensive steps, the most retried, every fallback, the longest wait for a person, queue waits past a share of a step's
