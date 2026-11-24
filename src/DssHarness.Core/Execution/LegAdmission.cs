@@ -209,13 +209,14 @@ public sealed record AdmissionRequest(
     public Func<long, DiskSpace, CancellationToken, Task<MadeRoom?>>? MakeRoom { get; init; }
 
     /// <summary>
-    /// Told each stage of the leg's admission as it is reached: what holds it back as each wait on a cause begins - the
-    /// machine's queue, its memory, its room - then <see cref="AdmissionStage.Taken"/> as it is let start, and
-    /// <see cref="AdmissionStage.Ended"/> once its admission ends - the slot it was let start in given back, or the leg
-    /// refused or stopped while it waited: what its caller's measure counts the machine's wait by, beside
-    /// <see cref="Progress"/>'s words. <see langword="null"/> where nothing is told.
+    /// Told each stage of the leg's admission as it is reached (<see cref="AdmissionTold"/>): what holds it back as each
+    /// wait on a cause begins - the machine's queue, its memory, its room - then <see cref="AdmissionStage.Taken"/> as it
+    /// is let start, and <see cref="AdmissionStage.Ended"/> once its admission ends - the slot it was let start in given
+    /// back, or the leg refused or stopped while it waited: what its caller's measure counts the machine's wait by,
+    /// beside <see cref="Progress"/>'s words. A wait on the machine's queue is told again as who stands ahead there
+    /// changes (<see cref="QueueAhead"/>); <see langword="null"/> where nothing is told.
     /// </summary>
-    public Action<AdmissionStage>? Told { get; init; }
+    public Action<AdmissionTold>? Told { get; init; }
 }
 
 /// <summary>A stage of a heavy leg's admission onto its machine, as its caller is told it (<see cref="AdmissionRequest.Told"/>).</summary>
@@ -236,6 +237,18 @@ public enum AdmissionStage
     /// <summary>Its admission ended: the slot it was let start in given back, or it was refused or stopped as it waited.</summary>
     Ended,
 }
+
+/// <summary>
+/// What a heavy leg's admission reached, as its caller is told it (<see cref="AdmissionRequest.Told"/>): the stage, and -
+/// where the stage is the machine's queue - who stands ahead there, so a wait behind another repository's units says
+/// whose they were.
+/// </summary>
+/// <param name="Stage">The stage reached.</param>
+/// <param name="Ahead">
+/// The class of the queue waited on and each tenant ahead in it, as the wait began and as the standing changes; left out
+/// on every other stage, and by the start and the end.
+/// </param>
+public sealed record AdmissionTold(AdmissionStage Stage, QueueAhead? Ahead = null);
 
 /// <summary>
 /// Admits a heavy leg onto its machine before its work starts: first one of the machine's heavy-leg slots, as its dispatch
@@ -367,6 +380,7 @@ public sealed class LegAdmission(
 
         // What the wait holds the leg back for now, as its caller was last told (AdmissionRequest.Told).
         AdmissionStage? holding = null;
+        QueueAhead? holdingOver = null;
 
         try
         {
@@ -400,7 +414,7 @@ public sealed class LegAdmission(
 
                 if (!standing.Holding)
                 {
-                    Holds(AdmissionStage.Queue);
+                    Holds(AdmissionStage.Queue, standing.TenantsAhead);
                     var whose = own ? $", each its own command's, which does not count against the {LedgerReport.SaidDuration(rule.MaxWait)} it may wait" : string.Empty;
 
                     if (heldBy is null || !heldBy.SequenceEqual(standing.Holders) || ownSaid != own)
@@ -604,7 +618,7 @@ public sealed class LegAdmission(
         {
             // Stopped or failed while it waited: its place goes back, as it does once a taken leg's work ends.
             place.Dispose();
-            request.Told?.Invoke(AdmissionStage.Ended);
+            request.Told?.Invoke(new AdmissionTold(AdmissionStage.Ended));
             throw;
         }
 
@@ -738,13 +752,15 @@ public sealed class LegAdmission(
             saidAt = _clock.GetTimestamp();
         }
 
-        // Tells the leg's caller what holds it back, as a wait on a cause other than the one before begins.
-        void Holds(AdmissionStage on)
+        // Tells the leg's caller what holds it back, as a wait on a cause other than the one before begins - and, where
+        // it is the machine's queue, as who stands ahead there changes.
+        void Holds(AdmissionStage on, QueueAhead? ahead = null)
         {
-            if (holding != on)
+            if (holding != on || (on == AdmissionStage.Queue && !Equals(ahead, holdingOver)))
             {
                 holding = on;
-                request.Told?.Invoke(on);
+                holdingOver = ahead;
+                request.Told?.Invoke(new AdmissionTold(on, ahead));
             }
         }
 
@@ -822,8 +838,8 @@ public sealed class LegAdmission(
             return Admission.Taken(place, fact, clock);
         }
 
-        told(AdmissionStage.Taken);
-        return Admission.Taken(place, fact, clock, () => told(AdmissionStage.Ended));
+        told(new AdmissionTold(AdmissionStage.Taken));
+        return Admission.Taken(place, fact, clock, () => told(new AdmissionTold(AdmissionStage.Ended)));
     }
 
     /// <summary>
@@ -845,7 +861,7 @@ public sealed class LegAdmission(
         string? room = null)
     {
         place.Dispose();
-        request.Told?.Invoke(AdmissionStage.Ended);
+        request.Told?.Invoke(new AdmissionTold(AdmissionStage.Ended));
 
         var holders = standing?.Holders ?? claimants;
 

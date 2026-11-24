@@ -2064,7 +2064,7 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         public void Used(FlowTurnSpend turn) => throw new InvalidOperationException("a check spends nothing");
 
-        public void Held(IReadOnlyList<string> on) => throw new InvalidOperationException("a check places no leg");
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) => throw new InvalidOperationException("a check places no leg");
 
         public void HandoffTaken() => throw new InvalidOperationException("a check takes no handoff");
     }

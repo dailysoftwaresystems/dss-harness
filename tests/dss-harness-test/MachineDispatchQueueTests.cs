@@ -280,6 +280,31 @@ public sealed class MachineDispatchQueueTests
         => Assert.Equal(tenant, MachineDispatchQueue.TenantOf(repository));
 
     /// <summary>
+    /// Where a unit waits names who stands ahead of it, as a wait on the queue is told: each unit ahead's tenant, once
+    /// each, in the order they stand - an entry an older build asked named by the local tenant, whose repository was not
+    /// said - and nothing where the unit holds, for nothing waits on its place.
+    /// </summary>
+    [Fact]
+    public void WhereAUnitWaits_NamesTheTenantsAheadOfIt_AsAWaitOnTheQueueIsTold()
+    {
+        using var machine = new Machine(slots: 2);
+
+        AdmissionKit.Write(machine.Record, AdmissionKit.Holder(machine.Harness, "older"));
+        var holding = machine.Ask("a-1", "/src/a");
+
+        Assert.True(machine.Queue.Look(holding).Holding);
+
+        var sameTenant = machine.Ask("a-2", "/src/a");
+        var other = machine.Ask("b-1", "/src/b");
+        var standing = machine.Queue.Look(other);
+
+        Assert.False(standing.Holding);
+        Assert.Equal(new QueueAhead(DispatchClassName.Heavy, ["local", "local/src/a"]), standing.TenantsAhead);
+        Assert.Equal(new QueueAhead(DispatchClassName.Heavy, ["local", "local/src/a", "local/src/b"]), machine.Queue.Look(sameTenant).TenantsAhead);
+        Assert.Null(machine.Queue.Look(holding).TenantsAhead);
+    }
+
+    /// <summary>
     /// A share past any number - an aging bound of no minutes, or more doublings than a number holds - is said as past
     /// any cost, and its tenant's debt is gone in one round: the queue says it as past any cost, and its document holds
     /// no number for it, which no JSON could.

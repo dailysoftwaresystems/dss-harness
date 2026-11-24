@@ -1267,7 +1267,7 @@ public sealed class CommitStepTests
         {
         }
 
-        public void Held(IReadOnlyList<string> on)
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead)
         {
         }
 

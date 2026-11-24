@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -611,7 +612,7 @@ public static class FlowRunReport
             ["type"] = step.Type,
             ["state"] = step.State,
             ["tries"] = measure?.Attempts is { Count: > 1 } count ? count.Count : null,
-            ["waited"] = measure?.Waited is { Count: > 0 } waited ? string.Join(", ", waited.Select(wait => $"{SecondsOf(wait.Seconds)} s on {wait.Cause}")) : null,
+            ["waited"] = measure?.Waited is { Count: > 0 } waited ? string.Join(", ", waited.Select(WaitSaid)) : null,
             ["ran"] = measure is { Ran: { } ran } ? SecondsOf(ran) : null,
             ["model"] = measure?.Attempts is { Count: > 0 } attempts ? attempts[^1].Model : null,
             ["tokens"] = measure?.Totals?.Tokens?.AllTokens,
@@ -778,7 +779,7 @@ public static class FlowRunReport
                 ["step"] = instance,
                 ["seconds"] = Seconds(WeightOf(leaves[instance], at)),
                 ["waited"] = measure?.Waited is { Count: > 0 } waits
-                    ? string.Join(", ", waits.OrderByDescending(wait => wait.Seconds).ThenBy(wait => wait.Cause, StringComparer.Ordinal).Select(wait => $"{SecondsOf(wait.Seconds)} s on {wait.Cause}"))
+                    ? string.Join(", ", waits.OrderByDescending(wait => wait.Seconds).ThenBy(wait => wait.Cause, StringComparer.Ordinal).Select(WaitSaid))
                     : null,
             });
         }
@@ -1160,7 +1161,7 @@ public static class FlowRunReport
 
         foreach (var queued in whole.Where(step => step.Whole > 0 && (step.Step.Measure?.Waited ?? []).Any(wait => FlowWaits.ForRoom(wait.Cause) && wait.Seconds / step.Whole * 100 > thresholds.QueueSharePercent)).OrderBy(step => step.Step.Instance, StringComparer.Ordinal))
         {
-            var waits = string.Join(", ", queued.Step.Measure!.Waited!.Where(wait => FlowWaits.ForRoom(wait.Cause)).Select(wait => $"{SecondsOf(wait.Seconds)} s on {wait.Cause}"));
+            var waits = string.Join(", ", queued.Step.Measure!.Waited!.Where(wait => FlowWaits.ForRoom(wait.Cause)).Select(WaitSaid));
             yield return new("queueWait", [queued.Step.Instance], $"{queued.Step.Instance} waited {waits}, over {thresholds.QueueSharePercent.ToString(CultureInfo.InvariantCulture)}% of its {SecondsOf(queued.Whole)} s");
         }
 
@@ -1240,6 +1241,17 @@ public static class FlowRunReport
     /// <summary>Seconds said with one decimal, the one form every duration in a report's words takes.</summary>
     private static string SecondsOf(double seconds)
         => seconds.ToString("0.0", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// One wait as every row says it: its seconds on its cause and - where the cause is the machine's queue - the class
+    /// of the queue and each tenant it waited behind, so a reader can tell its own run's units from another
+    /// repository's.
+    /// </summary>
+    private static string WaitSaid(FlowStepWait wait)
+        => $"{SecondsOf(wait.Seconds)} s on {wait.Cause}"
+            + (wait.Ahead is { Count: > 0 } ahead
+                ? $" ({string.Join(", ", ahead.Select(standing => $"{QueueReports.NameOf(standing.Class)}, behind {string.Join(", ", standing.Tenants.Select(tenant => $"'{tenant}'"))}"))})"
+                : string.Empty);
 
     /// <summary>Dollars said with four decimals and the currency, the one form every cost in a report's words takes.</summary>
     private static string UsdOf(double usd)

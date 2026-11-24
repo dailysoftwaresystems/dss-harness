@@ -5419,7 +5419,7 @@ public sealed class LegRunServiceTests
 
         public void Ended(string leg) => Add($"{leg} ended");
 
-        public void Admitting(string leg, string asking, AdmissionStage stage) => Add($"{asking} of {leg}: {stage}");
+        public void Admitting(string leg, string asking, AdmissionTold told) => Add($"{asking} of {leg}: {told.Stage}");
 
         public void Add(string said)
         {

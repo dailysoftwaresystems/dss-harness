@@ -10750,13 +10750,15 @@ public sealed class FlowCoordinator
         if (leg.Kind == FlowLegEventKind.Held)
         {
             // The machine holds every leg of the attempt still to run back, or lets one start: the attempt's run stops
-            // while it is held and goes on as it lets one start, and the time between is the step's wait on that cause.
+            // while it is held and goes on as it lets one start, and the time between is the step's wait on that cause -
+            // where the cause is the machine's queue, with who stands ahead in it.
             var now = _clock.GetUtcNow();
             var on = leg.On ?? [];
+            var ahead = leg.Ahead ?? [];
             instance.HeldBy = on.Count == 0 ? null : on;
             instance.Measure = (instance.Measure ?? new FlowStepMeasure(ReadyAt: now))
                 .Held(instance.Attempt, held: on.Count > 0, now)
-                .Waiting(on, now);
+                .Waiting(on, now, ahead);
 
             // Written as it changes, as every wait of a step's is: its record says what it waits on while it is held.
             Record(
@@ -14189,7 +14191,8 @@ public sealed class FlowCoordinator
     /// <param name="Kind">What it says.</param>
     /// <param name="Leg">The leg's name; null where the event is of every leg.</param>
     /// <param name="On">For <see cref="FlowLegEventKind.Held"/>, what the machine holds the legs back for; empty where it lets one start.</param>
-    private readonly record struct FlowLegEvent(FlowLegEventKind Kind, string? Leg, IReadOnlyList<string>? On = null);
+    /// <param name="Ahead">For <see cref="FlowLegEventKind.Held"/>, who stands ahead in the machine's queue, where it waits there.</param>
+    private readonly record struct FlowLegEvent(FlowLegEventKind Kind, string? Leg, IReadOnlyList<string>? On = null, IReadOnlyList<QueueAhead>? Ahead = null);
 
     /// <summary>One wait the loop keeps beside the channel: a retry's turn, or - where <paramref name="Drain"/> - the bound on a stopped step's runner ending.</summary>
     /// <param name="Instance">The step it is for.</param>
@@ -14263,8 +14266,8 @@ public sealed class FlowCoordinator
         }
 
         /// <inheritdoc/>
-        public void Held(IReadOnlyList<string> on)
-            => Post(new FlowLegEvent(FlowLegEventKind.Held, null, [.. on]));
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<QueueAhead> ahead)
+            => Post(new FlowLegEvent(FlowLegEventKind.Held, null, [.. on], ahead));
 
         /// <inheritdoc/>
         public void HandoffTaken()

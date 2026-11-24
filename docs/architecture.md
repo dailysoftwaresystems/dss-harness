@@ -3905,7 +3905,9 @@ time - the union of every attempt's runs, two steps at once counted once - its p
 person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
 kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
 and each step's advice by its advisor's, or by provider, step, agent or type - the retries and the fallbacks), one row
-per step (its state, attempts, waits by cause, run time, model, tokens, dollars, exit, error, handler and why it did
+per step (its state, attempts, waits by cause - a wait on the machine's dispatch queue naming the class of it and each
+tenant waited behind, joined over the whole wait, so a reader can tell its own run's units from another repository's -
+run time, model, tokens, dollars, exit, error, handler and why it did
 not run), the critical path (the longest road through the run's instances, each read as its declaration through
 `FlowInstanceId` and linked from the latest visit of each instance its declaration names in its own scope, a group as
 every instance inside it, the first in a scope from what its group came after, the first of an iteration from the

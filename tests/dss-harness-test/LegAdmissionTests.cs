@@ -125,7 +125,7 @@ public sealed class LegAdmissionTests
         var record = temp.Combine("admission.json");
         var clock = new ManualClock();
         var said = new List<string>();
-        var stages = new List<AdmissionStage>();
+        var stages = new List<AdmissionTold>();
 
         var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(84.1, 80, 75.9), clock)
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said) with { Told = stages.Add }, TestContext.Current.CancellationToken);
@@ -139,10 +139,10 @@ public sealed class LegAdmissionTests
         Assert.Equal("admitted after 1m00s, memory 75.9% in use (75.9 of 100 by the test)", said[^1]);
 
         // Its caller is told each stage, once: the wait on the memory, the start, and - once its slot is given back - the end.
-        Assert.Equal([AdmissionStage.Memory, AdmissionStage.Taken], stages);
+        Assert.Equal([new AdmissionTold(AdmissionStage.Memory), new AdmissionTold(AdmissionStage.Taken)], stages);
         admitted.Dispose();
         admitted.Dispose();
-        Assert.Equal([AdmissionStage.Memory, AdmissionStage.Taken, AdmissionStage.Ended], stages);
+        Assert.Equal([new AdmissionTold(AdmissionStage.Memory), new AdmissionTold(AdmissionStage.Taken), new AdmissionTold(AdmissionStage.Ended)], stages);
     }
 
     /// <summary>
@@ -155,7 +155,7 @@ public sealed class LegAdmissionTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var record = temp.Combine("admission.json");
-        var stages = new List<AdmissionStage>();
+        var stages = new List<AdmissionTold>();
 
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"), AdmissionKit.Holder(harness, "second"));
 
@@ -163,12 +163,13 @@ public sealed class LegAdmissionTests
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30, maxWaitMinutes: 2), []) with { Told = stages.Add }, TestContext.Current.CancellationToken);
 
         Assert.False(admitted.Fact.Admitted);
-        Assert.Equal([AdmissionStage.Queue, AdmissionStage.Ended], stages);
+        Assert.Equal([new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local"])), new AdmissionTold(AdmissionStage.Ended)], stages);
     }
 
     /// <summary>
-    /// A leg granted after a wait for a slot is told the queue once, as the wait begins, then Taken as it starts - never
-    /// before the wait has ended - and Ended once its admission ends with the slot given back.
+    /// A leg granted after a wait for a slot is told the queue once, as the wait begins - with the class of the queue and
+    /// each tenant ahead in it, again as who stands ahead changes - then Taken as it starts, never before the wait has
+    /// ended, and Ended once its admission ends with the slot given back.
     /// </summary>
     [Fact]
     public async Task ALegGrantedAfterItsQueueWait_IsToldTheQueue_ThenTaken_ThenEnded()
@@ -177,28 +178,46 @@ public sealed class LegAdmissionTests
         var harness = new HarnessFactory();
         var record = temp.Combine("admission.json");
         var clock = new ManualClock();
-        var stages = new List<AdmissionStage>();
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, clock: clock);
+        var wide = slots.Ask("run-a", "build", "a-1", "local", "/src/a", null, 3, repository: "/src/a");
+        var narrow = slots.Ask("run-b", "build", "b-1", "local", "/src/b", null, 3, repository: "/src/b");
+        var stages = new List<AdmissionTold>();
         var waits = 0;
 
-        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"), AdmissionKit.Holder(harness, "second"));
+        Assert.True(slots.Look(wide).Holding);
+        Assert.True(slots.Look(narrow).Holding);
 
-        // The first holder gives its slot back while this leg waits its second poll.
-        var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock, settle: TimeSpan.Zero, onWait: () =>
+        // The wide holder ends at the first wait - the leg's own rule, allowing one at once, still holds it back behind
+        // the narrow - and the narrow at the second: the leg looks after each.
+        var admitted = await AdmissionKit.Admission(slots, new ScriptedGauge(30), clock, settle: TimeSpan.Zero, onWait: () =>
         {
-            if (++waits == 2)
+            switch (++waits)
             {
-                AdmissionKit.Write(record, [.. AdmissionKit.Read(record).Where(entry => entry.Leg != "first")]);
+                case 1:
+                    wide.Dispose();
+                    break;
+                case 2:
+                    narrow.Dispose();
+                    break;
             }
         }).AdmitAsync(
-            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, settleLeast: 0, settleMost: 0), []) with { Told = stages.Add },
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, settleLeast: 0, settleMost: 0), []) with { Told = stages.Add },
             TestContext.Current.CancellationToken);
 
         Assert.True(admitted.Fact.Admitted);
-        Assert.Equal(60, admitted.Fact.WaitedSeconds);
-        Assert.Equal([AdmissionStage.Queue, AdmissionStage.Taken], stages);
+        Assert.Equal(2 * AdmissionSettings.DefaultPollSeconds, admitted.Fact.WaitedSeconds);
+
+        // The queue's telling says who stands ahead, each tenant once, and says so again as the line ahead shortens.
+        Assert.Equal(
+            [
+                new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/a", "local/src/b"])),
+                new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/b"])),
+                new AdmissionTold(AdmissionStage.Taken),
+            ],
+            stages);
 
         admitted.Dispose();
-        Assert.Equal([AdmissionStage.Queue, AdmissionStage.Taken, AdmissionStage.Ended], stages);
+        Assert.Equal([.. stages.Take(3), new AdmissionTold(AdmissionStage.Ended)], stages);
     }
 
     /// <summary>
@@ -212,7 +231,7 @@ public sealed class LegAdmissionTests
         var harness = new HarnessFactory();
         var record = temp.Combine("admission.json");
         var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
-        var stages = new List<AdmissionStage>();
+        var stages = new List<AdmissionTold>();
         var waits = 0;
 
         AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
@@ -230,7 +249,7 @@ public sealed class LegAdmissionTests
         {
             Assert.True(admitted.Fact.Admitted);
             Assert.Equal(60, admitted.Fact.WaitedSeconds);
-            Assert.Equal([AdmissionStage.Room, AdmissionStage.Taken], stages);
+            Assert.Equal([new AdmissionTold(AdmissionStage.Room), new AdmissionTold(AdmissionStage.Taken)], stages);
         }
     }
 

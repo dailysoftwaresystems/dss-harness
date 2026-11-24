@@ -337,7 +337,7 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
 
         public void Used(FlowTurnSpend turn) { }
 
-        public void Held(IReadOnlyList<string> on) { }
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }

@@ -357,10 +357,12 @@ public interface IFlowRunEvents
     /// <summary>
     /// The machine this step's legs run on holds every leg of it still to run back - for its dispatch queue, its memory, its
     /// room (<paramref name="on"/>) - or, where <paramref name="on"/> is empty, lets one start: the time it holds them is
-    /// the step's wait on those causes, never its run.
+    /// the step's wait on those causes, never its run. Where the queue is among the causes, <paramref name="ahead"/> says
+    /// who stands ahead in it - each class of it with its tenants, joined over every unit of the step's legs waiting there.
     /// </summary>
     /// <param name="on">What it waits on, as <see cref="FlowWaits"/> names each; empty where a leg of it runs.</param>
-    void Held(IReadOnlyList<string> on);
+    /// <param name="ahead">Who stands ahead in the machine's queue, where it waits there; empty otherwise.</param>
+    void Held(IReadOnlyList<string> on, IReadOnlyList<QueueAhead> ahead);
 
     /// <summary>
     /// The prompt that holds this attempt's <see cref="FlowStepRun.Handoff"/> is written: the handoff is spent, and its
@@ -409,7 +411,7 @@ public sealed class FlowRunEvents : IFlowRunEvents
     }
 
     /// <inheritdoc/>
-    public void Held(IReadOnlyList<string> on)
+    public void Held(IReadOnlyList<string> on, IReadOnlyList<QueueAhead> ahead)
     {
     }
 

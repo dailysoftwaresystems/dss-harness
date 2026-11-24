@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -1232,13 +1233,14 @@ public sealed class LegRunService(
 
     /// <summary>
     /// Who is told each stage of <paramref name="asking"/>'s admission here: the run's watch, where it has one; the machine
-    /// that dispatched this run to this host, by a note (<see cref="AdmissionNote"/>), which its own watch is told;
-    /// <see langword="null"/> where neither asks.
+    /// that dispatched this run to this host, by a note (<see cref="AdmissionNote"/>) - one line of JSON
+    /// (<see cref="NotedAdmission"/>) - which its own watch is told; <see langword="null"/> where neither asks.
     /// </summary>
-    internal static Action<AdmissionStage>? Told(string leg, string asking, ILegRunWatch? watch, HostNotes? notes, CommandOrigin origin)
-        => watch is not null ? stage => watch.Admitting(leg, asking, stage)
-            : notes is not null && origin.Dispatched is not null ? stage => notes.Write(AdmissionNote, $"{leg}\n{asking}\n{stage}")
-            : null;
+    internal static Action<AdmissionTold>? Told(string leg, string asking, ILegRunWatch? watch, HostNotes? notes, CommandOrigin origin)
+        => watch is not null ? told => watch.Admitting(leg, asking, told)
+            : notes is not null && origin.Dispatched is not null
+                ? told => notes.Write(AdmissionNote, JsonSerializer.Serialize(new NotedAdmission(leg, asking, told), JsonStateFile.LineOptions))
+                : null;
 
     /// <summary>
     /// What reads the notes the host of a dispatched leg writes as it runs: a stage of a leg's admission
@@ -1256,14 +1258,30 @@ public sealed class LegRunService(
 
                 // Dropped where it does not read as one this build writes, as a damaged note is: the step then counts that
                 // wait as its run, never a wrong cause.
-                else if (text.Split('\n') is [var named, var asking, var said] && Enum.TryParse<AdmissionStage>(said, out var stage) && Enum.IsDefined(stage))
+                else if (Read(text) is { } noted)
                 {
-                    watch.Admitting(named, asking, stage);
+                    watch.Admitting(noted.Leg, noted.Asking, noted.Told);
                 }
             };
 
-    /// <summary>The kind of note a host writes as a leg's admission there reaches a stage: the leg, what asked and the stage, one a line.</summary>
+    /// <summary>A note a host writes as a leg's admission there reaches a stage: the leg, what asked, and what it reached, as one line of JSON.</summary>
+    internal sealed record NotedAdmission(string Leg, string Asking, AdmissionTold Told);
+
+    /// <summary>The kind of note a host writes as a leg's admission there reaches a stage.</summary>
     internal const string AdmissionNote = "admission";
+
+    /// <summary>Reads one note of a leg's admission, as this build writes it; null where the note does not read.</summary>
+    private static NotedAdmission? Read(string text)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<NotedAdmission>(text, JsonStateFile.LineOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// The least room <paramref name="leg"/>'s builds here leave free on each filesystem they fill - its machine's

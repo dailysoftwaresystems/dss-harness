@@ -409,7 +409,17 @@ internal static class DispatchOrder
                 ? [.. Holders.TakeWhile(holder => holder != entry)]
                 : [.. Holders, .. Waiting.TakeWhile(waiting => waiting != entry)];
 
-            return new SlotStanding(holding, Holders, ahead, machine ?? ahead.Select(unit => unit.Slots).Append(entry.Slots).Min());
+            return new SlotStanding(
+                holding,
+                Holders,
+                ahead,
+                machine ?? ahead.Select(unit => unit.Slots).Append(entry.Slots).Min(),
+                holding ? null : new QueueAhead(DispatchClassName.Heavy, [.. ahead.Select(TenantAhead).Distinct(Comparer)]));
         }
+
+        // The tenant of one unit ahead: its row's, where this build asked it; an older build's entry has no row, and is the
+        // local tenant's, whose repository was not said.
+        private string TenantAhead(SlotEntry entry)
+            => Rows.GetValueOrDefault(entry)?.Tenant ?? MachineDispatchQueue.TenantOf(null);
     }
 }

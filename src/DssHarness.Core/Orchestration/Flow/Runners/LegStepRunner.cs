@@ -392,6 +392,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         private readonly StepHold _hold = new();
         private IReadOnlyList<string> _placed = [];
         private IReadOnlyList<string> _told = [];
+        private IReadOnlyList<QueueAhead> _toldAhead = [];
 
         /// <summary>Every leg the run placed, by name; none before it placed them.</summary>
         public IReadOnlyList<string> PlacedLegs => Volatile.Read(ref _placed);
@@ -425,20 +426,25 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         }
 
         /// <inheritdoc/>
-        public void Admitting(string leg, string asking, AdmissionStage stage) => Tell(() => _hold.Admitting(leg, asking, stage));
+        public void Admitting(string leg, string asking, AdmissionTold told) => Tell(() => _hold.Admitting(leg, asking, told));
 
-        // Tells the engine what holds the step's legs back, where a change makes it other than it last said: under one lock,
-        // so two legs' stages said at once are told in the order they changed it.
+        // Tells the engine what holds the step's legs back, where a change makes it other than it last said - the causes,
+        // or who stands ahead in the machine's queue - under one lock, so two legs' stages said at once are told in the
+        // order they changed it.
         private void Tell(Action change)
         {
             lock (_gate)
             {
                 change();
 
-                if (_hold.On() is var on && !on.SequenceEqual(_told))
+                var on = _hold.On();
+                var ahead = _hold.Ahead();
+
+                if (!on.SequenceEqual(_told) || !ahead.SequenceEqual(_toldAhead))
                 {
                     _told = on;
-                    events.Held(on);
+                    _toldAhead = ahead;
+                    events.Held(on, ahead);
                 }
             }
         }
@@ -447,13 +453,14 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
     /// <summary>
     /// What holds a machine step's legs back, from each stage of their admission: a leg is held while something of it -
     /// itself, or a unit of its work - waits at its machine and nothing of it holds a slot there; the step is held while
-    /// every leg it placed that has not ended is held, on what each of them waits on.
+    /// every leg it placed that has not ended is held, on what each of them waits on, and - where what they wait on is the
+    /// machine's queue - behind who stands ahead there, joined over every unit that waits.
     /// </summary>
     internal sealed class StepHold
     {
         private readonly HashSet<string> _legs = new(StringComparer.Ordinal);
         private readonly HashSet<string> _ended = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, (string Leg, AdmissionStage Stage)> _asking = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Leg, AdmissionTold Told)> _asking = new(StringComparer.Ordinal);
 
         /// <summary>The run placed <paramref name="legs"/>.</summary>
         public void Placed(IEnumerable<string> legs) => _legs.UnionWith(legs);
@@ -469,18 +476,18 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             }
         }
 
-        /// <summary><paramref name="asking"/>, of <paramref name="leg"/>, reached <paramref name="stage"/> of its admission.</summary>
-        public void Admitting(string leg, string asking, AdmissionStage stage)
+        /// <summary><paramref name="asking"/>, of <paramref name="leg"/>, reached what <paramref name="told"/> says of its admission.</summary>
+        public void Admitting(string leg, string asking, AdmissionTold told)
         {
             _ = _legs.Add(leg);
 
-            if (stage == AdmissionStage.Ended || _ended.Contains(leg))
+            if (told.Stage == AdmissionStage.Ended || _ended.Contains(leg))
             {
                 _ = _asking.Remove(asking);
             }
             else
             {
-                _asking[asking] = (leg, stage);
+                _asking[asking] = (leg, told);
             }
         }
 
@@ -495,7 +502,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
             foreach (var leg in running)
             {
-                var stages = _asking.Values.Where(entry => entry.Leg == leg).Select(entry => entry.Stage).ToList();
+                var stages = _asking.Values.Where(entry => entry.Leg == leg).Select(entry => entry.Told.Stage).ToList();
 
                 if (stages.Count == 0 || stages.Contains(AdmissionStage.Taken))
                 {
@@ -507,6 +514,14 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
             return [.. waits.Select(Words)];
         }
+
+        /// <summary>
+        /// Who stands ahead in the machine's queue, over every unit of the step's legs waiting in it, joined: each class
+        /// once, its tenants in the order each first stands; empty where the queue is not among what holds the legs back.
+        /// </summary>
+        public IReadOnlyList<QueueAhead> Ahead()
+            => QueueAhead.Joined(
+                [.. _asking.Values.Where(entry => entry.Told.Stage == AdmissionStage.Queue).Select(entry => entry.Told.Ahead).OfType<QueueAhead>()]);
 
         /// <summary>The words a record says a wait on <paramref name="stage"/> by.</summary>
         private static string Words(AdmissionStage stage) => stage switch

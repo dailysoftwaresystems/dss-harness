@@ -182,7 +182,17 @@ internal sealed record RoomStanding(bool Fits, DiskSpace? Disk, long Claimed, IR
 /// How many heavy legs may run at once while it waits: the machine's own count where its settings file declares one, else
 /// the fewest any leg ahead of it allows, its own included.
 /// </param>
-internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holders, IReadOnlyList<SlotEntry> InLineAhead, int Slots)
+/// <param name="TenantsAhead">
+/// Who stands ahead of it in the heavy class, as a wait on the queue is told (<see cref="QueueAhead"/>): each unit ahead's
+/// tenant, in the order they stand, an entry an older build asked named by the tenant <see cref="MachineDispatchQueue.LocalTenant"/>
+/// - the local tenant, whose repository was not said. <see langword="null"/> where it holds, for nothing waits on its place.
+/// </param>
+internal sealed record SlotStanding(
+    bool Holding,
+    IReadOnlyList<SlotEntry> Holders,
+    IReadOnlyList<SlotEntry> InLineAhead,
+    int Slots,
+    QueueAhead? TenantsAhead = null)
 {
     /// <summary>How many legs are ahead of it in line.</summary>
     public int Ahead => InLineAhead.Count;

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Execution;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -42,6 +43,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// person that spans two sessions is one wait, whole.
 /// </param>
 /// <param name="WaitingSince">When the open wait began; null where none is open.</param>
+/// <param name="WaitingAhead">
+/// Who the open wait stands behind in the machine's queue, as its legs' admissions were last told: each class of the
+/// queue with the tenants ahead in it, joined over the period so far. Null where the open wait is on no queue.
+/// </param>
 public sealed record FlowStepMeasure(
     [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? ReadyAt = null,
     IReadOnlyList<FlowStepWait>? Waited = null,
@@ -51,7 +56,8 @@ public sealed record FlowStepMeasure(
     FlowStepAdvice? Advice = null,
     FlowStepTotals? Totals = null,
     IReadOnlyList<string>? WaitingOn = null,
-    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? WaitingSince = null)
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? WaitingSince = null,
+    IReadOnlyList<QueueAhead>? WaitingAhead = null)
 {
     /// <summary>What is wrong with this measure; null when nothing is.</summary>
     public string? Problem()
@@ -94,20 +100,23 @@ public sealed record FlowStepMeasure(
     /// <summary>
     /// This measure with its open wait brought to <paramref name="on"/> at <paramref name="at"/>: the period that was
     /// open, where the causes changed, is closed into <see cref="Waited"/> by its causes - or into <see cref="Paused"/>
-    /// where the cause was the resume - and the new period opens where there is one to open. The engine settles this at
-    /// every place it writes what an instance waits on, so the causes are always the record's own words, and an
-    /// unchanged set of causes keeps the period open as it was. Seconds are kept exact as the clock gave them, so a wait
-    /// split at every change sums to the whole of it.
+    /// where the cause was the resume - and the new period opens where there is one to open. Where the wait is on the
+    /// machine's queue, <paramref name="ahead"/> - who stands behind it there - is joined into what the open period has
+    /// already seen, and folded into the queue's entry as the period closes, so a wait behind another repository's units
+    /// says whose they were. The engine settles this at every place it writes what an instance waits on, so the causes
+    /// are always the record's own words, and an unchanged set of causes keeps the period open as it was. Seconds are
+    /// kept exact as the clock gave them, so a wait split at every change sums to the whole of it.
     /// </summary>
     /// <param name="on">What the instance waits on now; empty where it waits on nothing.</param>
     /// <param name="at">Now, as the engine's clock says it.</param>
-    public FlowStepMeasure Waiting(IReadOnlyList<string> on, DateTimeOffset at)
+    /// <param name="ahead">Who stands ahead in the machine's queue, where the wait is on it; null where it is not said.</param>
+    public FlowStepMeasure Waiting(IReadOnlyList<string> on, DateTimeOffset at, IReadOnlyList<QueueAhead>? ahead = null)
     {
         ArgumentNullException.ThrowIfNull(on);
 
         if (WaitingOn is not null && WaitingOn.SequenceEqual(on, StringComparer.Ordinal))
         {
-            return this;
+            return this with { WaitingAhead = Joined(WaitingAhead, ahead) };
         }
 
         var waited = Waited;
@@ -116,7 +125,7 @@ public sealed record FlowStepMeasure(
         if (WaitingOn is { Count: > 0 } causes && WaitingSince is { } since && at > since)
         {
             // The closed period's seconds folded into its causes - each merged with its own earlier periods, so a cause
-            // that waited twice is one entry.
+            // that waited twice is one entry - and the machine's queue's entry with who the period waited behind.
             var seconds = (at - since).TotalSeconds;
 
             foreach (var cause in causes)
@@ -130,10 +139,12 @@ public sealed record FlowStepMeasure(
                 var held = waited?.FirstOrDefault(wait => wait.Cause == cause);
 
                 waited = held is { } wait
-                    ? [.. waited!.Select(other => ReferenceEquals(other, wait) ? wait with { Seconds = wait.Seconds + seconds } : other)]
-                    : [.. waited ?? [], new FlowStepWait(cause, seconds)];
+                    ? [.. waited!.Select(other => ReferenceEquals(other, wait) ? wait with { Seconds = wait.Seconds + seconds, Ahead = Joined(wait.Ahead, WaitingAhead) } : other)]
+                    : [.. waited ?? [], new FlowStepWait(cause, seconds, cause == FlowWaits.MachineQueue ? WaitingAhead : null)];
             }
         }
+
+        var open = on.Contains(FlowWaits.MachineQueue) ? ahead : null;
 
         return this with
         {
@@ -141,8 +152,13 @@ public sealed record FlowStepMeasure(
             Paused = paused,
             WaitingOn = on.Count > 0 ? on : null,
             WaitingSince = on.Count > 0 ? at : null,
+            WaitingAhead = open is { Count: > 0 } ? open : null,
         };
     }
+
+    /// <summary>Two standings in the machine's queue as one, each class once; null where neither stands anywhere.</summary>
+    private static IReadOnlyList<QueueAhead>? Joined(IReadOnlyList<QueueAhead>? kept, IReadOnlyList<QueueAhead>? told)
+        => QueueAhead.Joined([.. kept ?? [], .. told ?? []]) is { Count: > 0 } joined ? joined : null;
 
     /// <summary>
     /// This measure with attempt <paramref name="attempt"/> running from <paramref name="at"/>: its entry opened, or -
@@ -348,8 +364,35 @@ public sealed record FlowStepAdvice(string? Model = null, long? Tokens = null, d
 /// <summary>One cause the instance waited on, and how long.</summary>
 /// <param name="Cause">The cause, as <see cref="FlowWaits"/> names it.</param>
 /// <param name="Seconds">How long it waited on it, exact as the clock gave it.</param>
-public sealed record FlowStepWait(string Cause, double Seconds)
+/// <param name="Ahead">
+/// Where the cause is the machine's queue, who it waited behind there: each class of the queue with the tenants that
+/// stood ahead in it, joined over the whole wait; null on every other cause, and where it waited behind none.
+/// </param>
+public sealed record FlowStepWait(string Cause, double Seconds, IReadOnlyList<QueueAhead>? Ahead = null)
 {
+    /// <summary>Whether <paramref name="other"/> is the same wait: its cause, its seconds, and who it waited behind in order.</summary>
+    /// <param name="other">The wait, or <see langword="null"/>.</param>
+    public bool Equals(FlowStepWait? other)
+        => other is not null
+            && string.Equals(Cause, other.Cause, StringComparison.Ordinal)
+            && Seconds == other.Seconds
+            && (Ahead ?? []).SequenceEqual(other.Ahead ?? []);
+
+    /// <summary>The wait's hash, over its cause, its seconds and who it waited behind.</summary>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Cause, StringComparer.Ordinal);
+        hash.Add(Seconds);
+
+        foreach (var standing in Ahead ?? [])
+        {
+            hash.Add(standing);
+        }
+
+        return hash.ToHashCode();
+    }
+
     /// <summary>What is wrong with this wait; null when nothing is.</summary>
     public string? Problem()
         => string.IsNullOrWhiteSpace(Cause) ? "a wait names no cause"

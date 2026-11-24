@@ -986,12 +986,12 @@ public sealed class FlowStepMeasureTests
         var runner = new Runner().OnAsync("build", async (run, _) =>
         {
             var held = seen.SeenAsync(snapshot => Step(snapshot, "build").WaitsOn.SequenceEqual([FlowWaits.MachineQueue, FlowWaits.MachineRoom]));
-            run.Events.Held([FlowWaits.MachineQueue, FlowWaits.MachineRoom]);
+            run.Events.Held([FlowWaits.MachineQueue, FlowWaits.MachineRoom], [new QueueAhead(DispatchClassName.Heavy, ["local/src/other"])]);
             await held.WaitAsync(Bound, Token);
 
             clock.Advance(TimeSpan.FromSeconds(40));
             var let = seen.SeenAsync(snapshot => Step(snapshot, "build").WaitsOn.Count == 0 && Step(snapshot, "build").Measure?.Attempts?.Single().Runs?.Count == 2);
-            run.Events.Held([]);
+            run.Events.Held([], []);
             await let.WaitAsync(Bound, Token);
 
             clock.Advance(TimeSpan.FromSeconds(20));
@@ -1007,15 +1007,48 @@ public sealed class FlowStepMeasureTests
 
         var build = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single().Measure!;
 
-        Assert.Equal([new FlowStepWait(FlowWaits.MachineQueue, 40.0), new FlowStepWait(FlowWaits.MachineRoom, 40.0)], build.Waited);
+        Assert.Equal([new FlowStepWait(FlowWaits.MachineQueue, 40.0, [new QueueAhead(DispatchClassName.Heavy, ["local/src/other"])]), new FlowStepWait(FlowWaits.MachineRoom, 40.0)], build.Waited);
         Assert.Equal(20.0, build.Ran);
         Assert.Equal([new FlowStepSpan(Began, Began), new FlowStepSpan(Began.AddSeconds(40), Began.AddSeconds(60))], build.Attempts!.Single().Runs);
     }
 
     /// <summary>
+    /// A wait on the machine's queue keeps who it waited behind, joined over the whole wait: a later telling of who stands
+    /// ahead joins what came before - the class once, its tenants in the order each first stood - and the period's close
+    /// folds them into the queue's entry, so a second queue wait on the same step adds to the same tenants. A telling
+    /// that names no one takes none away, and a wait on another cause keeps none.
+    /// </summary>
+    [Fact]
+    public void AWaitOnTheMachinesQueue_KeepsWhoItWaitedBehind_JoinedOverTheWait()
+    {
+        var measure = new FlowStepMeasure()
+            .Waiting([FlowWaits.MachineQueue], Began, [new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])])
+            .Waiting([FlowWaits.MachineQueue], Began.AddSeconds(10), [new QueueAhead(DispatchClassName.Heavy, ["local/src/other", "local/src/them"])])
+            .Waiting([FlowWaits.MachineQueue], Began.AddSeconds(20))
+            .Waiting([], Began.AddSeconds(40))
+            .Waiting([FlowWaits.MachineRoom], Began.AddMinutes(2), [new QueueAhead(DispatchClassName.Heavy, ["local/src/never"])])
+            .Waiting([FlowWaits.MachineQueue], Began.AddMinutes(3), [new QueueAhead(DispatchClassName.Heavy, ["local/src/third"])])
+            .Waiting([], Began.AddMinutes(5));
+
+        Assert.Null(measure.Problem());
+
+        // The queue's two waits are one entry, summed, their tenants joined in the order each first stood; the room's
+        // wait, told of no one, keeps none.
+        Assert.Equal(
+            [
+                new FlowStepWait(FlowWaits.MachineQueue, 160.0, [new QueueAhead(DispatchClassName.Heavy, ["local/src/them", "local/src/other", "local/src/third"])]),
+                new FlowStepWait(FlowWaits.MachineRoom, 60.0),
+            ],
+            measure.Waited);
+        Assert.Null(measure.WaitingAhead);
+    }
+
+    /// <summary>
     /// A machine step's legs are held while every one still to run waits at its machine and none holds a slot there: a
     /// leg that runs, or a unit of a leg let start, keeps the step running; a leg that ends no longer counts; each cause
-    /// any of them waits on is said, once, in the order of the admission's stages.
+    /// any of them waits on is said, once, in the order of the admission's stages. Who stands ahead in the machine's
+    /// queue is said over every unit of the step's legs waiting in it, joined: each tenant once, in the order each first
+    /// stands, and not at all where none of them waits on the queue.
     /// </summary>
     [Fact]
     public void AStepsLegs_AreHeldWhileEveryOneStillToRunWaits()
@@ -1025,29 +1058,53 @@ public sealed class FlowStepMeasureTests
         hold.Placed(["linux", "windows"]);
         Assert.Empty(hold.On());
 
-        hold.Admitting("linux", "linux", AdmissionStage.Room);
+        hold.Admitting("linux", "linux", new AdmissionTold(AdmissionStage.Room));
         Assert.Empty(hold.On());
 
-        hold.Admitting("windows", "windows", AdmissionStage.Queue);
+        hold.Admitting("windows", "windows", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])));
         Assert.Equal([FlowWaits.MachineQueue, FlowWaits.MachineRoom], hold.On());
 
-        hold.Admitting("windows", "windows", AdmissionStage.Taken);
+        hold.Admitting("windows", "windows", new AdmissionTold(AdmissionStage.Taken));
         Assert.Empty(hold.On());
 
         hold.Ended("windows");
         Assert.Equal([FlowWaits.MachineRoom], hold.On());
 
         // A sweep's units: one let start keeps the leg running while another waits; the leg is held once none holds a slot.
-        hold.Admitting("linux", "linux", AdmissionStage.Ended);
-        hold.Admitting("linux", "linux/arm-1", AdmissionStage.Taken);
-        hold.Admitting("linux", "linux/arm-2", AdmissionStage.Memory);
+        hold.Admitting("linux", "linux", new AdmissionTold(AdmissionStage.Ended));
+        hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Taken));
+        hold.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Memory));
         Assert.Empty(hold.On());
 
-        hold.Admitting("linux", "linux/arm-1", AdmissionStage.Ended);
+        hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Ended));
         Assert.Equal([FlowWaits.MachineMemory], hold.On());
 
         hold.Ended("linux");
         Assert.Empty(hold.On());
+    }
+
+    /// <summary>
+    /// Who stands ahead in the machine's queue is joined over every unit of the step's legs waiting in it: two units of
+    /// one leg behind two tenants, and a unit of another behind one of them again, say the heavy class once with both
+    /// tenants, in the order each first stands; once none waits on the queue, nothing is said.
+    /// </summary>
+    [Fact]
+    public void WhoStandsAheadInTheMachinesQueue_IsJoinedOverEveryWaitingUnit()
+    {
+        var hold = new LegStepRunner.StepHold();
+
+        hold.Placed(["linux"]);
+        Assert.Empty(hold.Ahead());
+
+        hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])));
+        hold.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/other", "local/src/them"])));
+        Assert.Equal([new QueueAhead(DispatchClassName.Heavy, ["local/src/them", "local/src/other"])], hold.Ahead());
+
+        hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Taken));
+        Assert.Equal([new QueueAhead(DispatchClassName.Heavy, ["local/src/other", "local/src/them"])], hold.Ahead());
+
+        hold.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Taken));
+        Assert.Empty(hold.Ahead());
     }
 
     /// <summary>

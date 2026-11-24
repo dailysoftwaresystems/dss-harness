@@ -32,7 +32,7 @@ public sealed class ReasonStepRunnerTests
 
         public void Used(FlowTurnSpend turn) { }
 
-        public void Held(IReadOnlyList<string> on) { }
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }
@@ -1737,7 +1737,7 @@ public sealed class ReasonStepRunnerTests
             Turns.Add(turn);
         }
 
-        public void Held(IReadOnlyList<string> on) { }
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }
@@ -1758,7 +1758,7 @@ public sealed class ReasonStepRunnerTests
 
         public void Used(FlowTurnSpend turn) { }
 
-        public void Held(IReadOnlyList<string> on) { }
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() => Taken++;
     }

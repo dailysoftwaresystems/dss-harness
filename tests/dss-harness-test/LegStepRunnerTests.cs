@@ -116,7 +116,8 @@ public sealed class LegStepRunnerTests : IDisposable
 
         public void Used(FlowTurnSpend turn) => Add("used");
 
-        public void Held(IReadOnlyList<string> on) => Add(on.Count == 0 ? "a leg runs" : $"held on {string.Join(", ", on)}");
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<QueueAhead> ahead)
+            => Add(on.Count == 0 ? "a leg runs" : $"held on {string.Join(", ", on)}{(ahead.Count == 0 ? string.Empty : $", behind {string.Join(", ", ahead.Select(standing => $"{QueueReports.NameOf(standing.Class)}: {string.Join(", ", standing.Tenants)}"))}")}");
 
         public void HandoffTaken() => Add("handoff taken");
 
@@ -171,10 +172,10 @@ public sealed class LegStepRunnerTests : IDisposable
                 watch.Placed([new LegPlace("native", InACopy: true), new LegPlace("here", InACopy: false)]);
                 watch.CopyMade("native");
                 watch.Ended("here");
-                watch.Admitting("native", "native", AdmissionStage.Queue);
-                watch.Admitting("native", "native", AdmissionStage.Memory);
-                watch.Admitting("native", "native", AdmissionStage.Taken);
-                watch.Admitting("native", "native", AdmissionStage.Ended);
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/other"])));
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Memory));
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Taken));
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Ended));
                 watch.Ended("native");
             },
         };
@@ -187,12 +188,12 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal(HarnessExit.Success, result.Exit);
         Assert.Equal([new FlowLeg("native", LegVerdict.Passed), new FlowLeg("here", LegVerdict.Passed)], result.Legs);
 
-        // The machine held the step once every leg still to run waited at it - each cause as it began - and let it go on as
-        // its leg started.
+        // The machine held the step once every leg still to run waited at it - each cause as it began, the queue's with
+        // who stands ahead - and let it go on as its leg started.
         Assert.Equal(
             [
                 "placed native in a copy", "placed here in the tree", "every leg placed", "copy of native made", "here ended",
-                $"held on {FlowWaits.MachineQueue}", $"held on {FlowWaits.MachineMemory}", "a leg runs", "native ended",
+                $"held on {FlowWaits.MachineQueue}, behind heavy: local/src/other", $"held on {FlowWaits.MachineMemory}", "a leg runs", "native ended",
             ],
             said.Events);
 

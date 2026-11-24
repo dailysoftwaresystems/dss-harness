@@ -86,7 +86,7 @@ public sealed class FlowStepRunnerTests : IDisposable
 
         public void Used(FlowTurnSpend turn) { }
 
-        public void Held(IReadOnlyList<string> on) { }
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }

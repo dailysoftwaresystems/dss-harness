@@ -220,9 +220,10 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// A leg an ssh host admits tells the machine that dispatched it each stage of its admission there, by a note its watch
-    /// is told - the leg, what asked and the stage - while every other note reaches the command's own reader, and one that
-    /// does not read as a stage is dropped. A run nobody dispatched, with no watch, tells nobody.
+    /// A leg an ssh host admits tells the machine that dispatched it each stage of its admission there - and, where the
+    /// stage is the machine's queue, who stands ahead in it - by a note of one line of JSON its watch is told, while
+    /// every other note reaches the command's own reader, and one that does not read as this build writes is dropped. A
+    /// run nobody dispatched, with no watch, tells nobody.
     /// </summary>
     [Fact]
     public void AHostsAdmissionStages_ReachTheDispatchersWatch_AsNotes()
@@ -232,10 +233,10 @@ public sealed class HostAgentServiceTests
         var notes = new HostNotes(origin, new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false));
         var told = LegRunService.Told("linux", "linux/arm-1", watch: null, notes, origin)!;
 
-        told(AdmissionStage.Queue);
+        told(new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])));
         notes.Write(NoteSink.ArmKind, "an arm's verdict");
-        notes.Write(LegRunService.AdmissionNote, "linux\nlinux/arm-1\nNever");
-        told(AdmissionStage.Taken);
+        notes.Write(LegRunService.AdmissionNote, "linux\nlinux/arm-1\nQueue");
+        told(new AdmissionTold(AdmissionStage.Taken));
 
         var watch = new StagesWatch();
         var command = new List<(string Kind, string Text)>();
@@ -246,7 +247,12 @@ public sealed class HostAgentServiceTests
             Assert.False(agent.Error(line.TrimEnd('\r')), "no piece of a note is relayed");
         }
 
-        Assert.Equal([("linux", "linux/arm-1", AdmissionStage.Queue), ("linux", "linux/arm-1", AdmissionStage.Taken)], watch.Told);
+        Assert.Equal(
+            [
+                ("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"]))),
+                ("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Taken)),
+            ],
+            watch.Told);
         Assert.Equal([(NoteSink.ArmKind, "an arm's verdict")], command);
         Assert.Null(LegRunService.Told("linux", "linux", watch: null, notes, CommandOrigin.Typed));
     }
@@ -255,7 +261,7 @@ public sealed class HostAgentServiceTests
     private sealed class StagesWatch : ILegRunWatch
     {
         /// <summary>Each stage told, with the leg and what asked.</summary>
-        public List<(string Leg, string Asking, AdmissionStage Stage)> Told { get; } = [];
+        public List<(string Leg, string Asking, AdmissionTold Told)> Told { get; } = [];
 
         public void Placed(IReadOnlyList<LegPlace> legs)
         {
@@ -269,7 +275,7 @@ public sealed class HostAgentServiceTests
         {
         }
 
-        public void Admitting(string leg, string asking, AdmissionStage stage) => Told.Add((leg, asking, stage));
+        public void Admitting(string leg, string asking, AdmissionTold told) => Told.Add((leg, asking, told));
     }
 
     /// <summary>

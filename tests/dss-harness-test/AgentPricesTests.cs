@@ -433,7 +433,7 @@ public sealed class AgentRunSpendTests
 
         public void Used(FlowTurnSpend turn) => Spent.Add((turn.Usage.AllTokens, turn.Usd, turn.Uncounted));
 
-        public void Held(IReadOnlyList<string> on) { }
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
@@ -60,7 +61,7 @@ public sealed class FlowRunReportTests
 
         Assert.Equal(["a", "b", "c"], path.Select(link => link!["step"]!.GetValue<string>()));
         Assert.Equal([10.0, 30.0, 10.0], path.Select(link => link!["seconds"]!.GetValue<double>()));
-        Assert.Equal("5.0 s on the run to be quiet", path[1]!["waited"]!.GetValue<string>());
+        Assert.Equal("12.5 s on the machine's queue (heavy, behind 'local/src/them'), 5.0 s on the run to be quiet", path[1]!["waited"]!.GetValue<string>());
     }
 
     /// <summary>
@@ -623,7 +624,11 @@ public sealed class FlowRunReportTests
             [
                 Step("a", "orient", "Done", Began, Began.AddSeconds(10), agent: "item-1", measure: new FlowStepMeasure(Attempts: [Attempt(1, "Done", usd: 0.01, model: "model-x", tokens: new AgentUsage(90_000, 500, 60_000, 0, 0, 0)) with { GraphPages = new FlowStepGraphPages(2, new FlowStepGraphAsk("find", 2, 4)) }], Totals: new FlowStepTotals(new AgentUsage(90_000, 500, 60_000, 0, 0, 0), 0.01))),
                 Step("b", "orient", "Done", Began.AddSeconds(15), Began.AddSeconds(45), agent: "item-2", measure: new FlowStepMeasure(
-                    Waited: [new FlowStepWait(FlowWaits.Quiet, 5.0)],
+                    Waited:
+                    [
+                        new FlowStepWait(FlowWaits.Quiet, 5.0),
+                        new FlowStepWait(FlowWaits.MachineQueue, 12.5, [new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])]),
+                    ],
                     Attempts: [Attempt(1, "Failed"), Attempt(2, "Done", usd: 0.02, model: "model-y", tokens: new AgentUsage(90_000, 500, 10_000, 0, 0, 0), fallbackFrom: "model-w", fallbackReason: "key refused") with { GraphPages = new FlowStepGraphPages(1, new FlowStepGraphAsk("node", 1, 3)) }],
                     Totals: new FlowStepTotals(new AgentUsage(90_000, 500, 10_000, 0, 0, 0), 0.02))),
                 Step("c", "class-closure", "Failed", Began.AddSeconds(50), Began.AddSeconds(60), agent: "item-1", measure: new FlowStepMeasure(Attempts: [Attempt(1, "Failed", exit: 20, error: "it did not pass") with { Legs = [new FlowStepLeg("linux", "Failed", Unparsed: 4)] }], Totals: new FlowStepTotals()),
