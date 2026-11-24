@@ -10009,7 +10009,9 @@ each program's own errors, warnings, status lines and end, read by the one owner
 the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries - MSTest's
 console saying one by its `Test method X threw exception:` head, each inner exception folded onto the
 error's line after ` ---> `, the stack in the runtime's order - the
-JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's, Dart's, Go's panic and
+JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's with Node's `[cause]:`
+among the properties it prints in braces - each nested cause, printed inside the braces of the one
+before it, that one's cause - Dart's, Go's panic and
 `go test`'s console - its verbose stream read too, each test's logged lines kept from the `===` line
 that named it to its result line, which says none of them again, and dropped there or at its
 package's result line, so nothing is held past the test it is of; a result line read at any indent,

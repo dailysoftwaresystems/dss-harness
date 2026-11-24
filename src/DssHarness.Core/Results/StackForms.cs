@@ -782,7 +782,9 @@ internal sealed class PythonStackParser : IBuiltInParser
 /// <c>TypeError [ERR_INVALID_ARG_VALUE]: message</c> - then its frames: <c>at f (path:line:col)</c>, <c>at new C
 /// (...)</c>, <c>at async f (...)</c> (a frame of kind <c>async</c>, its call awaited) and <c>at path:line:col</c>. The
 /// properties Node prints after it in braces, the line that says which frames it shares with its cause, and its
-/// <c>Node.js vN</c> line, are part of the record. An error that ended Node is printed under its header - where it was
+/// <c>Node.js vN</c> line, are part of the record; the error's cause among those properties - <c>[cause]: Type: message</c>
+/// and the frames under it, a cause of its own printed inside its braces, indented further - is the record's cause, each
+/// nested one the cause of the one it is printed inside. An error that ended Node is printed under its header - where it was
 /// thrown, the source line, a caret under it and a blank line - which says the line after it is that error's head: its
 /// message's further lines are read up to its first frame, and it has <c>crashed</c> the program. A logged error line,
 /// with no header above it, has <c>errored</c>; it is decided by the line after it alone - a frame makes it a stack trace,
@@ -795,6 +797,8 @@ internal sealed class V8StackParser : IBuiltInParser
     private static readonly Regex Caret = LinearRegex.Compile(@"^\s*\^+\s*$");
 
     private static readonly Regex SharedWithCause = LinearRegex.Compile(@"^\s+\.\.\. \d+ lines? matching cause stack trace \.\.\.$");
+
+    private static readonly Regex Cause = LinearRegex.Compile(@"^(?<indent> +)\[cause\]: (?<thrown>.+)$");
 
     private static readonly Regex Called = LinearRegex.Compile(@"^\s+at (?<async>async )?(?<new>new )?(?<symbol>.+?) \((?<location>.+)\)$");
 
@@ -839,6 +843,7 @@ internal sealed class V8StackParser : IBuiltInParser
         private string? _code;
         private readonly List<string> _message = [];
         private readonly List<StackFrame> _frames = [];
+        private readonly List<(int Indent, string Type, string Message, List<StackFrame> Frames)> _causes = [];
         private int _from;
         private int _to;
         private bool _uncaught;
@@ -857,6 +862,7 @@ internal sealed class V8StackParser : IBuiltInParser
                 {
                     _properties = text != "}";
                     _to = line.Last;
+                    Property(text);
                     return LineTaken.Took;
                 }
 
@@ -950,17 +956,48 @@ internal sealed class V8StackParser : IBuiltInParser
             return LineTaken.Took;
         }
 
+        /// <summary>
+        /// A line of the properties Node prints in braces after the error's frames: a cause's head opens it under the cause
+        /// it is printed inside - the one less indented than it - and a frame is the innermost open cause's.
+        /// </summary>
+        private void Property(string text)
+        {
+            if (Cause.Match(text) is { Success: true } cause && Thrown.Match(cause.Groups["thrown"].Value) is { Success: true } thrown)
+            {
+                var indent = cause.Groups["indent"].Length;
+
+                while (_causes.Count > 0 && _causes[^1].Indent >= indent)
+                {
+                    _causes.RemoveAt(_causes.Count - 1);
+                }
+
+                _causes.Add((indent, thrown.Groups["type"].Value, thrown.Groups["message"].Value, []));
+                return;
+            }
+
+            if (_causes.Count > 0 && FrameOf(text.EndsWith(" {", StringComparison.Ordinal) ? text[..^2] : text) is { } frame)
+            {
+                _causes[^1].Frames.Add(frame);
+            }
+        }
+
         private void Close(ResultSink sink)
         {
             if (_type is { } type)
             {
                 var message = ParsedText.Joined(_message) ?? string.Empty;
+                ExceptionRecord? cause = null;
+
+                for (var at = _causes.Count - 1; at >= 0; at--)
+                {
+                    cause = new ExceptionRecord(_causes[at].Type, _causes[at].Message, [.. _causes[at].Frames], cause is null ? [] : [cause]);
+                }
 
                 sink.Add(new TestFailure(
                     "node",
                     ParsedText.Headed(_code is null ? type : $"{type} [{_code}]", message),
                     Message: message.Length > 0 ? message : null,
-                    Exception: new ExceptionRecord(type, message, [.. _frames], []),
+                    Exception: new ExceptionRecord(type, message, [.. _frames], cause is null ? [] : [cause]),
                     Outcome: _uncaught ? "crashed" : "errored",
                     Log: (_from, _to)));
                 _closed = true;
@@ -975,6 +1012,7 @@ internal sealed class V8StackParser : IBuiltInParser
             _code = null;
             _message.Clear();
             _frames.Clear();
+            _causes.Clear();
             _properties = false;
             _uncaught = false;
         }

@@ -234,6 +234,74 @@ public sealed class ResultParsersTests
             ],
             digest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count, failure.Log!.Value)));
         Assert.Equal(["ERROR:root:the store could not be loaded"], digest.Unparsed);
+
+        var cause = Assert.Single(digest.Failures[1].Exception!.CausedBy);
+
+        Assert.Equal(
+            ("SyntaxError", "Unexpected end of JSON input", 9, "/home/runner/work/app/app/cause.js", 2, 0),
+            (cause.Type, cause.Message, cause.Stack.Count, cause.Stack[1].File!, cause.Stack[1].Line!.Value, cause.CausedBy.Count));
+    }
+
+    /// <summary>
+    /// A Node error's cause, which Node prints among its properties in braces - <c>[cause]: Type: message</c> and its frames,
+    /// a cause of its own inside its braces, indented further - is the record's cause, each nested one the cause of the
+    /// one it is printed inside, so a matcher reading the cause chain meets each. The lines are Node 18's own output for an
+    /// error thrown with a cause that has one, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void ANodeErrorsCauses_AreItsRecordsCauses_EachNestedOneUnderTheOneItIsPrintedIn()
+    {
+        var digest = Digested(
+            [
+                "/home/runner/work/app/app/nested.js:2",
+                "function load() { try { parse(); } catch (err) { throw new Error('the store could not be read', { cause: err }); } }",
+                "                                                 ^",
+                string.Empty,
+                "Error: the store could not be read",
+                "    at load (/home/runner/work/app/app/nested.js:2:56)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/nested.js:3:1)",
+                "    ... 5 lines matching cause stack trace ...",
+                "    at node:internal/main/run_main_module:28:49 {",
+                "  [cause]: Error: the record could not be parsed",
+                "      at parse (/home/runner/work/app/app/nested.js:1:65)",
+                "      at load (/home/runner/work/app/app/nested.js:2:25)",
+                "      ... 6 lines matching cause stack trace ...",
+                "      at node:internal/main/run_main_module:28:49 {",
+                "    [cause]: SyntaxError: Unexpected end of JSON input",
+                "        at JSON.parse (<anonymous>)",
+                "        at parse (/home/runner/work/app/app/nested.js:1:31)",
+                "        at load (/home/runner/work/app/app/nested.js:2:25)",
+                "        at Object.<anonymous> (/home/runner/work/app/app/nested.js:3:1)",
+                "        at Module._compile (node:internal/modules/cjs/loader:1356:14)",
+                "        at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)",
+                "        at Module.load (node:internal/modules/cjs/loader:1197:32)",
+                "        at Module._load (node:internal/modules/cjs/loader:1013:12)",
+                "        at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)",
+                "        at node:internal/main/run_main_module:28:49",
+                "  }",
+                "}",
+                string.Empty,
+                "Node.js v18.19.1",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        var failure = Assert.Single(digest.Failures);
+        var chain = new List<(string, string, int, string?)>();
+
+        for (var thrown = failure.Exception; thrown is not null; thrown = thrown.CausedBy.SingleOrDefault())
+        {
+            chain.Add((thrown.Type, thrown.Message, thrown.Stack.Count, thrown.Stack[0].Symbol));
+        }
+
+        Assert.Equal(("crashed", (5, 27)), (failure.Outcome, failure.Log!.Value));
+        Assert.Equal(
+            [
+                ("Error", "the store could not be read", 3, "load"),
+                ("Error", "the record could not be parsed", 3, "parse"),
+                ("SyntaxError", "Unexpected end of JSON input", 10, "JSON.parse"),
+            ],
+            chain);
+        Assert.Empty(digest.Unparsed ?? []);
     }
 
     /// <summary>
