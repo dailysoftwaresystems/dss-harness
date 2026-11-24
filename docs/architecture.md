@@ -9853,7 +9853,9 @@ time as it streams - never held whole - in one pass (`PhaseParsers.FindingsOf`):
 terminal escapes taken off (`Text\TerminalText.cs`), is offered first to the parser with a record
 open, then to each chosen parser in the order chosen, until one takes it or holds it undecided; one
 that leaves what it held gives it back, and each held line is offered to the others, never to it
-again - so each line is one parser's at most, and a line no parser took is said unparsed only where
+again, while the line that ended its hold, which says only that the held lines were not its, is
+offered again as a line of its own, to it as well - a thrown error's head after a logged one is the
+head of the parser's next record - so each line is one parser's at most, and a line no parser took is said unparsed only where
 it holds an error's marker as a word (`error:`, `error CODE:`, `FAILED`, `fatal:`, a line's own
 `panic:`, a thrown error's `Type: `). The findings are merged in the order of the lines they begin
 at, each with its log range as the log's file numbers its lines (`NumberedLine`), and at the end

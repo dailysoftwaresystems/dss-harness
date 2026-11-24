@@ -162,8 +162,9 @@ public static class PhaseParsers
     /// What the parsers chosen for a log found in it, read in one pass as it streams - never held whole. Each line, its
     /// terminal escapes taken off, is offered first to the reading that has a record open, then to each chosen parser's
     /// reading in the order chosen, until one takes it or holds it undecided; a reading that gives held lines back has
-    /// them offered to the others, never to itself again, so every line is one reading's at most and is read a bounded
-    /// number of times. The findings of every reading are merged in the order of the lines they begin at, each with its
+    /// them offered to the others, never to itself again, and the line that ended its hold offered again as a line of
+    /// its own - to it as well, for that line may begin its next record - so every line is one reading's at most and is
+    /// read a bounded number of times. The findings of every reading are merged in the order of the lines they begin at, each with its
     /// log range as the file numbers its lines. A line no reading took that holds an error's marker - <c>error:</c>,
     /// <c>error CODE:</c>, <c>FAILED</c>, <c>fatal:</c>, <c>panic:</c>, a thrown error's <c>Type: </c> - is handed to
     /// <paramref name="unparsed"/> as the pass meets it, every one, for the digest's owner to count and bound: what the
@@ -382,7 +383,7 @@ public static class PhaseParsers
                         _held.Add(offered);
                         return;
                     default:
-                        GiveBack(offered);
+                        GiveBack(offered, ended: _held.Count > 0);
                         return;
                 }
             }
@@ -414,19 +415,27 @@ public static class PhaseParsers
 
         /// <summary>
         /// The reading with a record open gave back what it held, and <paramref name="current"/> with it: each line waits to
-        /// be offered again, in the order printed and ahead of every line after it, refused by that reading.
+        /// be offered again, in the order printed and ahead of every line after it. A held line is refused by that reading;
+        /// so is <paramref name="current"/>, unless it <paramref name="ended"/> a hold - the line that says the held lines
+        /// were not the reading's says nothing of itself, and may begin the reading's next record, so it is offered again as a
+        /// line of its own, to that reading as well.
         /// </summary>
-        private void GiveBack(Offered? current)
+        private void GiveBack(Offered? current, bool ended = false)
         {
             var refusing = _active;
-            List<Offered> back = current is { } line ? [.. _held, line] : [.. _held];
+            var held = _held.ToArray();
 
             _held.Clear();
             _active = -1;
 
-            for (var at = back.Count - 1; at >= 0; at--)
+            if (current is { } line)
             {
-                _given.Push(back[at] with { Refused = [.. back[at].Refused ?? [], refusing] });
+                _given.Push(ended ? line : line with { Refused = [.. line.Refused ?? [], refusing] });
+            }
+
+            for (var at = held.Length - 1; at >= 0; at--)
+            {
+                _given.Push(held[at] with { Refused = [.. held[at].Refused ?? [], refusing] });
             }
         }
 

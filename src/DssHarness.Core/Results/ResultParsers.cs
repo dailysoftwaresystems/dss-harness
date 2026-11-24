@@ -9,7 +9,9 @@ public enum LineTaken
 {
     /// <summary>
     /// Not the reading's. Every line it held undecided before this one is not its either, and is given back to be
-    /// offered to the other readings; the record it held them for is no record. A record it took lines for may stay open
+    /// offered to the other readings; the record it held them for is no record. Where it held lines, this line - which
+    /// says only that they were not the reading's - is offered again as a line of its own, to the reading as well, which
+    /// answers it as from a fresh start: it may begin the reading's next record. A record it took lines for may stay open
     /// past it - a test a runner said began, whose own output other readings read - and is finished when the reading says.
     /// </summary>
     Left,
@@ -582,8 +584,13 @@ internal abstract class GnuFormParser : IBuiltInParser
                 return LineTaken.Took;
             }
 
-            // A chain the compiler began and no diagnostic ended is not this reading's: it is given back.
-            Unchain();
+            // A chain the compiler began and no diagnostic ended is not this reading's: it is given back, and the line that
+            // ended it is offered again on its own.
+            if (_from is not null)
+            {
+                Unchain();
+                return LineTaken.Left;
+            }
 
             if (_saidSinceTrailer && Trailer.IsMatch(text))
             {

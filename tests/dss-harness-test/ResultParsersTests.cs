@@ -20,12 +20,14 @@ namespace DssHarness.Tests;
 public sealed class ResultParsersTests
 {
     /// <summary>
-    /// One pass: each line is offered to each reading at most once - the reading with a record open first - and a reading
-    /// that leaves what it held gives it back, every held line offered to the others in the order printed, never to it
-    /// again; a given-back line no reading takes is said unparsed where it looks like an error; and each reading ends once.
+    /// One pass: each line is offered to the reading with a record open first, and a reading that leaves what it held gives
+    /// it back, every held line offered to the others in the order printed, never to it again - while the line that ended
+    /// its hold, which says only that the held lines were not its, is offered again as a line of its own, to it as well; a
+    /// line a reading left with nothing held goes to the others alone; a given-back line no reading takes is said unparsed
+    /// where it looks like an error; and each reading ends once.
     /// </summary>
     [Fact]
-    public void EachLine_IsOfferedToEachReadingOnce_AndWhatOneGivesBackGoesToTheOthers()
+    public void AHeldLine_GoesToTheOthers_AndTheLineThatEndedItsHoldIsOfferedAgainOnItsOwn()
     {
         var offered = new List<string>();
 
@@ -34,10 +36,68 @@ public sealed class ResultParsersTests
             [new Holding(offered), new Taking(offered)]);
 
         Assert.Equal(
-            ["A a1", "A a2 error: lost", "A x", "B a1", "B a2 error: lost", "B x", "B b1", "B a3", "A a3", "A end", "B end"],
+            ["A a1", "A a2 error: lost", "A x", "B a1", "B a2 error: lost", "A x", "B x", "B b1", "B a3", "A a3", "A end", "B end"],
             offered);
         Assert.Equal([("taking", "x", (3, 3))], digest!.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Message, diagnostic.Log!.Value)));
         Assert.Equal(["a2 error: lost"], digest.Unparsed);
+    }
+
+    public static TheoryData<string[], string> HeadsInARow() => new()
+    {
+        {
+            [
+                "System.Net.Http.HttpRequestException: Connection refused (localhost:5432)",
+                "System.InvalidOperationException: The store could not be loaded.",
+                @"   at Crash.Store.Load(String name) in D:\a\app\app\net\Crash\Program.cs:line 13",
+                @"   at Crash.Program.Main() in D:\a\app\app\net\Crash\Program.cs:line 38",
+            ],
+            "dotnet errored 'System.InvalidOperationException: The store could not be loaded.' 2 frames (2, 4); unparsed: System.Net.Http.HttpRequestException: Connection refused (localhost:5432)"
+        },
+        {
+            [
+                "Error: retry 1",
+                "TypeError: x is not a function",
+                "    at load (/home/runner/work/app/app/store.js:4:10)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/store.js:7:1)",
+            ],
+            "node errored 'TypeError: x is not a function' 2 frames (2, 4); unparsed: Error: retry 1"
+        },
+        {
+            [
+                "java.lang.IllegalStateException: retry 1",
+                "java.io.UncheckedIOException: the store could not be read",
+                "\tat com.example.Store.load(Store.java:13)",
+                "\tat com.example.Main.main(Main.java:38)",
+            ],
+            "jvm errored 'java.io.UncheckedIOException: the store could not be read' 2 frames (2, 4); unparsed: java.lang.IllegalStateException: retry 1"
+        },
+        {
+            [
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/store.py\", line 9, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+            ],
+            "python errored 'KeyError: 'port'' 1 frames (3, 6); unparsed: Traceback (most recent call last):"
+        },
+    };
+
+    /// <summary>
+    /// A thrown error's head that ends what a stack reader held undecided - a logged error's line no frame followed, a
+    /// traceback cut short - is read as the head it is, of the error whose frames follow it: never lost with the held line,
+    /// nor its frames dropped for want of a record, on any runtime; the held line no frame followed is said unparsed.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(HeadsInARow))]
+    public void AHeadThatEndsAHold_IsReadAsTheHeadOfTheErrorItBegins(string[] lines, string read)
+    {
+        var digest = PhaseParsers.DigestOf(lines, PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        Assert.Equal(
+            read,
+            $"{string.Join(" | ", digest.Failures.Select(failure => $"{failure.Framework} {failure.Outcome} '{failure.Id}' {failure.Frames.Count} frames {failure.Log}"))}; unparsed: {string.Join(" | ", digest.Unparsed ?? [])}");
     }
 
     /// <summary>
