@@ -101,6 +101,59 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// A logged thrown error's head - a <c>Type: message</c> line a program printed - is decided by the line after it
+    /// alone: a frame makes it a stack trace's, any other line gives it back, so a reader holds that one line and never the
+    /// log below it. The process's own crash under it is read as that crash, never as the logged line's message, and a test
+    /// console's block under it is read by its console.
+    /// </summary>
+    [Fact]
+    public void ALoggedHead_IsDecidedByTheLineAfterIt_SoNoReaderHoldsTheLogBelowIt()
+    {
+        var dotnet = new List<string>();
+        var crash = PhaseParsers.DigestOf(
+            [
+                "MyApp.Config.SettingException: 'x' missing, using default",
+                "loading the store",
+                "still loading",
+                "Unhandled exception. System.InvalidOperationException: The store could not be loaded.",
+                @"   at Crash.Store.Load(String name) in D:\a\app\app\net\Crash\Program.cs:line 13",
+                @"   at Crash.Program.Main() in D:\a\app\app\net\Crash\Program.cs:line 38",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "dotnet-stack" ? new Recording(parser, dotnet) : parser)])!;
+
+        // The logged line is held for the one line after it, which gives it back and is read again on its own.
+        Assert.Equal(["1 Held", "2 Left", "2 Left", "3 Left", "4 Took", "5 Took", "6 Took"], dotnet);
+        Assert.Equal(
+            [("dotnet", "crashed", "System.InvalidOperationException: The store could not be loaded.", 2)],
+            crash.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count)));
+        Assert.Equal(["MyApp.Config.SettingException: 'x' missing, using default"], crash.Unparsed);
+
+        var v8 = new List<string>();
+        var jest = PhaseParsers.DigestOf(
+            [
+                "Error: connect ECONNREFUSED 127.0.0.1:5432",
+                " FAIL  src/store.test.js",
+                "  ● Store › loads its record",
+                string.Empty,
+                "    expect(received).toBe(expected) // Object.is equality",
+                string.Empty,
+                "    Expected: 4",
+                "    Received: 3",
+                string.Empty,
+                "      at Object.toBe (src/store.test.js:7:27)",
+                string.Empty,
+                "Tests:       1 failed, 1 total",
+            ],
+            [.. PhaseParsers.ForTests(new HarnessConfig(), "npx", null).Select(parser => parser.Name == "v8-stack" ? new Recording(parser, v8) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Left"], v8);
+        Assert.Equal(
+            [("jest", "failed", "Store › loads its record", 1)],
+            jest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count)));
+        Assert.Equal(["Error: connect ECONNREFUSED 127.0.0.1:5432"], jest.Unparsed);
+    }
+
+    /// <summary>
     /// A phase's log is digested as it streams, through to the digest: each line is offered to the readings before the
     /// next is read from the log - never the whole log read first and parsed after - and every line no reading took that
     /// looks like an error is counted as the pass meets it, the last fifty held - the nearest the failure - and the rest
@@ -739,6 +792,27 @@ public sealed class ResultParsersTests
                 trace.Add($"read {line}");
                 yield return line;
             }
+        }
+    }
+
+    /// <summary>A parser whose reading notes what it answered of each line it was offered, by the line's number.</summary>
+    private sealed class Recording(IResultParser parser, List<string> answers) : IResultParser
+    {
+        public string Name => parser.Name;
+
+        public IResultReading Begin() => new Reading(parser.Begin(), answers);
+
+        private sealed class Reading(IResultReading reading, List<string> answers) : IResultReading
+        {
+            public LineTaken Offer(NumberedLine line, ResultSink sink)
+            {
+                var taken = reading.Offer(line, sink);
+
+                answers.Add($"{line.Number.ToString(CultureInfo.InvariantCulture)} {taken}");
+                return taken;
+            }
+
+            public LineTaken End(ResultSink sink) => reading.End(sink);
         }
     }
 

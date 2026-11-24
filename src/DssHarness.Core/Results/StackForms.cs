@@ -206,10 +206,12 @@ internal sealed class ThrownLevels
 
 /// <summary>
 /// A .NET stack trace as a process prints it: <c>Unhandled exception. Type: message</c> for one that ended the process,
-/// or a <c>Namespace.Type: message</c> line a frame follows; each inner exception a <c> ---&gt; Type: message</c> line,
-/// the innermost's frames first and <c>--- End of inner exception stack trace ---</c> stepping out to the next; an
-/// awaited boundary a frame of kind <c>async</c>. One that ended the process has <c>crashed</c> it; any other is
-/// <c>errored</c>. A <c>Type: message</c> line no frame follows is no stack trace: it is given back.
+/// with its message's further lines under it, or a <c>Namespace.Type: message</c> line a frame follows; each inner
+/// exception a <c> ---&gt; Type: message</c> line, the innermost's frames first and <c>--- End of inner exception stack
+/// trace ---</c> stepping out to the next; an awaited boundary a frame of kind <c>async</c>. One that ended the process has
+/// <c>crashed</c> it; any other is <c>errored</c>. A logged <c>Type: message</c> line is decided by the line after it alone
+/// - a frame or an inner exception's <c> ---&gt; </c> make it a thrown error's, any other line gives it back - so the
+/// reading never holds more than that one line.
 /// </summary>
 internal sealed class DotNetStackParser : IBuiltInParser
 {
@@ -259,17 +261,19 @@ internal sealed class DotNetStackParser : IBuiltInParser
                     return Framed(line);
                 }
 
-                if (!_framed && text.Trim().Length > 0 && !Thrown.IsMatch(text) && !OtherFrame.IsMatch(text))
+                if (_crashed && !_framed && text.Trim().Length > 0 && !Thrown.IsMatch(text) && !OtherFrame.IsMatch(text))
                 {
-                    // The message's own further lines, before the first frame: held where only a frame can say the line
-                    // above them was a thrown error's.
+                    // The message's own further lines, which the runtime prints under the line that says the error ended
+                    // the process, before its first frame.
                     thrown.Continue(text);
                     _to = line.Last;
-                    return _crashed ? LineTaken.Took : LineTaken.Held;
+                    return LineTaken.Took;
                 }
 
                 if (!_framed && !_crashed)
                 {
+                    // A logged head is a thrown error's only where the runtime's own next line follows it: this one says
+                    // it was not, and nothing is held past it.
                     _thrown = null;
                     return LineTaken.Left;
                 }
@@ -348,8 +352,9 @@ internal sealed class DotNetStackParser : IBuiltInParser
 /// loader and module as <c>at java.base/p.C.m(...)</c> or <c>at app//p.C.m(...)</c> since Java 9, and
 /// <c>(Native Method)</c> and <c>(Unknown Source)</c> naming no line; each <c>Caused by:</c> the cause of the error
 /// above it, its <c>... N more</c> the last N frames of the error it caused, which the JVM leaves out where they are the
-/// same; a <c>Suppressed:</c> block a part of the record, its frames no one's. A <c>Type: message</c> line no frame
-/// follows is no stack trace: it is given back.
+/// same; a <c>Suppressed:</c> block a part of the record, its frames no one's. A logged <c>package.Type: message</c> line
+/// is decided by the line after it alone - a frame or a <c>Caused by:</c> make it a thrown error's, any other line gives it
+/// back - so the reading never holds more than that one line.
 /// </summary>
 /// <remarks>
 /// A JVM frame names its source file by its name alone (<c>Runner.java</c>), never by a path: a name is no place in any
@@ -412,7 +417,7 @@ internal sealed class JvmStackParser : IBuiltInParser
                     return Framed(line);
                 }
 
-                if (_framed && CausedBy.Match(text) is { Success: true } cause)
+                if (CausedBy.Match(text) is { Success: true } cause)
                 {
                     _levels.Add((cause.Groups["type"].Value, [cause.Groups["message"].Value], []));
                     return Framed(line);
@@ -435,15 +440,19 @@ internal sealed class JvmStackParser : IBuiltInParser
                     return Framed(line);
                 }
 
-                if (!_framed && text.Trim().Length > 0 && !Thrown.IsMatch(text))
+                if (_crashed && !_framed && text.Trim().Length > 0 && !Thrown.IsMatch(text))
                 {
+                    // The message's own further lines, which the JVM prints under the line that says the error ended a
+                    // thread, before its first frame.
                     _levels[^1].Message.Add(text);
                     _to = line.Last;
-                    return _crashed ? LineTaken.Took : LineTaken.Held;
+                    return LineTaken.Took;
                 }
 
                 if (!_framed && !_crashed)
                 {
+                    // A logged head is a thrown error's only where the JVM's own next line follows it: this one says it was
+                    // not, and nothing is held past it.
                     _levels.Clear();
                     return LineTaken.Left;
                 }
@@ -552,6 +561,7 @@ internal sealed class PythonStackParser : IBuiltInParser
         private readonly List<ExceptionRecord> _chain = [];
         private List<StackFrame>? _frames;
         private bool _chained;
+        private bool _blank;
         private int _from;
         private int _to;
 
@@ -589,10 +599,16 @@ internal sealed class PythonStackParser : IBuiltInParser
 
             if (_chain.Count > 0)
             {
-                if (text.Trim().Length == 0)
+                if (text.Trim().Length == 0 && !_blank)
                 {
+                    // The one blank line Python prints between the parts of a chain: the line after it says whether the
+                    // chain goes on.
+                    _blank = true;
                     return LineTaken.Held;
                 }
+
+                var blank = _blank;
+                _blank = false;
 
                 if (!_chained && Chained.IsMatch(text))
                 {
@@ -604,6 +620,12 @@ internal sealed class PythonStackParser : IBuiltInParser
                 if (!_chained || !Head.IsMatch(text))
                 {
                     Close(sink);
+
+                    if (blank)
+                    {
+                        // The blank line was no part of the chain: it is given back, and this line offered again on its own.
+                        return LineTaken.Left;
+                    }
                 }
             }
 
@@ -631,6 +653,7 @@ internal sealed class PythonStackParser : IBuiltInParser
         private void Close(ResultSink sink)
         {
             _chained = false;
+            _blank = false;
 
             if (_chain.Count == 0)
             {
@@ -658,14 +681,22 @@ internal sealed class PythonStackParser : IBuiltInParser
 
 /// <summary>
 /// V8's stack trace, Node's and the browsers': the error line - <c>TypeError: message</c>, with Node's code as in
-/// <c>TypeError [ERR_INVALID_ARG_VALUE]: message</c> - and its message's further lines, then its frames: <c>at f
-/// (path:line:col)</c>, <c>at new C (...)</c>, <c>at async f (...)</c> (a frame of kind <c>async</c>, its call awaited)
-/// and <c>at path:line:col</c>. The properties Node prints after it in braces, and its <c>Node.js vN</c> line, are part
-/// of the record. An error line no frame follows is no stack trace: it is given back.
+/// <c>TypeError [ERR_INVALID_ARG_VALUE]: message</c> - then its frames: <c>at f (path:line:col)</c>, <c>at new C
+/// (...)</c>, <c>at async f (...)</c> (a frame of kind <c>async</c>, its call awaited) and <c>at path:line:col</c>. The
+/// properties Node prints after it in braces, the line that says which frames it shares with its cause, and its
+/// <c>Node.js vN</c> line, are part of the record. An error that ended Node is printed under its header - where it was
+/// thrown, the source line, a caret under it and a blank line - which says the line after it is that error's head: its
+/// message's further lines are read up to its first frame. A logged error line, with no header above it, is decided by the
+/// line after it alone - a frame makes it a stack trace, any other line gives it back - so the reading never holds more
+/// than that one line.
 /// </summary>
 internal sealed class V8StackParser : IBuiltInParser
 {
     private static readonly Regex Thrown = LinearRegex.Compile(@"^(?:Uncaught )?(?<type>(?:[A-Z][\w$]*)?(?:Error|Exception))(?: \[(?<code>[A-Z][A-Z0-9_]*)\])?: (?<message>.*)$");
+
+    private static readonly Regex Caret = LinearRegex.Compile(@"^\s*\^+\s*$");
+
+    private static readonly Regex SharedWithCause = LinearRegex.Compile(@"^\s+\.\.\. \d+ lines? matching cause stack trace \.\.\.$");
 
     private static readonly Regex Called = LinearRegex.Compile(@"^\s+at (?<async>async )?(?<new>new )?(?<symbol>.+?) \((?<location>.+)\)$");
 
@@ -712,9 +743,11 @@ internal sealed class V8StackParser : IBuiltInParser
         private readonly List<StackFrame> _frames = [];
         private int _from;
         private int _to;
-        private int _blanks;
+        private bool _uncaught;
         private bool _properties;
         private bool _closed;
+        private int? _caret;
+        private int? _headAt;
 
         public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
@@ -740,21 +773,31 @@ internal sealed class V8StackParser : IBuiltInParser
                     return LineTaken.Took;
                 }
 
-                if (_frames.Count > 0)
+                if (_frames.Count > 0 && SharedWithCause.IsMatch(text))
+                {
+                    // Node's word for the frames the error shares with its cause, which it prints under the cause.
+                    _to = line.Last;
+                    return LineTaken.Took;
+                }
+
+                if (_frames.Count > 0 || (_uncaught && Trailer.IsMatch(text)))
                 {
                     Close(sink);
                 }
-                else if (Thrown.IsMatch(text) || (text.Trim().Length == 0 && ++_blanks >= 2))
+                else if (_uncaught)
                 {
-                    Reset();
-                    return LineTaken.Left;
+                    // The message's own further lines, which Node prints under the head of the error that ended it, before
+                    // its first frame.
+                    _message.Add(text);
+                    _to = line.Last;
+                    return LineTaken.Took;
                 }
                 else
                 {
-                    _blanks = text.Trim().Length == 0 ? _blanks : 0;
-                    _message.Add(text);
-                    _to = line.Last;
-                    return LineTaken.Held;
+                    // A logged head is a stack trace's only where a frame follows it: this line says it was not, and
+                    // nothing is held past it.
+                    Reset();
+                    return LineTaken.Left;
                 }
             }
 
@@ -769,6 +812,17 @@ internal sealed class V8StackParser : IBuiltInParser
                 _closed = text.Trim().Length == 0;
             }
 
+            // Node's header above the error that ended it - where it was thrown, its source line, a caret under it and a
+            // blank line - says the line after it is that error's head.
+            if (Caret.IsMatch(text))
+            {
+                _caret = line.Last;
+            }
+            else if (text.Trim().Length == 0 && _caret == line.Number - 1)
+            {
+                _headAt = line.Last + 1;
+            }
+
             if (Thrown.Match(text) is { Success: true } thrown)
             {
                 _type = thrown.Groups["type"].Value;
@@ -776,9 +830,9 @@ internal sealed class V8StackParser : IBuiltInParser
                 _message.Add(thrown.Groups["message"].Value);
                 _from = line.Number;
                 _to = line.Last;
-                _blanks = 0;
                 _closed = false;
-                return LineTaken.Held;
+                _uncaught = line.Number == _headAt;
+                return _uncaught ? LineTaken.Took : LineTaken.Held;
             }
 
             return LineTaken.Left;
@@ -788,7 +842,7 @@ internal sealed class V8StackParser : IBuiltInParser
         {
             _closed = false;
 
-            if (_type is not null && _frames.Count == 0)
+            if (_type is not null && _frames.Count == 0 && !_uncaught)
             {
                 Reset();
                 return LineTaken.Left;
@@ -824,7 +878,7 @@ internal sealed class V8StackParser : IBuiltInParser
             _message.Clear();
             _frames.Clear();
             _properties = false;
-            _blanks = 0;
+            _uncaught = false;
         }
     }
 }
@@ -966,6 +1020,7 @@ internal sealed class GoPanicParser : IBuiltInParser
         private int? _line;
         private string? _kind;
         private readonly List<string> _message = [];
+        private bool _blank;
         private bool _dumped;
         private int _goroutines;
         private (string Symbol, string Text)? _function;
@@ -1090,15 +1145,17 @@ internal sealed class GoPanicParser : IBuiltInParser
 
             if (!_dumped)
             {
-                if (Nested.IsMatch(text) || Signal.IsMatch(text))
+                if (!_blank && (Nested.IsMatch(text) || Signal.IsMatch(text)))
                 {
                     _message.Add(text.Trim());
                     _to = line.Last;
                     return LineTaken.Held;
                 }
 
-                if (text.Trim().Length == 0)
+                if (!_blank && text.Trim().Length == 0)
                 {
+                    // The one blank line Go prints between a panic's lines and the goroutine that panicked.
+                    _blank = true;
                     return LineTaken.Held;
                 }
 
@@ -1185,6 +1242,7 @@ internal sealed class GoPanicParser : IBuiltInParser
             _frames.Clear();
             _function = null;
             _dumped = false;
+            _blank = false;
         }
     }
 }

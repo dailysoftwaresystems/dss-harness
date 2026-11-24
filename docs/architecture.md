@@ -9851,7 +9851,10 @@ The built-in parsers (`Results\ResultParsers.cs` for the build tools' forms, `Re
 for the runtimes' stacks, `Results\ConsoleParsers.cs` for the test consoles) read a log a line at a
 time as it streams - never held whole - in one pass (`PhaseParsers.FindingsOf`): each line, its
 terminal escapes taken off (`Text\TerminalText.cs`), is offered first to the parser with a record
-open, then to each chosen parser in the order chosen, until one takes it or holds it undecided; one
+open, then to each chosen parser in the order chosen, until one takes it or holds it undecided -
+held only until the runtime's or the tool's own next line says whether it is the parser's (a logged
+error's `Type: message` head by a frame under it, a heading by the problem under it, a blank line by
+the paragraph or the chain after it), so no hold grows with the log; one
 that leaves what it held gives it back, and each held line is offered to the others, never to it
 again, while the line that ended its hold, which says only that the held lines were not its, is
 offered again as a line of its own, to it as well - a thrown error's head after a logged one is the

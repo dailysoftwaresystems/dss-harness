@@ -763,6 +763,25 @@ internal sealed class LinkerParser : IBuiltInParser
 
             Close(sink);
 
+            var own = Own.Match(text);
+            var reference = Reference.Match(own.Success ? own.Groups["rest"].Value : text);
+
+            if (_held is not null && !reference.Success)
+            {
+                // An `in function` line no reference followed was no reference's: it is given back, and this line offered
+                // again on its own.
+                _held = null;
+                return LineTaken.Left;
+            }
+
+            if (reference.Success)
+            {
+                // A reference, behind the linker's name or with none ahead of it: under the function a line before named,
+                // the line its object's place begins.
+                Open(line, new Diagnostic("ld", "error", null, reference.Groups["message"].Value.Trim(), reference.Groups["file"].Value));
+                return LineTaken.Took;
+            }
+
             if (_apple && UndefinedSymbol.Match(text) is { Success: true } symbol)
             {
                 Open(line, new Diagnostic("ld", "error", null, $"undefined symbol: {symbol.Groups["symbol"].Value}"));
@@ -787,17 +806,8 @@ internal sealed class LinkerParser : IBuiltInParser
                 return Failed(line, driver.Groups["message"].Value, sink);
             }
 
-            if (Own.Match(text) is not { Success: true } own)
+            if (!own.Success)
             {
-                // A reference the linker printed with no name of its own ahead of it: under the function a line before
-                // named, the line its object's place begins.
-                if (Reference.Match(text) is { Success: true } bare)
-                {
-                    Open(line, new Diagnostic("ld", "error", null, bare.Groups["message"].Value.Trim(), bare.Groups["file"].Value));
-                    return LineTaken.Took;
-                }
-
-                _held = null;
                 return LineTaken.Left;
             }
 
@@ -805,15 +815,9 @@ internal sealed class LinkerParser : IBuiltInParser
 
             if (InFunction.IsMatch(rest))
             {
-                // The object and function the references under it are in: held until a reference says it.
-                _held ??= line.Number;
+                // The object and function the references under it are in: the next line says whether one does.
+                _held = line.Number;
                 return LineTaken.Held;
-            }
-
-            if (Reference.Match(rest) is { Success: true } reference)
-            {
-                Open(line, new Diagnostic("ld", "error", null, reference.Groups["message"].Value.Trim(), reference.Groups["file"].Value));
-                return LineTaken.Took;
             }
 
             if (Severity.Match(rest) is { Success: true } severity)
@@ -913,6 +917,7 @@ internal sealed class CMakeParser : IBuiltInParser
         private readonly List<string> _message = [];
         private readonly List<StackFrame> _frames = [];
         private bool _stack;
+        private bool _blank;
         private int _to;
         private bool _errorSaid;
 
@@ -924,9 +929,20 @@ internal sealed class CMakeParser : IBuiltInParser
             {
                 if (text.Trim().Length == 0)
                 {
-                    // A blank line between the block's paragraphs, or the block's end: the line after it says which.
-                    return LineTaken.Held;
+                    if (!_blank)
+                    {
+                        // A blank line between the block's paragraphs, or the first of the two that end it: the line after
+                        // it says which.
+                        _blank = true;
+                        return LineTaken.Held;
+                    }
+
+                    // The second blank line in a row, which ends the block, with the one before it.
+                    Close(sink);
+                    return LineTaken.Took;
                 }
+
+                _blank = false;
 
                 if (CallStack.IsMatch(text))
                 {
@@ -1028,6 +1044,7 @@ internal sealed class CMakeParser : IBuiltInParser
             _message.Clear();
             _frames.Clear();
             _stack = false;
+            _blank = false;
         }
     }
 }
@@ -1239,6 +1256,7 @@ internal sealed class EslintParser : IBuiltInParser
     private sealed class Reading : IResultReading
     {
         private string? _file;
+        private bool _heading;
         private bool _said;
 
         public LineTaken Offer(NumberedLine line, ResultSink sink)
@@ -1257,10 +1275,21 @@ internal sealed class EslintParser : IBuiltInParser
                     ParsedText.Whole(problem.Groups["col"]),
                     Log: (line.Number, line.Last)));
                 _said = true;
+                _heading = false;
                 return LineTaken.Took;
             }
 
+            var heading = _heading;
+
             _file = null;
+            _heading = false;
+
+            if (heading)
+            {
+                // A file alone on a line no problem followed was no heading of stylish's: it is given back, and this line
+                // offered again on its own.
+                return LineTaken.Left;
+            }
 
             if (Compact.Match(text) is { Success: true } compact)
             {
@@ -1284,8 +1313,9 @@ internal sealed class EslintParser : IBuiltInParser
 
             if (File.Match(text) is { Success: true } named)
             {
-                // A file alone on a line is stylish's heading only where a problem follows it: held until one does.
+                // A file alone on a line is stylish's heading only where a problem follows it: the next line says.
                 _file = named.Groups["file"].Value;
+                _heading = true;
                 return LineTaken.Held;
             }
 
@@ -1296,6 +1326,7 @@ internal sealed class EslintParser : IBuiltInParser
         public LineTaken End(ResultSink sink)
         {
             _file = null;
+            _heading = false;
             _said = false;
             return LineTaken.Left;
         }
