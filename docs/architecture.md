@@ -3962,22 +3962,37 @@ holds the cited member in. One owner holds the unit of every number the cited se
 writes them: `FlowRunReport.Units`, keyed by the member's path (`theRun.wallSeconds`, `theRun.budget.minutes`,
 `steps[].usd`, `totals.cacheSharePercent`; an entry of an object covering every number inside it, an entry of a text
 the unit of each number it writes bare, as a step's `ran` in seconds) and held to every number the builder writes by
-`FlowRunReportTests`. The impact is read as words, a word ending at every character no id holds - space, a dash but the
-hyphen inside an id, `=`, a comparison, an arrow, a slash, a sentence's brackets, Markdown's marks, quotes - while the
-characters ids are made of (`. - _ @ # [ ] : +`) stay in it, so `queue—3600s—before` and `wait=3600s` each say a
-number and `b@2` or `rounds#2.items[0].fix` none; a currency's sign inside a word starts a number, with the capitals
-before it that say whose currency it is (`cost:$0.40`, `US$0.40`, `R$0.40`). A word is read once every character at
-its ends that is neither a letter nor a digit is read off it - Markdown's marks, a comparison, a currency's sign, a
-sign or a point directly before a digit kept - for its numeric head (thousands grouped in threes) and its unit
-(`FlowUnit`: its kind and how many of the kind's base one of it is; a currency by its sign, its ISO 4217 code in
-capitals or its name, `US$`, `USD`, `$` and `dollars` the report's dollars), the words beside it with nothing but space
-between naming the unit of a number written with none - a scale and a unit after it, else a currency's code or sign
-before it; a number written bare is the cited value as written, a number joined to its unit (`3600s`, `1.5h`, `12k
-tokens`, `$0.02`, `28%`) is held where a cited member of its unit's kind holds it, converted exactly into that member's
-unit - `1.5h` is a budget's 90 minutes, and `60 hours` no wait's 60 seconds - numbers joined to units of one kind from
-the largest to the smallest, glued or with nothing but space between (`1h30m`, `1h 30m`, `2 min 5 s`), are one value
-held as their sum, one of a kind no member is (`2x`, a size, another currency: `€0.02`, `0.02 EUR`, `0.02 euros`) is
-refused, and a word that starts as a number and reads as no one number (a date, a range) is refused as such.
+`FlowRunReportTests`. The impact is read as words by what the report and the citations say is an id, never by a guess at
+one: a word is an id only where the report holds it as one - a row's id, a name the id is made of as the row's own
+members hold it (a hotspot's item and path), a section's or a member's name - or a citation writes it as its path
+(`c@1.exit`), and an id is read whole, its `: + @ # /` and brackets included, never for a number (`c@1`,
+`slowestStep#2`, `hotspots:<item>:<class>:<path>`); an id that starts as a number is read as any word is, so no number
+goes unread. Every other word ends at every character but a letter, a digit, a mark, a hyphen, a point, an underscore
+and the signs a number is written with - space, `: + @ # / =`, a dash but the hyphen, a comparison, an arrow, a
+bracket, a quote, Markdown's marks - so `queue:3600s`, `T+3600s`, `wait=3600s` and `queue—3600s—before` each say a
+number, `b@2` says 2 where the report holds no such attempt, and `windows-2022`, `net10.0` or `claude-opus-4-5` stays
+whole and unread; a currency's sign or its ISO 4217 code in capitals that starts a number inside a word starts a word of
+its own, with the capitals before the sign that say whose currency it is (`cost$0.40`, `US$0.40`, `R$0.40`,
+`costUSD0.40`). A word is read once every character at its ends that is neither a letter nor a digit is read off it -
+Markdown's marks, a point, a sign - but where an amount starts: a digit, a sign or a point directly before one, the lead
+that names its unit directly before those (a currency's sign, with its capitals before or after it, `US$`, `$US`; its
+code glued to a digit, `USD0.40`; a multiple's sign) and a sign before the lead, the number's own (`-$0.02` is minus two
+cents) - for its numeric head (thousands grouped in threes) and its unit (`FlowUnit`: its kind and how many of the
+kind's base one of it is; a currency by its sign, its ISO 4217 code in capitals or its name, `US$`, `USD`, `$` and
+`dollars` the report's dollars, a dollar's name after another country's - `Canadian dollars` - a currency of its own),
+the words beside it naming the unit of a number written with none - a scale and a unit after it, else a currency's word
+before it - beside meaning with nothing between them but space on one line and Markdown's emphasis and code marks
+(`**1.5** hours`), so a sentence's punctuation sets them apart; a number with no unit of its own, or a currency's, takes
+the currency its own phrase names, anywhere after it up to the next number or the clause's end (a comma, a semicolon, a
+point, a closing bracket, a line's end) and, where it is its clause's first number, anywhere before it in the clause
+(`0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`, `EUR: 0.02`), two currencies in its phrase reading as no one
+number (`$0.02 CAD`); a number written bare is the cited value as written, a number joined to its unit (`3600s`,
+`1.5h`, `12k tokens`, `$0.02`, `28%`) is held where a cited member of its unit's kind holds it, converted exactly into
+that member's unit - `1.5h` is a budget's 90 minutes, and `60 hours` no wait's 60 seconds - numbers joined to units of
+one kind from the largest to the smallest, glued or beside each other (`1h30m`, `1h 30m`, `2 min 5 s`), are one
+value held as their sum, one of a kind no member is (`2x`, a size, another currency: `€0.02`, `0.02 EUR`,
+`0.02 euros`) is refused, and a word that starts as a number and reads as no one number (a date, a range) is refused as
+such.
 Every rule a text must keep is the schema's (a pattern for every text, an enum for every closed list), and a run with
 nothing to change is analysed as one, no pain point named. What a run of the analyst leaves is kept under
 `analysis/<stamp>/` whatever it answered -

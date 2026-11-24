@@ -460,7 +460,7 @@ public sealed class AnalyzeReportTests
     /// A number is read whatever wraps it: Markdown's emphasis and code, a comparison and any currency's sign are read off
     /// a word's ends before its head is, a sign directly before a digit kept - so a measurement in bold, in backticks,
     /// after a sign or in another currency is held to the citations as a bare one is, refused where none holds it and
-    /// held where one does, and an id is still never read.
+    /// held where one does, and an id the report holds is still never read.
     /// </summary>
     [Fact]
     public void ANumberInMarkdownAfterASignOrInACurrency_IsReadAndHeldToTheCitations()
@@ -473,7 +473,7 @@ public sealed class AnalyzeReportTests
             Cited("errors", "c@1", "exit", "20"));
 
         Assert.Empty(FlowAnalysisEvidence.Problems(
-            AnalysisOf(evidence, "q1 waited **60s**, `1min` and >60 s - “60s” in all - for `$0.02`; c@1 exited (20), **-** b's id b@2 is no number."),
+            AnalysisOf(evidence, "q1 waited **60s**, `1min` and >60 s - “60s” in all - for `$0.02`; c@1 exited (20), **-** b's failed attempt b@1 is no number."),
             report));
         Assert.Equal(
             [
@@ -528,23 +528,27 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
-    /// A word ends at every character no id holds - a dash but the hyphen inside an id, two hyphens, <c>=</c>, a
-    /// comparison, an arrow, a slash - and a currency's sign inside a word starts a number, with the capitals before it
-    /// that say whose currency it is: so a number joined to a word that starts with a letter is read and held to the
-    /// citations as any other, refused where none holds it and held where one does, US$ the report's dollars and R$ or
-    /// CA$ a currency of its own; and the characters an id is made of keep it whole, its digits unread.
+    /// A word that is no id ends at every character but a letter, a digit, a hyphen, a point, an underscore and the signs a
+    /// number is written with - a dash, two hyphens, <c>=</c>, a comparison, an arrow, a slash, <c>:</c>, <c>+</c>,
+    /// <c>@</c>, <c>#</c>, a bracket, an apostrophe - and a currency's sign or its ISO 4217 code in capitals inside a word
+    /// starts a number, with the capitals before the sign that say whose currency it is: so a number joined to a word that
+    /// starts with a letter is read and held to the citations as any other, refused where none holds it and held where one
+    /// does, US$, $US and USD the report's dollars and R$, CA$ or EUR a currency of its own; and a word of letters, digits,
+    /// hyphens, points and underscores alone - a leg's, a version's, a model's name - stays whole, its digits unread.
     /// </summary>
     [Fact]
-    public void ANumberJoinedToAWordByACharacterNoIdHolds_IsReadAndHeldToTheCitations()
+    public void ANumberJoinedToAWordByAnyCharacterAWordDoesNotKeep_IsReadAndHeldToTheCitations()
     {
         var report = FlowRunReport.Of(FlowRunReportTests.Source());
         var evidence = string.Join(
             ",",
             Cited("people", "q1", "waitedSeconds", "60"),
             Cited("totals", "model-y", "usd", "0.02"));
+        static string Other(string said, string kind)
+            => $"painPoints[0].impact: says {said}, an amount in {kind}, and no member of the report is one - write the report's own numbers, each cited, or leave it out";
 
         Assert.Empty(FlowAnalysisEvidence.Problems(
-            AnalysisOf(evidence, "q1 sat in the queue—60s—before its answer (wait=60s, wait>1min, wait≥60 s, wait/60s, wait--60s, queue–60s, then→60s) and cost US$0.02, cost:$0.02 and 2 cents; b@2, rounds#2.items[0].fix+2 and items:x:c-rate are ids."),
+            AnalysisOf(evidence, "q1 sat in the queue—60s—before its answer (wait=60s, wait>1min, wait≥60 s, wait/60s, wait--60s, queue–60s, then→60s, queue:60s, T+60s, x@60s, run#60s, wait[60s], wait'60s) and cost US$0.02, $US0.02, USD0.02, cost:$0.02, costUSD0.02 and 2 cents, on windows-2022, net10.0 and claude-opus-4-5."),
             report));
         Assert.Equal(
             [
@@ -553,15 +557,169 @@ public sealed class AnalyzeReportTests
                 $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
                 $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
                 $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 3600s, a time {NoneHolds}",
                 $"painPoints[0].impact: says US$0.40, an amount in USD {NoneHolds}",
                 $"painPoints[0].impact: says $0.40, an amount in USD {NoneHolds}",
-                "painPoints[0].impact: says R$0.02, an amount in R$, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
-                "painPoints[0].impact: says CA$0.02, an amount in CA$, and no member of the report is one - write the report's own numbers, each cited, or leave it out",
+                $"painPoints[0].impact: says USD0.40, an amount in USD {NoneHolds}",
+                $"painPoints[0].impact: says $US0.40, an amount in USD {NoneHolds}",
+                Other("R$0.02", "R$"),
+                Other("CA$0.02", "CA$"),
+                Other("EUR0.02", "EUR"),
                 "painPoints[0].impact: says 7, which none of its citations holds - cite where the report holds it, or leave it out",
             ],
             FlowAnalysisEvidence.Problems(
-                AnalysisOf(evidence, "the gate sat in the queue—3600s—before it ran: wait=3600s, wait/3600s, wait--3600s, then→3600s; it cost US$0.40 (cost:$0.40), R$0.02 and CA$0.02, c@1 went x=7 - b@2 is no number."),
+                AnalysisOf(evidence, "the gate sat in the queue—3600s—before it ran: wait=3600s, wait/3600s, wait--3600s, then→3600s, queue:3600s, T+3600s, x@3600s, wait'3600s; it cost US$0.40 (cost:$0.40), USD0.40, $US0.40, R$0.02, CA$0.02 and EUR0.02, c@1 went x=7."),
                 report));
+    }
+
+    /// <summary>
+    /// A word is an id only where the report holds it as one - a row's id, a name the id is made of as the row's own
+    /// members hold it (a hotspot's item and path), a section's or a member's name - or a citation writes it as its path,
+    /// and an id is read whole, its <c>: + @ # /</c> and brackets included, never for a number: a hotspot's path whose file
+    /// name starts with a date, a forEach step's instance, its failed attempt and that attempt's cited member say nothing.
+    /// The same characters in a word the report holds as no id part it, so every number in it is read: an attempt or a
+    /// signal the report never had, and the hotspot's path where the report holds no such hotspot, which reads as no one
+    /// number - an analysis cannot pass a number off as part of a name the report does not hold.
+    /// </summary>
+    [Fact]
+    public void AWordIsAnIdOnlyWhereTheReportOrACitationHoldsIt_AndEveryOtherNumberIsRead()
+    {
+        const string Hotspot = "hotspots:rounds#2.items[0]:c-rate:db/migrate/20240101_users.rb";
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with
+        {
+            Flow = source.Flow with
+            {
+                Steps = [.. source.Flow.Steps.Select(step => step.Instance == "c"
+                    ? step with { Instance = "rounds#2.items[0].fix+2", State = "Done", Output = JsonNode.Parse("""{"hotspots":[{"class":"c-rate","path":"db/migrate/20240101_users.rb","touches":6}]}""") }
+                    : step)],
+            },
+        });
+        var evidence = string.Join(
+            ",",
+            Cited("criticalPath", "b", "seconds", "30.0"),
+            Cited("errors", "rounds#2.items[0].fix+2@1", "exit", "20"),
+            Cited("convergence", Hotspot, "touches", "6"));
+
+        static IEnumerable<string> Ids(JsonNode? rows)
+            => rows!.AsArray().Select(row => row!["id"]!.GetValue<string>());
+
+        // The rows the impact names are the report's own: the step's instance, its failed attempt, its hotspot, a signal.
+        Assert.Equal(["a", "b", "rounds#2.items[0].fix+2"], Ids(report["steps"]));
+        Assert.Equal(["b@1", "rounds#2.items[0].fix+2@1"], Ids(report["errors"]));
+        Assert.Equal([Hotspot], Ids(report["convergence"]!["hotspots"]));
+        Assert.Contains("slowestStep#2", Ids(report["signals"]));
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, $"the hotspot `db/migrate/20240101_users.rb` of item rounds#2.items[0] ({Hotspot}.touches says 6) cost the gate 30.0 s; rounds#2.items[0].fix+2's attempt rounds#2.items[0].fix+2@1 exited 20, as rounds#2.items[0].fix+2@1.exit says - b@1, slowestStep#2 and classesReopened:item-1:c-rate are the report's rows."),
+            report));
+        Assert.Equal(
+            [
+                "painPoints[0].impact: says 2, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 9, which none of its citations holds - cite where the report holds it, or leave it out",
+                "painPoints[0].impact: says 2, which none of its citations holds - cite where the report holds it, or leave it out",
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "the gate waited on b@2, slowestStep#9 and rounds#2.items[0].fix+2@2."), report));
+        Assert.Equal(
+            ["painPoints[0].impact: says 20240101_users.rb, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values"],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(Cited("criticalPath", "b", "seconds", "30.0"), "the hotspot `db/migrate/20240101_users.rb` cost the gate 30.0 s."),
+                FlowRunReport.Of(source)));
+    }
+
+    /// <summary>
+    /// A unit written beside a number is its unit through Markdown's emphasis and code marks, which a word's reading takes
+    /// off its ends - bold, italic, backticks, strikethrough between a number and its unit or its scale change nothing - so
+    /// 1.5 hours in bold is a budget's 90 minutes and 60 hours in bold no wait's 60 seconds, a currency's sign before a
+    /// number in bold is its currency; and punctuation still sets a number apart from the unit after it, so a count before
+    /// a comma takes no currency written past it.
+    /// </summary>
+    [Fact]
+    public void AUnitWrittenBesideANumber_IsItsThroughMarkdownsMarks_ButNotThroughPunctuation()
+    {
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with { Flow = source.Flow with { Spent = source.Flow.Spent with { Minutes = 90 } } });
+        var evidence = string.Join(
+            ",",
+            Cited("theRun", string.Empty, "budget.minutes", "90"),
+            Cited("people", "q1", "waitedSeconds", "60"),
+            Cited("totals", "model-y", "usd", "0.02"));
+        const string InEuros = "an amount in €, and no member of the report is one - write the report's own numbers, each cited, or leave it out";
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "the run reasoned **1.5** hours - `5400` s, __90__ *minutes*, ~~1.5~~ h - while q1 waited **60** s and `1` *min*, for $0.02."),
+            report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says 60 hours, a time {NoneHolds}",
+                $"painPoints[0].impact: says 90 s, a time {NoneHolds}",
+                $"painPoints[0].impact: says 60 hours, a time {NoneHolds}",
+                $"painPoints[0].impact: says 1.2 million tokens, a count {NoneHolds}",
+                $"painPoints[0].impact: says € 0.02, {InEuros}",
+                "painPoints[0].impact: says 12, which none of its citations holds - cite where the report holds it, or leave it out",
+                $"painPoints[0].impact: says € 0.02, {InEuros}",
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "q1 waited **60** hours, `90` s and 60 *hours*; the run reasoned **1.2** million tokens and cost €**0.02** - 12, € 0.02."),
+                report));
+    }
+
+    /// <summary>
+    /// A currency named anywhere in a number's own phrase is its currency: after it, up to the next number or its clause's
+    /// end - whatever stands between, an adjective, a preposition, a bracket - and before it where it is its clause's first
+    /// number, a colon between; a dollar's name after a country's but the United States' names that country's dollars. So
+    /// Canadian dollars, Swiss francs, Japanese yen, an amount in euros and an amount the code EUR is written beside are
+    /// each refused against a cost the report holds in dollars, and one whose phrase names two currencies reads as no one
+    /// number, while US and American dollars, dollars after a preposition and the code USD before or after are held.
+    /// </summary>
+    [Fact]
+    public void ACurrencyNamedAnywhereInANumbersOwnPhrase_IsItsCurrency()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = Cited("totals", "model-y", "usd", "0.02");
+        static string Other(string said, string kind)
+            => $"painPoints[0].impact: says {said}, an amount in {kind}, and no member of the report is one - write the report's own numbers, each cited, or leave it out";
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, "model-y cost 0.02 US dollars; 0.02 American dollars; 0.02 in dollars; USD: 0.02; 0.02 (USD)."),
+            report));
+        Assert.Equal(
+            [
+                Other("0.02 Canadian dollars", "Canadian dollars"),
+                Other("0.02 Swiss francs", "francs"),
+                Other("20 Japanese yen", "yen"),
+                Other("0.02 in euros", "euros"),
+                Other("0.02 EUR", "EUR"),
+                Other("EUR 0.02", "EUR"),
+                "painPoints[0].impact: says $0.02 CAD, which reads as no one number - write each number alone or joined to its unit, as one of its citations' values",
+            ],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(evidence, "the cold cache cost 0.02 Canadian dollars on model-y; 0.02 Swiss francs; 20 Japanese yen; 0.02 in euros; 0.02 (EUR) and EUR: 0.02 at last; $0.02 CAD."),
+                report));
+    }
+
+    /// <summary>
+    /// A sign directly before a currency's sign, its capitals or its code is the number's own sign: minus two cents of
+    /// dollars written with a hyphen or the minus sign before the dollar's sign, before US$ or before USD is refused
+    /// against a cost of plus two cents, never read as that cost, and a plus before the sign is held by it.
+    /// </summary>
+    [Fact]
+    public void ASignBeforeACurrencysSignOrCode_IsTheNumbersSign()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = Cited("totals", "model-y", "usd", "0.02");
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "model-y cost $0.02 (+$0.02 on the bill, +US$0.02 in all)."), report));
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: says -$0.02, an amount in USD {NoneHolds}",
+                $"painPoints[0].impact: says −$0.02, an amount in USD {NoneHolds}",
+                $"painPoints[0].impact: says -US$0.02, an amount in USD {NoneHolds}",
+                $"painPoints[0].impact: says -USD0.02, an amount in USD {NoneHolds}",
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "the fallback changed model-y's cost by -$0.02, −$0.02, -US$0.02 and -USD0.02."), report));
     }
 
     /// <summary>

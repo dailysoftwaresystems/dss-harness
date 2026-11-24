@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -173,11 +174,13 @@ public sealed record FlowNoted(string What, string Why);
 /// seconds - and one of a kind no member of the report is (<c>2x</c>, a size, another currency, by its sign, its ISO
 /// 4217 code or its name: <c>€0.02</c>, <c>R$0.02</c>, <c>0.02 EUR</c>, <c>0.02 euros</c>) never; numbers joined to
 /// units of one kind from the largest to the smallest (<c>1h 30m</c>, <c>1h30m</c>, <c>2 min 5 s</c>) are one value, held
-/// as their sum; and a word that starts as a number and reads as no one number (a date, a range) is refused as such. A
-/// number is read whatever wraps it or joins it to a word - Markdown, a comparison, an arrow, a dash, <c>=</c>, a slash,
-/// a currency's sign (<c>queue—3600s—before</c>, <c>wait=3600s</c>, <c>US$0.40</c>) - for a word ends at every
-/// character no id holds, and every character at a word's ends that is neither a letter nor a digit is read off it, a
-/// sign or a point directly before a digit kept. An analysis cannot invent a measurement.
+/// as their sum; and a word that starts as a number and reads as no one number (a date, a range) is refused as such. The
+/// numbers are read by what the report and the citations say is an id, never by a guess at one (<see cref="NumbersIn"/>):
+/// a word is an id only where the report holds it as one - a row's id or a name it is made of, a section's or a member's
+/// name - or a citation writes it as its path, and is then read whole and never for a number; every other word is parted
+/// at <c>: + @ # / =</c> and every mark no word keeps, hyphens, points and underscores staying inside it - so
+/// <c>queue:3600s</c> and <c>T+3600s</c> each say a number, and <c>windows-2022</c> none. An analysis cannot invent a
+/// measurement.
 /// </summary>
 public static class FlowAnalysisEvidence
 {
@@ -197,10 +200,13 @@ public static class FlowAnalysisEvidence
 
         var problems = new List<string>();
         var steps = (report["steps"] as JsonArray ?? []).OfType<JsonObject>().Select(row => TextOf(row["id"])).ToHashSet(StringComparer.Ordinal);
+        var held = Names.Of(report);
 
         foreach (var (point, at) in (analysis["painPoints"] as JsonArray ?? []).Select((point, at) => (point, at)))
         {
             var cited = new List<SaidNumber>();
+            var evidence = point?["evidence"] as JsonArray ?? [];
+            var names = held.With(evidence.SelectMany(PathsOf));
 
             foreach (var (step, named) in (point?["where"] as JsonArray ?? []).Select((step, named) => (TextOf(step), named)))
             {
@@ -210,9 +216,9 @@ public static class FlowAnalysisEvidence
                 }
             }
 
-            foreach (var (citation, of) in (point?["evidence"] as JsonArray ?? []).Select((citation, of) => (citation, of)))
+            foreach (var (citation, of) in evidence.Select((citation, of) => (citation, of)))
             {
-                if (Held(citation!, report, out var numbers) is { } problem)
+                if (Held(citation!, report, names, out var numbers) is { } problem)
                 {
                     problems.Add($"painPoints[{at}].evidence[{of}]: {problem}");
                 }
@@ -222,7 +228,7 @@ public static class FlowAnalysisEvidence
                 }
             }
 
-            foreach (var said in NumbersIn(TextOf(point?["impact"]), bare: null))
+            foreach (var said in NumbersIn(TextOf(point?["impact"]), bare: null, names))
             {
                 if (!said.Reads)
                 {
@@ -244,11 +250,25 @@ public static class FlowAnalysisEvidence
     }
 
     /// <summary>
-    /// Why <paramref name="citation"/> is not a value the report holds; null where it is, with the numbers it holds, each
-    /// in its unit - the value where it is one, in its member's unit; each number a text says where it is a text, in the
-    /// unit written beside it or, written bare, in its member's.
+    /// The paths <paramref name="citation"/> writes, each read as an id: its section, its row and its member, and the
+    /// member under its row and under its section, as the analysis's own evidence lines write them (<c>c@1.exit</c>,
+    /// <c>theRun.budget.minutes</c>).
     /// </summary>
-    private static string? Held(JsonNode citation, JsonNode report, out IReadOnlyList<SaidNumber> numbers)
+    private static IEnumerable<string> PathsOf(JsonNode? citation)
+    {
+        var section = TextOf(citation?["section"]);
+        var row = TextOf(citation?["row"]);
+        var of = TextOf(citation?["of"]);
+
+        return [section, row, of, $"{row}.{of}", $"{section}.{of}"];
+    }
+
+    /// <summary>
+    /// Why <paramref name="citation"/> is not a value the report holds; null where it is, with the numbers it holds, each
+    /// in its unit - the value where it is one, in its member's unit; each number a text says where it is a text, read with
+    /// <paramref name="ids"/> as its ids, in the unit written beside it or, written bare, in its member's.
+    /// </summary>
+    private static string? Held(JsonNode citation, JsonNode report, Names ids, out IReadOnlyList<SaidNumber> numbers)
     {
         numbers = [];
         var section = TextOf(citation["section"]);
@@ -323,7 +343,7 @@ public static class FlowAnalysisEvidence
             return $"{named} is {value.ToJsonString(Agents.AgentEnvelope.Written)}, not '{said}'";
         }
 
-        numbers = [.. NumbersIn(text, unit).Where(one => one.Reads)];
+        numbers = [.. NumbersIn(text, unit, ids).Where(one => one.Reads)];
         return null;
     }
 
@@ -341,34 +361,42 @@ public static class FlowAnalysisEvidence
         };
 
     /// <summary>
-    /// Each number <paramref name="text"/> says. The text is read as words (<see cref="WordsOf"/>): a word ends at every
-    /// character no id holds - space, a dash but the hyphen inside an id, <c>=</c>, a comparison, an arrow, a slash, a
-    /// sentence's brackets, Markdown's marks, quotes - so <c>queue—3600s—before</c> and <c>wait=3600s</c> each say a
-    /// number of their own, and a currency's sign inside a word starts one (<c>cost:$0.40</c>, <c>US$0.40</c>). Every word
-    /// that starts as a number once what wraps it is read off (<see cref="Word"/>) - a sign or a point directly before a
-    /// digit, or a digit - is read for its numeric head (digits, thousands grouped in threes, one fraction, an exponent)
-    /// and its unit: a sign against it (<c>$0.02</c>, <c>US$0.40</c>, <c>R$0.40</c>, <c>28%</c>), a word joined to it,
-    /// glued (<c>3600s</c>, <c>2x</c>) or after one hyphen (<c>40-minute</c>), a scale joined to it multiplying it
-    /// (<c>12k</c>); a number with no unit of its own takes the words after it that name one - a scale, then a unit
-    /// (<c>30 s</c>, <c>1 hour</c>, <c>1.2 million tokens</c>, <c>0.02 EUR</c>, <c>0.02 euros</c>), or a sign alone
-    /// (<c>28 %</c>) - else a currency's code or sign written just before it (<c>EUR 0.02</c>, <c>R$ 0.40</c>). A word the
-    /// check does not know as a unit leaves the number bare, and a number with no unit is in <paramref name="bare"/>.
-    /// Numbers each joined to a unit of one kind, from the largest unit to the smallest, glued (<c>1h30m</c>) or with
-    /// nothing but space between them (<c>1h 30m</c>, <c>2 min 5 s</c>), are one value, their sum. A word that starts as a
-    /// number and holds more than one number and its unit otherwise - a date, a time of day, a range, a currency's amount
-    /// in minutes - reads as no one number. A digit inside an id is never read: an id starts with a letter, and the
-    /// characters it is made of (<c>. - _ @ # [ ] : +</c>) stay in its word.
+    /// Each number <paramref name="text"/> says. The text is read as words (<see cref="WordsOf"/>): a word is an id only
+    /// where <paramref name="names"/> holds it - a name the report holds or a path a citation writes - and is then read
+    /// whole and never for a number, its <c>: + @ # /</c> and brackets included (<c>c@1</c>, <c>slowestStep#2</c>, a
+    /// hotspot's <c>hotspots:&lt;item&gt;:&lt;class&gt;:&lt;path&gt;</c> and its path); every other word ends at every
+    /// character but a letter, a digit, a mark, a hyphen, a point, an underscore and the signs a number is written with, so
+    /// <c>queue:3600s</c>, <c>T+3600s</c>, <c>wait=3600s</c> and <c>queue—3600s—before</c> each say a number while
+    /// <c>windows-2022</c>, <c>net10.0</c> and <c>claude-opus-4-5</c> say none, and a currency's sign or its ISO 4217 code
+    /// in capitals that starts a number inside a word starts a word of its own (<c>cost$0.40</c>). Every word that starts
+    /// as a number once what wraps it is read off (<see cref="Word"/>) - a digit, a sign or a point directly before one, or
+    /// a currency's sign or code, or a multiple's sign, directly before those, a sign before the currency's its own - is
+    /// read for its numeric head (digits, thousands grouped in threes, one fraction, an exponent) and its unit: a sign
+    /// against it (<c>$0.02</c>, <c>-$0.02</c>, <c>US$0.40</c>, <c>$US0.40</c>, <c>USD0.40</c>, <c>28%</c>), a word joined
+    /// to it, glued (<c>3600s</c>, <c>2x</c>) or after one hyphen (<c>40-minute</c>), a scale joined to it multiplying it
+    /// (<c>12k</c>); a number with no unit of its own takes the words written beside it that name one - a scale, then a
+    /// unit after it (<c>30 s</c>, <c>1 hour</c>, <c>1.2 million tokens</c>, <c>0.02 EUR</c>), or a sign alone
+    /// (<c>28 %</c>) - else a currency's word just before it (<c>EUR 0.02</c>, <c>R$ 0.40</c>); beside means with nothing
+    /// between but space on one line and Markdown's emphasis and code marks, which a word's reading takes off its ends
+    /// (<c>**1.5** hours</c>, <c>`3600` s</c>), so a comma or any other mark sets them apart. A number with no unit of its
+    /// own, or a currency's, takes the currency its own phrase names (<see cref="Reading.InPhrase"/>). A word the check
+    /// does not know as a unit leaves the number bare, and a number with no unit is in <paramref name="bare"/>. Numbers
+    /// each joined to a unit of one kind, from the largest unit to the smallest, glued (<c>1h30m</c>) or beside each other
+    /// (<c>1h 30m</c>, <c>2 min 5 s</c>), are one value, their sum. A word that starts as a number and
+    /// holds more than one number and its unit otherwise - a date, a time of day, a range, a currency's amount in minutes
+    /// - reads as no one number.
     /// </summary>
     /// <param name="text">The text.</param>
     /// <param name="bare">The unit of a number written with none of its own: a cited member's; null in an impact, whose bare number is held as written.</param>
-    private static IEnumerable<SaidNumber> NumbersIn(string text, FlowUnit? bare)
+    /// <param name="names">The words read as ids.</param>
+    private static IReadOnlyList<SaidNumber> NumbersIn(string text, FlowUnit? bare, Names names)
     {
-        var words = WordsOf(text);
+        var words = WordsOf(text, names);
         var read = new List<Reading>();
 
         for (var at = 0; at < words.Count; at++)
         {
-            var head = HeadOf(words[at].Core, 0, words[at].Core.Length);
+            var head = words[at].Id ? 0 : HeadOf(words[at].Core, 0, words[at].Core.Length);
 
             if (head == 0)
             {
@@ -389,7 +417,7 @@ public static class FlowAnalysisEvidence
             at = number.Last;
         }
 
-        return read.Select(one => one.Number);
+        return [.. read.Select((one, index) => one.InPhrase(text, words, index > 0 ? read[index - 1].Last : -1, index + 1 < read.Count ? read[index + 1].First : words.Count).Number)];
     }
 
     /// <summary>
@@ -425,9 +453,8 @@ public static class FlowAnalysisEvidence
             units.Add(joined);
         }
 
-        // A number joined to no word, or to its scale alone, takes the words after it that scale it and name its unit,
-        // else the currency a word just before it names - each written beside it, nothing but space between them; a
-        // number joined to any other word is that word's.
+        // A number joined to no word, or to its scale alone, takes the words beside it that scale it and name its unit,
+        // else the currency a word just before it names; a number joined to any other word is that word's.
         if (glued.Length == 0 || scale is not null)
         {
             var next = at + 1;
@@ -446,7 +473,7 @@ public static class FlowAnalysisEvidence
                 last = next;
             }
 
-            if (units.Count == 0 && at - 1 > taken && word.Joined && words[at - 1].Currency is { } before)
+            if (units.Count == 0 && at - 1 > taken && word.Joined && CurrencyAt(words, at - 1) is { } before)
             {
                 units.Add(before);
                 said = $"{words[at - 1].Said} {said}";
@@ -473,6 +500,21 @@ public static class FlowAnalysisEvidence
             signed,
             negative,
             Led: first < at);
+    }
+
+    /// <summary>
+    /// The currency the word at <paramref name="at"/> names (<see cref="Word.Currency"/>), read with the word written
+    /// directly before it where that word qualifies a dollar's name (<see cref="FlowUnit.NamedAfter"/>): <c>Canadian
+    /// dollars</c> are a currency of their own; null for an id and a word that names none.
+    /// </summary>
+    private static FlowUnit? CurrencyAt(IReadOnlyList<Word> words, int at)
+    {
+        var word = words[at];
+
+        return at > 0 && word.Joined && word is { Id: false, Core.Length: > 0 } && words[at - 1] is { Id: false, Core.Length: > 0 } qualifier
+            && FlowUnit.NamedAfter(qualifier.Core, word.Core) is { IsCurrency: true } named
+            ? named
+            : word.Currency;
     }
 
     /// <summary>
@@ -591,85 +633,211 @@ public static class FlowAnalysisEvidence
     private const char Minus = '−';
 
     /// <summary>
-    /// The words of <paramref name="text"/>: every run of the characters a word holds (<see cref="Joins"/>), a currency's
-    /// sign inside one that starts a number - with the capitals directly before it, which say whose it is - starting a
-    /// word of its own (<c>cost:$0.40</c>, <c>US$0.40</c>); each read off what wraps it, and joined to the word before
-    /// where nothing but space stands between them.
+    /// The words of <paramref name="text"/>: each id <paramref name="names"/> holds where it stands whole (<see
+    /// cref="Names.At"/>), a word of its own read for no number; else every run of the characters a word holds
+    /// (<see cref="Joins"/>), a currency's sign or its code in capitals that starts a number inside one - with the capitals
+    /// directly before the sign, which say whose it is, and a sign before those that starts the run - starting a word of
+    /// its own (<c>cost$0.40</c>, <c>costUS$0.40</c>, <c>costUSD0.40</c>); each read off what wraps it, and joined to the
+    /// word before where nothing but space and Markdown's marks stand between them (<see cref="Beside"/>).
     /// </summary>
-    private static List<Word> WordsOf(string text)
+    private static List<Word> WordsOf(string text, Names names)
     {
         var words = new List<Word>();
         var ended = -1;
 
         for (var at = 0; at < text.Length;)
         {
+            if (names.At(text, at) is > 0 and var name)
+            {
+                Add(Word.OfName(text, at, at + name));
+                at += name;
+                continue;
+            }
+
             if (!Joins(text, at))
             {
                 at++;
                 continue;
             }
 
-            var start = at;
+            var start = at++;
 
-            while (at < text.Length && Joins(text, at))
+            while (at < text.Length && Joins(text, at) && names.At(text, at) == 0)
             {
                 at++;
             }
 
             var from = start;
 
-            for (var sign = start; sign < at; sign++)
+            for (var lead = start; lead < at; lead++)
             {
-                if (!FlowUnit.IsCurrencySign(text[sign]) || !StartsNumber(text, sign + 1, at))
+                if (AmountStartsAt(text, lead, from, at) is { } begins && begins > from)
                 {
-                    continue;
-                }
-
-                var capitals = sign;
-
-                while (capitals > from && char.IsAsciiLetterUpper(text[capitals - 1]))
-                {
-                    capitals--;
-                }
-
-                if (capitals > from)
-                {
-                    Add(from, capitals);
-                    from = capitals;
+                    Add(Word.Of(text, from, begins));
+                    from = begins;
                 }
             }
 
-            Add(from, at);
+            Add(Word.Of(text, from, at));
         }
 
         return words;
 
-        void Add(int from, int to)
+        void Add(Word word)
         {
-            var word = Word.Of(text, from, to);
-
-            words.Add(word with { Joined = ended >= 0 && text.AsSpan(ended, word.Start - ended).IsWhiteSpace() });
+            words.Add(word with { Joined = ended >= 0 && Beside(text, ended, word.Start) });
             ended = word.End;
         }
     }
 
     /// <summary>
-    /// Whether the character at <paramref name="at"/> of <paramref name="text"/> stays in a word: a letter, a digit or a
-    /// mark; a character an id is made of - <c>. _ @ # [ ] : +</c>, and a hyphen but two or more in a row, which are a dash
-    /// - or an apostrophe; a comma between two digits, grouping thousands; a sign a number is written with - <c>%</c>,
-    /// <c>×</c>, a currency's - and the minus sign that starts one. Any other ends a word.
+    /// Where the word of an amount whose currency's sign or code is at <paramref name="at"/> starts, inside a run of a
+    /// word's characters from <paramref name="from"/> to <paramref name="to"/>: at the capitals directly before a sign,
+    /// which say whose it is, or at the code - a sign before either taken with it where the sign starts the run; null where
+    /// no currency's sign or code that starts a number stands at <paramref name="at"/>.
+    /// </summary>
+    private static int? AmountStartsAt(string text, int at, int from, int to)
+    {
+        int begins;
+
+        if (FlowUnit.IsCurrencySign(text[at]) && LeadAt(text, at, to) is not null)
+        {
+            begins = at;
+
+            while (begins > from && char.IsAsciiLetterUpper(text[begins - 1]))
+            {
+                begins--;
+            }
+        }
+        else if (char.IsAsciiLetterUpper(text[at]) && (at == from || !char.IsAsciiLetterUpper(text[at - 1])) && LeadAt(text, at, to) is not null)
+        {
+            begins = at;
+        }
+        else
+        {
+            return null;
+        }
+
+        return begins - 1 == from && text[from] is '-' or '+' or Minus ? from : begins;
+    }
+
+    /// <summary>
+    /// The lead of an amount at <paramref name="at"/> of <paramref name="text"/>, before <paramref name="to"/>: what is
+    /// written directly before a number and names its unit, with how many characters it is - a currency's sign
+    /// (<c>$</c>, <c>€</c>), with the capitals that say whose it is before or after it (<c>US$</c>, <c>R$</c>,
+    /// <c>$US</c>), a currency's ISO 4217 code in capitals (<c>USD</c>, <c>EUR</c>), or a multiple's sign (<c>×</c>); null
+    /// where no number follows it, or nothing there names a unit.
+    /// </summary>
+    private static (int Length, FlowUnit Unit)? LeadAt(string text, int at, int to)
+    {
+        if (at >= to)
+        {
+            return null;
+        }
+
+        var character = text[at];
+
+        if (FlowUnit.IsCurrencySign(character))
+        {
+            if (StartsNumber(text, at + 1, to))
+            {
+                return (1, FlowUnit.OfSign(character)!);
+            }
+
+            var after = CapitalsFrom(text, at + 1, to);
+
+            return after > at + 1 && StartsNumber(text, after, to) && FlowUnit.OfSign(character, text[(at + 1)..after]) is { } whose ? (after - at, whose) : null;
+        }
+
+        if (character == '×')
+        {
+            return StartsNumber(text, at + 1, to) ? (1, FlowUnit.Multiple) : null;
+        }
+
+        var capitals = CapitalsFrom(text, at, to);
+
+        if (capitals == at)
+        {
+            return null;
+        }
+
+        if (capitals < to && FlowUnit.IsCurrencySign(text[capitals]) && StartsNumber(text, capitals + 1, to) && FlowUnit.OfSign(text[capitals], text[at..capitals]) is { } prefixed)
+        {
+            return (capitals + 1 - at, prefixed);
+        }
+
+        return StartsNumber(text, capitals, to) && FlowUnit.OfCode(text[at..capitals]) is { } code ? (capitals - at, code) : null;
+    }
+
+    /// <summary>Where the run of capitals that starts at <paramref name="at"/> of <paramref name="text"/> ends, before <paramref name="to"/>; <paramref name="at"/> where none starts there.</summary>
+    private static int CapitalsFrom(string text, int at, int to)
+    {
+        while (at < to && char.IsAsciiLetterUpper(text[at]))
+        {
+            at++;
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// Whether the character at <paramref name="at"/> of <paramref name="text"/> stays in a word: a letter, a digit, a mark
+    /// or an underscore (<see cref="Whole"/>); a point; a hyphen but two or more in a row, which are a dash; a comma between
+    /// two digits, grouping thousands; a currency's sign; <c>%</c> and <c>×</c> but directly after a letter; and a sign
+    /// - the minus sign, or a plus - that starts an amount (<see cref="StartsAmount"/>) after no letter or digit. Any other
+    /// ends a word: space, <c>: + @ # / =</c>, a bracket, a quote, an apostrophe, Markdown's marks, any other dash and mark.
     /// </summary>
     private static bool Joins(string text, int at)
         => text[at] switch
         {
             '-' => !(at > 0 && text[at - 1] == '-') && !(at + 1 < text.Length && text[at + 1] == '-'),
+            '.' => true,
             ',' => at > 0 && at + 1 < text.Length && char.IsAsciiDigit(text[at - 1]) && char.IsAsciiDigit(text[at + 1]),
-            Minus => (at == 0 || !char.IsLetterOrDigit(text[at - 1])) && StartsNumber(text, at, text.Length),
-            '.' or '_' or '@' or '#' or '[' or ']' or ':' or '+' or '\'' or '’' or '%' or '×' => true,
-            var character => char.IsLetterOrDigit(character)
-                || FlowUnit.IsCurrencySign(character)
-                || char.GetUnicodeCategory(character) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark or UnicodeCategory.ConnectorPunctuation,
+            '%' or '×' => at == 0 || !char.IsLetter(text[at - 1]),
+            Minus or '+' => (at == 0 || !char.IsLetterOrDigit(text[at - 1])) && StartsAmount(text, at, text.Length),
+            var character => Whole(character) || FlowUnit.IsCurrencySign(character),
         };
+
+    /// <summary>Whether <paramref name="character"/> is one a word keeps whatever stands around it: a letter, a digit, a mark, or an underscore or another joining punctuation.</summary>
+    private static bool Whole(char character)
+        => char.IsLetterOrDigit(character)
+            || char.GetUnicodeCategory(character) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark or UnicodeCategory.ConnectorPunctuation;
+
+    /// <summary>
+    /// Whether what stands between <paramref name="from"/> and <paramref name="to"/> of <paramref name="text"/> sets no
+    /// word apart from the one before it: nothing but space on one line and Markdown's emphasis and code marks
+    /// (<c>* _ ` ~</c>), which a word's reading takes off its ends.
+    /// </summary>
+    private static bool Beside(string text, int from, int to)
+    {
+        foreach (var character in text.AsSpan(from, to - from))
+        {
+            if (!(char.IsWhiteSpace(character) && !LineBreak(character)) && character is not ('*' or '_' or '`' or '~'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Whether what stands between <paramref name="from"/> and <paramref name="to"/> of <paramref name="text"/> ends a clause: a comma, a semicolon, a point, a mark of a question or an exclamation, a closing bracket or a line's end.</summary>
+    private static bool ClauseEnds(string text, int from, int to)
+    {
+        foreach (var character in text.AsSpan(from, to - from))
+        {
+            if (character is ',' or ';' or '.' or '!' or '?' or ')' or ']' or '}' || LineBreak(character))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="character"/> ends a line.</summary>
+    private static bool LineBreak(char character)
+        => character is '\n' or '\r' or '\u2028' or '\u2029';
 
     /// <summary>Whether a number starts at <paramref name="at"/> of <paramref name="text"/>, before <paramref name="to"/>: a digit, or a sign or a point directly before one.</summary>
     private static bool StartsNumber(string text, int at, int to)
@@ -685,66 +853,84 @@ public static class FlowAnalysisEvidence
     }
 
     /// <summary>
-    /// One word of a text, read off what wraps it: every character at either end that is neither a letter nor a digit -
-    /// Markdown's marks, brackets, punctuation - a sign or a point directly before a digit kept as the number's; with the
-    /// units the signs read off name, a currency's (after the capitals that say whose it is: <c>US$</c>, <c>R$</c>) or a
-    /// multiple's before it and a percent's, a multiple's or a currency's after it.
+    /// Whether an amount starts at <paramref name="at"/> of <paramref name="text"/>, before <paramref name="to"/>: a number
+    /// (<see cref="StartsNumber"/>), or the lead that names its unit written directly before it (<see cref="LeadAt"/>), or
+    /// a sign directly before that lead (<c>-$0.40</c>).
     /// </summary>
-    /// <param name="Core">What is left of the word: its letters and digits and what stands between them.</param>
+    private static bool StartsAmount(string text, int at, int to)
+        => StartsNumber(text, at, to)
+            || LeadAt(text, at, to) is not null
+            || (at < to && text[at] is '-' or '+' or Minus && LeadAt(text, at + 1, to) is not null);
+
+    /// <summary>
+    /// One word of a text, read off what wraps it: every character at either end that is neither a letter nor a digit -
+    /// Markdown's underscores, points, signs - but where an amount starts (<see cref="StartsAmount"/>); with the units the
+    /// signs read off name, the lead's before it (<see cref="LeadAt"/>: a currency's sign, its capitals, its code, a
+    /// multiple's sign) and a percent's, a multiple's or a currency's after it; a sign directly before the lead the
+    /// number's own (<c>-$0.40</c> is a negative amount). An id is a word read whole (<see cref="OfName"/>).
+    /// </summary>
+    /// <param name="Core">What is left of the word: its letters and digits and what stands between them, the number's sign before them.</param>
     /// <param name="Signs">The units the signs read off its ends name, in the order they stood.</param>
     /// <param name="Said">The word as an answer says it back: its core, with the signs read as its unit around it.</param>
     /// <param name="Trail">The sign read off its end, where one names a unit.</param>
     /// <param name="Start">Where what it says starts in the text - its core and the signs read as its unit; where the word does, for a word of signs alone.</param>
     /// <param name="End">Where what it says ends in the text; where the word does, for a word of signs alone.</param>
-    /// <param name="Joined">Whether nothing but space stands between it and the word before it.</param>
-    private readonly record struct Word(string Core, IReadOnlyList<FlowUnit> Signs, string Said, char? Trail, int Start, int End, bool Joined)
+    /// <param name="Joined">Whether nothing but space and Markdown's marks stand between it and the word before it.</param>
+    /// <param name="Id">Whether it is an id the report or a citation holds, read for no number and naming no unit.</param>
+    private readonly record struct Word(string Core, IReadOnlyList<FlowUnit> Signs, string Said, char? Trail, int Start, int End, bool Joined, bool Id = false)
     {
         /// <summary>
         /// The unit the word names where it stands after a number of no unit of its own: a unit's name or a currency's code,
         /// a currency's sign after its capitals (<c>R$</c>), or a unit's sign alone; null where it names none.
         /// </summary>
-        public FlowUnit? Unit => Core.Length == 0 ? (Signs.Count == 1 ? Signs[0] : null) : FlowUnit.Named(Core) ?? Prefixed;
+        public FlowUnit? Unit => Id ? null : Core.Length == 0 ? (Signs.Count == 1 ? Signs[0] : null) : FlowUnit.Named(Core) ?? Prefixed;
 
         /// <summary>
-        /// The currency the word names where it stands just before a number of no unit of its own: its code (<c>EUR</c>),
-        /// or its sign, alone or after its capitals (<c>€</c>, <c>R$</c>); null where it names none.
+        /// The currency the word names: its name or its code (<c>euros</c>, <c>EUR</c>), or its sign, alone or after its
+        /// capitals (<c>€</c>, <c>R$</c>); null where it names none.
         /// </summary>
-        public FlowUnit? Currency => Core.Length == 0 ? (Signs is [{ IsCurrency: true } sign] ? sign : null) : FlowUnit.OfCode(Core) ?? Prefixed;
+        public FlowUnit? Currency => Id ? null : Core.Length == 0 ? (Signs is [{ IsCurrency: true } sign] ? sign : null) : FlowUnit.Named(Core) is { IsCurrency: true } named ? named : Prefixed;
 
         /// <summary>The currency a word of capitals ending in a currency's sign names (<c>R$</c>, <c>US$</c>); null for any other word.</summary>
         private FlowUnit? Prefixed => Signs.Count == 1 && Trail is { } sign ? FlowUnit.OfSign(sign, Core) : null;
+
+        /// <summary>The id that stands in <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/>, a word read whole.</summary>
+        public static Word OfName(string text, int from, int to)
+            => new(text[from..to], [], text[from..to], null, from, to, Joined: false, Id: true);
 
         /// <summary>The word that stands in <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/>, read off what wraps it.</summary>
         public static Word Of(string text, int from, int to)
         {
             var start = from;
-            string? lead = null;
-            var leads = from;
 
-            while (start < to && !char.IsLetterOrDigit(text[start]) && !StartsNumber(text, start, to))
+            while (start < to && !char.IsLetterOrDigit(text[start]) && !StartsAmount(text, start, to))
             {
-                if (FlowUnit.OfSign(text[start]) is { Kind: not "percent" })
-                {
-                    lead = text[start].ToString();
-                    leads = start;
-                }
-
                 start++;
             }
 
-            // Capitals directly before a currency's sign that starts a number say whose currency it is: US$0.40, R$0.40.
-            var capitals = start;
+            // A sign directly before the lead is the number's, but where the number after the lead has a sign of its own.
+            var leads = start;
+            char? sign = start < to && text[start] is '-' or '+' or Minus && LeadAt(text, start + 1, to) is not null ? text[start] : null;
 
-            while (capitals < to && char.IsAsciiLetterUpper(text[capitals]))
+            if (sign is not null)
             {
-                capitals++;
+                start++;
             }
 
-            if (capitals > start && capitals < to && FlowUnit.IsCurrencySign(text[capitals]) && StartsNumber(text, capitals + 1, to))
+            string? lead = null;
+            FlowUnit? before = null;
+
+            if (LeadAt(text, start, to) is { } found)
             {
-                lead = text[start..(capitals + 1)];
-                leads = start;
-                start = capitals + 1;
+                lead = text[start..(start + found.Length)];
+                before = found.Unit;
+                start += found.Length;
+
+                if (sign is not null && text[start] is '-' or '+' or Minus)
+                {
+                    sign = null;
+                    leads++;
+                }
             }
 
             var end = to;
@@ -757,23 +943,21 @@ public static class FlowAnalysisEvidence
             // A word of signs alone - the % after a number, written apart - is the one sign of it that names a unit.
             if (start == end)
             {
-                var signs = text[from..to].Where(sign => FlowUnit.OfSign(sign) is not null).ToList();
+                var signs = text[from..to].Where(one => FlowUnit.OfSign(one) is not null).ToList();
 
                 return signs.Count == 1
                     ? new Word(string.Empty, [FlowUnit.OfSign(signs[0])!], signs[0].ToString(), null, from, to, Joined: false)
                     : new Word(string.Empty, [], string.Empty, null, from, to, Joined: false);
             }
 
-            // Before a number a currency's sign or a multiple's names its unit, after it the sign that ends it: a
-            // percent's, a multiple's or a currency's.
+            // After a number the sign that ends it: a percent's, a multiple's or a currency's.
             var trail = end < to && FlowUnit.OfSign(text[end]) is not null ? text[end] : (char?)null;
             var core = text[start..end];
-            var before = lead is null ? null : FlowUnit.OfSign(lead[^1], lead[..^1]);
 
             return new Word(
-                core,
+                $"{sign}{core}",
                 [.. new[] { before, trail is { } after ? FlowUnit.OfSign(after) : null }.OfType<FlowUnit>()],
-                $"{lead}{core}{trail}",
+                $"{sign}{lead}{core}{trail}",
                 trail,
                 lead is null ? start : leads,
                 trail is null ? end : end + 1,
@@ -785,7 +969,7 @@ public static class FlowAnalysisEvidence
     /// How many characters of <paramref name="word"/> from <paramref name="from"/> to <paramref name="to"/> its numeric
     /// head is: a sign, digits - thousands grouped by commas, three digits each after a first group of one to three - one
     /// fraction, its point first where no digit comes before it (<c>.5</c>), and an exponent; 0 where it does not start as
-    /// a number (a sign alone, or a letter - an id).
+    /// a number (a sign alone, or a letter).
     /// </summary>
     private static int HeadOf(string word, int from, int to)
     {
@@ -840,6 +1024,149 @@ public static class FlowAnalysisEvidence
     }
 
     /// <summary>
+    /// The words a text is read with as ids (<see cref="WordsOf"/>), each read whole and never for a number: what the report
+    /// holds as a name - each row's id and each name it is made of, as the row's own members hold them (a hotspot's item,
+    /// class and path), and every section's and member's name - and the paths a pain point's citations write
+    /// (<see cref="PathsOf"/>). A name is kept where it starts with a letter, once what is neither a letter nor a digit is
+    /// read off its start, and holds a character a word does not keep whatever stands around it: a name of letters,
+    /// digits, hyphens, points and underscores alone reads the same as a word, and one that starts as a number is read as
+    /// any word is, so no number goes unread.
+    /// </summary>
+    private sealed class Names
+    {
+        /// <summary>The trees of names an id is looked for in, the report's first.</summary>
+        private readonly IReadOnlyList<Node> _trees;
+
+        /// <summary>The names <paramref name="trees"/> hold.</summary>
+        private Names(IReadOnlyList<Node> trees) => _trees = trees;
+
+        /// <summary>What <paramref name="report"/> holds as names: each row's id and the names it is made of, and every section's and member's name.</summary>
+        public static Names Of(JsonNode report)
+        {
+            var tree = new Node();
+
+            foreach (var (place, node) in JsonWalk.Descendants(report))
+            {
+                if (place.Name is { } name)
+                {
+                    tree.Add(name);
+                }
+
+                if (place.Index is not null && node is JsonObject row && TextOf(row["id"]) is { Length: > 0 } id)
+                {
+                    tree.Add(id);
+
+                    foreach (var member in row)
+                    {
+                        if (TextOf(member.Value) is { Length: > 0 } part && PartOf(id, part))
+                        {
+                            tree.Add(part);
+                        }
+                    }
+                }
+            }
+
+            return new([tree]);
+        }
+
+        /// <summary>These names and <paramref name="paths"/>.</summary>
+        public Names With(IEnumerable<string> paths)
+        {
+            var tree = new Node();
+
+            foreach (var path in paths)
+            {
+                tree.Add(path);
+            }
+
+            return new([.. _trees, tree]);
+        }
+
+        /// <summary>
+        /// How many characters the longest name that stands whole at <paramref name="at"/> of <paramref name="text"/> is: one
+        /// that no character a word holds joins on either side - a letter, a digit, a mark or an underscore, a point or a
+        /// hyphen with a letter or a digit beyond it, and after it a comma or a minus sign before a digit, or a sign a number
+        /// is written with - so <c>c@10</c> holds no <c>c@1</c>; 0 where none does.
+        /// </summary>
+        public int At(string text, int at)
+        {
+            if (at > 0 && (Whole(text[at - 1]) || (text[at - 1] is '-' or '.' && at > 1 && char.IsLetterOrDigit(text[at - 2]))))
+            {
+                return 0;
+            }
+
+            var longest = 0;
+
+            foreach (var tree in _trees)
+            {
+                var node = tree;
+
+                for (var end = at; end < text.Length && node.Next.TryGetValue(text[end], out var next);)
+                {
+                    node = next;
+                    end++;
+
+                    if (node.Ends && end - at > longest && StandsWhole(text, end))
+                    {
+                        longest = end - at;
+                    }
+                }
+            }
+
+            return longest;
+        }
+
+        /// <summary>Whether a name that ends at <paramref name="end"/> of <paramref name="text"/> ends there, no character a word holds joining it after.</summary>
+        private static bool StandsWhole(string text, int end)
+            => end == text.Length
+                || !(Whole(text[end])
+                    || text[end] is '%' or '×'
+                    || FlowUnit.IsCurrencySign(text[end])
+                    || (text[end] is '-' or '.' or ',' or Minus && end + 1 < text.Length && char.IsLetterOrDigit(text[end + 1])));
+
+        /// <summary>Whether <paramref name="part"/> is a name <paramref name="id"/> is made of: the id itself, or a part of it that a colon sets apart.</summary>
+        private static bool PartOf(string id, string part)
+            => string.Equals(id, part, StringComparison.Ordinal)
+                || id.StartsWith($"{part}:", StringComparison.Ordinal)
+                || id.EndsWith($":{part}", StringComparison.Ordinal)
+                || id.Contains($":{part}:", StringComparison.Ordinal);
+
+        /// <summary>One character of a tree of names: what may follow it, and whether a name ends at it.</summary>
+        private sealed class Node
+        {
+            /// <summary>The characters that may follow this one, each with its own node.</summary>
+            public Dictionary<char, Node> Next { get; } = [];
+
+            /// <summary>Whether a name ends at this node.</summary>
+            public bool Ends { get; private set; }
+
+            /// <summary>Adds <paramref name="name"/> below this node, where it is one a text is read with as an id (<see cref="Names"/>).</summary>
+            public void Add(string name)
+            {
+                if (!(name.FirstOrDefault(char.IsLetterOrDigit) is var first && char.IsLetter(first)) || name.All(character => Whole(character) || character is '-' or '.'))
+                {
+                    return;
+                }
+
+                var node = this;
+
+                foreach (var character in name)
+                {
+                    if (!node.Next.TryGetValue(character, out var next))
+                    {
+                        next = new Node();
+                        node.Next[character] = next;
+                    }
+
+                    node = next;
+                }
+
+                node.Ends = true;
+            }
+        }
+    }
+
+    /// <summary>
     /// One number a text says as it is read: the number; the words it takes, from its first to its last; the kind of the
     /// unit written against it, the base of the smallest unit it is said in and its value in its kind's base - none where
     /// no unit is written; whether it is written with a sign, and with a minus; and whether it takes a currency's word
@@ -849,8 +1176,8 @@ public static class FlowAnalysisEvidence
     {
         /// <summary>
         /// This number and <paramref name="next"/> as one value, their sum, where next continues it: a number joined to a
-        /// smaller unit of its kind, with no sign and no currency's word before it, written directly after it with nothing
-        /// but space between (<c>1h 30m</c>, <c>2 min 5 s</c>); null where it does not.
+        /// smaller unit of its kind, with no sign and no currency's word before it, written directly beside it
+        /// (<see cref="Beside"/>: <c>1h 30m</c>, <c>2 min 5 s</c>); null where it does not.
         /// </summary>
         public Reading? Continued(Reading next, IReadOnlyList<Word> words)
         {
@@ -869,6 +1196,68 @@ public static class FlowAnalysisEvidence
                 Smallest = next.Smallest,
                 Whole = whole,
             };
+        }
+
+        /// <summary>
+        /// This number with the currency its own phrase names, where it has no unit of its own or a currency's: a currency's
+        /// name, code or sign anywhere after it up to the next number, at <paramref name="next"/>, or its clause's end
+        /// (<c>0.02 in euros</c>, <c>0.02 (EUR)</c>, <c>0.02 Canadian dollars</c>), and - where no number stands before it
+        /// in its clause, the last before it ending at <paramref name="previous"/> - anywhere before it in its clause
+        /// (<c>EUR: 0.02</c>). A number whose phrase names two currencies, or one other than its own, reads as no one
+        /// number; one whose phrase names none, or that is joined to a unit of another kind, is as it was read.
+        /// </summary>
+        public Reading InPhrase(string text, IReadOnlyList<Word> words, int previous, int next)
+        {
+            if (!Number.Reads || (Kind is not null && Number.Unit is { IsCurrency: false }))
+            {
+                return this;
+            }
+
+            var named = new List<FlowUnit>();
+            var after = Last;
+
+            for (var at = Last + 1; at < next && !ClauseEnds(text, words[at - 1].End, words[at].Start); at++)
+            {
+                if (CurrencyAt(words, at) is { } currency)
+                {
+                    named.Add(currency);
+                    after = at;
+                }
+            }
+
+            var start = First;
+
+            while (start > previous + 1 && !ClauseEnds(text, words[start - 1].End, words[start].Start))
+            {
+                start--;
+            }
+
+            var before = First;
+
+            if (start == 0 || ClauseEnds(text, words[start - 1].End, words[start].Start))
+            {
+                for (var at = start; at < First; at++)
+                {
+                    if (CurrencyAt(words, at) is { } currency)
+                    {
+                        named.Add(currency);
+                        before = Math.Min(before, at);
+                    }
+                }
+            }
+
+            if (named.Count == 0)
+            {
+                return this;
+            }
+
+            var units = (Kind is null ? named : named.Prepend(Number.Unit!)).Distinct().ToList();
+            var said = string.Join(" ", words.Skip(before).Take(First - before).Select(word => word.Said)
+                .Append(Number.Text)
+                .Concat(words.Skip(Last + 1).Take(after - Last).Select(word => word.Said))
+                .Where(part => part.Length > 0));
+
+            return this with { Number = units.Count > 1 ? new SaidNumber(said, Reads: false, null, null) : new SaidNumber(said, Reads: true, Number.Value, units[0]) };
         }
     }
 

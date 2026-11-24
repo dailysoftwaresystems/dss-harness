@@ -6,7 +6,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// numbers are one measure only where their kinds are one, the one converted exactly into the other's unit
 /// (<see cref="Holds"/>); a number of one kind is never read as a number of another.
 /// </summary>
-/// <param name="Kind">What it measures: <c>time</c>, <c>count</c>, <c>percent</c>, <c>multiple</c>, <c>size</c>, or a currency - <c>USD</c> the report's dollars, any other by the ISO 4217 code (<c>EUR</c>), the name (<c>euros</c>) or the sign (<c>€</c>, <c>R$</c>) it is written in.</param>
+/// <param name="Kind">What it measures: <c>time</c>, <c>count</c>, <c>percent</c>, <c>multiple</c>, <c>size</c>, or a currency - <c>USD</c> the report's dollars, any other by the ISO 4217 code (<c>EUR</c>), the name (<c>euros</c>, <c>Canadian dollars</c>) or the sign (<c>€</c>, <c>R$</c>) it is written in.</param>
 /// <param name="Base">How many of its kind's base one of it is: seconds for a time, ones for a count, a percent and a multiple, a currency's whole unit, bytes for a size.</param>
 public sealed record FlowUnit(string Kind, decimal Base)
 {
@@ -85,6 +85,33 @@ public sealed record FlowUnit(string Kind, decimal Base)
 
         return word.Length == 1 ? Letters.GetValueOrDefault(word) : Words.GetValueOrDefault(word) ?? OfCode(word);
     }
+
+    /// <summary>
+    /// The unit a name written after the word that qualifies it names, nothing but space between them (<c>Canadian
+    /// dollars</c>): a dollar's or a cent's name after a word that starts with a capital and is no name of the United
+    /// States' (<c>US</c>, <c>USA</c>, <c>USD</c>, <c>American</c>, <c>States</c>) is that word's dollars, a
+    /// currency of its own (<c>Canadian dollars</c>); any other name, and a dollar's after any other word, the unit it names
+    /// alone (<see cref="Named"/>).
+    /// </summary>
+    /// <param name="qualifier">The word written directly before the name, without what wraps it.</param>
+    /// <param name="name">The name, without what wraps it.</param>
+    public static FlowUnit? NamedAfter(string qualifier, string name)
+    {
+        ArgumentNullException.ThrowIfNull(qualifier);
+        ArgumentNullException.ThrowIfNull(name);
+
+        var named = Named(name);
+
+        return named is not null && DollarNames.Contains(name) && qualifier.Length > 0 && char.IsUpper(qualifier[0]) && !UnitedStates.Contains(qualifier)
+            ? new($"{qualifier} dollars", named.Base)
+            : named;
+    }
+
+    /// <summary>The names of the dollar and its cent, which name the report's dollars where no other country's name qualifies them (<see cref="NamedAfter"/>).</summary>
+    private static readonly HashSet<string> DollarNames = new(StringComparer.OrdinalIgnoreCase) { "dollar", "dollars", "cent", "cents" };
+
+    /// <summary>The words that say a dollar is the United States' (<c>States</c> as in <c>United States dollars</c>).</summary>
+    private static readonly HashSet<string> UnitedStates = new(StringComparer.Ordinal) { "US", "USA", "USD", "American", "States" };
 
     /// <summary>
     /// The currency a code names: one of ISO 4217's, written in capitals as the standard writes it - <c>USD</c> the

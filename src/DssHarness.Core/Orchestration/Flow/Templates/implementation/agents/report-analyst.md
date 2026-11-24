@@ -27,10 +27,16 @@ comes from it.
   `3600` seconds as `1h`, a budget of `90` minutes as `1.5h` or `1h 30m`, `180000` tokens as `180k tokens`). A unit of
   another kind than its citation's is refused - `60 hours` is no wait of 60 seconds - and so is a multiple (`2x`), a
   size or another currency, which no member of the report is, by its sign, its code or its name alike (`€0.02`,
-  `0.02 EUR`, `0.02 euros`): a currency's code in capitals beside a number makes it an amount in that currency. Bold,
-  backticks, a sign around a number, or a dash, `=` or a slash joining it to a word change nothing: it is read and
-  checked all the same. A number you work out from the report - a sum, a ratio, a share - is not the
-  report's: cite where the report holds it, or leave it out. Write no date, range or other run of numbers in it.
+  `0.02 EUR`, `0.02 euros`): a currency's code in capitals beside a number or glued to it (`EUR0.40`) makes it an
+  amount in that currency, and so does a currency named anywhere in the number's own phrase, up to the next number or
+  the clause's end (`0.02 in euros`, `0.02 (EUR)`, `EUR: 0.02`, `0.02 Canadian dollars`); a minus before a currency's
+  sign is the number's (`-$0.02`). Bold, backticks, a sign around a number, Markdown's marks between it and its unit
+  (`**1.5** hours`), or a dash, `=`, `:`, `+`, `@`, `#` or a slash joining it to a word change nothing: it is read and
+  checked all the same. A word is read whole, its digits unread, only where it is one of the report's ids - a row's id
+  or a name it is made of, a section's or a member's name - or a path one of your citations writes (`c@1.exit`);
+  hyphens, points and underscores keep a word whole (`windows-2022`, `net10.0`). A number you work out from the
+  report - a sum, a ratio, a share - is not the report's: cite where the report holds it, or leave it out. Write no
+  date, range or other run of numbers in it.
 - Order the pain points by what they cost: time and dollars, from the report. What you cannot put a number on goes
   under `noted`, with why you could not confirm it.
 - Name steps as the report's rows name them, by their instance ids. A recommendation names its change exactly: a
