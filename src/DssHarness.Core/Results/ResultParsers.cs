@@ -646,10 +646,11 @@ internal abstract class GnuFormParser : IBuiltInParser
                     return LineTaken.Took;
                 }
 
-                if (_source)
+                if (_source && !Heads(text))
                 {
                     // The line under a diagnostic or a note, which clang before 17 printed with no gutter: held for
-                    // the one line after it, the caret under it, which says whether it is the source.
+                    // the one line after it, the caret under it, which says whether it is the source. A line that
+                    // opens a form of this reading is never held - it is read as what it is.
                     _source = false;
                     _candidate = true;
                     return LineTaken.Held;
@@ -779,6 +780,10 @@ internal abstract class GnuFormParser : IBuiltInParser
         /// <summary>The diagnostic <paramref name="text"/> says, its place in either form clang prints: its own, or MSVC's as clang-cl writes it.</summary>
         private static Match SaidOf(string text)
             => Said.Match(text) is { Success: true } said ? said : SaidAsMsvc.Match(text);
+
+        /// <summary>Whether <paramref name="text"/> opens a record of this reading: a diagnostic or a note in either place form, the driver's own word, or a line of a chain.</summary>
+        private static bool Heads(string text)
+            => SaidOf(text).Success || Driver.Match(text) is { Success: true } || Included.Match(text) is { Success: true } || Context.Match(text) is { Success: true } || Required.Match(text) is { Success: true };
 
         /// <summary>The flag that names a diagnostic: <c>-Wx</c>, also where <c>-Werror=x</c> or <c>-Werror,-Wx</c> promoted it.</summary>
         private static string? CodeOf(Group flag)
