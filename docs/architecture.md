@@ -10041,7 +10041,8 @@ how much a test logs - of a running test only where its lines begin and that fir
 dropped at its result line or its package's, so nothing is held past the test it is of; a result line read at any indent,
 for plain `-v` nests a subtest's under its parent's, a nested `--- PASS` no line its parent logged,
 the failed tests open at once held by their indent - a line indented past a test's result line its
-own, a parent's printed after its subtest's block among them, and one at or above it its end - and a
+own, a parent's printed after its subtest's block among them and one of whitespace alone, as Go
+prints a message's empty line, and one at or above it its end - and a
 parent whose subtest failed said by it where it logged nothing of its own by its end - and every package
 that did not build said by its own block, the `# pkg` line ahead of its compiler's words read
 whenever it comes and holding for the line under it, a compiler's line a diagnostic of the package

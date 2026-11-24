@@ -1114,7 +1114,8 @@ internal sealed class DartStackParser : IBuiltInParser
 /// logs; a <c>--- PASS</c> or <c>--- SKIP</c> ends the test, and what was held of its stream is dropped. The failed tests
 /// open at once are held by their indent, the innermost on top: a nested <c>--- FAIL</c> opens its subtest above its
 /// parent, a line indented past a test's result line is that test's - a parent's own line printed after its subtest's
-/// block among them - and a line at or above it ends it, so each test is decided at its own end. A test whose subtest
+/// block among them, and a line of whitespace alone, as Go prints a message's empty line (testify's before its diff) -
+/// and a line at or above it ends it, so each test is decided at its own end. A test whose subtest
 /// failed and that logged nothing of its own by its end is said by its subtest, whichever order Go prints their results in.
 /// What is held of a test's stream - where it begins and its first line that names its place - is held only while it
 /// runs: dropped at its own result line, and at its package's result line (<c>ok</c>, <c>FAIL</c>, <c>?</c>), which ends
@@ -1223,19 +1224,20 @@ internal sealed class GoPanicParser : IBuiltInParser
 
             var result = Result.Match(text);
             var indent = text.Length - text.TrimStart().Length;
-            var blank = text.Trim().Length == 0;
 
             if (!Panic.IsMatch(text))
             {
-                // Each open test this line is not inside has ended - the line is at or above its result line's indent, or
-                // blank - the innermost first, each decided at its own end; a panic is the innermost's.
-                while (_tests.TryPeek(out var ended) && (blank || indent <= ended.Indent))
+                // Each open test this line is not inside has ended - the line is at or above its result line's indent - the
+                // innermost first, each decided at its own end; a panic is the innermost's. A line of whitespace alone is
+                // measured as any other: Go indents every line of a test's block, a message's empty line - testify's
+                // before its diff - printed as its indent, so one indented past a test's result line is still the test's.
+                while (_tests.TryPeek(out var ended) && indent <= ended.Indent)
                 {
                     CloseTest();
                 }
             }
 
-            if (_tests.TryPeek(out var test) && !blank && indent > test.Indent)
+            if (_tests.TryPeek(out var test) && indent > test.Indent)
             {
                 if (!result.Success)
                 {

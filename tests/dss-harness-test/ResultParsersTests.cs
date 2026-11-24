@@ -1421,6 +1421,62 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// A line of whitespace alone inside a test's block is the open test's line: run without <c>-v</c>, Go prints every line
+    /// of a test's message after its first indented, a message's empty line as that indent alone - testify's empty line
+    /// before its diff as the indent, a tab, its label's width in spaces and a tab - and a subtest's block four spaces
+    /// further in, so the test reads on through its diff and its second assertion, and a parent's own line after its
+    /// subtest's message held an empty line is still the parent's. The lines are written as Go's testing package prints
+    /// them (its <c>decorate</c> and the indent it gives a subtest's block) and testify's <c>labeledOutput</c> with them;
+    /// no Go toolchain ran here.
+    /// </summary>
+    [Fact]
+    public void AWhitespaceLineInsideAGoTestsBlock_IsTheOpenTestsLine()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestStore (0.00s)",
+                "    store_test.go:12: ",
+                "        \tError Trace:\t/home/runner/work/app/app/store_test.go:12",
+                "        \tError:      \tNot equal: ",
+                "        \t            \texpected: []int{1, 2}",
+                "        \t            \tactual  : []int{1, 3}",
+                "        \t            \t",
+                "        \t            \tDiff:",
+                "        \t            \t--- Expected",
+                "        \t            \t+++ Actual",
+                "        \t            \t@@ -1,4 +1,4 @@",
+                "        \t            \t ([]int) (len=2) {",
+                "        \t            \t  (int) 1,",
+                "        \t            \t- (int) 2",
+                "        \t            \t+ (int) 3",
+                "        \t            \t }",
+                "        \tTest:       \tTestStore",
+                "    store_test.go:20: count = 1, want 2",
+                "        ",
+                "        the store held: [1]",
+                "--- FAIL: TestLoad (0.00s)",
+                "    --- FAIL: TestLoad/first (0.00s)",
+                "        load_test.go:7: first record",
+                "            ",
+                "            not found",
+                "    load_test.go:9: the parent's own line",
+                "FAIL",
+                "FAIL\texample.com/app\t0.003s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStore", (string?)"store_test.go:12:", (string?)"store_test.go", (int?)12, (1, 20)),
+                ("TestLoad", "load_test.go:9: the parent's own line", "load_test.go", 9, (21, 26)),
+                ("TestLoad/first", "load_test.go:7: first record", "load_test.go", 7, (22, 25)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
+        Assert.All(digest.Failures, failure => Assert.Equal("example.com/app", failure.Class));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
     /// What a test streamed is held only while it runs, never past its end: a subtest's lines are dropped at its nested
     /// result line - so a run of each test twice (<c>-count=2</c>) says the failing second run by its own lines alone, not
     /// the first run's - and every test's at its package's result line, so a package whose binary was killed before its
