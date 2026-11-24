@@ -124,11 +124,12 @@ public sealed class ResultFixturesTests
     }
 
     /// <summary>
-    /// The bytes a model is handed, held: for every fixture, a short log's among them, the digest said for a model - written
-    /// as every JSON a model reads is (AgentEnvelope.Written) - costs no more than what the model was handed before digests
-    /// existed - the fifty last lines, and the whole log the old instruction sent it to read beside them. The total over
-    /// every fixture is pinned exactly, so a change that grows or shrinks what a model reads is a change someone made on
-    /// purpose.
+    /// The bytes a model is handed, held: for every fixture, a short log's among them, the whole of what a red entry hands
+    /// a model of it - the digest said for a model and the raw lines beside it, the fifty last lines as the entry's tail
+    /// (ResultDigest.Handed), written as every JSON a model reads is (AgentEnvelope.Written) - costs no more than what the
+    /// model was handed before digests existed - the fifty last lines, and the whole log the old instruction sent it to
+    /// read beside them - so a line handed twice grows it. The total over every fixture is pinned exactly, so a change that
+    /// grows or shrinks what a model reads is a change someone made on purpose.
     /// </summary>
     [Fact]
     public void TheBytesAModelIsHanded_AreHeld_AndTheirTotalIsPinned()
@@ -139,7 +140,14 @@ public sealed class ResultFixturesTests
         {
             var expect = Expectation(fixture);
             var lines = File.ReadAllLines(Output(fixture));
-            var held = Encoding.UTF8.GetByteCount(Placed(fixture, expect, Read(fixture, expect)!).ForAModel().ToJsonString(DssHarness.Core.Agents.AgentEnvelope.Written));
+            Func<string, string> asRead = expect["read"]!.AsObject().ContainsKey("ci") ? DssHarness.Core.Ci.CiLog.TextOf : PhaseParsers.AsRead;
+            var handed = ResultDigest.Handed(Placed(fixture, expect, Read(fixture, expect)!), [.. lines.TakeLast(50)], asRead);
+            var entry = new JsonObject
+            {
+                ["tail"] = new JsonArray([.. handed.Lines.Select(line => (JsonNode?)line)]),
+                ["digest"] = handed.Digest,
+            };
+            var held = Encoding.UTF8.GetByteCount(entry.ToJsonString(DssHarness.Core.Agents.AgentEnvelope.Written));
 
             var before = Encoding.UTF8.GetByteCount(string.Join("\n", lines.TakeLast(50))) + Encoding.UTF8.GetByteCount(string.Join("\n", lines));
 

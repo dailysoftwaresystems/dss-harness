@@ -33,7 +33,7 @@ public sealed class WorkflowTemplatesTests
         var rediagnose = Prose.Words(WorkflowTemplates.TextOf("prompts/rediagnose.md")!);
 
         Assert.Contains("1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The lines its `log` names are one read away in the entry's `log` file", mend, StringComparison.Ordinal);
-        Assert.Contains("the `tail` then holds only the lines no parser held. The entry's `log` is the file that phase wrote, null for a leg another machine ran.", mend, StringComparison.Ordinal);
+        Assert.Contains("Each line reaches you once: where the digest holds an error or a failure, its `unparsed` holds the lines no parser held - the last ones, nearest the failure, `unparsedLeftOut` saying how many more there were - and the `tail` is empty; where it holds neither, the `tail` holds the phase's last lines and `unparsed` those lines no parser held that the `tail` does not. The entry's `log` is the file that phase wrote, null for a leg another machine ran.", mend, StringComparison.Ordinal);
         Assert.Contains("1. Start from the digest's `first` - the first thing that went wrong, in the order the tool met it - and read the", diagnose, StringComparison.Ordinal);
         Assert.Contains("the lines a digest's `log` names are those of the entry's own `log` file, numbered as that file numbers them.", diagnose, StringComparison.Ordinal);
         Assert.Contains("each red entry's digest, its `first` the first thing that went wrong in the order the tool met it, the lines its `log` names those of the entry's own `log` file.", rediagnose, StringComparison.Ordinal);

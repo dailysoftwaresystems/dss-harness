@@ -63,8 +63,9 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
-    /// The failures are held to their bound with every one counted by its outcome, and the unparsed lines to theirs with
-    /// every one counted: what the bound left out is said, never silent.
+    /// The failures are held to their bound with every one counted by its outcome - the first met held - and the unparsed
+    /// lines to theirs with every one counted - the last met held, the nearest the failure, as a tail is: what the bound
+    /// left out is said, never silent, to a model as much as in the record.
     /// </summary>
     [Fact]
     public void FailuresAndUnparsedLines_AreHeldToTheirBound_EveryOneCounted()
@@ -78,7 +79,9 @@ public sealed class ResultDigestRecordTests
         Assert.Equal((60, 60, 70), (digest.Failed, digest.Errored, digest.UnparsedCount));
         Assert.Equal((70, 20), (digest.FailuresLeftOut, digest.UnparsedLeftOut));
         Assert.Equal("T1", digest.Failures[0].Id);
-        Assert.Equal("error line 50", digest.Unparsed[^1]);
+        Assert.Equal(("error line 21", "error line 70"), (digest.Unparsed[0], digest.Unparsed[^1]));
+        Assert.Equal(20, digest.ForAModel()["unparsedLeftOut"]!.GetValue<int>());
+        Assert.Equal(20, digest.Document()["leftOut"]!["unparsed"]!.GetValue<int>());
     }
 
     /// <summary>
@@ -360,20 +363,36 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
-    /// The raw lines beside a digest: where it holds an error or a failure, the lines no parser held; where it holds
-    /// warnings alone, the phase's tail whole - the line saying why the phase failed is in no warning.
+    /// What a red entry hands a model says every line once: where the digest holds an error or a failure, it says the lines
+    /// no parser held and no raw line goes beside it; where it holds warnings alone, the phase's tail goes whole - the line
+    /// saying why the phase failed is in no warning - and the digest says those lines no parser held the tail does not,
+    /// each tail line read as the digest's were answering for one; where there is no digest, the tail alone.
     /// </summary>
     [Fact]
-    public void TheTailBesideADigest_IsTheUnparsedLinesOnlyWhereItHoldsAProblem()
+    public void WhatARedEntryHandsAModel_SaysEveryLineOnce()
     {
-        IReadOnlyList<string> tail = ["warning: unused x", "Killed"];
-        var warnings = ResultDigest.Of([new Diagnostic("gcc", "warning", null, "unused x")], [], ["warning: odd"]);
+        IReadOnlyList<string> tail = ["warning: unused x", "\u001b[31merror: odd\u001b[0m", "Killed"];
+        var warnings = ResultDigest.Of([new Diagnostic("gcc", "warning", null, "unused x")], [], ["error: early", "error: odd"]);
         var errors = ResultDigest.Of([new Diagnostic("gcc", "error", null, "x undeclared")], [], ["error: odd"]);
         var failed = ResultDigest.Of([], [new TestFailure("ctest", "t")], ["error: odd"]);
 
-        Assert.Same(tail, warnings.TailBeside(tail));
-        Assert.Equal(["error: odd"], errors.TailBeside(tail));
-        Assert.Equal(["error: odd"], failed.TailBeside(tail));
+        var beside = ResultDigest.Handed(warnings, tail, PhaseParsers.AsRead);
+
+        Assert.Same(tail, beside.Lines);
+        Assert.Equal(["error: early"], beside.Digest!["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        foreach (var holding in new[] { errors, failed })
+        {
+            var handed = ResultDigest.Handed(holding, tail, PhaseParsers.AsRead);
+
+            Assert.Empty(handed.Lines);
+            Assert.Equal(["error: odd"], handed.Digest!["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+        }
+
+        var none = ResultDigest.Handed(null, tail, PhaseParsers.AsRead);
+
+        Assert.Null(none.Digest);
+        Assert.Same(tail, none.Lines);
     }
 
     /// <summary>

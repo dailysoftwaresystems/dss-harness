@@ -187,10 +187,22 @@ public static class PhaseParsers
 
         foreach (var line in lines)
         {
-            pass.Read(line with { Text = TerminalText.Plain(line.Text).TrimEnd('\r') });
+            pass.Read(line with { Text = AsRead(line.Text) });
         }
 
         return pass.Finish();
+    }
+
+    /// <summary>
+    /// A log's line as the pass reads it (<see cref="FindingsOf"/>) - its terminal escapes taken off, and a carriage return
+    /// at its end - so a raw line handed beside a digest is matched to the digest's own (<see cref="ResultDigest.Handed"/>).
+    /// </summary>
+    /// <param name="line">The line, as the log holds it.</param>
+    public static string AsRead(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        return TerminalText.Plain(line).TrimEnd('\r');
     }
 
     /// <summary>Whether <paramref name="line"/> holds an error's marker, as a line no parser took is judged.</summary>

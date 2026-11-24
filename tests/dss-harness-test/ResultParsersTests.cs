@@ -43,8 +43,8 @@ public sealed class ResultParsersTests
     /// <summary>
     /// A phase's log is digested as it streams, through to the digest: each line is offered to the readings before the
     /// next is read from the log - never the whole log read first and parsed after - and every line no reading took that
-    /// looks like an error is counted as the pass meets it, the first fifty held and the rest said as left out, for the
-    /// one bound of those lines is the digest's own.
+    /// looks like an error is counted as the pass meets it, the last fifty held - the nearest the failure - and the rest
+    /// said as left out, for the one bound of those lines is the digest's own.
     /// </summary>
     [Fact]
     public void APhasesLog_IsDigestedAsItStreams_EveryLineNoReadingTookCounted()
@@ -62,7 +62,7 @@ public sealed class ResultParsersTests
             ["read c1 error: lost", "A c1 error: lost", "B c1 error: lost", "read c2 error: lost", "A c2 error: lost", "B c2 error: lost"],
             trace.Take(6));
         Assert.Equal((ResultDigest.Bound + 3, 3), (digest.UnparsedCount, digest.UnparsedLeftOut));
-        Assert.Equal(lines.Take(ResultDigest.Bound), digest.Unparsed);
+        Assert.Equal(lines.TakeLast(ResultDigest.Bound), digest.Unparsed);
     }
 
     /// <summary>

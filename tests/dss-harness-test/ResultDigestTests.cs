@@ -333,14 +333,14 @@ public sealed class ResultDigestTests
         }
 
         // The cuts the bounds made are read back as they were said: six frames of seventy, the two records below the
-        // eighth cause, and the three unparsed lines past the fifty held.
+        // eighth cause, and the three unparsed lines before the last fifty held.
         Assert.Equal((6, 2, ResultDigest.Bound + 3), (read.Diagnostics[1].StackCut, cut.CausesCut, read.UnparsedCount));
         Assert.Null(ResultDigest.Read(null));
 
         var said = ResultDigest.Read(digest.Document(), text => text.Replace("192.0.2.10", "mac", StringComparison.Ordinal))!;
 
         Assert.Equal(
-            ["unused at mac", "no x at mac", "wrapping at mac", "a stray line 1 from mac"],
+            ["unused at mac", "no x at mac", "wrapping at mac", "a stray line 4 from mac"],
             [said.Diagnostics[0].Message, said.Diagnostics[1].Message, said.Failures[0].Exception!.CausedBy[0].Message, said.Unparsed[0]]);
     }
 

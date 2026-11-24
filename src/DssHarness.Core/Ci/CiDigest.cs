@@ -52,6 +52,19 @@ public static class CiLog
         return LineEnds.Streamed(log, (start, end, _) => (start, end)).Select((span, at) => Read(log, span.start, span.end, at + 1));
     }
 
+    /// <summary>
+    /// One line of a kept job's log as a digest reads it (<see cref="Of"/>): its timestamp, a byte order mark at its start
+    /// and the forge's marker taken off, as the parsers read it (<see cref="PhaseParsers.AsRead"/>) - so a page of the log
+    /// handed beside a digest is matched to the digest's own lines.
+    /// </summary>
+    /// <param name="line">The line, as the kept log holds it.</param>
+    public static string TextOf(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        return PhaseParsers.AsRead(Read(line, 0, line.Length, 1).Line.Text);
+    }
+
     private static CiLine Read(string log, int start, int end, int number)
     {
         // The log's first line carries the byte order mark the forge writes, which no reader of the file sees.

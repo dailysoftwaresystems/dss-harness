@@ -324,6 +324,13 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         Assert.True(holding < pages.Marks.Count, $"page {holding} of {pages.Marks.Count}");
         Assert.Equal(page.Entries.Select(entry => entry.Text).ToArray(), failing);
+
+        // The digest holds no error a tool's form read, so the page goes whole beside it, and the lines no parser held -
+        // each on the page, numbered - are said there alone: every line reaches a model once.
+        var digest = red["digest"]!.AsObject();
+
+        Assert.False(digest.ContainsKey("unparsed"));
+        Assert.False(digest.ContainsKey("unparsedLeftOut"));
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
     }
 
@@ -333,7 +340,8 @@ public sealed class CheckStepRunnerTests : IDisposable
     /// file numbers it. A problem matcher's line - under the forge's marker in the log, an annotation with its place on the
     /// forge - is one finding, first, named by its path in the repository; a workflow command's annotation takes its
     /// line of the log; and a line the forge marked that no form read - the runner's own sentence that the step failed -
-    /// is said among the lines no parser held, never as the first error. The raw page goes, the typed errors standing.
+    /// is said among the lines no parser held, never as the first error. The raw page goes, the typed errors standing and
+    /// the line no parser held said in the digest alone.
     /// </summary>
     [Fact]
     public async Task ARedJob_IsDigestedFromItsAnnotationsAndItsLog_EachFindingOnce_NumberedAsTheKeptLog()
@@ -385,8 +393,9 @@ public sealed class CheckStepRunnerTests : IDisposable
         Assert.Equal([6, 6], next["log"]!.AsArray().Select(line => line!.GetValue<int>()));
         Assert.Equal(["Process completed with exit code 1."], digest["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
 
-        // The typed errors stand, and beside them only the line no parser held - never the raw page as well.
-        Assert.Equal(["Process completed with exit code 1."], red["failing"]!.AsArray().Select(line => line!.GetValue<string>()));
+        // The typed errors stand, and the line no parser held is said in the digest alone - never the raw page, nor the line
+        // again beside it.
+        Assert.Empty(red["failing"]!.AsArray());
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
     }
 

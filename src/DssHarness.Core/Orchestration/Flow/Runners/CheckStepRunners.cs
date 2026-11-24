@@ -570,10 +570,11 @@ public sealed class CiWaitStepRunner(
 
             // The check digested: its annotations with a place first, then its kept log read by every form a CI log holds,
             // each path placed against the job's own workspace on its runner - so a red job's entry starts from what
-            // failed, not from a page; and beside it only the raw lines it does not hold.
-            var digest = CiDigest.Of(masked, check.Annotations, check.Check.Repository, mask.Redact, context.Config.Results.Matchers);
-
-            failing = digest?.TailBeside(failing) ?? failing;
+            // failed, not from a page; and beside it only the raw lines it does not say, every line once.
+            var handed = ResultDigest.Handed(
+                CiDigest.Of(masked, check.Annotations, check.Check.Repository, mask.Redact, context.Config.Results.Matchers),
+                failing,
+                entry => CiLog.TextOf(TextPages.Unnumbered(entry)));
 
             red.Add(new JsonObject
             {
@@ -584,10 +585,10 @@ public sealed class CiWaitStepRunner(
                 ["leg"] = check.Leg,
                 ["overran"] = check.Overran,
                 ["url"] = check.Check.Url,
-                ["failing"] = new JsonArray([.. failing.Select(line => (JsonNode?)line)]),
+                ["failing"] = new JsonArray([.. handed.Lines.Select(line => (JsonNode?)line)]),
                 ["log"] = kept,
                 ["lines"] = lines,
-                ["digest"] = digest?.ForAModel(),
+                ["digest"] = handed.Digest,
                 ["conclusion"] = check.Check.Conclusion,
                 ["description"] = check.Check.Description,
                 ["unread"] = check.Unread,

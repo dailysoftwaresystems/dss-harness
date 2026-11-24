@@ -147,6 +147,20 @@ public static class TextPages
     }
 
     /// <summary>
+    /// An entry of a numbered page as its text holds the line: the number and the tab a numbered page leads a line with
+    /// taken off; a piece that goes on from another, which no number leads, as it stands.
+    /// </summary>
+    /// <param name="entry">The entry's text, as the numbered page gives it.</param>
+    public static string Unnumbered(string entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var tab = entry.IndexOf('\t', StringComparison.Ordinal);
+
+        return tab > 0 && entry.AsSpan(0, tab).IndexOfAnyExceptInRange('0', '9') < 0 ? entry[(tab + 1)..] : entry;
+    }
+
+    /// <summary>
     /// Lays the pages of the text at <paramref name="path"/> in one pass over its bytes - never holding the file, a line of
     /// it or a page of it whole - into where each page begins, with the digest of the bytes and the text's lines.
     /// </summary>

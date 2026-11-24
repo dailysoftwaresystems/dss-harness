@@ -152,6 +152,11 @@ public sealed record TestFailure(
             : Stack.Select(frame => frame.Problem()).FirstOrDefault(frameWrong => frameWrong is not null);
 }
 
+/// <summary>What a red entry hands a model of what its phase printed (<see cref="ResultDigest.Handed"/>): every line once.</summary>
+/// <param name="Digest">The digest said for a model; null where the entry carries none.</param>
+/// <param name="Lines">The raw lines beside it; empty where the digest says them all.</param>
+public sealed record HandedToAModel(JsonObject? Digest, IReadOnlyList<string> Lines);
+
 /// <summary>How many printings one code or one file had, over the whole of what was digested.</summary>
 /// <param name="Of">The code, or the file.</param>
 /// <param name="Count">How many printings named it.</param>
@@ -176,9 +181,10 @@ public sealed record ResultDigest
 {
     /// <summary>
     /// How many diagnostics of each severity, how many failures, and how many unparsed lines a digest holds: the first
-    /// this many of each in the order met - an error is never displaced by warnings, for each severity is held apart -
-    /// the rest counted over the whole (<see cref="ByCode"/>, <see cref="ByFile"/>, the counts by severity and outcome,
-    /// <see cref="UnparsedCount"/>) and said as left out.
+    /// this many diagnostics and failures in the order met - an error is never displaced by warnings, for each severity is
+    /// held apart - and the last this many unparsed lines, the nearest the failure, as a log's tail is; the rest counted
+    /// over the whole (<see cref="ByCode"/>, <see cref="ByFile"/>, the counts by severity and outcome,
+    /// <see cref="UnparsedCount"/>) and said as left out, to a model as much as in the record.
     /// </summary>
     public const int Bound = 50;
 
@@ -219,7 +225,7 @@ public sealed record ResultDigest
     /// <summary>The printings of every diagnostic by its file, over the whole output - the held and the rest - in the order each file was first met.</summary>
     public IReadOnlyList<Counted> ByFile { get; private init; } = [];
 
-    /// <summary>The lines that look like errors and matched nothing, the first <see cref="Bound"/>, masked - what the parsers did not understand; empty where they understood everything.</summary>
+    /// <summary>The lines that look like errors and matched nothing, the last <see cref="Bound"/> in the order met, masked - what the parsers did not understand; empty where they understood everything.</summary>
     public IReadOnlyList<string> Unparsed { get; private init; } = [];
 
     /// <summary>How many such lines there were in all, the held among them.</summary>
@@ -430,18 +436,57 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// The raw lines that go beside this digest, the one rule of every red entry that carries one - a red leg's tail and a
-    /// red job's failing page alike: where the digest holds an error or a failure to start from, only the lines no parser
-    /// held - a model reads the typed problems or the raw lines, never both repeated - and where it holds none, warnings
-    /// and notes alone among them, <paramref name="tail"/> whole, for the line that says why the phase failed is in no
-    /// diagnostic.
+    /// What a red entry hands a model of what its phase printed - a red leg's, a red job's: the digest said for a model and
+    /// the raw lines beside it, the one rule of every entry that carries one, so every line reaches a model once. Where the
+    /// digest holds an error or a failure to start from, the lines no parser held are said in the digest - the last
+    /// <see cref="Bound"/>, the nearest the failure, with how many it left out - and no raw line goes beside it: a model
+    /// reads the typed problems and the lines no parser held, never a page that repeats them. Where it holds none -
+    /// warnings and notes alone, or nothing typed - <paramref name="tail"/> goes whole beside it, for the line that says
+    /// why the phase failed is in no diagnostic, and the digest says those of its lines no parser held the tail does not:
+    /// each line of the tail, read as the digest's were (<paramref name="asRead"/>), answers for one of them. Where there
+    /// is no digest, the tail alone.
     /// </summary>
+    /// <param name="digest">The entry's digest; null where it carries none.</param>
     /// <param name="tail">The raw lines that would go without a digest: the phase's last lines, the job's failing page.</param>
-    public IReadOnlyList<string> TailBeside(IReadOnlyList<string> tail)
+    /// <param name="asRead">A raw line as the digest's reading read it (<see cref="PhaseParsers.AsRead"/> for a phase's log).</param>
+    public static HandedToAModel Handed(ResultDigest? digest, IReadOnlyList<string> tail, Func<string, string> asRead)
     {
         ArgumentNullException.ThrowIfNull(tail);
+        ArgumentNullException.ThrowIfNull(asRead);
 
-        return HoldsAProblem ? Unparsed : tail;
+        if (digest is null)
+        {
+            return new HandedToAModel(null, tail);
+        }
+
+        if (digest.HoldsAProblem)
+        {
+            return new HandedToAModel(digest.ForAModel(digest.Unparsed), []);
+        }
+
+        var told = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var line in tail)
+        {
+            var read = asRead(line);
+            told[read] = told.GetValueOrDefault(read) + 1;
+        }
+
+        var said = new List<string>();
+
+        foreach (var line in digest.Unparsed)
+        {
+            if (told.TryGetValue(line, out var left) && left > 0)
+            {
+                told[line] = left - 1;
+            }
+            else
+            {
+                said.Add(line);
+            }
+        }
+
+        return new HandedToAModel(digest.ForAModel(said), tail);
     }
 
     /// <summary>
@@ -458,12 +503,20 @@ public sealed record ResultDigest
     /// The digest as a model reads it: the counts, the first problem said whole with its stack rendered to its frames in
     /// the tree and its causes under it, the next distinct problems to four in all - an error one line each, a test
     /// failure with its rendered stack - the rest counted by code and by file (every printing the four do not say, over
-    /// the whole output), and the lines no parser held; each thing said once, and a member that says nothing - a count of
-    /// none, an empty list, a null - left out at every depth, for a model pays for every byte it is handed. A rule of
-    /// rendering, never of the record: the whole digest stays in the ledger's own <c>--json</c> (<see cref="Document"/>),
-    /// its counts by code and by file over everything.
+    /// the whole output), and the lines no parser held, with how many the bound left out; each thing said once, and a
+    /// member that says nothing - a count of none, an empty list, a null - left out at every depth, for a model pays for
+    /// every byte it is handed. A rule of rendering, never of the record: the whole digest stays in the ledger's own
+    /// <c>--json</c> (<see cref="Document"/>), its counts by code and by file over everything. What a red entry hands a
+    /// model beside it is <see cref="Handed"/>'s to say.
     /// </summary>
-    public JsonObject ForAModel()
+    public JsonObject ForAModel() => ForAModel(Unparsed);
+
+    /// <summary>
+    /// The digest as a model reads it (<see cref="ForAModel()"/>), saying of the lines no parser held
+    /// <paramref name="unparsed"/> - those the raw lines beside it do not (<see cref="Handed"/>) - and how many the bound
+    /// left out.
+    /// </summary>
+    private JsonObject ForAModel(IReadOnlyList<string> unparsed)
     {
         // The four a round starts from, in the order met: the errors first - a failure is rarely reached past one -
         // then the failures; the first said whole, the next three as their kind renders.
@@ -504,7 +557,8 @@ public sealed record ResultDigest
             })]),
             ["byCode"] = Rest(ByCode, said, diagnostic => diagnostic.Code),
             ["byFile"] = Rest(ByFile, said, diagnostic => diagnostic.File),
-            ["unparsed"] = new JsonArray([.. Unparsed.Select(line => (JsonNode?)line)]),
+            ["unparsed"] = new JsonArray([.. unparsed.Select(line => (JsonNode?)line)]),
+            ["unparsedLeftOut"] = UnparsedLeftOut,
         });
     }
 
@@ -1325,7 +1379,8 @@ public sealed record ResultDigest
     /// A digest made a finding at a time, in the order the output met them: the one place a digest is made, its bounds
     /// applied and every cut counted. A diagnostic printed again is folded into the one held, where it stands, its count
     /// grown by the printings it carries - so <see cref="First"/> is the first the tool met, and the fold is linear - and
-    /// one past its severity's bound is counted by severity, by code and by file all the same. Every stack is held to
+    /// one past its severity's bound is counted by severity, by code and by file all the same. The unparsed lines held are
+    /// the last <see cref="Bound"/> met, every one counted. Every stack is held to
     /// <see cref="StackTrace.FrameBound"/> and every cause chain to <see cref="ExceptionRecord.CauseBound"/>, the cuts said;
     /// a finding that is not one a digest holds - a severity, an outcome or a line no tool means - is said among the
     /// unparsed lines with why, never held and never dropped unsaid. A phase's two accounts of one run - the results files
@@ -1345,7 +1400,7 @@ public sealed record ResultDigest
         private readonly Dictionary<string, int> _fileAt = new(StringComparer.Ordinal);
         private readonly List<TestFailure> _failures = [];
         private readonly HashSet<string> _named = new(StringComparer.Ordinal);
-        private readonly List<string> _unparsed = [];
+        private readonly Queue<string> _unparsed = new();
         private readonly Gathering? _into;
         private readonly ILineMask? _mask;
         private int _unparsedCount;
@@ -1458,7 +1513,10 @@ public sealed record ResultDigest
             }
         }
 
-        /// <summary>Gathers <paramref name="line"/>, the next line no parser held.</summary>
+        /// <summary>
+        /// Gathers <paramref name="line"/>, the next line no parser held: every one counted, the last <see cref="Bound"/>
+        /// held - the nearest the failure, as a log's tail is.
+        /// </summary>
         /// <param name="line">The line, masked as the log kept it.</param>
         public void Unparsed(string line)
         {
@@ -1471,10 +1529,11 @@ public sealed record ResultDigest
             }
 
             _unparsedCount++;
+            _unparsed.Enqueue(line);
 
-            if (_unparsed.Count < Bound)
+            if (_unparsed.Count > Bound)
             {
-                _unparsed.Add(line);
+                _unparsed.Dequeue();
             }
         }
 

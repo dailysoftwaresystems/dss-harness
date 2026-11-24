@@ -23,8 +23,10 @@ public sealed record AgentContinuedStep(string Instance, string Ended, string Di
 /// holds it; null where the entry carries none.
 /// </param>
 /// <param name="Tail">
-/// The raw lines the red entry carries beside its digest: the lines no parser held where it has one, the phase's last
-/// lines where it has none - so a leg whose output no parser read is never said by its ledger line alone.
+/// The raw lines the red entry carries beside its digest, which says none of them again
+/// (<see cref="Results.ResultDigest.Handed"/>): none where the digest holds a problem and says the lines no parser held
+/// itself, the phase's last lines where it holds none or there is no digest - so a leg whose output no parser read is
+/// never said by its ledger line alone.
 /// </param>
 /// <param name="Log">
 /// The log the phase wrote, whose lines the digest's ranges number, where this machine holds it: the record copies it
@@ -141,8 +143,8 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 
         if (work.RedLegs.Count > 0)
         {
-            // Each red leg by its ledger line, what its phase printed digested, the raw lines beside the digest - the last
-            // lines where nothing was digested - and its log's copy, whose lines the digest's ranges number.
+            // Each red leg by its ledger line, what its phase printed digested, the raw lines the entry carries beside the
+            // digest - each line once, as the entry holds them - and its log's copy, whose lines the digest's ranges number.
             record.Part(
                 "the last red build or test",
                 "The last build or test in this worktree was red:" + NL + NL

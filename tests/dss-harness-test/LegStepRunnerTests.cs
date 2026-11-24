@@ -925,12 +925,12 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// A red entry whose leg holds a digest renders it for a model: the first error said whole with its stack rendered
-    /// to its frames in the tree, the next distinct to four as one line each, the rest counted by code and by file -
-    /// and the tail then holds only the lines no parser held, for a model sees either the typed errors or the raw
-    /// lines, never both repeated.
+    /// to its frames in the tree, the next distinct to four as one line each, the rest counted by code and by file - and
+    /// every line reaches a model once: the digest holds an error, so it says the lines no parser held and the tail is
+    /// empty, never repeating them.
     /// </summary>
     [Fact]
-    public void ARedEntryHoldingADigest_RendersItForAModel_AndItsTailHoldsOnlyTheUnparsed()
+    public void ARedEntryHoldingADigest_RendersItForAModel_EachLineOnce()
     {
         var digest = ResultDigest.Of(
             [
@@ -963,10 +963,12 @@ public sealed class LegStepRunnerTests : IDisposable
 
         var red = legs["red"]!.AsArray().Single()!.AsObject();
 
-        Assert.Equal(["a stray line nobody parsed"], red["tail"]!.AsArray().Select(line => line!.GetValue<string>()));
+        Assert.Empty(red["tail"]!.AsArray());
 
         var model = red["digest"]!.AsObject();
 
+        Assert.Equal(["a stray line nobody parsed"], model["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+        Assert.False(model.ContainsKey("unparsedLeftOut"));
         Assert.Equal(2, model["errors"]!.GetValue<int>());
 
         var first = red["digest"]!["first"]!.AsObject();

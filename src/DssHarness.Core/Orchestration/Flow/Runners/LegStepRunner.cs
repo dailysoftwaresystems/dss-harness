@@ -275,14 +275,16 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
         JsonObject Red(string leg, LegVerdict verdict, string? phase, string detail, IReadOnlyList<string> tail, string? arm, FailedUnits? failedUnits, ResultDigest? digest, string? log)
         {
+            // What the phase printed, every line once: the digest, and the raw lines it does not say.
+            var handed = ResultDigest.Handed(digest, tail, PhaseParsers.AsRead);
             var entry = new JsonObject
             {
                 ["leg"] = leg,
                 ["verdict"] = Verdicts.Display(verdict),
                 ["phase"] = phase,
                 ["detail"] = detail,
-                ["tail"] = new JsonArray([.. (digest?.TailBeside(tail) ?? tail).Select(line => (JsonNode?)line)]),
-                ["digest"] = digest?.ForAModel(),
+                ["tail"] = new JsonArray([.. handed.Lines.Select(line => (JsonNode?)line)]),
+                ["digest"] = handed.Digest,
 
                 // The log the phase wrote, whose lines the digest's ranges number: one read away from the entry.
                 ["log"] = log,
