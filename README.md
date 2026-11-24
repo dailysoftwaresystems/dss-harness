@@ -200,7 +200,9 @@ table; `--json` carries the digest typed as `digest`, its bounds said - the firs
 each severity, the first 50 failures and the last 50 lines no parser held kept, the rest counted by
 code and by file over the whole output, each stack held to its first 48 and last 16 frames, each
 cause chain followed 8 deep, every cut counted - every diagnostic and failure with its place, stack,
-causes and counts, each file inside the tree named
+causes and counts, each place inside the tree carrying the declaration a graph of the tree holds
+enclosing it - the declaration's kind, its qualified name, its handle - where one is held, each file
+inside the tree named
 relative to it (a Go test's, which `go test` prints relative to its package, read from the package's
 directory below the `go.mod` that owns its import path; a Dart `package:` frame of the project's own
 package from the `lib` beside the `pubspec.yaml` that names it), each log range numbering the lines of

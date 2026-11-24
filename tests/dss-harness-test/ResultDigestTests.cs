@@ -215,6 +215,74 @@ public sealed class ResultDigestTests
     }
 
     /// <summary>
+    /// Where the tree's graph is held, each place of the digest that it has a declaration for says it: a diagnostic's
+    /// symbol is the declaration enclosing its line - its kind, its qualified name and its handle, as the graph names a
+    /// node - and a frame says it beside the function its line printed, or alone where the frame printed none. A place
+    /// the graph does not hold, a frame that names no file, and every digest of a tree with no graph, say none; the
+    /// declaration is asked by the place as the tree names it, each place once however many findings name it.
+    /// </summary>
+    [Fact]
+    public void APlacesEnclosingDeclaration_FromTheTreesGraph_IsSaidAtEachPlaceTheGraphHolds()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("src/Program.cs");
+        temp.WriteFile("src/Other.cs");
+        var asked = new List<string>();
+
+        var marked = ResultDigest.Of(
+            [
+                // Printed as the tool did, by a path the placing reads: the graph is asked by the place as the tree names it.
+                new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", temp.Combine("src", "Program.cs").Replace('\\', '/'), 12, 35, Log: (10, 11)),
+            ],
+            [
+                new TestFailure(
+                    "xunit",
+                    "App.Tests.Holds",
+                    Exception: new ExceptionRecord(
+                        "System.InvalidOperationException",
+                        "no record",
+                        [
+                            new StackFrame("at App.Tests.Holds() in src/Program.cs:12", "src/Program.cs", 12, Symbol: "App.Tests.Holds"),
+                            new StackFrame("at System.Text.StringBuilder.Append(char)", "mscorlib.cs", 123, Symbol: "System.Text.StringBuilder.Append"),
+                            new StackFrame("at Nowhere()", "nowhere.cs", 5, Symbol: "Nowhere"),
+                            new StackFrame("in src/Other.cs:3", "src/Other.cs", 3),
+                        ],
+                        [new ExceptionRecord("System.ArgumentException", "inner", [new StackFrame("at Inner() in src/Other.cs:9", "src/Other.cs", 9, Symbol: "Inner")], [])])),
+            ],
+            [])
+            .WithInTree(new DigestTree(
+                temp.Path,
+                null,
+                new PhysicalFileSystem(FilePermissionsFactory.Create()),
+                (file, line) =>
+                {
+                    asked.Add($"{file}:{line.ToString(CultureInfo.InvariantCulture)}");
+
+                    return (file, line) switch
+                    {
+                        ("src/Program.cs", 12) => new EnclosingDeclaration("member", "App.Tests.Holds", "4f2a9b"),
+                        ("src/Other.cs", 3) => new EnclosingDeclaration("member", "App.Other.Load", "8c1d2e"),
+                        ("src/Other.cs", 9) => new EnclosingDeclaration("type", "App.Other", "9b7c3d"),
+                        _ => null,
+                    };
+                }));
+
+        Assert.Equal("member App.Tests.Holds 4f2a9b", marked.Diagnostics[0].Symbol);
+        Assert.Equal(
+            [
+                "App.Tests.Holds [member App.Tests.Holds 4f2a9b]",
+                "System.Text.StringBuilder.Append",
+                "Nowhere",
+                "member App.Other.Load 8c1d2e",
+            ],
+            marked.Failures[0].Exception!.Stack.Select(frame => frame.Symbol));
+        Assert.Equal("Inner [type App.Other 9b7c3d]", marked.Failures[0].Exception!.CausedBy[0].Stack[0].Symbol);
+
+        // The diagnostic and the frame name the same place: the graph answers it once.
+        Assert.Equal(["src/Program.cs:12", "mscorlib.cs:123", "nowhere.cs:5", "src/Other.cs:3", "src/Other.cs:9"], asked);
+    }
+
+    /// <summary>
     /// The tree's declarations are read once for a digest, however many of its places ask: several Go tests of packages no
     /// <c>go.mod</c> owns, and a Dart frame of a package no <c>pubspec.yaml</c> names, each needing the whole tree read, list
     /// each directory of it exactly once - the placing stays linear in the tree and the places - and every place stays as

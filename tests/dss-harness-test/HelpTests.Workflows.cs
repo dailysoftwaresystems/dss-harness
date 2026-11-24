@@ -110,7 +110,9 @@ public sealed partial class HelpTests
                 + "else the run's own - null for a leg a host ran, whose log stays there and whose digest, made there, travels on its "
                 + "line. The ledger's --json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics "
                 + "of each severity, the first 50 failures and the last 50 lines no parser held, the rest counted, a stack held to its "
-                + "first 48 and last 16 frames with the cut counted - the text ledger says each red leg's first error in a block below "
+                + "first 48 and last 16 frames with the cut counted, each place inside the tree carrying the declaration a graph of "
+                + "the tree holds enclosing it where one is held - the declaration's kind, its qualified name, its handle - the text "
+                + "ledger says each red leg's first error in a block below "
                 + "its table, and {run.red} says it on its line",
             prose,
             StringComparison.Ordinal);
@@ -651,7 +653,9 @@ public sealed partial class HelpTests
                 + "else the run's own - null for a leg a host ran, whose log stays there and whose digest, made there, travels on its "
                 + "line. The ledger's --json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics "
                 + "of each severity, the first 50 failures and the last 50 lines no parser held, the rest counted, a stack held to its "
-                + "first 48 and last 16 frames with the cut counted - the text ledger says each red leg's first error in a block below "
+                + "first 48 and last 16 frames with the cut counted, each place inside the tree carrying the declaration a graph of "
+                + "the tree holds enclosing it where one is held - the declaration's kind, its qualified name, its handle - the text "
+                + "ledger says each red leg's first error in a block below "
                 + "its table, and {run.red} says it on its line. What "
                 + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
                 + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "

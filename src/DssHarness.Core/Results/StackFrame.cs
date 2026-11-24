@@ -12,7 +12,7 @@ namespace DssHarness.Core.Results;
 /// <param name="Line">The line the frame names; null where it names none.</param>
 /// <param name="Column">The column the frame names; null where it names none.</param>
 /// <param name="Module">The assembly, library, package or binary the frame names; null where it names none.</param>
-/// <param name="Symbol">The frame's function as printed - <c>Namespace.Class.Method</c>, <c>ns::f&lt;T&gt;</c>; null where it names none.</param>
+/// <param name="Symbol">The frame's function as printed - <c>Namespace.Class.Method</c>, <c>ns::f&lt;T&gt;</c>; null where it names none. Where the tree's graph holds the frame's file (<see cref="ResultDigest.WithInTree(DigestTree)"/>), the declaration enclosing its line is said with it, in brackets - its kind, its qualified name, the node's handle (<see cref="EnclosingDeclaration.Said"/>) - or alone where the frame printed none.</param>
 /// <param name="Kind">Which kind of frame it is: <c>call</c>, <c>include</c>, <c>instantiation</c>, <c>macro</c> or <c>async</c>.</param>
 /// <param name="InTree">Whether the tree holds the frame's file (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>); false where it names no file.</param>
 public sealed record StackFrame(

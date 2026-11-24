@@ -9837,13 +9837,15 @@ kept.
 What a red phase or a failed test prints is typed, never left as a log to search: one owner of the
 shapes (`Results\ResultDigest.cs`) and one of the parsers that read them
 (`Results\ResultParsers.cs`). A `Diagnostic` is a compiler's or a linter's line - its tool, its
-severity, its code, its message, its file, line and column, its project, how many times it was
+severity, its code, its message, its file, line and column, the declaration enclosing that place where
+the tree's graph is held, its project, how many times it was
 printed again (once per translation unit or per target framework, folded into one), the chain that
 led to it as `StackFrame`s and the line range of its log - and a `TestFailure` is a failed test's
 identity, its assertion, its duration, its outcome (`failed`, `errored`, `timedOut`, `crashed`),
 its log range and, where the failure is a thrown error, its `ExceptionRecord`: type, message, stack
 and the cause chain, each cause a record nested under the one it caused - the failure's stack held
-there, never twice. A `StackFrame` carries its line as printed, its place, its symbol, its kind
+there, never twice. A `StackFrame` carries its line as printed, its place, its symbol - the function
+as printed, the enclosing declaration said beside it where the tree's graph holds the file - its kind
 (`call`, `include`, `instantiation`, `macro`, `async`) and whether the tree holds its file. A
 `ResultDigest` is made in one place (`ResultDigest.Gathering`), a finding at a time in the order
 the output met them, and applies every bound there, each said: a diagnostic printed again is
@@ -10015,7 +10017,13 @@ the `lib` directory beside the `pubspec.yaml` nearest the root that names the pa
 where none does. The declarations are found by reading the tree a level at a time from its root, no deeper than a
 question needs and each level at most once for a digest however many of its places ask, so a copy of the tree kept
 inside it never wins over the tree's own and the placing stays linear in the tree and the places
-(`ResultDigest.WithInTree`, the one place a digest's paths ask the tree's file system).
+(`ResultDigest.WithInTree`, the one place a digest's paths ask the tree's file system). Where the tree's graph is
+held, each placed file and line the graph has a declaration for gains it (`CodebaseGraphQueries.AtLine`, asked
+through the tree's own declaration ask, each place once): a diagnostic's symbol is it - the declaration's kind, its
+qualified name and its handle, said as the graph names a node - and a frame says it beside the function its line
+printed, or alone where the frame printed none, so a place joins to the code it stands in by a handle the graph
+answers; a tree with no graph - one no run made a graph of, a job's workspace on its runner - and a place the graph
+does not hold say none, and a digest placed by a workspace's convention alone never asks.
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first`, the first thing that went wrong in
 the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and

@@ -21,7 +21,7 @@ namespace DssHarness.Core.Results;
 /// <param name="Column">The column it names; null where it names none.</param>
 /// <param name="EndLine">The last line it names, where the tool gives a range; null where it does not.</param>
 /// <param name="EndColumn">The last column it names, where the tool gives a range; null where it does not.</param>
-/// <param name="Symbol">The declaration enclosing that line, from the graph, where it holds the file: its class, its method, the node's handle; null where the graph does not.</param>
+/// <param name="Symbol">The declaration enclosing that line, said as the tree's graph holds it - its kind, its qualified name, the node's handle (<see cref="EnclosingDeclaration.Said"/>) - where the tree's graph holds the file (<see cref="ResultDigest.WithInTree(DigestTree)"/>); null where it does not or the tree has no graph.</param>
 /// <param name="Project">The project or target the tool named; null where it names none.</param>
 /// <param name="Count">How many times the same diagnostic was printed - once per translation unit or per target framework, folded into one; 1 where it was printed once.</param>
 /// <param name="Stack">The chain the tool printed that led to it, as frames, innermost first; empty where it printed none, as MSBuild's own errors are - never null.</param>
@@ -164,12 +164,32 @@ public sealed record Counted(string Of, int Count);
 
 /// <summary>
 /// The tree a digest's places are read against: where the work ran, the directory the tool that printed them ran in -
-/// which a relative path it printed is read from - and the file system that says whether the tree holds a file.
+/// which a relative path it printed is read from - and the file system that says whether the tree holds a file. Where
+/// the tree's graph is held, its declaration for a place is asked through <see cref="DeclarationAt"/>.
 /// </summary>
 /// <param name="Root">The tree the phase ran in, as the machine that ran it writes it.</param>
 /// <param name="WorkingDirectory">The directory the tool ran in, which a relative path it printed is read from; <see langword="null"/> for the root.</param>
 /// <param name="FileSystem">The file system the tree is on.</param>
-public sealed record DigestTree(string Root, string? WorkingDirectory, IFileSystem FileSystem);
+/// <param name="DeclarationAt">
+/// The tree's graph's declaration enclosing a place, a file named as the tree names it and a line of it
+/// (<see cref="EnclosingDeclaration"/>); <see langword="null"/> where the tree has no graph, and answering
+/// <see langword="null"/> where the graph does not hold the file.
+/// </param>
+public sealed record DigestTree(string Root, string? WorkingDirectory, IFileSystem FileSystem, Func<string, int, EnclosingDeclaration?>? DeclarationAt = null);
+
+/// <summary>
+/// The declaration enclosing a place of a digest, as the tree's graph holds it: what was declared - its kind, its
+/// qualified name - and the handle that names the node in the view, so a place a digest names is joined to the code it
+/// stands in and a reader can ask the graph about it by its handle.
+/// </summary>
+/// <param name="Kind">The declaration's kind in the graph: a <c>type</c>, a <c>member</c>, a <c>section</c>.</param>
+/// <param name="QualifiedName">The declaration's qualified name, as the graph names it.</param>
+/// <param name="Handle">The node's handle in the tree's view of the graph.</param>
+public sealed record EnclosingDeclaration(string Kind, string QualifiedName, string Handle)
+{
+    /// <summary>The declaration said as one line: its kind, its qualified name and its handle - the three a digest's symbol holds.</summary>
+    public string Said() => $"{Kind} {QualifiedName} {Handle}";
+}
 
 /// <summary>
 /// What a phase's or a job's output digested to: the diagnostics and the test failures, typed, bounded, with the
@@ -313,7 +333,9 @@ public sealed record ResultDigest
     /// names the package; where no file of the tree declares the name, the place stays as written. Placed by the one owner
     /// of placing a digest's paths (<see cref="WithInTree(Func{string, string?}, Func{string, string, string?})"/>), and the
     /// one place a digest's paths ask the tree's file system: the tree's declarations are read once for the digest,
-    /// however many of its places ask.
+    /// however many of its places ask. Where the tree's graph is held (<see cref="DigestTree.DeclarationAt"/>), each place
+    /// it has a declaration for gains it - a diagnostic's symbol, said with a frame's printed one - the one owner of the
+    /// digest's symbols, asked by the placed file and the line, each place once.
     /// </summary>
     /// <param name="tree">The tree the phase ran in, and where its tool ran.</param>
     public ResultDigest WithInTree(DigestTree tree)
@@ -322,18 +344,73 @@ public sealed record ResultDigest
         ArgumentException.ThrowIfNullOrWhiteSpace(tree.Root);
 
         var packages = new ProjectPackages(tree);
-
-        return WithInTree(
+        var placed = WithInTree(
             file => ProjectPackages.DartPackageOf(file) is { } named
                 ? packages.DartLibraryOf(named.Package) is { } library ? Held(named.Path, library) : null
                 : Held(file, tree.WorkingDirectory),
             (file, package) => packages.GoPackageDirectoryOf(package) is { } directory ? Held(file, directory) : null);
+
+        return tree.DeclarationAt is { } declarationAt ? Declared(placed, declarationAt) : placed;
 
         // A path the tree holds, read from the directory a relative one was printed relative to, named as the tree's.
         string? Held(string file, string? from)
             => PlatformPaths.RelativeAsWritten(tree.Root, file, from) is { } below && tree.FileSystem.FileExists(Path.Combine(tree.Root, below))
                 ? below
                 : null;
+    }
+
+    /// <summary>
+    /// <paramref name="digest"/> with the declaration the tree's graph holds said at each of its places that one holds:
+    /// a diagnostic's symbol is it, and a frame says it beside the function its line printed - so what and where is file,
+    /// declaration and line, and the handle joins the place to the graph's node. Each place asked once, however many
+    /// findings name it; a place the graph does not hold, a place that names no file or no line, and every digest of a
+    /// tree with no graph, say none.
+    /// </summary>
+    /// <param name="digest">The digest, its places already named as the tree names them.</param>
+    /// <param name="declarationAt">The tree's graph's declaration enclosing a placed file and line.</param>
+    private static ResultDigest Declared(ResultDigest digest, Func<string, int, EnclosingDeclaration?> declarationAt)
+    {
+        var asked = new Dictionary<(string? File, int? Line), string?>();
+
+        return digest with
+        {
+            Diagnostics = [.. digest.Diagnostics.Select(diagnostic => diagnostic with { Symbol = DeclaredAt(diagnostic.File, diagnostic.Line) })],
+            Failures = [.. digest.Failures.Select(failure => failure with
+            {
+                Exception = failure.Exception is { } thrown ? Thrown(thrown) : null,
+                Stack = [.. failure.Stack.Select(Frame)],
+            })],
+        };
+
+        ExceptionRecord Thrown(ExceptionRecord thrown) => thrown with
+        {
+            Stack = [.. thrown.Stack.Select(Frame)],
+            CausedBy = [.. thrown.CausedBy.Select(Thrown)],
+        };
+
+        StackFrame Frame(StackFrame frame) => frame with
+        {
+            Symbol = DeclaredAt(frame.File, frame.Line) is { } declared
+                ? frame.Symbol is { } printed ? $"{printed} [{declared}]" : declared
+                : frame.Symbol,
+        };
+
+        string? DeclaredAt(string? file, int? line)
+        {
+            if (file is not { } held || line is not { } at)
+            {
+                return null;
+            }
+
+            var place = (held, at);
+
+            if (!asked.TryGetValue(place, out var said))
+            {
+                asked[place] = said = declarationAt(held, at)?.Said();
+            }
+
+            return said;
+        }
     }
 
     /// <summary>
