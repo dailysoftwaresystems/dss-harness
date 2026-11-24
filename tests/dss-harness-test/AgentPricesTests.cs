@@ -257,6 +257,7 @@ public sealed class AgentModelTests
         Assert.Equal(["claude-opus-5-5", "glm-5.3"], tierConfig["high"]);
         Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["balanced"]);
         Assert.Equal(["claude-haiku-5-5", "glm-5.3"], tierConfig["fast"]);
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["reporting"]);
     }
 
 
@@ -272,7 +273,7 @@ public sealed class AgentModelTests
 
         Assert.Equal("balanced", config.Defaults.AgentTier);
         Assert.Equal(2, config.Providers.Count);
-        Assert.Equal(4, config.TierConfig.Count);
+        Assert.Equal(["best", "high", "balanced", "fast", "reporting"], config.TierConfig.Keys);
         Assert.Null(config.BalanceKeyUsage);
 
         // The shipped workflow resolves under what init writes: every step's tier is defined, every effort taken.
