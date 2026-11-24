@@ -52,8 +52,9 @@ inputs:
     kind: value
     description: The step whose failure the recovery puts right - the recovery's source, handed in as every fact of the caller is - which the remedy prompt names; absent where a round uses the pipeline.
 # What the pipeline gives the step that uses it, read when the use ends. An item a person answered
-# skip has no fold and no review, and each of these reads nothing for it: the use ends done with
-# none of them, as an output that reads nothing is no failure of the use.
+# skip has no fold and no review: what its fold gives reads nothing for it, and the use ends done
+# without it, as an output that reads nothing is no failure of the use; what its review loop left
+# reads each list of a routing that never ran as none, and so is empty.
 outputs:
   - name: written
     description: The paths the item's fold wrote; none where the item was skipped.
@@ -62,8 +63,8 @@ outputs:
     description: The anchor rows the item's fold carried; none where the item was skipped.
     from: fold.rows
   - name: leftover
-    description: What the review loop left where it ended at its bound, none of it acted on - its last routing's rework and home audits, as the loop's own leftover reads them; empty where it ended clean, and none where the item was skipped.
-    from: 'union(fix.route.rework, fix.route.homeAudit)'
+    description: What the review loop left where it ended at its bound, none of it acted on - its last routing's rework and home audits, as the loop's own leftover reads them; empty where it ended clean, and where the item was skipped, which no loop reviewed.
+    from: 'union(fix.route.rework ?? null, fix.route.homeAudit ?? null)'
 steps:
   - name: item-agent
     type: create-agent

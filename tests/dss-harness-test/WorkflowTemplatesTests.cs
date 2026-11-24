@@ -721,7 +721,8 @@ public sealed class WorkflowTemplatesTests
     /// or more, graded by the worst of its findings, keeps the loop going past its rounds as a rework of that grade does,
     /// and what the loop leaves at its bound holds it, so an audit still owed is written to the backlog and named in the
     /// pull request; a loop whose routing left nothing blocks nothing and leaves nothing. The pipeline's own leftover
-    /// output reads the same lists of the loop's last routing.
+    /// output reads the same lists of the loop's last routing, and is empty for an item a person answered skip, whose
+    /// loop never ran - never a failure of the use that built nothing.
     /// </summary>
     [Fact]
     public void TheReviewLoop_ReadsTheHomeAuditsItsRoutingLeaves_AsItReadsTheRework()
@@ -743,13 +744,24 @@ public sealed class WorkflowTemplatesTests
                 FlowExpression.Parse(repeat.Leftover!).Evaluate(Read).ToNode()!.ToJsonString());
         }
 
+        // The pipeline's output, read as the use ends: the loop's last routing, through the loop - and, for an item a person
+        // answered skip, whose loop never ran, a routing that reads nothing, which leaves nothing rather than failing the use.
+        var left = Assert.Single(items.Use!.Outputs, output => output.Name == "leftover").From;
+
+        string Left(JsonArray? rework, JsonArray? homeAudit)
+            => FlowExpression.Parse(left).Evaluate(path => path.Root == "fix"
+                ? rework is null || homeAudit is null
+                    ? FlowValue.Missing
+                    : FlowValue.Of(new JsonObject { ["route"] = new JsonObject { ["rework"] = rework.DeepClone(), ["homeAudit"] = homeAudit.DeepClone(), ["reopened"] = new JsonArray() } })
+                : throw new InvalidOperationException($"the output reads '{path.Whole}'")).ToNode()!.ToJsonString();
+
         Assert.Equal((true, new JsonArray(audit.DeepClone()).ToJsonString()), Decided([], [audit.DeepClone()]));
         Assert.Equal((false, new JsonArray(nit.DeepClone()).ToJsonString()), Decided([nit.DeepClone()], []));
         Assert.Equal((false, "[]"), Decided([], []));
+        Assert.Equal(new JsonArray(nit.DeepClone(), audit.DeepClone()).ToJsonString(), Left([nit.DeepClone()], [audit.DeepClone()]));
+        Assert.Equal("[]", Left([], []));
+        Assert.Equal("[]", Left(null, null));
         Assert.Equal("empty(route.rework) && empty(route.homeAudit)", repeat.Until);
-        Assert.Equal(
-            "union(fix.route.rework, fix.route.homeAudit)",
-            Assert.Single(items.Use!.Outputs, output => output.Name == "leftover").From);
         Assert.Equal("union(route.rework, route.homeAudit)", repeat.Leftover);
     }
 

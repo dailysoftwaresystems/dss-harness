@@ -2527,6 +2527,13 @@ public sealed class ImplementationFlowTests
 
             var fold = other.Harness.OrchestrationStore.ReadFlow(other.RunOf())!.Steps;
 
+            // The item's use ended done on its one visit, the skip no failure of it: what its review loop left is empty,
+            // for no loop ran, and nothing was taken to the recovery.
+            var item = fold.Single(step => step.Instance == "rounds#1.items[0]");
+
+            Assert.Equal((nameof(FlowInstanceState.Done), "[]"), (item.State, item.Output?["leftover"]?.ToJsonString()));
+            Assert.Empty(other.Agents.Of("diagnostician"));
+
             // Nothing of the item was folded, and its agent was released by no one: only the drop took it.
             Assert.DoesNotContain(fold, step => step.Step.EndsWith(".fold", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done));
             Assert.DoesNotContain(fold, step => step.Step.EndsWith(".release", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Done));
