@@ -43,9 +43,8 @@ public sealed class UserStateTests
     /// <summary>
     /// Where the variable names nothing - not set, or set to nothing - the isolation's own directory is in the user's cache
     /// directory as each system places it: LOCALAPPDATA on Windows, else AppData\Local in the home; XDG_CACHE_HOME
-    /// elsewhere, else the home's cache directory, macOS's the Library's. An empty value counts as unset, as the XDG
-    /// variables' empty values do: a shell's export of a variable that holds nothing sets it so, and Windows cannot hold an
-    /// empty value at all, so refusing it would refuse on Linux and macOS alone what Windows reads as unset.
+    /// elsewhere, else the home's cache directory, macOS's the Library's. An empty value counts as unset on every system,
+    /// as the XDG variables' empty values do: a shell's export of a variable that holds nothing sets it so.
     /// </summary>
     [Fact]
     public void WhereTheVariableNamesNothing_TheIsolationsDirectory_IsInTheUsersCacheDirectory()

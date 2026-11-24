@@ -7277,8 +7277,8 @@ names none, the state is in the user data and the isolation's directory in the u
 variable is the tool's own: the home, the user data and the user cache are every program's, and moving
 one of them to move the tool's state would move with it every reader of `~` - the host's home written
 `~`, the agent policy's, ssh's keys - and every other program's caches, NuGet's and npm's among them.
-An empty value counts as unset, as the XDG variables' empty values do: a shell's `export` of a
-variable that holds nothing gives it so, and Windows holds no empty value at all. Any other value that
+An empty value counts as unset on every system, as the XDG variables' empty values do: a shell's
+`export` of a variable that holds nothing gives it so. Any other value that
 is not a fully qualified path names no directory: it is refused (`VariableNamesNoDirectoryException`),
 never read as the default the variable was set to leave - the settings file is refused as one that
 cannot be read, a heavy leg's slot has nowhere to be kept, and an isolation has nowhere for its caches,

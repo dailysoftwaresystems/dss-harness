@@ -149,8 +149,8 @@ public sealed partial class HelpTests
             $"Where {UserState.Variable} names a directory - a fully qualified path, read first on every system - that directory holds them in "
                 + "place of <user data>/dssharness, with every other file this tool keeps for its user and, in "
                 + $"{UserState.IsolationDirectoryName} below it, the isolation's caches. The variable is the tool's own, so moving it moves nothing "
-                + "another program keeps in the home or the user data. Set empty, it counts as unset, as the XDG variables' empty values do; "
-                + "Windows holds no empty value. Set to anything else that is not a fully qualified path, it names no directory: nothing is read "
+                + "another program keeps in the home or the user data. Set empty, it counts as unset on every system, as the XDG variables' empty "
+                + "values do. Set to anything else that is not a fully qualified path, it names no directory: nothing is read "
                 + "from or kept in the default in its place - the settings file is refused as one that cannot be read, and a heavy leg, whose "
                 + "slot is kept there, is refused - each naming it.",
             admission,

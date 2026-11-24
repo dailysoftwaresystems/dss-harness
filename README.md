@@ -265,8 +265,8 @@ copy of its last commit: so the machine's own settings file,
 `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on Linux, and
 `<user data>/dssharness` the directory `DSSHARNESS_USER_STATE` names in its place, on every system,
 where it names one: a fully qualified path, the tool's own, so moving it moves nothing another program
-keeps in the home or the user data; set empty, it counts as unset, as the XDG variables' empty values
-do (Windows holds no empty value), and anything else is refused, never read as the default - holds
+keeps in the home or the user data; set empty, it counts as unset on every system, as the XDG
+variables' empty values do, and anything else is refused, never read as the default - holds
 `{ "admission": { ... } }` in the same keys, read as strictly as `config.json`, and each field it
 declares wins over what any tree's `config.json` says for that machine, `hosts.<machine>.admission`
 and `defaults.admission` staying the rule for each field it leaves out. A count it declares is every

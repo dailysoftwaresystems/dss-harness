@@ -265,11 +265,10 @@ public static partial class HelpTopics
         builder.AppendLine($"every other file this tool keeps for its user and, in {UserState.IsolationDirectoryName}");
         builder.AppendLine("below it, the isolation's caches. The variable is the tool's own, so moving it moves");
         builder.AppendLine("nothing another program keeps in the home or the user data. Set empty, it counts as");
-        builder.AppendLine("unset, as the XDG variables' empty values do; Windows holds no empty value. Set to");
-        builder.AppendLine("anything else that is not a fully qualified path, it names no directory: nothing is");
-        builder.AppendLine("read from or kept in the default in its place - the settings file is refused as one");
-        builder.AppendLine("that cannot be read, and a heavy leg, whose slot is kept there, is refused - each");
-        builder.AppendLine("naming it.");
+        builder.AppendLine("unset on every system, as the XDG variables' empty values do. Set to anything else");
+        builder.AppendLine("that is not a fully qualified path, it names no directory: nothing is read from or");
+        builder.AppendLine("kept in the default in its place - the settings file is refused as one that cannot");
+        builder.AppendLine("be read, and a heavy leg, whose slot is kept there, is refused - each naming it.");
 
         return builder.ToString();
     }

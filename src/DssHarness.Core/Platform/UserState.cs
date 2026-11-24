@@ -22,8 +22,8 @@ public static class UserState
     /// <summary>
     /// The variable of this tool's own that names the directory it keeps its per-user state in, as a fully qualified path,
     /// in place of the system's default: read first, on every system, by <see cref="Directory"/> and
-    /// <see cref="IsolationDirectory"/> alike. Set to nothing, it counts as unset, as the XDG variables' empty values do -
-    /// a shell's <c>export</c> of a variable that holds nothing gives it so, and Windows cannot hold an empty value at all.
+    /// <see cref="IsolationDirectory"/> alike. Set to nothing, it counts as unset on every system, as the XDG variables'
+    /// empty values do - a shell's <c>export</c> of a variable that holds nothing gives it so.
     /// Set to anything else that is not a fully qualified path, it names no directory, and is refused for it
     /// (<see cref="VariableNamesNoDirectoryException"/>) by every reader of this tool's per-user state rather than read as
     /// the default, which is the very place its setter meant to leave.
