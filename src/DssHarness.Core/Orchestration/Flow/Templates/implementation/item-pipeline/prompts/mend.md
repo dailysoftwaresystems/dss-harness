@@ -9,7 +9,8 @@ The whole logs are under `{source.runDirectory}`. This is visit {visit} of this 
 Each entry names a leg, the phase that did not pass - the build, or the tests - and what that phase printed,
 digested: in `digest`, the first error whole - its stack rendered to the frames inside the tree, its `log` naming the
 lines it was read from, as the entry's own `log` file numbers them - the next distinct errors to four as one line
-each, every test failure of the four with its stack, and the rest counted by code and by file; the `tail` then holds
+each, every test failure of the four with its stack, and the rest - what the four do not say - counted by code and by
+file, a count of none and an empty list left out; the `tail` then holds
 only the lines no parser held. The entry's `log` is the file that phase wrote, null for a leg another machine ran.
 
 How the engine runs the tests, leg by leg: {input.orient.tests}

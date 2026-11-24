@@ -2274,7 +2274,8 @@ the step's stored stream whose id a closure record's `measuredBy` cites. The leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass, what it printed digested and said for a model (`digest`: the first
-error whole with its stack and its log range, the next ones a line each, the rest counted), the raw lines beside it
+error whole with its stack and its log range, the next ones a line each, the rest - what those do not say - counted by
+code and by file, a count of none and an empty list left out), the raw lines beside it
 (`tail`: the lines no parser held where the digest holds typed errors, the phase's last lines where it holds none),
 the log whose lines the digest's ranges number (`log`: the copy kept in the step's directory in an agent's worktree,
 else the run's own, null for a leg a host ran), and for `build`, `test` and `run` the units its build

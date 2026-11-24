@@ -393,7 +393,7 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             }
 
             _text.Append(text);
-            _lines += DssHarness.Core.Text.LineEnds.Spans(text, (_, _, _) => 0).Count;
+            _lines += DssHarness.Core.Text.LineEnds.Count(text);
         }
 
         /// <summary>What each named part's pages are, in the record's order: the first page that holds its first line to the page that holds its last.</summary>
