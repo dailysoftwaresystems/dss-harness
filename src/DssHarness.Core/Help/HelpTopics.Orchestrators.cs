@@ -342,9 +342,9 @@ public static partial class HelpTopics
             + "whatever it answered: report.json, the very bytes it read, whose hash it names; analysis.json, the "
             + "analysis or why it was refused, with what it cost; analysis.md where an analysis was given; and the "
             + "analyst's stream - every one named on every exit, and what it cost said, refused or not. What it costs is "
-            + "the person's, never the run's. It runs on the tier 'reporting' names in tierConfig - which init seeds "
-            + "none of, for which model a paid analysis runs on is a person's choice - and is refused (12) where the "
-            + "configuration defines none, saying which key to set. --markdown answers as Markdown and --json as one "
+            + "the person's, never the run's. It runs on the tier 'reporting' names in tierConfig - which init seeds, as "
+            + "it seeds every other tier, with the balanced tier's models, the person's to change - and is refused (12) "
+            + "where the configuration defines none, saying which key to set. --markdown answers as Markdown and --json as one "
             + "JSON document, the analysis apart from its cost and its record, the analysis null where none was given.");
         builder.AppendLine();
         AppendWrapped(

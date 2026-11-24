@@ -127,8 +127,10 @@ public static partial class HelpTopics
         AppendWrapped(
             builder,
             $"One tier is read by name rather than by a step: 'reporting', the tier {Orchestration.Flow.FlowService.AnalyzeReportCommand} "
-            + "runs its analyst on ('help orchestrators'). init seeds no such tier - which model a paid analysis runs on is a "
-            + "person's choice - so the command is refused (12) until tierConfig names one, saying which key to set.");
+            + "runs its analyst on ('help orchestrators'). init seeds it as it seeds every other tier, with the balanced "
+            + "tier's models, so a configuration init wrote analyses a run as it stands; which model a paid analysis runs "
+            + "on stays the person's to change there, and a configuration whose tierConfig names no such tier has the "
+            + "command refused (12), saying which key to set.");
         builder.AppendLine();
         AppendWrapped(
             builder,

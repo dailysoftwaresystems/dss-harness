@@ -140,9 +140,12 @@ public static class AgentProviderReports
             lines.Add(PriceLine(provider.Name, provider.Currency, provider.ReadOn, [.. provider.Models.Select(model => (model.Code, model.Priced))], everyModel: true));
         }
 
+        // Each tier's models start in one column, a space past the longest name and its colon, however long a name is.
+        var named = list.Tiers.Select(tier => tier.Name.Length).DefaultIfEmpty(0).Max() + 2;
+
         foreach (var tier in list.Tiers)
         {
-            lines.Add($"tier {(tier.Name + ":").PadRight(10)}{string.Join(", ", tier.Models.Select(model => $"{model.Name} ({model.Code})"))}");
+            lines.Add($"tier {(tier.Name + ":").PadRight(named)}{string.Join(", ", tier.Models.Select(model => $"{model.Name} ({model.Code})"))}");
         }
 
         foreach (var client in list.Clients)

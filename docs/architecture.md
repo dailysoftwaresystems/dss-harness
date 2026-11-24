@@ -3915,7 +3915,8 @@ as one, no pain point named. What a run of the analyst leaves is kept under `ana
 `report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis or why it was refused
 and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
 it cost; where no analyst ran, the command says nothing was written. It runs on the tier `reporting` names in
-`tierConfig`, which `init` seeds none of, refused (12) naming the key where none is defined.
+`tierConfig`, which `init` seeds as it seeds every other tier (`Agents\Templates\agent-providers.json`: the balanced
+tier's models, the person's to change), refused (12) naming the key where a configuration defines none.
 
 A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the

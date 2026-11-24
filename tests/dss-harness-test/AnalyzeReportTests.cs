@@ -317,7 +317,10 @@ public sealed class AnalyzeReportTests
             store.ReadDefinition(layout)));
     }
 
-    /// <summary>A run paused on its gate question, with its analyst wired and a reporting tier configured unless <paramref name="reporting"/> is false.</summary>
+    /// <summary>
+    /// A run paused on its gate question, with its analyst wired, in a repository whose agent sections are the ones init
+    /// writes - its reporting tier the one init seeds, unless <paramref name="reporting"/> is false and it was taken out.
+    /// </summary>
     private static async Task<(HarnessFactory Harness, TempDirectory Tree, Agents Analyst, FlowService Service, string Run)> AnalyzableAsync(TempDirectory? temp = null, bool reporting = true)
     {
         temp ??= new TempDirectory();
@@ -325,20 +328,15 @@ public sealed class AnalyzeReportTests
         var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
         var tiers = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase);
 
-        if (reporting)
+        // The agent sections init writes seed the reporting tier, as they seed every tier; a configuration that names none
+        // is one a person took it out of - its models' lists of tiers with it, so the configuration reads.
+        if (!reporting)
         {
-            var named = agents.AgentTier is { } tier ? tiers.GetValueOrDefault(tier) : null;
-            var chosen = named ?? tiers.Values.First();
-            tiers["reporting"] = [.. chosen];
+            tiers.Remove("reporting");
 
-            // A tier's models must name the tier: the chosen ones gain it (their lists are theirs to gain), so the
-            // config reads.
-            foreach (var provider in agents.Providers)
+            foreach (var model in agents.Providers.SelectMany(provider => provider.Models))
             {
-                foreach (var model in provider.Models.Where(model => chosen.Contains(model.Code, StringComparer.Ordinal)))
-                {
-                    model.Tiers.Add("reporting");
-                }
+                model.Tiers.Remove("reporting");
             }
         }
 

@@ -115,9 +115,9 @@ public sealed class RecordsAgentRunner(
                     AnalystPromptOf(call),
                     WorkflowTemplates.TextOf($"schemas/{WorkflowTemplates.AnalystSchema}.schema.json") ?? throw Unshipped(),
                     HarnessExit.InternalError),
-                // The analyst runs on the tier 'reporting' names in tierConfig, and on nothing else: where the
-                // configuration defines no such tier, the verb is refused naming the key to set - an analysis is a paid
-                // run, and which model pays for it is a person's decision, not a default.
+                // The analyst runs on the tier 'reporting' names in tierConfig, and on nothing else - init seeds it as
+                // it seeds every tier, the person's to change: where the configuration defines no such tier, the verb is
+                // refused naming the key to set, for an analysis is a paid run no other tier is taken for.
                 new RecordsAgentModel(
                     "reporting",
                     Model: null,
