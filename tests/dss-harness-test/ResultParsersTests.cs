@@ -1554,6 +1554,156 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// A sanitizer's report ends at the first line that is none of its own - its frames, its blank and indented lines, its
+    /// sentences between stacks, its shadow bytes - and that line is offered again to every other reading, so a report the
+    /// program ran on from, printed with no summary and no halt line, holds nothing the program printed after it: inside a
+    /// GoogleTest test, MemorySanitizer's report is its own and both failing tests are said by GoogleTest; AddressSanitizer's
+    /// and ThreadSanitizer's end at their last line, before the program's next. The reports are clang 19's own, its
+    /// runtimes told to recover and print no summary (<c>halt_on_error=0:print_summary=0</c>), the run's directory written as
+    /// a runner's; GoogleTest's lines are its console's, as a test binary run directly prints them.
+    /// </summary>
+    [Fact]
+    public void ASanitizersReport_EndsAtTheFirstLineNotItsOwn_HoldingNothingTheProgramPrintedAfterIt()
+    {
+        var memory = Digested(
+            [
+                "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+                "[==========] Running 2 tests from 1 test suite.",
+                "[----------] Global test environment set-up.",
+                "[----------] 2 tests from StoreTest",
+                "[ RUN      ] StoreTest.Loads",
+                "==397==WARNING: MemorySanitizer: use-of-uninitialized-value",
+                "    #0 0x555555620026 in pick /home/runner/work/app/app/umr.c:5:3",
+                "    #1 0x55555561fde9 in main /home/runner/work/app/app/umr.c:11:7",
+                "    #2 0x7ffff7c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7ffff7c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5555555862f4 in _start (/home/runner/work/app/app/umr-recover+0x322f4) (BuildId: ad434bb27eafd0dda709cef4d8f303935e6d388a)",
+                string.Empty,
+                "/home/runner/work/app/app/tests/store_test.cc:14: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: 3",
+                "  2",
+                "[  FAILED  ] StoreTest.Loads (0 ms)",
+                "[ RUN      ] StoreTest.Counts",
+                "/home/runner/work/app/app/tests/store_test.cc:22: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: 3",
+                "  2",
+                "[  FAILED  ] StoreTest.Counts (0 ms)",
+                "[----------] 2 tests from StoreTest (0 ms total)",
+                string.Empty,
+                "[----------] Global test environment tear-down",
+                "[==========] 2 tests from 1 test suite ran. (0 ms total)",
+                "[  PASSED  ] 0 tests.",
+                "[  FAILED  ] 2 tests, listed below:",
+                "[  FAILED  ] StoreTest.Loads",
+                "[  FAILED  ] StoreTest.Counts",
+                string.Empty,
+                " 2 FAILED TESTS",
+                "MemorySanitizer: 1 warnings reported.",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null),
+            1)!;
+
+        Assert.Equal(
+            [
+                ("gtest", "StoreTest.Loads", "failed", "Expected equality of these values:\n  store.Count()\n    Which is: 3\n  2", (5, 18)),
+                ("sanitizer", "MemorySanitizer: use-of-uninitialized-value", "errored", "use-of-uninitialized-value (while the test StoreTest.Loads ran)", (6, 12)),
+                ("gtest", "StoreTest.Counts", "failed", "Expected equality of these values:\n  store.Count()\n    Which is: 3\n  2", (19, 25)),
+            ],
+            memory.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message!, failure.Log!.Value)));
+        Assert.Equal((2, 1, 0), (memory.Failed, memory.Errored, memory.Crashed));
+
+        var address = Digested(
+            [
+                "=================================================================",
+                "==400==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x502000000018 at pc 0x635ab0dc184c bp 0x7fff0b93d620 sp 0x7fff0b93d618",
+                "READ of size 4 at 0x502000000018 thread T0",
+                "    #0 0x635ab0dc184b in main /home/runner/work/app/app/oob.c:8:14",
+                "    #1 0x7db731e2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x7db731e2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x635ab0ce0344 in _start (/home/runner/work/app/app/oob-recover+0x2c344) (BuildId: d322ae48ef6432f596dad7560833cc9ab3db253a)",
+                string.Empty,
+                "0x502000000018 is located 0 bytes after 8-byte region [0x502000000010,0x502000000018)",
+                "allocated by thread T0 here:",
+                "    #0 0x635ab0d80173 in malloc (/home/runner/work/app/app/oob-recover+0xcc173) (BuildId: d322ae48ef6432f596dad7560833cc9ab3db253a)",
+                "    #1 0x635ab0dc1788 in main /home/runner/work/app/app/oob.c:5:17",
+                "    #2 0x7db731e2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7db731e2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x635ab0ce0344 in _start (/home/runner/work/app/app/oob-recover+0x2c344) (BuildId: d322ae48ef6432f596dad7560833cc9ab3db253a)",
+                string.Empty,
+                "Shadow bytes around the buggy address:",
+                "  0x501ffffffd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501ffffffe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501ffffffe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501fffffff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x502000000000: fa fa 00[fa]fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000080: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "Shadow byte legend (one shadow byte represents 8 application bytes):",
+                "  Addressable:           00",
+                "  Partially addressable: 01 02 03 04 05 06 07 ",
+                "  Heap left redzone:       fa",
+                "  Freed heap region:       fd",
+                "  Stack left redzone:      f1",
+                "  Stack mid redzone:       f2",
+                "  Stack right redzone:     f3",
+                "  Stack after return:      f5",
+                "  Stack use after scope:   f8",
+                "  Global redzone:          f9",
+                "  Global init order:       f6",
+                "  Poisoned by user:        f7",
+                "  Container overflow:      fc",
+                "  Array cookie:            ac",
+                "  Intra object redzone:    bb",
+                "  ASan internal:           fe",
+                "  Left alloca redzone:     ca",
+                "  Right alloca redzone:    cb",
+                "went on with 0",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            0)!;
+
+        var thread = Digested(
+            [
+                "==================",
+                "WARNING: ThreadSanitizer: data race (pid=413)",
+                "  Write of size 4 at 0x5555569e6698 by main thread:",
+                "    #0 main /home/runner/work/app/app/race.c:8:9 (race+0xe64f6) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Previous write of size 4 at 0x5555569e6698 by thread T1:",
+                "    #0 work /home/runner/work/app/app/race.c:4:31 (race+0xe6484) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Location is global 'shared' of size 4 at 0x5555569e6698 (race+0x1492698)",
+                string.Empty,
+                "  Thread T1 (tid=415, finished) created by main thread at:",
+                "    #0 pthread_create <null> (race+0x62c75) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                "    #1 main /home/runner/work/app/app/race.c:7:3 (race+0xe64de) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "==================",
+                "ThreadSanitizer: reported 1 warnings",
+                "went on",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            66)!;
+
+        Assert.Equal(
+            [
+                ("AddressSanitizer: heap-buffer-overflow on address 0x502000000018 at pc 0x635ab0dc184c bp 0x7fff0b93d620 sp 0x7fff0b93d618", "errored", (2, 47)),
+                ("ThreadSanitizer: data race (pid=413)", "errored", (2, 14)),
+            ],
+            address.Failures.Concat(thread.Failures).Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)));
+        Assert.Empty(address.Unparsed ?? []);
+        Assert.Empty(thread.Unparsed ?? []);
+    }
+
+    /// <summary>
     /// Ninja's <c>FAILED:</c> line is read by the one owner of it (<see cref="DssHarness.Core.Build.Ninja"/>), as the
     /// build's own reading of its failed units reads it: the exit code ninja writes between <c>FAILED:</c> and the step's
     /// outputs - a negative one, a Windows crash's - taken off, so the edge whose build failed is the outputs alone,

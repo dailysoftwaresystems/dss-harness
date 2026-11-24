@@ -1848,9 +1848,14 @@ internal sealed class RustPanicParser : IBuiltInParser
 /// <summary>
 /// The sanitizers' reports: AddressSanitizer's and LeakSanitizer's <c>==pid==ERROR: KindSanitizer: message</c>,
 /// MemorySanitizer's <c>==pid==WARNING: MemorySanitizer: message</c> and ThreadSanitizer's <c>WARNING: ThreadSanitizer:
-/// message</c>, read to the line the sanitizer halts the program with or through their <c>SUMMARY:</c> and the shadow
-/// bytes under it; and UndefinedBehaviorSanitizer's <c>path:line:col: runtime error: message</c>, with its stack where
-/// one was asked for and its <c>SUMMARY:</c>. The report's first stack is its stack - each frame <c>#N 0x... in symbol
+/// message</c>, read over the report's own lines - its frames, blank and indented lines, the runtime's <c>==pid==</c>
+/// lines, the sentences between its stacks (<c>READ of size</c>, <c>0x... is located</c>, <c>freed by thread T0 here:</c>,
+/// <c>Thread T1 created by</c>, a leak's, <c>HINT:</c>), the registers' values, its <c>SUMMARY:</c> and the shadow bytes
+/// under it - to the line the sanitizer halts the program with, or to the first line that is none of them, which ends it
+/// and is offered again to every other reading, so a report printed with no summary and no halt line holds nothing of
+/// what the program printed after it; and UndefinedBehaviorSanitizer's <c>path:line:col: runtime error: message</c>,
+/// with its stack where one was asked for and its <c>SUMMARY:</c>. A report's head ends the report open before it. The
+/// report's first stack is its stack - each frame <c>#N 0x... in symbol
 /// path:line[:col]</c>, <c>(module+0x...)</c> where only the binary is known - and the stacks after it (where the memory
 /// was allocated, freed, last written, where its value was made) are part of the record. A report the sanitizer ended
 /// the program over - closed by the line it halts with, AddressSanitizer's <c>==pid==ABORTING</c>, MemorySanitizer's
@@ -1884,7 +1889,20 @@ internal sealed class SanitizerParser : IBuiltInParser
     /// </summary>
     private const string MemoryHalt = "Exiting";
 
+    /// <summary>The shadow bytes a report prints around the address it names, their legend, and every indented line of it.</summary>
     private static readonly Regex Shadow = LinearRegex.Compile(@"^(?:Shadow byte.*|=>0x.*|\s+\S.*)$");
+
+    /// <summary>A line the sanitizer's runtime prints under its own <c>==pid==</c> prefix: the signal's cause, a hint, the registers' head.</summary>
+    private static readonly Regex Prefixed = LinearRegex.Compile(@"^==\d+==");
+
+    /// <summary>
+    /// The sentences a report prints at the start of a line between its stacks: the access, where the address lies, whose
+    /// stack the next is - allocated, freed, a thread created - a leak's, a hint, and that no more is known.
+    /// </summary>
+    private static readonly Regex Sentence = LinearRegex.Compile(@"^(?:(?:READ|WRITE) of size \d+ at |(?:Address )?0x[0-9a-f]+ is |(?:previously allocated|allocated|freed) by thread T\d+ here:$|Thread T\d+ .*created by |(?:Direct|Indirect) leak of |HINT: |\w+Sanitizer can not provide additional info\.$)");
+
+    /// <summary>A line of the registers' values a report prints on a deadly signal: <c>rax = 0x...  rbx = 0x...</c>.</summary>
+    private static readonly Regex Registers = LinearRegex.Compile(@"^(?:\s*\w+ = 0x[0-9a-f]+)+\s*$");
 
     public string Name => "sanitizer";
 
@@ -1968,7 +1986,10 @@ internal sealed class SanitizerParser : IBuiltInParser
                     return LineTaken.Took;
                 }
 
-                if (_summary ? Shadow.IsMatch(text) : !_runtime)
+                // A line of the report's own goes on with it - after its summary its shadow bytes, before it any line of the
+                // report's forms - and any other ends it, offered again to every other reading: a report the program ran on
+                // from, printing no summary and no halt line, holds none of the lines after it.
+                if (!Heads(text) && (_summary ? Shadow.IsMatch(text) : !_runtime && Own(text)))
                 {
                     return Took(line);
                 }
@@ -2014,6 +2035,17 @@ internal sealed class SanitizerParser : IBuiltInParser
         /// <summary>Whether a line is the one the open report's sanitizer halts the program with.</summary>
         private bool Halted(string text)
             => Aborting.IsMatch(text) || (_kind == "MemorySanitizer" && string.Equals(text, MemoryHalt, StringComparison.Ordinal));
+
+        /// <summary>Whether a line heads a report of its own: the next report, never a line of the one open.</summary>
+        private static bool Heads(string text) => Error.IsMatch(text) || Warning.IsMatch(text) || Runtime.IsMatch(text);
+
+        /// <summary>
+        /// Whether a line is one a report prints before its summary besides its frames: a blank one, an indented one - a
+        /// thread's access, where a value was made, a frame's objects, the shadow bytes - one under the runtime's
+        /// <c>==pid==</c> prefix, one of the sentences between its stacks, or the registers' values.
+        /// </summary>
+        private static bool Own(string text)
+            => text.Trim().Length == 0 || Shadow.IsMatch(text) || Prefixed.IsMatch(text) || Sentence.IsMatch(text) || Registers.IsMatch(text);
 
         private void Open(NumberedLine line, string kind, string message, bool runtime)
         {

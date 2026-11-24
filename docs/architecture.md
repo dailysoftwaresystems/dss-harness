@@ -10038,7 +10038,11 @@ that did not build said by its own block, the `# pkg` line ahead of its compiler
 whenever it comes and holding for the line under it, a compiler's line a diagnostic of the package
 whose head was the last, its `[build failed]` result, printed later in the packages' order, said
 only where that package's own block said nothing, so neither another package's block nor its
-failing tests silence it, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
+failing tests silence it, Rust's panic and `cargo test`'s, the sanitizers' reports - each read over
+its own lines alone, its frames, blank and indented lines, the sentences between its stacks, its
+summary and shadow bytes, to the line its sanitizer halts with or the first line that is none of
+them, which is offered again to the others, so a report printed with no summary and no halt line
+holds nothing the program printed after it - a native crash as gdb
 or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
 failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
 test`'s - a failure whose top frame is the test framework's own an expectation that failed, any other
