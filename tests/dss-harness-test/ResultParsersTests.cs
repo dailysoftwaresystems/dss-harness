@@ -1200,6 +1200,194 @@ public sealed class ResultParsersTests
         }
     }
 
+    /// <summary>
+    /// CMake's blank line between a block's paragraphs is decided by the line after it: a paragraph under it takes it
+    /// as the separator, a second blank ends the block with it, and any other line ends the block and is offered again
+    /// on its own, the blank given back - so the reading holds one line, never the log below it.
+    /// </summary>
+    [Fact]
+    public void ACMakeBlocksBlankLine_IsDecidedByTheLineAfterIt()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
+                "  add_subdirectory given source \"lib/missing\" which is not an existing",
+                "  directory.",
+                string.Empty,
+                string.Empty,
+                "-- Configuring incomplete, errors occurred!",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [("CMakeLists.txt", (int?)3, "add_subdirectory: add_subdirectory given source \"lib/missing\" which is not an existing directory.", (1, 5))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.File!, diagnostic.Line, diagnostic.Message, diagnostic.Log!.Value)));
+
+        var answers = new List<string>();
+
+        var ended = PhaseParsers.DigestOf(
+            [
+                "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
+                "  a message",
+                string.Empty,
+                "-- something else",
+            ],
+            [.. PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null).Select(parser => parser.Name == "cmake" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Took", "2 Took", "3 Held", "4 Left", "4 Left"], answers);
+        var said = Assert.Single(ended.Diagnostics);
+        Assert.Equal(("a message", (1, 2)), (said.Message, said.Log!.Value));
+        Assert.Empty(ended.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// eslint's stylish heading - a file alone on a line - is decided by the problem under it: a problem takes it as
+    /// its file, and any other line gives it back and is offered again on its own, so the reading holds the one line.
+    /// </summary>
+    [Fact]
+    public void AnEslintHeading_IsDecidedByTheProblemUnderIt()
+    {
+        var answers = new List<string>();
+
+        var digest = PhaseParsers.DigestOf(
+            [
+                "/home/runner/work/app/app/src/store.js",
+                "  4:9  error  'add' is not defined  no-undef",
+            ],
+            [.. PhaseParsers.ForTests(new HarnessConfig(), "npx", null).Select(parser => parser.Name == "eslint" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Took"], answers);
+        Assert.Equal(
+            [("error", "no-undef", "/home/runner/work/app/app/src/store.js", 4, 9)],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Severity, diagnostic.Code!, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Column!.Value)));
+
+        var noneAnswers = new List<string>();
+
+        var none = PhaseParsers.DigestOf(
+            ["/tmp/notes.txt", "something else"],
+            [.. PhaseParsers.ForTests(new HarnessConfig(), "npx", null).Select(parser => parser.Name == "eslint" ? new Recording(parser, noneAnswers) : parser)]);
+
+        Assert.Null(none);
+        Assert.Equal(["1 Held", "2 Left", "2 Left"], noneAnswers);
+    }
+
+    /// <summary>
+    /// GNU ld's <c>in function</c> line is decided by the reference under it: a reference takes it as the block's first
+    /// line, and any other line gives it back and is offered again on its own, so the reading holds the one line.
+    /// </summary>
+    [Fact]
+    public void AnLdInFunctionLine_IsDecidedByTheReferenceUnderIt()
+    {
+        var answers = new List<string>();
+
+        var digest = PhaseParsers.DigestOf(
+            [
+                "/usr/bin/ld: /tmp/cc.o: in function `main':",
+                "/home/u/app/link.c:4: undefined reference to `parse_record'",
+            ],
+            [.. PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null).Select(parser => parser.Name == "ld" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Took"], answers);
+        Assert.Equal(
+            [("undefined reference to `parse_record'", "/home/u/app/link.c", (int?)4, (1, 2))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Message, diagnostic.File!, diagnostic.Line, diagnostic.Log!.Value)));
+
+        var noneAnswers = new List<string>();
+
+        var none = PhaseParsers.DigestOf(
+            ["/usr/bin/ld: /tmp/cc.o: in function `main':", "something"],
+            [.. PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null).Select(parser => parser.Name == "ld" ? new Recording(parser, noneAnswers) : parser)]);
+
+        Assert.Null(none);
+        Assert.Equal(["1 Held", "2 Left", "2 Left"], noneAnswers);
+    }
+
+    /// <summary>
+    /// The one blank line Python prints between the parts of a chain is decided by the line after it: the chain's own
+    /// marker takes it as the part separator, and any other line ends the chain and is offered again on its own, the
+    /// blank given back - so the reading holds one line, never the traceback after it.
+    /// </summary>
+    [Fact]
+    public void APythonChainsBlankLine_IsDecidedByTheLineAfterIt()
+    {
+        var answers = new List<string>();
+
+        var digest = PhaseParsers.DigestOf(
+            [
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+                string.Empty,
+                "During handling of the above exception, another exception occurred:",
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/store.py\", line 9, in load",
+                "    raise ValueError(\"store\")",
+                "ValueError: 'store'",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "python-stack" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(
+            ["1 Held", "2 Held", "3 Held", "4 Took", "5 Held", "6 Took", "7 Held", "8 Held", "9 Held", "10 Took"],
+            answers);
+        Assert.Equal(
+            [("python", "ValueError: 'store'", "KeyError", "errored")],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Exception!.CausedBy[0].Type, failure.Outcome)));
+
+        var endedAnswers = new List<string>();
+
+        var ended = PhaseParsers.DigestOf(
+            [
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+                string.Empty,
+                "went on",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "python-stack" ? new Recording(parser, endedAnswers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Held", "3 Held", "4 Took", "5 Held", "6 Left", "6 Left"], endedAnswers);
+        var said = Assert.Single(ended.Failures);
+        Assert.Equal(("KeyError: 'port'", "errored", (1, 4)), (said.Id, said.Outcome, said.Log!.Value));
+        Assert.Empty(ended.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// The one blank line Go prints between a panic's lines and the goroutine that panicked is decided by the line
+    /// after it: the goroutine's head takes it as the panic's, and any other line says the lines were no panic's - both
+    /// given back, the line offered again on its own - so the reading holds one line.
+    /// </summary>
+    [Fact]
+    public void AGoPanicsBlankLine_IsDecidedByTheGoroutineUnderIt()
+    {
+        var answers = new List<string>();
+
+        var digest = PhaseParsers.DigestOf(
+            [
+                "panic: runtime error: index out of range [3] with length 3",
+                string.Empty,
+                "goroutine 1 [running]:",
+                "main.main()",
+                "\t/home/runner/work/app/app/main.go:8 +0x1d",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "go-panic" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Held", "3 Took", "4 Took", "5 Took"], answers);
+        var crashed = Assert.Single(digest.Failures);
+        Assert.Equal(("panic: runtime error: index out of range [3] with length 3", "crashed", 1), (crashed.Id, crashed.Outcome, crashed.Exception!.Stack.Count));
+
+        var givenAnswers = new List<string>();
+
+        var given = PhaseParsers.DigestOf(
+            ["panic: something", "next line"],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "go-panic" ? new Recording(parser, givenAnswers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Left", "2 Left"], givenAnswers);
+        Assert.Empty(given.Failures);
+        Assert.Equal(["panic: something"], given.Unparsed);
+    }
+
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
     private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
     {
