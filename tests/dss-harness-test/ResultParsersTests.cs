@@ -1151,6 +1151,55 @@ public sealed class ResultParsersTests
         Assert.Empty(digest.Unparsed ?? []);
     }
 
+    /// <summary>
+    /// MSTest's thrown error is read as one under <c>dotnet test</c>, as xUnit's and NUnit's are: its
+    /// <c>Test method X threw exception:</c> head, the error's <c>Type: message</c> line under it with each inner
+    /// exception folded onto it after <c> ---&gt; </c>, and the stack in the order the runtime printed it, the inner
+    /// one's frames after the <c>Inner Stack Trace</c> marker - the failure's exception whole, where it had been null.
+    /// </summary>
+    [Fact]
+    public void AnMstestThrownError_IsReadAsOne_UnderDotnetTest()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "  Failed Demo.Tests.StoreTests.Loads [31 ms]",
+                "  Error Message:",
+                "   Test method Demo.Tests.StoreTests.Loads threw exception: ",
+                "System.InvalidOperationException: The store could not be loaded. ---> System.ArgumentNullException: Value cannot be null. (Parameter 'name')",
+                "  Stack Trace:",
+                @"    at Demo.Tests.StoreTests.Loads() in D:\a\app\app\tests\StoreTests.cs:line 18",
+                "   ----- Inner Stack Trace -----",
+                @"    at Demo.Library.Store.Load(String name) in D:\a\app\app\lib\Store.cs:line 9",
+                "  Standard Output Messages:",
+                " loading the store",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "dotnet", null))!;
+
+        var failure = Assert.Single(digest.Failures);
+
+        Assert.Equal(("dotnet", "Demo.Tests.StoreTests.Loads"), (failure.Framework, failure.Id));
+        Assert.Equal(
+            ("System.InvalidOperationException", "The store could not be loaded."),
+            (failure.Exception!.Type, failure.Exception.Message));
+        Assert.Equal(
+            [("System.InvalidOperationException", "The store could not be loaded.", 1), ("System.ArgumentNullException", "Value cannot be null. (Parameter 'name')", 1)],
+            CausesOf(failure.Exception));
+
+        return;
+
+        static List<(string Type, string Message, int Frames)> CausesOf(ExceptionRecord thrown)
+        {
+            var causes = new List<(string, string, int)>();
+
+            for (var cause = thrown; cause is not null; cause = cause.CausedBy.FirstOrDefault())
+            {
+                causes.Add((cause.Type, cause.Message, cause.Stack.Count));
+            }
+
+            return causes;
+        }
+    }
+
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
     private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
     {

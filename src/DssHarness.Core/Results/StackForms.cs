@@ -60,11 +60,19 @@ public static class StackForms
         return [.. lines.Select(DotNetFrameOf).OfType<StackFrame>()];
     }
 
+    /// <summary>MSTest's head for a thrown error: <c>Test method X threw exception:</c>, the error's own line under it.</summary>
+    private static readonly Regex MsTestHead = LinearRegex.Compile(@"^\s*Test method .+ threw exception[:.]?\s*$");
+
+    /// <summary>One error of the line MSTest folds its inner ones onto after <c> ---&gt; </c>: <c>Type: message</c>, no space before the colon.</summary>
+    private static readonly Regex MsTestThrown = LinearRegex.Compile(@"^\s*(?<type>[A-Za-z_][\w.`+]*)\s*:\s*(?<message>.*)$");
+
     /// <summary>
     /// The thrown .NET error a test framework said in a message and a stack, as xUnit and NUnit write it: the message's
     /// first line <c>Type : message</c>, each inner exception a line <c>---- Type : message</c> under it (four dashes a
     /// level deeper), and the stack the outer exception's frames, each inner one's after a <c>----- Inner Stack Trace
-    /// -----</c> line. Null where the message is no thrown error's - an assertion's.
+    /// -----</c> line. MSTest says one by its head - <c>Test method X threw exception:</c> - with the error's own line
+    /// under it and each inner exception folded onto it after <c> ---&gt; </c>, the stack in the order the runtime
+    /// printed it. Null where the message is no thrown error's - an assertion's.
     /// </summary>
     /// <param name="message">The message's lines.</param>
     /// <param name="stack">The stack's lines.</param>
@@ -74,8 +82,31 @@ public static class StackForms
         ArgumentNullException.ThrowIfNull(stack);
 
         var thrown = new ThrownLevels();
+        var lines = (string[])[.. message];
 
-        foreach (var line in message)
+        if (lines.Length > 0 && MsTestHead.IsMatch(lines[0]))
+        {
+            lines = lines[1..];
+
+            // MSTest folds the error and each inner one onto one line, ` ---> ` between them; the first segment is the
+            // error's, each after it the cause of the one before.
+            var folded = lines.Length > 0 ? lines[0].Split(" ---> ") : [];
+
+            if (folded.Length == 0 || !folded.All(segment => MsTestThrown.Match(segment) is { Success: true }))
+            {
+                return null;
+            }
+
+            foreach (var segment in folded)
+            {
+                var said = MsTestThrown.Match(segment);
+                thrown.Add(said.Groups["type"].Value, said.Groups["message"].Value);
+            }
+
+            lines = lines[1..];
+        }
+
+        foreach (var line in lines)
         {
             if (FrameworkThrown.Match(line) is { Success: true } said && said.Groups["dashes"].Length / 4 == thrown.Count)
             {

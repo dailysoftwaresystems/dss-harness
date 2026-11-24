@@ -9931,7 +9931,9 @@ behind its object where ld names it first as MinGW's does, behind a linker named
 gold, lld, ld64, link); CMake's message blocks (the command that raised one
 said ahead of its message, for a diagnostic's project is the project or target a build names, never a command); Ninja's
 `FAILED:` edge; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
-the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries, the
+the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries - MSTest's
+console saying one by its `Test method X threw exception:` head, each inner exception folded onto the
+error's line after ` ---> `, the stack in the runtime's order - the
 JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's, Dart's, Go's panic and
 `go test`'s console - its verbose stream read too, each test's logged lines kept from the `===` line
 that named it to its `--- FAIL` line, which says them again, held once - and a package that did not

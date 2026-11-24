@@ -97,8 +97,10 @@ internal static class ConsoleText
 /// under it (and a test's <c>Standard Output Messages:</c>), the passed and skipped tests, the run's summary, and
 /// <c>The active test run was aborted</c> where the test host crashed. Microsoft.Testing.Platform's: each <c>failed Name
 /// (7ms)</c> with its message indented by two and its frames by four, xUnit's <c>XunitException:</c> wrapper taken off
-/// the message, and its <c>Test run summary</c>. A message that is a thrown error's (<c>Type : message</c>, its inner ones
-/// under it) is that error's record, its stack read through the .NET frame owner (<see cref="StackForms"/>); the
+/// the message, and its <c>Test run summary</c>. A message that is a thrown error's is that error's record - xUnit's and
+/// NUnit's <c>Type : message</c> with its inner ones under it, MSTest's <c>Test method X threw exception:</c> head with
+/// the error's line under it and each inner one folded onto it after <c> ---&gt; </c>
+/// (<see cref="StackForms.DotNetThrownOf"/>) - its stack read through the .NET frame owner; the
 /// <c>[xUnit.net ...]</c> lines the adapter prints say again what the blocks say, and are part of the run.
 /// </summary>
 internal sealed class DotNetTestParser : IBuiltInParser
