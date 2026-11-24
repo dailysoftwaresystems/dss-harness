@@ -10189,7 +10189,9 @@ matched as the same reader's failure of the same id that ended the same way and 
 own output the console printed it under (`PhaseFindings.Tests`, which CTest's reader says of the lines under each failed
 test's status line, `ResultSink.Printed`), never by the order the files met them: one gtest test two CTest tests ran -
 one binary for each of two backends - keeps each its own range whichever ended first, and where the console says no
-test's output a printing lies in it is the one test's that printed it, none where several did. Never by an error's
+test's output a printing lies in it is the one test's that printed it, none where several did; one under a test whose
+output printed none of them is no printing of theirs, and is read as any other failure of the log, and a failure a
+test's output printed is never matched by its id alone, which another test's output may have printed too. Never by an error's
 heading alone, so a process that died of the error a case's test threw is a crash the files lack, said beside it; and
 what the files could not give is said beside them. Every place is then read against the
 tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed - a diagnostic's file and its

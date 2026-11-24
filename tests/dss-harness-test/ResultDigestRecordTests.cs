@@ -500,6 +500,26 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
+    /// A printing the log holds under the output of a test whose own output printed none of the failures a case read is no
+    /// printing of theirs, however alike it prints: the case read from another test's output is given nothing of it, and
+    /// it is matched as any other failure of the log is - to the file's failure of its own id, where a file names one.
+    /// </summary>
+    [Fact]
+    public void APrintingUnderAnotherTestsOutput_IsNoPrintingOfTheFailuresACaseRead()
+    {
+        var gathering = new ResultDigest.Gathering();
+        var printed = new TestFailure("gtest", "StoreTest.Loads", Message: "Expected equality", File: "test/store_test.cc", Line: 12);
+
+        gathering.Add(new TestFailure("junit", "store_sqlite", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
+        gathering.Add(new TestFailure("junit", "StoreTest.Loads", Message: "Expected equality"));
+        gathering.Beside(new PhaseFindings([], [printed with { Log = (8, 11) }]) { Tests = [new PrintedTest("store_pg", 5, 24)] }, file => file);
+
+        Assert.Equal(
+            [("store_sqlite", null), ("StoreTest.Loads", ((int, int)?)(8, 11))],
+            gathering.Digest().Failures.Select(failure => (failure.Id, failure.Log)));
+    }
+
+    /// <summary>
     /// A thrown error a results file's case was said through names no test: the log's printing of that same error is the
     /// case's, given to it and never a second failure, but a process that died of an error with the same type and message -
     /// the JVM's own "Exception in thread" - is a crash no results file is written for, and is said beside the case.

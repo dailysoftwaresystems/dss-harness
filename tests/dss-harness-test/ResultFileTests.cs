@@ -317,10 +317,14 @@ public sealed class ResultFileTests
     /// One gtest binary CTest runs twice - once for each backend - fails the same tests both times, and the console prints
     /// the run that ended first first, in the other order than the JUnit file lists them: each failure the file's cases
     /// read from their own output - the one each case was said through and every other - is given the range of its own
-    /// printing, the one the console printed under that test's status line, never the other backend's.
+    /// printing, the one the console printed under that test's status line, never the other backend's. Where the file kept
+    /// no output of the backend that ended first, the console's printings under that test are no other test's: the other
+    /// backend's failures keep their own ranges, and none of them takes one of a test whose output it was not read from.
     /// </summary>
-    [Fact]
-    public void OneGTestTestTwoCTestTestsRan_IsGivenTheRangeOfEachOnesOwnOutput_WhicheverEndedFirst()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OneGTestTestTwoCTestTestsRan_IsGivenTheRangeOfEachOnesOwnOutput_WhicheverEndedFirst(bool pgOutputKept)
     {
         using var temp = new TempDirectory();
         var parsers = PhaseParsers.ForTests(new Core.Configuration.HarnessConfig(), "ctest", null);
@@ -353,7 +357,7 @@ public sealed class ResultFileTests
             <?xml version="1.0" encoding="UTF-8"?>
             <testsuite name="(empty)" tests="2" failures="2">
               <testcase name="store_sqlite" classname="store_sqlite" time="0.03" status="fail"><failure message="Failed"/><system-out>{string.Join("&#10;", sqlite)}</system-out></testcase>
-              <testcase name="store_pg" classname="store_pg" time="0.02" status="fail"><failure message="Failed"/><system-out>{string.Join("&#10;", pg)}</system-out></testcase>
+              <testcase name="store_pg" classname="store_pg" time="0.02" status="fail"><failure message="Failed"/><system-out>{(pgOutputKept ? string.Join("&#10;", pg) : string.Empty)}</system-out></testcase>
             </testsuite>
             """);
 
@@ -385,14 +389,22 @@ public sealed class ResultFileTests
             into => ResultFiles.Read(() => new MemoryStream(report, writable: false), into, parsers) is null)!;
 
         Assert.Equal(
-            [
-                ("store_sqlite", "Expected 2 records, found 3", ((int, int)?)(29, 32)),
-                ("StoreTest.Saves", "Expected the record saved", (33, 36)),
-                ("store_pg", "connection refused", (8, 11)),
-                ("StoreTest.Saves", "connection reset", (12, 15)),
-            ],
+            pgOutputKept
+                ?
+                [
+                    ("store_sqlite", "Expected 2 records, found 3", ((int, int)?)(29, 32)),
+                    ("StoreTest.Saves", "Expected the record saved", (33, 36)),
+                    ("store_pg", "connection refused", (8, 11)),
+                    ("StoreTest.Saves", "connection reset", (12, 15)),
+                ]
+                :
+                [
+                    ("store_sqlite", "Expected 2 records, found 3", ((int, int)?)(29, 32)),
+                    ("StoreTest.Saves", "Expected the record saved", (33, 36)),
+                    ("store_pg", "Failed", null),
+                ],
             digest.Failures.Select(failure => (failure.Id, failure.Message!, failure.Log)));
-        Assert.Equal(4, digest.Failed);
+        Assert.Equal(pgOutputKept ? 4 : 3, digest.Failed);
     }
 
     /// <summary>

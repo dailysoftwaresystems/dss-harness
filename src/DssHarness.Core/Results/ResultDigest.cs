@@ -1601,6 +1601,7 @@ public sealed record ResultDigest
         private readonly List<TestFailure> _failures = [];
         private readonly HashSet<string> _named = new(StringComparer.Ordinal);
         private readonly Dictionary<(string Framework, string Id, string Outcome), Dictionary<string, Queue<int?>>> _printed = [];
+        private readonly HashSet<int> _printedBy = [];
         private readonly Queue<string> _unparsed = new();
         private readonly Gathering? _into;
         private readonly ILineMask? _mask;
@@ -1727,6 +1728,11 @@ public sealed record ResultDigest
             if (Kept(failure, out var at))
             {
                 Printed(failure, test, at);
+
+                if (at is { } kept)
+                {
+                    _printedBy.Add(kept);
+                }
             }
         }
 
@@ -1829,7 +1835,10 @@ public sealed record ResultDigest
         /// whose own output the log printed it under (<see cref="PhaseFindings.Tests"/>: CTest's under that test's status
         /// line), never the next by the order the files met them - one gtest test two CTest tests ran keeps each its own
         /// range, whichever ended first; where the log says no test's output it lies in, it is the one test's that printed
-        /// it, and where more than one did, no case is given its range, for nothing says whose it is. A thrown error a case
+        /// it, and where more than one did, no case is given its range, for nothing says whose it is. One the log printed
+        /// under a test whose output printed none of them is no printing of theirs, and is read as any other failure of the
+        /// log; and a failure a test's output printed beside the one its case was said through is matched by its printing
+        /// alone, never by its id, which another test's output may have printed too. A thrown error a case
         /// was said through is matched by its printing alone, never by its heading: the same error a process died of, which
         /// no results file is written for, is the log's own crash, said.
         /// </summary>
@@ -1855,21 +1864,29 @@ public sealed record ResultDigest
             var heldAt = new Dictionary<string, int>(StringComparer.Ordinal);
             var tests = log.Tests.OrderBy(test => test.From).ToList();
 
+            // A failure a test's output printed beside the one its case was said through is matched by its printing alone,
+            // never by its id: another test's output may have printed one of that id too.
             for (var at = 0; at < _failures.Count; at++)
             {
-                heldAt.TryAdd(_failures[at].Id, at);
+                if (!_printedBy.Contains(at))
+                {
+                    heldAt.TryAdd(_failures[at].Id, at);
+                }
             }
 
             // A printing of a failure a file's case's own test printed gives the one its test's output printed - the test
-            // whose output the log printed it under, else the one test that printed it; a failure of a test a file names
-            // gives the file's failure of that test what it lacks; any other is the log's own.
+            // whose output the log printed it under, else the one test that printed it - and one under a test whose output
+            // printed none of them is no printing of theirs; a failure of a test a file names gives the file's failure of
+            // that test what it lacks; any other is the log's own.
             foreach (var failure in log.Failures)
             {
-                if (_printed.TryGetValue(Printing(failure), out var byTest))
-                {
-                    var test = Under(failure) ?? (byTest.Count == 1 ? byTest.Keys.Single() : null);
+                var under = Under(failure);
 
-                    Give(test is not null && byTest.TryGetValue(test, out var printed) && printed.TryDequeue(out var said) ? said : null, failure);
+                if (_printed.TryGetValue(Printing(failure), out var byTest) && (under is null || byTest.ContainsKey(under)))
+                {
+                    var test = under ?? (byTest.Count == 1 ? byTest.Keys.Single() : null);
+
+                    Give(test is not null && byTest[test].TryDequeue(out var said) ? said : null, failure);
                 }
                 else if (_named.Contains(failure.Id))
                 {
