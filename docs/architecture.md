@@ -122,10 +122,11 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
   provider's pause - retried while it lasts, as long as its own answer says to wait; a failure retried while it is a new
   one, by its digest; and a final one ended at once.
 - `Text\`: every regular expression made by one maker on .NET's linear-time engine, with no timeout, a construct that
-  engine lacks refused by name (`LinearRegex`) - none source-generated, whose matcher backtracks - and a match sought
-  from where a reader stands, the pattern's `\A` there, for the `\G` that engine lacks (`LinearRegex.MatchFrom`); and
-  two sequences diffed by one owner with no edit bound - anchors that occur once on each side first, Myers'
-  linear-space algorithm where a region has none (`SequenceDiff`).
+  engine lacks refused by name (`LinearRegex`) - none source-generated, whose matcher backtracks - and each `\z` of a
+  pattern with groups compiled as `(?:\Z\z)`, the same end, at which that engine keeps the groups it loses at a lone
+  `\z` after a final line feed; a match sought from where a reader stands, the pattern's `\A` there, for the `\G` that
+  engine lacks (`LinearRegex.MatchFrom`); and two sequences diffed by one owner with no edit bound - anchors that occur
+  once on each side first, Myers' linear-space algorithm where a region has none (`SequenceDiff`).
 
 Four owners gained members of the same kind. A one-line message names every item that fits its room and says where the
 whole list is (`Output\Names.Line`). JSON is read, written and walked at any depth (`Json\JsonDepth`, and

@@ -323,13 +323,8 @@ public static partial class CommandAnalysis
     /// follows: the character after it is matched too, or the expression's end. After the second's unbraced name, the
     /// rest of a run of a name's characters is matched too, since no name begins inside it.
     /// </summary>
-    /// <remarks>
-    /// The <c>=</c>'s next character is matched as <c>[^=]|$</c>, not <c>[^=]|\z</c>: the first takes any line break, so
-    /// <c>$</c> stands only at the end, and .NET's linear matcher reports no group of a match a <c>\z</c> ends after a
-    /// final line break.
-    /// </remarks>
     private static readonly System.Text.RegularExpressions.Regex ArithmeticAssignment = LinearRegex.Compile(
-        @"(?:\A|[^A-Za-z0-9_$])(?<name>" + ArithmeticName + @")\s*(?:\[[^\]]*\]\s*)?(?:(?<operator>(?:[-+*/%&|^]|<<|>>)?=)(?:[^=]|$)|(?<operator>\+\+|--))"
+        @"(?:\A|[^A-Za-z0-9_$])(?<name>" + ArithmeticName + @")\s*(?:\[[^\]]*\]\s*)?(?:(?<operator>(?:[-+*/%&|^]|<<|>>)?=)(?:[^=]|\z)|(?<operator>\+\+|--))"
         + @"|(?:\+\+|--)\s*(?:(?<name>\$\{[^}]*\}|\$\([^)]*\))|(?<name>\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)[A-Za-z0-9_$]*)");
 
     /// <summary>A name as arithmetic spells one: <c>${...}</c>, <c>$(...)</c>, <c>$name</c> or a bare name.</summary>

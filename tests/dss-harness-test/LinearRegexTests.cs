@@ -155,4 +155,59 @@ public sealed class LinearRegexTests
 
         static (int Index, int Length) Place(Match match) => match.Success ? (match.Index, match.Length) : (-1, -1);
     }
+
+    /// <summary>
+    /// The fact the maker's end anchor stands on, of the runtime the suite runs on: .NET's linear engine, given a match a
+    /// <c>\z</c> of the pattern could end at the end of a text whose last character is a line feed, finds the match but
+    /// reports its groups unmatched - where the backtracking engine reports them - and keeps them where the end is written
+    /// <c>(?:\Z\z)</c>. The day a runtime keeps them at a lone <c>\z</c>, this goes red and the maker's rewrite can go.
+    /// </summary>
+    [Theory]
+    [InlineData(@"(?<g>a)\s*\z")]
+    [InlineData(@"(?<g>a)(?:[^b]|\z)")]
+    [InlineData(@"(?<g>a)\n\z")]
+    public void DotNetsLinearEngine_LosesTheGroupsOfAMatchAnEndAnchorEndsAfterAFinalLineFeed(string pattern)
+    {
+        var linear = new Regex(pattern, RegexOptions.NonBacktracking).Match("a\n");
+        var backtracking = new Regex(pattern).Match("a\n");
+        var kept = new Regex(pattern.Replace(@"\z", @"(?:\Z\z)", StringComparison.Ordinal), RegexOptions.NonBacktracking).Match("a\n");
+
+        Assert.Equal((0, 2), (linear.Index, linear.Length));
+        Assert.False(linear.Groups["g"].Success, "the linear engine keeps a group a \\z ends after a final line feed now: LinearRegex's rewrite of \\z can go");
+        Assert.Equal((true, 0, 1), (backtracking.Groups["g"].Success, backtracking.Groups["g"].Index, backtracking.Groups["g"].Length));
+        Assert.Equal((true, 0, 1), (kept.Groups["g"].Success, kept.Groups["g"].Index, kept.Groups["g"].Length));
+    }
+
+    /// <summary>
+    /// A pattern with groups keeps every group of a match its <c>\z</c> ends after a final line feed: each <c>\z</c> the
+    /// pattern holds as an anchor is found as .NET reads the pattern - never one a backslash escapes, one in a class or a
+    /// <c>(?#...)</c> comment, nor a <c>[</c> in a comment of a pattern that ignores whitespace mistaken for a class, nor a
+    /// <c>#</c> after the group such a setting ended mistaken for a comment.
+    /// </summary>
+    [Theory]
+    [InlineData(@"(?<g>a)\s*\z", RegexOptions.None, "a\n", 2)]
+    [InlineData(@"(?<g>a)(?:[^b]|\z)", RegexOptions.None, "a\n", 2)]
+    [InlineData(@"(?<g>a)\n\z", RegexOptions.None, "a\n", 2)]
+    [InlineData(@"(?<g>a)\n?\z", RegexOptions.Multiline, "a\n", 2)]
+    [InlineData(@"(?<g>a)\\z", RegexOptions.None, @"a\z", 3)]
+    [InlineData(@"(?<g>[(?#])\n?\z", RegexOptions.None, "(\n", 2)]
+    [InlineData(@"(?#\z)(?<g>a)\n?\z", RegexOptions.None, "a\n", 2)]
+    [InlineData("(?<g>a)\\n? # [ \n\\z", RegexOptions.IgnorePatternWhitespace, "a\n", 2)]
+    [InlineData("(?x)(?<g>a)\\n? # [ \n\\z", RegexOptions.None, "a\n", 2)]
+    [InlineData(@"(?<g>a)(?x: \n? )#[\n]?\z", RegexOptions.None, "a\n#\n", 4)]
+    public void AnEndAnchor_KeepsEveryGroupOfTheMatchItEnds(string pattern, RegexOptions options, string text, int length)
+    {
+        var match = LinearRegex.Compile(pattern, options).Match(text);
+
+        Assert.Equal((0, length), (match.Index, match.Length));
+        Assert.Equal((true, 0, 1), (match.Groups["g"].Success, match.Groups["g"].Index, match.Groups["g"].Length));
+    }
+
+    /// <summary>A pattern with groups and a <c>\z</c> that the engine refuses is refused as written, never as the end anchor is rewritten.</summary>
+    [Fact]
+    public void APatternWithAnEndAnchorTheEngineRefuses_IsRefusedAsWritten()
+    {
+        Assert.False(LinearRegex.TryCompile(@"(?<g>a)\z(?<=a)", RegexOptions.None, out _, out var refusal));
+        Assert.Equal(@"The pattern '(?<g>a)\z(?<=a)' holds a lookahead or lookbehind, which .NET's linear-time matcher lacks.", refusal);
+    }
 }

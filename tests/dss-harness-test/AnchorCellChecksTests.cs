@@ -26,6 +26,7 @@ public sealed class AnchorCellChecksTests
     [InlineData("cites D-PROBE-EXISTING- ROW-ONE, joined already", "an anchor id with a space after one of its hyphens ('D-PROBE-EXISTING- ROW-ONE')")]
     [InlineData("see tests/hir/\ntest_x.cpp for the case", @"a path broken across a line after a '/' ('tests/hir/\ntest_x.cpp')")]
     [InlineData("see src/\n.clang-format", @"a path broken across a line after a '/' ('src/\n.clang-format')")]
+    [InlineData("see src/\n.clang-format\n", @"a path broken across a line after a '/' ('src/\n.clang-format')")]
     [InlineData("see tests/hir/ test_x.cpp for the case", "a path with a space after a '/' ('tests/hir/ test_x.cpp', as it would be stored)")]
     public void AValueTheDoorWouldStoreCut_IsRefused_NamingTheCut(string text, string refusal)
     {
