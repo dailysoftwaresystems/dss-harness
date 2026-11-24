@@ -190,19 +190,27 @@ public static class CodeSubKinds
     /// </summary>
     public const string Sheet = "sheet";
 
+    /// <summary>
+    /// A fixture a test framework provides a test's parameter by - pytest's, a function a test is given by its parameter's
+    /// name (<c>@pytest.fixture</c>, a conftest.py's among them): reached by a fixture qualifier
+    /// (<see cref="CodeQualifierKinds.Fixture"/>), the parameter's name, and by a call that writes its name as any function is.
+    /// </summary>
+    public const string Fixture = "fixture";
+
     /// <summary>Whether <paramref name="subKind"/> is a data file's or a style sheet's, which no reference reaches by its name alone.</summary>
     /// <param name="subKind">A node's kind within its kind, or <see langword="null"/>.</param>
     public static bool IsData(string? subKind) => subKind is Key or Element or Rule or Keyframes or StyleMixin or StyleFunction or FontFace or StyleVariable or Sheet;
 
     /// <summary>
-    /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a rule for a
-    /// selector, a key for a key qualifier, and for each qualifier a style sheet writes where its syntax says what a name
-    /// names - a variable, a mixin, a function, an animation's keyframes, a font's face - that kind; <see langword="null"/>
-    /// for every other, which reaches no node of data by its name alone.
+    /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a fixture for a
+    /// fixture qualifier, a rule for a selector, a key for a key qualifier, and for each qualifier a style sheet writes where
+    /// its syntax says what a name names - a variable, a mixin, a function, an animation's keyframes, a font's face - that
+    /// kind; <see langword="null"/> for every other, which reaches no node of data by its name alone.
     /// </summary>
     /// <param name="qualifier">The kind of a reference's qualifier (<see cref="CodeQualifierKinds"/>), or <see langword="null"/>.</param>
     public static string? ReachedBy(string? qualifier) => qualifier switch
     {
+        CodeQualifierKinds.Fixture => Fixture,
         CodeQualifierKinds.Selector => Rule,
         CodeQualifierKinds.Key => Key,
         CodeQualifierKinds.StyleVariable => StyleVariable,

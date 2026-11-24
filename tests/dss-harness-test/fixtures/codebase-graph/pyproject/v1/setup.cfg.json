@@ -1,0 +1,1 @@
+{"nodes":[{"id":"pyproject:setup.cfg","kind":"project","name":"shop-cfg","qualified":"setup.cfg","start":1,"end":13,"signature":"name = shop-cfg","modifiers":[]}],"scopes":[],"imports":[],"addressRoots":[],"references":[],"dynamic":[],"layoutRoots":["src","tests"]}

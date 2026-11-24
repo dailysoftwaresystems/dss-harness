@@ -1,0 +1,32 @@
+[
+  {
+    "data": "total",
+    "sites": [
+      { "place": "src/Cart.vue:19", "how": "defines" },
+      { "place": "src/Cart.vue:69", "how": "calls" }
+    ]
+  },
+  {
+    "data": "add",
+    "sites": [
+      { "place": "src/Cart.vue:12", "how": "defines" },
+      { "place": "src/Cart.vue:68", "how": "calls" }
+    ]
+  },
+  {
+    "data": ".btn-primary",
+    "sites": [
+      { "place": "src/site.css:5", "how": "defines" },
+      { "place": "src/Cart.vue:68", "how": "uses" },
+      { "place": "src/Cart.vue:55", "how": "holds the literal" },
+      { "place": "src/Cart.vue:60", "how": "holds the literal" }
+    ]
+  },
+  {
+    "data": "lineText",
+    "sites": [
+      { "place": "src/LineItem.vue:6", "how": "defines" },
+      { "place": "src/LineItem.vue:14", "how": "uses" }
+    ]
+  }
+]

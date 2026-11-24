@@ -296,7 +296,8 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
         var extract = Read("Shared/Go.razor", "@code {\n    void Start() { dynamic value = Get(); value.Run(); }\n}\n");
         var alone = new CSharpExtractor().Extract(new CodeFileInput("Shared/Go.cs", "namespace Shared; partial class Go {\n    void Start() { dynamic value = Get(); value.Run(); }\n}\n"));
 
-        Assert.Equal(2, Assert.Single(extract.Dynamic).Line);
+        Assert.Equal((2, CSharpExtractor.DynamicCall), (Assert.Single(extract.Dynamic).Line, Assert.Single(extract.Dynamic).Kind));
+        CodeGraphContract.Signed(new RazorExtractor(), extract, "Shared/Go.razor");
         Assert.Equal(alone.Dynamic, extract.Dynamic);
         Assert.Equal(alone.Scopes, extract.Scopes);
     }

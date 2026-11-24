@@ -1,0 +1,6 @@
+@using Shop.Web.Data
+@model CartService
+@inject CartService Carts
+
+<h2>Receipt</h2>
+@Html.Partial("_Total", Model)

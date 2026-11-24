@@ -15,6 +15,7 @@
   </Folder>
   <Folder Name="/Solution Items/Files/">
     <File Path=".github/actions/verify-tool-package/action.yml" />
+    <File Path=".github/scripts/unicode-names.cs" />
     <File Path=".github/scripts/version.cs" />
   </Folder>
   <Folder Name="/Solution Items/Workflows/">

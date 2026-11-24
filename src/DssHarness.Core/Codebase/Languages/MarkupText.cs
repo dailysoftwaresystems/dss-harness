@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Globalization;
 using System.Text;
 using AngleSharp.Html;
@@ -85,21 +86,33 @@ internal sealed class MarkupText
         "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title", "noscript",
     };
 
-    private readonly List<MarkupElement> _elements = [];
-    private readonly List<(long Start, long End)> _texts = [];
+    private readonly Counted<MarkupElement> _elements;
+    private readonly Counted<(long Start, long End)> _texts;
     private readonly List<int> _open = [];
     private readonly Dictionary<string, int> _openNames = new(StringComparer.Ordinal);
     private readonly bool _closesAsHtml;
+    private readonly Func<string, bool>? _closesSelf;
 
     /// <summary>How many foreign elements - an <c>svg</c>, a <c>math</c> - are open, in which <c>/&gt;</c> closes any element.</summary>
     private int _foreign;
 
-    private MarkupText(CodeText text, bool closesAsHtml)
+    private MarkupText(CodeText text, bool closesAsHtml, Func<string, bool>? closesSelf)
     {
         Text = text;
         Lines = text.LineIndex;
         _closesAsHtml = closesAsHtml;
+        _closesSelf = closesSelf;
+        _elements = new Counted<MarkupElement>(this);
+        _texts = new Counted<(long Start, long End)>(this);
     }
+
+    /// <summary>
+    /// How many times its elements and its runs of text were read, one at a time - by the walk that makes them and by every reader
+    /// that reads them (<see cref="Elements"/>, <see cref="Texts"/>): the work a markup's reading costs past its tokens, which a
+    /// reading linear in the markup keeps to a fixed number of reads of each - and which a reading that walks the elements again for
+    /// each run of text, as one that asks of each run whether it is inside a script, multiplies by the runs.
+    /// </summary>
+    public long Visited { get; private set; }
 
     /// <summary>
     /// The most characters a markup file's text holds for AngleSharp's tokenizer to read it: the tokenizer counts a position
@@ -107,16 +120,28 @@ internal sealed class MarkupText
     /// </summary>
     public const long MostCharacters = int.MaxValue;
 
+    /// <summary>
+    /// The kind of the mark a markup file of more than <see cref="MostCharacters"/> gives, the sign of the limit of every markup
+    /// implementation's help that says so (<see cref="CodeGraphLimit.Signs"/>).
+    /// </summary>
+    internal const string HugeFile = "huge-file";
+
     /// <summary>The text read, its line endings each one line feed.</summary>
     public CodeText Text { get; }
 
     /// <summary>Where its lines begin.</summary>
     public CodeLineIndex Lines { get; }
 
-    /// <summary>Its elements, in the order their start tags are written; each one's parent is before it.</summary>
+    /// <summary>Its elements, in the order their start tags are written; each one's parent is before it. Each read of one counted (<see cref="Visited"/>).</summary>
     public IReadOnlyList<MarkupElement> Elements => _elements;
 
-    /// <summary>Its runs of text - what no tag and no comment is - each from its first character to past its last.</summary>
+    /// <summary>
+    /// Its runs of markup text - what no tag and no comment is - each from its first character to past its last, in the order
+    /// they are written: the text a <c>script</c> or a <c>style</c> element holds, written as such, none of them - that is code
+    /// its own language's reader reads, no template's expression - and a <c>textarea</c>'s or a <c>title</c>'s among them, as a
+    /// framework interpolates it. Told once, by the walk that reads the tokens, which knows the element whose text is raw. Each
+    /// read of one counted (<see cref="Visited"/>).
+    /// </summary>
     public IReadOnlyList<(long Start, long End)> Texts => _texts;
 
     /// <summary>
@@ -130,21 +155,23 @@ internal sealed class MarkupText
         ArgumentNullException.ThrowIfNull(text);
 
         return text.Length > MostCharacters
-            ? new FileExtract([]) { Dynamic = [new ExtractDynamic(text.LineIndex.LineAt(MostCharacters), string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {MostCharacters:N0} the HTML tokenizer (AngleSharp) counts a position in, so it is not read"))] }
+            ? new FileExtract([]) { Dynamic = [new ExtractDynamic(text.LineIndex.LineAt(MostCharacters), string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {MostCharacters:N0} the HTML tokenizer (AngleSharp) counts a position in, so it is not read"), HugeFile)] }
             : null;
     }
 
     /// <summary>
     /// Reads <paramref name="text"/>: its elements closing as HTML closes a page's where <paramref name="closesAsHtml"/>,
-    /// else as written.
+    /// else as written - and, where <paramref name="closesSelf"/> says so of a tag as HTML names it, an element of that tag
+    /// closed by its <c>/&gt;</c> though the others close as HTML, as Angular closes a component's.
     /// </summary>
     /// <param name="text">The markup, its line endings each one line feed (<see cref="CodeText.LineFed"/>).</param>
     /// <param name="closesAsHtml">Whether it is a page, whose elements HTML closes where their end tags are left out.</param>
-    public static MarkupText Read(CodeText text, bool closesAsHtml)
+    /// <param name="closesSelf">The tags a <c>/&gt;</c> closes where elements close as HTML (<see cref="MarkupDialect.ClosesSelf"/>); none where null.</param>
+    public static MarkupText Read(CodeText text, bool closesAsHtml, Func<string, bool>? closesSelf = null)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        var markup = new MarkupText(text, closesAsHtml);
+        var markup = new MarkupText(text, closesAsHtml, closesSelf);
         markup.Walk();
         return markup;
     }
@@ -200,6 +227,10 @@ internal sealed class MarkupText
         var empty = false;
         var textStart = -1L;
 
+        // Whether the characters the tokenizer gives next are a script's or a style's raw text - code of its own language,
+        // no markup's - as the start tag that put it in that state says, until the next token that is no character.
+        var raw = false;
+
         while (true)
         {
             var token = tokenizer.Get();
@@ -228,10 +259,15 @@ internal sealed class MarkupText
                 closed = null;
             }
 
-            if (token.Type != HtmlTokenType.Character && textStart >= 0)
+            if (token.Type != HtmlTokenType.Character)
             {
-                _texts.Add((textStart, at));
+                if (textStart >= 0 && !raw)
+                {
+                    _texts.Add((textStart, at));
+                }
+
                 textStart = -1;
+                raw = false;
             }
 
             switch (token.Type)
@@ -257,15 +293,15 @@ internal sealed class MarkupText
                     }
 
                     var element = new MarkupElement(Written(at, name), name, at, LineAt(at), _open.Count > 0 ? _open[^1] : -1,
-                        [.. tag.Attributes.Select(attribute => new MarkupAttribute(attribute.Name, attribute.Value, LineAt(attribute.Position.Index)) { NameAt = Math.Clamp((long)attribute.Position.Index, 0, Text.Length), ValueAt = ValueAt(attribute.Position.Index, attribute.Name.Length) })]);
+                        [.. tag.Attributes.Select(attribute => Attribute(attribute.Name, attribute.Value, attribute.Position.Index))]);
 
                     _elements.Add(element);
                     opened = element;
 
                     // A void element holds nothing - a component's tag is matched as written, so a component named as one,
                     // a Link, an Input, holds what it is written around - and a component's tag closed by /> holds nothing,
-                    // as a page's foreign one does.
-                    empty = (_closesAsHtml ? Void.Contains(name) : IsVoid(element.Tag)) || (tag.IsSelfClosing && (!_closesAsHtml || _foreign > 0));
+                    // as a page's foreign one does, and one the markup's framework closes so where the rest close as HTML.
+                    empty = (_closesAsHtml ? Void.Contains(name) : IsVoid(element.Tag)) || (tag.IsSelfClosing && (!_closesAsHtml || _foreign > 0 || _closesSelf?.Invoke(name) == true));
 
                     if (empty)
                     {
@@ -282,6 +318,7 @@ internal sealed class MarkupText
                     if (_foreign == 0 && (_closesAsHtml || element.Tag == name) && Raw.TryGetValue(name, out var mode))
                     {
                         tokenizer.State = mode;
+                        raw = name is "script" or "style";
                     }
 
                     break;
@@ -481,6 +518,19 @@ internal sealed class MarkupText
         }
     }
 
+    /// <summary>The attribute named <paramref name="name"/> - as HTML names it - of <paramref name="value"/>, its name written at <paramref name="at"/>: where its name and its value stand, and its name as the text writes it.</summary>
+    private MarkupAttribute Attribute(string name, string value, int at)
+    {
+        var nameAt = Math.Clamp((long)at, 0, Text.Length);
+
+        return new MarkupAttribute(name, value, LineAt(at))
+        {
+            NameAt = nameAt,
+            ValueAt = ValueAt(at, name.Length),
+            Written = Text.Substring(nameAt, Math.Min(name.Length, Text.Length - nameAt)),
+        };
+    }
+
     /// <summary>
     /// Where the value of the attribute whose name of <paramref name="length"/> characters begins at
     /// <paramref name="name"/> begins: past its name, its <c>=</c> and its opening quote; where its name ends, for one
@@ -520,6 +570,39 @@ internal sealed class MarkupText
 
         var written = Text.Substring(start, name.Length);
         return string.Equals(written, name, StringComparison.OrdinalIgnoreCase) ? ExtractText.Whole(written) : name;
+    }
+
+    /// <summary>
+    /// One of the markup's own lists, the one place its items are kept: each item read, by its place or in turn, counted on the
+    /// markup (<see cref="Visited"/>) whoever reads it - its own walk among them - and an item added, by the walk, not.
+    /// </summary>
+    private sealed class Counted<T>(MarkupText markup) : IReadOnlyList<T>
+    {
+        private readonly List<T> _items = [];
+
+        public int Count => _items.Count;
+
+        public T this[int index]
+        {
+            get
+            {
+                markup.Visited++;
+                return _items[index];
+            }
+        }
+
+        public IEnumerator<T> GetEnumerator()
+        {
+            foreach (var item in _items)
+            {
+                markup.Visited++;
+                yield return item;
+            }
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public void Add(T item) => _items.Add(item);
     }
 }
 
@@ -566,6 +649,9 @@ internal sealed record MarkupAttribute(string Name, string Value, int Line)
 {
     /// <summary>Where its name begins in the text, which writes it as written - a dynamic argument's code in its case.</summary>
     public long NameAt { get; init; }
+
+    /// <summary>Its name as the text writes it, in its case: <c>#searchBox</c>, <c>[class.isOpen]</c>, <c>v-bind:[myKey]</c>.</summary>
+    public string Written { get; init; } = string.Empty;
 
     /// <summary>Where its value begins in the text: past its <c>=</c> and its quote - where its code stands, for a reader of code given it there.</summary>
     public long ValueAt { get; init; }

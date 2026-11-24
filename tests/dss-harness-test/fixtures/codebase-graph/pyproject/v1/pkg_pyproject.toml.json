@@ -1,0 +1,1 @@
+{"nodes":[{"id":"pyproject:pkg/pyproject.toml","kind":"project","name":"app","qualified":"pkg/pyproject.toml","start":1,"end":12,"signature":"name = \"app\"","modifiers":[]}],"scopes":[],"imports":[],"addressRoots":[],"references":[],"dynamic":[],"layoutRoots":["src","lib","pdm_src"]}

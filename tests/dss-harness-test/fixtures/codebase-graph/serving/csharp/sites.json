@@ -1,0 +1,27 @@
+[
+  {
+    "data": "Largest",
+    "sites": [
+      { "place": "src/Geometry.cs:22", "how": "defines" },
+      { "place": "src/Geometry.cs:116", "how": "calls" },
+      { "place": "tests/GeometryTests.cs:19", "how": "calls" }
+    ]
+  },
+  {
+    "data": "Describe",
+    "sites": [
+      { "place": "src/Report.cs:10", "how": "defines" },
+      { "place": "src/Report.cs:22", "how": "calls" },
+      { "place": "src/Report.cs:37", "how": "uses" },
+      { "place": "tests/GeometryTests.cs:26", "how": "calls" }
+    ]
+  },
+  {
+    "data": "Items",
+    "sites": [
+      { "place": "src/Catalog.cs:9", "how": "defines" },
+      { "place": "src/Catalog.cs:20", "how": "uses" },
+      { "place": "src/Catalog.cs:32", "how": "uses" }
+    ]
+  }
+]

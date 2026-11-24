@@ -67,6 +67,7 @@ public static partial class HelpTopics
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("workflows", ["workflow"], "Workflow definitions: what config.json declares and the yml file defines", RenderWorkflows),
         new("codebase-graph", ["graph", "graphify-codebase"], "A run's map of the repository: what it reads, and what it does not see", RenderCodebaseGraph),
+        new(CodebaseGraphLanguages, ["graph-languages"], "Each language the codebase graph reads: what it reads, and each limit by its short name", RenderCodebaseGraphLanguages),
         new("web-search", ["search", "web_search", "agentwebsearch"], "The harness's own web search: its sources, their kinds and keys", RenderWebSearch),
         new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
         new("side-tasks", ["side-task"], "An agent outside every workflow: run-side-task, its chat and its records", RenderSideTasks),

@@ -596,7 +596,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             .Single(toolNamed => toolNamed["name"]?.GetValue<string>() == AgentGraphSupport.ToolName);
 
         Assert.Equal(
-            ["find", "node", "related", "outline", "body", "edit", "wholeFile"],
+            ["find", "node", "related", "outline", "body", "sites", "edit", "wholeFile"],
             [.. schema["inputSchema"]!.AsObject()["properties"]!.AsObject()["op"]!.AsObject()["enum"]!.AsArray().Select(one => one!.GetValue<string>())]);
     }
 

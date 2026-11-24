@@ -57,7 +57,7 @@ internal static class PackageManifest
         {
             References = references,
             AddressRoots = name is not null && roots is not null ? roots(name, root!) : [],
-            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why)],
+            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why, JsonOutline.NotAnObject)],
         };
     }
 }

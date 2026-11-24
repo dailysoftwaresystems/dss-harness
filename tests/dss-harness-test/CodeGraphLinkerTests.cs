@@ -333,6 +333,73 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A chain written as links past an import's prefix - of a name or of a type, the prefix one name or several - is found a step a
+    /// link however long: its first name past the prefix what the import makes visible by it, each next a member of what the one
+    /// before came to, the call exact on the type the last names.
+    /// </summary>
+    [Fact]
+    public void AChainOfLinksPastAnImportsPrefix_IsFoundAStepALink()
+    {
+        static IEnumerable<ExtractReference> Chain(string from, string prefix, string kind) =>
+        [
+            Ref(from, CodeEdgeKinds.Uses, "Outer") with { Qualifier = Prefix(prefix) },
+            Ref(from, CodeEdgeKinds.Uses, "Inner") with { Qualifier = new ExtractQualifier(kind) { Link = 0 } },
+            Ref(from, CodeEdgeKinds.Uses, "Deep") with { Qualifier = new ExtractQualifier(kind) { Link = 1 } },
+            Call(from, "Run", 0, new ExtractQualifier(kind) { Link = 2 }),
+        ];
+
+        var linked = Link(
+            File("lib/shapes.t", [Type("Outer"), Type("Outer.Inner"), Type("Outer.Inner.Deep"), Member("Outer.Inner.Deep.Run", 0)]),
+            File("named.t", [Member("Named", 0)], [.. Chain("Named", "ns", CodeQualifierKinds.Named)], imports: [Import(CodeImportForms.Relative, "lib/shapes.t") with { Prefix = "ns" }]),
+            File("typed.t", [Member("Typed", 0)], [.. Chain("Typed", "lib.shapes", CodeQualifierKinds.Type)], imports: [Import(CodeImportForms.Relative, "lib/shapes.t") with { Prefix = "lib.shapes" }]));
+
+        Assert.Equal(
+            [Edge("t:Named", "t:Outer.Inner.Deep.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact), Edge("t:Typed", "t:Outer.Inner.Deep.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.From, StringComparer.Ordinal));
+        Assert.Empty(linked.External);
+    }
+
+    /// <summary>
+    /// What a member's body declares - a closed scope its file declares under the member's qualified name, as a Python function's
+    /// body and a JavaScript wrapper's are - is seen from that body and the bodies inside it alone: found exact from the member's
+    /// own code and from a member declared inside it, by its name and by a type's; and from nowhere else - not by a name the rest
+    /// of its file writes alone nor by the name of a type it ends, and not from another file - nor by the repository's step from
+    /// anywhere, the body's own code's call on a value whose type nothing says among it: each counted external, a name nothing
+    /// that code sees declares.
+    /// </summary>
+    [Fact]
+    public void AMembersBodysDeclarations_AreSeenFromThatBodyAlone()
+    {
+        var linked = Link(
+            File(
+                "a.t",
+                [Member("Outer", 0), Member("Outer.Helper", 0), Type("Outer.Local"), Member("Outer.Local.Make", 0), Member("Outer.Helper.Inner", 0), Member("Sibling", 0)],
+                [
+                    Call("Outer", "Helper", 0),
+                    Call("Outer", "Helper", 0, new ExtractQualifier(CodeQualifierKinds.Value)),
+                    Call("Outer.Helper.Inner", "Helper", 0),
+                    Ref("Outer.Helper.Inner", CodeEdgeKinds.References, "Local"),
+                    Call("Outer.Helper.Inner", "Make", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Local")),
+                    Call("Sibling", "Helper", 0),
+                    Call("Sibling", "Helper", 0, new ExtractQualifier(CodeQualifierKinds.Value)),
+                    Ref("Sibling", CodeEdgeKinds.References, "Local"),
+                    Call("Sibling", "Make", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Local")),
+                ],
+                [new ExtractScope("Outer", Open: false), new ExtractScope("Outer.Helper", Open: false) { Parent = "Outer" }]),
+            File("b.t", [Member("Far", 0)], [Call("Far", "Helper", 0)]));
+
+        Assert.Equal(
+            [
+                Edge("t:Outer", "t:Outer.Helper", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Outer.Helper.Inner", "t:Outer.Helper", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Outer.Helper.Inner", "t:Outer.Local.Make", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Outer.Helper.Inner", "t:Outer.Local", CodeEdgeKinds.References, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.References).OrderBy(edge => edge.From, StringComparer.Ordinal).ThenBy(edge => edge.Kind, StringComparer.Ordinal).ThenBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal([("t:Far", 1), ("t:Outer", 1), ("t:Sibling", 4)], linked.External.OrderBy(count => count.Key, StringComparer.Ordinal).Select(count => (count.Key, count.Value)));
+    }
+
+    /// <summary>
     /// A global import is made by every file of its language: a name it makes visible is found unique through it from a file
     /// that imports nothing, where the repository alone would give candidates.
     /// </summary>
@@ -1519,6 +1586,7 @@ public sealed class CodeGraphLinkerTests
                 Assert.Equal(whole.Edges, again.Edges);
                 Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
                 Assert.Equal([.. whole.External], [.. again.External]);
+                Assert.Equal(SignsOf(whole), SignsOf(again));
 
                 (tree, linked) = (after, again);
             }
@@ -1581,13 +1649,14 @@ public sealed class CodeGraphLinkerTests
         Again(before, after);
     }
 
-    /// <summary>What the references of the declaration <paramref name="reader"/> found in <paramref name="linked"/>: its edges, and its count of names found nowhere.</summary>
+    /// <summary>What the references of the declaration <paramref name="reader"/> found in <paramref name="linked"/>: its edges, its count of names found nowhere, and the signs they gave.</summary>
     private static string Found(CodeGraphLinked linked, string reader)
         => string.Join(
             '\n',
             linked.Edges.Where(edge => edge.From == reader)
                 .Select(edge => $"{edge.To} {edge.Kind} {edge.Confidence}")
-                .Append($"external {linked.External.GetValueOrDefault(reader)}"));
+                .Append($"external {linked.External.GetValueOrDefault(reader)}")
+                .Append($"signs {string.Join(", ", linked.Signs.GetValueOrDefault(reader) ?? [])}"));
 
     /// <summary>Every thing <see cref="Reading"/> changes alone.</summary>
     public static TheoryData<string> ThingsAFindingReads() => [.. Reading().Keys];
@@ -1622,6 +1691,14 @@ public sealed class CodeGraphLinkerTests
         // What a file imported by its path declares at its top.
         var importsLib = File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Prefix = "p" }]);
         Case("a name, at the top of a file imported by its path", [importsLib], File("lib.t", [Member("Stop", 0)]), File("lib.t", [Member("Stop", 0), Member("Run", 0)]));
+
+        // Whether the file an import binding a name names is in the tree: come, so the name is no longer one only an import naming no
+        // file of it binds - counted external alike, but its sign gone.
+        Case(
+            "whether an import binding a name names a file of the tree",
+            [Within(File("use.t", [go], [Call("Go", "Run", 0)], imports: [Import(CodeImportForms.Relative, "far.t") with { Show = ["Run"] }]))],
+            null,
+            File("far.t", [Member("Stop", 0)]));
 
         // Whether a declaration of a file imported by its path is at its top: one held by another is not.
         Case(
@@ -1858,6 +1935,140 @@ public sealed class CodeGraphLinkerTests
             null,
             File("Views/_ViewImports.cshtml", [], imports: [Import(CodeImportForms.Directory, "Shop.Web")]) with { Language = "razor" });
 
+        // A declaration's selectors, names it is found by as its own: one come that the reference names.
+        reader = "t:Go";
+        Case(
+            "a declaration's selectors",
+            [File("use.t", [go], [Ref("Go", CodeEdgeKinds.Instantiates, "x-cart")])],
+            File("cart.t", [Type("Cart")]),
+            File("cart.t", [Type("Cart") with { Selectors = ["x-cart"] }]));
+
+        // The templates a declaration names: a template's own name, read on the declaration that names its file its template.
+        reader = "t:Body";
+        Case(
+            "the templates a declaration names",
+            [File("cart.t", [Member("Body", 0)], [Call("Body", "Save", 0, new ExtractQualifier(CodeQualifierKinds.This))])],
+            File("comp.t", [Type("Comp"), Member("Comp.Save", 0) with { Parent = "t:Comp" }]),
+            File("comp.t", [Type("Comp") with { Templates = ["./cart.t"] }, Member("Comp.Save", 0) with { Parent = "t:Comp" }]));
+
+        // Whether a type's members are reached by a receiver alone: its bases passed over by a name written alone in its scope - a
+        // namespace's of its name merged with it, which sees its own names and never the type's bases' - and that name found past it.
+        reader = "t:lib.Cart.Go";
+        Case(
+            "whether a type's members are reached by a receiver alone",
+            [
+                File("b.t", [Member("lib.Cart.Go", 0)], [Call("lib.Cart.Go", "Run", 0)]),
+                File("c.t", [Member("lib.Run", 0)]),
+                File("d.t", [Type("lib.Base"), Member("lib.Base.Run", 0)]),
+            ],
+            File("a.t", [Type("lib.Cart")], [Ref("lib.Cart", CodeEdgeKinds.Inherits, "Base")]),
+            File("a.t", [Type("lib.Cart") with { MembersByReceiver = true }], [Ref("lib.Cart", CodeEdgeKinds.Inherits, "Base")]));
+
+        // Whether a member added to a type from outside its body is reached by a receiver alone: the scope it is declared in passed over.
+        reader = "t:lib.X.Go";
+        var outside = new ExtractScope("lib.X", Open: true) { Parent = QualifiedName.Of("lib") };
+        Case(
+            "whether a member added from outside its type is reached by a receiver alone",
+            [File("b.t", [Member("lib.X.Go", 0)], [Call("lib.X.Go", "Run", 0)], scopes: [outside]), File("c.t", [Member("lib.Run", 0)])],
+            File("a.t", [Member("lib.X.Run", 0) with { Extends = "X" }]),
+            File("a.t", [Member("lib.X.Run", 0) with { Extends = "X", MembersByReceiver = true }]));
+
+        // The members declared to extend a type of a name: one come that extends the function a this is read in, which makes the
+        // function a constructor function, whose own this is read on it.
+        reader = "t:Go";
+        Case(
+            "the members declared to extend a type of a name",
+            [File("use.t", [go], [Call("Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.This))])],
+            File("ext.t", [Member("Go.Run", 0) with { Extends = "Other" }]),
+            File("ext.t", [Member("Go.Run", 0) with { Extends = "Go" }]));
+
+        // What a file of a language that binds its names within the file reaches through another file's imports and layout: each
+        // a declaration named Run of an id of its own, so which one a call finds is seen.
+        reader = "t:Go";
+        static ExtractNode RunAt(string id) => Member("Run", 0) with { Id = id };
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+        static CodeGraphFile Whole(CodeGraphFile file) => file with { Extract = file.Extract! with { WrittenWhole = true } };
+        var throughMid = Within(File("use.t", [go], [Call("Go", "Run", 0)], imports: [Import(CodeImportForms.Relative, "mid.t")]));
+        var runs = new[] { File("a.t", [RunAt("t:a.Run")]), File("b.t", [RunAt("t:b.Run")]) };
+
+        // Whether a file writes its type names whole, read of another file through the value it declares: the type of the value's type
+        // looked for from where the value stands - the repository's of its last name - or, written whole, the one of its whole name alone.
+        var throughCart = File("use.t", [Member("app.Go", 0)], [Call("app.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Value, "cart"))], scopes: [Open("app")]);
+        var cart = File("x.t", [Type("x.Cart"), Member("x.Cart.Run", 0) with { Parent = "t:x.Cart" }]);
+        var valued = File("cart.t", [Value("app.cart", "Cart")], scopes: [Open("app")]);
+
+        reader = "t:app.Go";
+        Case("whether a file writes its names whole", [throughCart, cart], valued, Whole(valued));
+        Case("whether a file writes its names whole, no longer", [throughCart, cart], Whole(valued), valued);
+
+        // Whether a file binds its names within it, read the same way: the type of the value's type looked for in the repository by its
+        // name where the file binds none, and nowhere where it binds all.
+        Case("whether a file binds its names within it, read through its value", [throughCart, cart], valued, Within(valued));
+        Case("whether a file binds its names within it, read through its value, no longer", [throughCart, cart], Within(valued), valued);
+        reader = "t:Go";
+
+        // Whether what another file's import binds is its importers' too: a re-export become one.
+        Case(
+            "whether an import's names are its importers' too",
+            [throughMid, .. runs],
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Show = ["Run"] }]),
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Show = ["Run"], Reexports = true }]));
+
+        // Whether another file's place is one of two a name may stand at: the place above become a candidate beside it.
+        Case(
+            "whether an import is one of two places",
+            [throughMid, .. runs],
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Reexports = true }, Import(CodeImportForms.Relative, "b.t") with { Reexports = true, Fallback = true }]),
+            File("mid.t", [], imports: [Import(CodeImportForms.Relative, "a.t") with { Reexports = true, Either = true }, Import(CodeImportForms.Relative, "b.t") with { Reexports = true, Fallback = true }]));
+
+        // The names a file publishes, which an import taking its published names makes visible alone.
+        var takesPublished = Within(File("use.t", [go], [Call("Go", "Run", 0)], imports: [Import(CodeImportForms.Relative, "lib.t") with { Published = true }]));
+        Case(
+            "the names a file publishes",
+            [takesPublished],
+            new CodeGraphFile("lib.t", "t", Extract([RunAt("t:lib.Run")]) with { Published = ["Stop"] }),
+            new CodeGraphFile("lib.t", "t", Extract([RunAt("t:lib.Run")]) with { Published = ["Run"] }));
+
+        // Whether what a file's own such imports take is among what it publishes: its * import's names become its own.
+        Case(
+            "whether a file publishes what its imports take",
+            [takesPublished, new CodeGraphFile("a.t", "t", Extract([RunAt("t:a.Run")]) with { Published = ["Run"] })],
+            new CodeGraphFile("lib.t", "t", Extract([]) with { Published = [], Imports = [Import(CodeImportForms.Relative, "a.t") with { Published = true, Reexports = true }] }),
+            new CodeGraphFile("lib.t", "t", Extract([]) with { Published = [], PublishesTaken = true, Imports = [Import(CodeImportForms.Relative, "a.t") with { Published = true, Reexports = true }] }));
+
+        // Whether a directory is a unit of its language's layout: a package's file come, so a place of the layout in it is passed
+        // over and the one above taken.
+        var layout = Within(File(
+            "pkg/sub/mod.t",
+            [go],
+            [Call("Go", "Run", 0, Prefix("h"))],
+            imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Layout = true }, Import(CodeImportForms.Relative, "../../helper.t") with { Prefix = "h", Layout = true, Fallback = true }]));
+        Case(
+            "a unit of the layout",
+            [layout, File("pkg/sub/helper.t", [RunAt("t:near.Run")]), File("helper.t", [RunAt("t:far.Run")])],
+            null,
+            new CodeGraphFile("pkg/sub/init.t", "t", Extract([]) with { FolderUnit = true }));
+
+        // The roots of the layout an import under one is found through: a root a project file declares moved, and a unit come
+        // that makes the directory it stands in one.
+        var rooted = Within(File("use.t", [go], [Call("Go", "Run", 0, Prefix("x"))], imports: [Import(CodeImportForms.Rooted, "x/run.t") with { Prefix = "x" }]));
+        var underRoots = new[] { rooted, File("src/x/run.t", [RunAt("t:src.Run")]), File("lib/x/run.t", [RunAt("t:lib.Run")]) };
+        Case(
+            "a root of the layout a file declares",
+            underRoots,
+            new CodeGraphFile("project.t", "t", Extract([]) with { LayoutRoots = ["src"] }),
+            new CodeGraphFile("project.t", "t", Extract([]) with { LayoutRoots = ["lib"] }));
+        Case("a unit that makes a root of the layout", underRoots, null, new CodeGraphFile("src/x/init.t", "t", Extract([]) with { FolderUnit = true }));
+
+        // What a directory's import serves: become the fixture references' alone, which a test's parameter now reaches a fixture through.
+        Case(
+            "what an import serves",
+            [
+                Within(File("tests/t.t", [go], [Ref("Go", CodeEdgeKinds.References, "sample") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Fixture) }])),
+            ],
+            File("tests/conf.t", [Member("conf.sample", 0) with { SubKind = CodeSubKinds.Fixture }], scopes: [Open("conf")], imports: [Import(CodeImportForms.Directory, "conf")]),
+            File("tests/conf.t", [Member("conf.sample", 0) with { SubKind = CodeSubKinds.Fixture }], scopes: [Open("conf")], imports: [Import(CodeImportForms.Directory, "conf") with { Serves = CodeQualifierKinds.Fixture }]));
+
         // The keys' join: a key come that a member's name and a literal name, each now a use of it.
         reader = "t:Reader";
         Case(
@@ -1868,6 +2079,343 @@ public sealed class CodeGraphLinkerTests
 
         return cases;
     }
+
+    /// <summary>
+    /// A member extending a type of a name several types are - none an import or the member's scopes name - reads its own
+    /// <c>this</c> on each of them, never on the first alone: a member one of them declares is found unique, never exact.
+    /// </summary>
+    [Fact]
+    public void AMemberExtendingATypeSeveralAreNamed_ReadsItsThisOnEachOfThem()
+    {
+        var linked = Link(
+            File("lib/w.t", [Type("lib.Widget"), Member("lib.Widget.Draw", 0) with { Parent = "t:lib.Widget" }]),
+            File("app/w.t", [Type("app.Widget"), Member("app.Widget.Size", 0) with { Parent = "t:app.Widget" }]),
+            File("ext.t", [Member("Ext.Paint", 0) with { Extends = "Widget" }], [Call("Ext.Paint", "Draw", 0, new ExtractQualifier(CodeQualifierKinds.This)), Call("Ext.Paint", "Size", 0, new ExtractQualifier(CodeQualifierKinds.This))]));
+
+        Assert.Equal(
+            [Edge("t:Ext.Paint", "t:lib.Widget.Draw", CodeEdgeKinds.Calls, CodeConfidences.Unique), Edge("t:Ext.Paint", "t:app.Widget.Size", CodeEdgeKinds.Calls, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.From == "t:Ext.Paint" && edge.Kind == CodeEdgeKinds.Calls));
+    }
+
+    /// <summary>
+    /// A name written alone in a member's code passes over the scope of members reached by a receiver alone - a type's own that
+    /// says so, and the one a member added from outside its type is declared in - and finds what the scope around holds: never
+    /// the member itself, nor its sibling.
+    /// </summary>
+    [Fact]
+    public void ANameWrittenAlone_PassesOverTheScopeOfMembersReachedByAReceiverAlone()
+    {
+        var linked = Link(
+            File("lib.t", [Type("lib.Cart") with { MembersByReceiver = true }, Member("lib.Cart.render", 1) with { Parent = "t:lib.Cart" }, Member("lib.render", 1)], [Call("lib.Cart.render", "render", 1)]),
+            File("ext.t", [Member("lib.Box.paint", 0) with { Extends = "Box", MembersByReceiver = true }, Member("lib.Box.draw", 0) with { Extends = "Box", MembersByReceiver = true }, Member("lib.draw", 0)], [Call("lib.Box.paint", "draw", 0)], scopes: [new ExtractScope("lib.Box", Open: true) { Parent = QualifiedName.Of("lib") }]));
+
+        Assert.Equal([Edge("t:lib.Cart.render", "t:lib.render", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Cart.render"));
+        Assert.Equal([Edge("t:lib.Box.paint", "t:lib.draw", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Box.paint"));
+    }
+
+    /// <summary>
+    /// A file that keeps its names' kinds apart (<see cref="FileExtract.KindsApart"/>) calls what takes arguments alone, uses a value alone and
+    /// reaches a type by neither: where one name is a type, a function and a value, its call is an edge to the function alone, its use to the
+    /// value alone, each exact, and a new of the name to the type alone. A file that says so of itself not reaches all three by a call and by a
+    /// use, as candidates, and makes the type's edge an instantiation - as every language's file does that keeps no kinds apart.
+    /// </summary>
+    [Fact]
+    public void AFileThatKeepsItsNamesKindsApart_CallsAFunction_UsesAValue_AndReachesATypeByNeither()
+    {
+        var declared = File("x.t", [Type("x.Cart"), Member("x.Cart", 0) with { Id = "t:x.Cart~2" }, Value("x.Cart", null) with { Id = "t:x.Cart~3" }], scopes: [Open("x")]);
+        var use = File(
+            "use.t",
+            [Member("Go", 0)],
+            [
+                Call("Go", "Cart", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "x")),
+                Ref("Go", CodeEdgeKinds.Uses, "Cart") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, "x"), Line = 2 },
+                Ref("Go", CodeEdgeKinds.Instantiates, "Cart") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, "x"), Line = 3 },
+            ]);
+        var apart = Link(declared, use with { Extract = use.Extract! with { KindsApart = true } }).Edges.Where(edge => edge.From == "t:Go").OrderBy(edge => edge.Line).ToList();
+
+        Assert.Equal(
+            [
+                Edge("t:Go", "t:x.Cart~2", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Go", "t:x.Cart~3", CodeEdgeKinds.Uses, CodeConfidences.Exact) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Instantiates, CodeConfidences.Exact) with { Line = 3 },
+            ],
+            apart);
+
+        var together = Link(declared, use).Edges.Where(edge => edge.From == "t:Go").OrderBy(edge => edge.Line).ThenBy(edge => edge.Kind, StringComparer.Ordinal).ThenBy(edge => edge.To, StringComparer.Ordinal).ToList();
+
+        Assert.Equal(
+            [
+                Edge("t:Go", "t:x.Cart~2", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Go", "t:x.Cart~3", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Instantiates, CodeConfidences.Candidates),
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Uses, CodeConfidences.Candidates) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart~2", CodeEdgeKinds.Uses, CodeConfidences.Candidates) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart~3", CodeEdgeKinds.Uses, CodeConfidences.Candidates) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Instantiates, CodeConfidences.Exact) with { Line = 3 },
+            ],
+            together);
+    }
+
+    /// <summary>
+    /// A new in a file that keeps its names' kinds apart (<see cref="FileExtract.KindsApart"/>) makes no constructor function: it is a type
+    /// alone, though a member another file declares to extend the function makes one of it - where a new of the name, in a file that says
+    /// nothing of the kinds of its names, is an edge to the function.
+    /// </summary>
+    [Fact]
+    public void ANewInAFileThatKeepsItsNamesKindsApart_MakesNoConstructorFunction()
+    {
+        var declared = new[] { File("widget.t", [Member("Widget", 0)]), File("ext.t", [Member("Widget.draw", 0) with { Extends = "Widget" }]) };
+        var use = File("use.t", [Member("Go", 0)], [Ref("Go", CodeEdgeKinds.Instantiates, "Widget")]);
+
+        var kept = Link([.. declared, use with { Extract = use.Extract! with { KindsApart = true } }]).Edges.Where(edge => edge.From == "t:Go").ToList();
+
+        Assert.Equal([Edge("t:Go", "t:Widget", CodeEdgeKinds.Instantiates, CodeConfidences.Unique)], Link([.. declared, use]).Edges.Where(edge => edge.From == "t:Go"));
+        Assert.Equal([], kept);
+    }
+
+    /// <summary>
+    /// A file that writes its type names whole (<see cref="FileExtract.WrittenWhole"/>) finds the type or scope of a name's whole qualified name
+    /// alone - by a type's qualifier, through the value it declares, by a chain whose head names a type and by a type's chain written as links
+    /// past an import's prefix: the one of that whole name, exact, and nothing where none is - never one the scopes its code is in declare by
+    /// that name, one an import makes visible nor one whose name ends with it. A file that writes them not is looked for from where the code
+    /// stands, as before: the scope's, the import's, the ending's and the value's.
+    /// </summary>
+    [Fact]
+    public void AFileThatWritesItsNamesWhole_FindsTheTypeOfThatWholeNameAlone()
+    {
+        var declared = new[]
+        {
+            File(
+                "lib.t",
+                [
+                    Type("Clock"), Member("Clock.Tick", 0) with { Parent = "t:Clock" }, Value("Clock.inner", "Inner") with { Parent = "t:Clock" },
+                    Type("Inner"), Member("Inner.Run", 0) with { Parent = "t:Inner" },
+                ]),
+            File(
+                "app.t",
+                [
+                    Type("app.Clock"), Member("app.Clock.Tick", 0) with { Parent = "t:app.Clock" }, Value("app.Clock.inner", "app.Inner") with { Parent = "t:app.Clock" },
+                    Type("app.Inner"), Member("app.Inner.Run", 0) with { Parent = "t:app.Inner" }, Type("app.Lib.Mailer"), Member("app.Lib.Mailer.Send", 0) with { Parent = "t:app.Lib.Mailer" },
+                ],
+                scopes: [Open("app"), Open("app.Lib")]),
+        };
+        var use = File(
+            "use.t",
+            [Member("app.Go", 0), Value("app.clock", "Clock")],
+            [
+                Call("app.Go", "Tick", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Clock")),
+                Call("app.Go", "Send", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Lib.Mailer")) with { Line = 2 },
+                Call("app.Go", "Tick", 0, new ExtractQualifier(CodeQualifierKinds.Value, "clock")) with { Line = 3 },
+                Call("app.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Value, "Clock.inner")) with { Line = 4 },
+            ],
+            scopes: [Open("app")]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("t:app.Go", "t:Clock.Tick", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:Clock.Tick", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:Inner.Run", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact),
+            ],
+            Link([.. declared, use with { Extract = use.Extract! with { WrittenWhole = true } }]).Edges.Where(edge => edge.From == "t:app.Go").OrderBy(edge => edge.Line));
+
+        Assert.Equal(
+            [
+                new CodeEdge("t:app.Go", "t:app.Clock.Tick", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:app.Lib.Mailer.Send", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:app.Clock.Tick", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:app.Inner.Run", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact),
+            ],
+            Link([.. declared, use]).Edges.Where(edge => edge.From == "t:app.Go").OrderBy(edge => edge.Line));
+
+        // A type's chain written as links past an import's prefix is, written whole, the whole name its links spell - which nothing declares -
+        // and never what the import makes visible.
+        var shapes = File("lib/shapes.t", [Type("Outer"), Type("Outer.Inner"), Type("Outer.Inner.Deep"), Member("Outer.Inner.Deep.Run", 0)]);
+        var chain = File(
+            "typed.t",
+            [Member("Typed", 0)],
+            [
+                Ref("Typed", CodeEdgeKinds.Uses, "Outer") with { Qualifier = Prefix("lib.shapes") },
+                Ref("Typed", CodeEdgeKinds.Uses, "Inner") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 } },
+                Ref("Typed", CodeEdgeKinds.Uses, "Deep") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) { Link = 1 } },
+                Call("Typed", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 2 }),
+            ],
+            imports: [Import(CodeImportForms.Relative, "lib/shapes.t") with { Prefix = "lib.shapes" }]);
+        var typed = Link(shapes, chain).Edges.Where(edge => edge is { From: "t:Typed", Kind: CodeEdgeKinds.Calls }).ToList();
+        var whole = Link(shapes, chain with { Extract = chain.Extract! with { WrittenWhole = true } }).Edges.Where(edge => edge is { From: "t:Typed", Kind: CodeEdgeKinds.Calls }).ToList();
+
+        Assert.Equal([Edge("t:Typed", "t:Outer.Inner.Deep.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact)], typed);
+        Assert.Equal([], whole);
+    }
+
+    /// <summary>
+    /// A fixture qualifier reaches a fixture alone - a member of that kind within a kind - as every qualifier that names the kind it
+    /// reaches does: through the scope import that serves fixtures, exact; a type of that kind, and a member of none, are not reached.
+    /// </summary>
+    [Fact]
+    public void AFixtureQualifier_ReachesAFixtureMemberAlone()
+    {
+        var test = File("tests/t.t", [Member("Go", 0)], [Ref("Go", CodeEdgeKinds.References, "sample") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Fixture) }]);
+        IReadOnlyList<CodeEdge> Reached(ExtractNode sample)
+            => [.. Link(test, File("tests/conf.t", [sample], scopes: [Open("c")], imports: [Import(CodeImportForms.Directory, "c") with { Serves = CodeQualifierKinds.Fixture }])).Edges.Where(edge => edge.From == "t:Go")];
+
+        Assert.Equal([Edge("t:Go", "t:c.sample", CodeEdgeKinds.References, CodeConfidences.Exact)], Reached(Member("c.sample", 0) with { SubKind = CodeSubKinds.Fixture }));
+        Assert.Empty(Reached(Type("c.sample") with { SubKind = CodeSubKinds.Fixture }));
+        Assert.Empty(Reached(Member("c.sample", 0)));
+    }
+
+    /// <summary>
+    /// What a reference found - nothing, or several - gives its node the sign of why, as the way it is written tells it, no language
+    /// named, each one thing the linker knows: a fixture no scope and no serving import provides; a name, or a prefix, only an import
+    /// that names no file of the tree binds; a name written alone nothing binds, in a file that binds its names within it - none in a
+    /// file that does not, and none where an import naming a file of the tree binds the name, though each is counted external
+    /// alike - a directory's import, which every file of its language is given, naming a scope and no file, binds none of them;
+    /// candidates through an import of two places, both places declaring the name or one alone, as that import's file's own node is
+    /// signed beside its edges; and any other candidates. A use, which is recall, and a probe that found nothing, which misses nothing,
+    /// give none.
+    /// </summary>
+    [Fact]
+    public void AFinding_GivesItsNodeTheSignOfWhyItFoundNothingOrSeveral()
+    {
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+
+        var linked = Link(
+            Within(File("t/test.t", [Member("UsesFixture", 0)], [Ref("UsesFixture", CodeEdgeKinds.References, "sample") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Fixture) }])),
+            Within(File(
+                "outside.t",
+                [Member("Outside", 0), Member("Prefixed", 0)],
+                [Call("Outside", "convert", 1), Call("Prefixed", "get", 0, Prefix("requests"))],
+                imports: [Import(CodeImportForms.Relative, "vendor/rates.t") with { Show = ["convert"] }, Import(CodeImportForms.Relative, "requests.t") with { Prefix = "requests" }])),
+            Within(File(
+                "unbound.t",
+                [Member("Unbound", 0), Member("UsesOnly", 0), Member("Probing", 0)],
+                [Call("Unbound", "nowhere", 0), Ref("UsesOnly", CodeEdgeKinds.Uses, "absent"), Ref("Probing", CodeEdgeKinds.Calls, "absent") with { Probe = true }])),
+            File("open.t", [Member("Open", 0)], [Call("Open", "nowhere", 0)]),
+            Within(File("present.t", [Member("Present", 0)], [Call("Present", "missing", 0)], imports: [Import(CodeImportForms.Relative, "lib.t") with { Show = ["missing"] }])),
+            File("lib.t", [Member("Other", 0)]),
+            Within(File(
+                "tools/run.t",
+                [Member("Run", 0), Member("Solo", 0)],
+                [Call("Run", "pack", 0, Prefix("h")), Call("Solo", "solo", 0, Prefix("h"))],
+                imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true }])),
+            File("tools/helper.t", [Member("pack", 0) with { Id = "t:near.pack" }, Member("solo", 0) with { Id = "t:near.solo" }]),
+            File("helper.t", [Member("pack", 0) with { Id = "t:far.pack" }]),
+            File("duck.t", [Member("Duck", 0)], [Call("Duck", "quack", 0, new ExtractQualifier(CodeQualifierKinds.Value))]),
+            File("ducks/a.t", [Member("quack", 0) with { Id = "t:a.quack" }]),
+            File("ducks/b.t", [Member("quack", 0) with { Id = "t:b.quack" }]),
+            File("top.t", [], imports: [Import(CodeImportForms.Directory, "far") with { Global = true }]));
+
+        Assert.Equal(
+            [
+                "file:tools/run.t: candidate-imports",
+                "t:Duck: candidates",
+                "t:Outside: outside-import",
+                "t:Prefixed: outside-import",
+                "t:Run: candidate-imports",
+                "t:Solo: candidate-imports",
+                "t:Unbound: unbound",
+                "t:UsesFixture: unprovided-fixture",
+            ],
+            SignsOf(linked));
+
+        // Counted external all the same - a name the repository declares nowhere, one an import of a file of the tree binds - but no
+        // sign of either: nothing the linker knows tells why. A directory's import, given to every file of the language, names a
+        // scope and no file: it makes no name an outside import's.
+        Assert.Equal(1, linked.External["t:Open"]);
+        Assert.Equal(1, linked.External["t:Present"]);
+        Assert.Equal(
+            [Edge("t:Run", "t:far.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates), Edge("t:Run", "t:near.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.From == "t:Run").OrderBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal([Edge("t:Solo", "t:near.solo", CodeEdgeKinds.Calls, CodeConfidences.Candidates)], linked.Edges.Where(edge => edge.From == "t:Solo"));
+    }
+
+    /// <summary>
+    /// A chain written as links is bound where its head is: a link that found nothing past a head only an import naming no file of
+    /// the tree binds gives outside-import, though its own qualifier writes no name - here past a probe that found nothing, which
+    /// gives none - and one left candidates through an import taken as several gives candidate-imports, as its head does, both places
+    /// declaring the type or one alone: a member of a type an import of two places reaches is a candidate as the type is.
+    /// </summary>
+    [Fact]
+    public void AChainWrittenAsLinks_GivesTheSignItsHeadsImportGives()
+    {
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+
+        var linked = Link(
+            Within(File(
+                "outside.t",
+                [Member("Outside", 0)],
+                [Ref("Outside", CodeEdgeKinds.Uses, "version") with { Qualifier = Prefix("np"), Probe = true }, Call("Outside", "split", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 })],
+                imports: [Import(CodeImportForms.Relative, "vendor/numpy.t") with { Prefix = "np" }])),
+            Within(File(
+                "tools/run.t",
+                [Member("Run", 0), Member("Solo", 0)],
+                [
+                    Ref("Run", CodeEdgeKinds.Uses, "Box") with { Qualifier = Prefix("h") }, Call("Run", "pack", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 }),
+                    Ref("Solo", CodeEdgeKinds.Uses, "Crate") with { Qualifier = Prefix("h") }, Call("Solo", "pack", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 2 }),
+                ],
+                imports: [Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true }])),
+            File(
+                "tools/helper.t",
+                [
+                    Type("Box") with { Id = "t:near.Box" }, Member("Box.pack", 0) with { Id = "t:near.Box.pack", Parent = "t:near.Box" },
+                    Type("Crate") with { Id = "t:near.Crate" }, Member("Crate.pack", 0) with { Id = "t:near.Crate.pack", Parent = "t:near.Crate" },
+                ]),
+            File("helper.t", [Type("Box") with { Id = "t:far.Box" }, Member("Box.pack", 0) with { Id = "t:far.Box.pack", Parent = "t:far.Box" }]));
+
+        Assert.Equal(["file:tools/run.t: candidate-imports", "t:Outside: outside-import", "t:Run: candidate-imports", "t:Solo: candidate-imports"], SignsOf(linked));
+        Assert.Equal(
+            [Edge("t:Run", "t:far.Box.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates), Edge("t:Run", "t:near.Box.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge is { From: "t:Run", Kind: CodeEdgeKinds.Calls }).OrderBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.Equal(
+            [Edge("t:Solo", "t:near.Crate", CodeEdgeKinds.Uses, CodeConfidences.Candidates), Edge("t:Solo", "t:near.Crate.pack", CodeEdgeKinds.Calls, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.From == "t:Solo"));
+    }
+
+    /// <summary>
+    /// What an import of two places reaches is a candidate of each, though one place alone declares it, by every way a reference
+    /// reaches through one: a name written alone it lets, a member of a type a qualifier names through its prefix, and a member of the
+    /// value a chain of names reaches from a type it lets - the type's doubt carried along the chain to what is found on its value. Each
+    /// gives the sign of the import, never of a name bound alone.
+    /// </summary>
+    [Fact]
+    public void WhatAnImportOfTwoPlacesReaches_IsACandidate_ANameATypesMemberAndAValuesMemberAlike()
+    {
+        static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+
+        var linked = Link(
+            Within(File(
+                "tools/run.t",
+                [Member("Bare", 0), Member("Named", 0), Member("Valued", 0)],
+                [Call("Bare", "solo", 0), Call("Named", "make", 0, new ExtractQualifier(CodeQualifierKinds.Type, "h.Box")), Call("Valued", "go", 0, new ExtractQualifier(CodeQualifierKinds.Value, "Box.inner"))],
+                imports:
+                [
+                    Import(CodeImportForms.Relative, "helper.t") with { Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Fallback = true },
+                    Import(CodeImportForms.Relative, "helper.t") with { Prefix = "h", Either = true }, Import(CodeImportForms.Relative, "../helper.t") with { Prefix = "h", Fallback = true },
+                ])),
+            File(
+                "tools/helper.t",
+                [
+                    Member("solo", 0) with { Id = "t:near.solo" },
+                    Type("Box") with { Id = "t:near.Box" }, Member("Box.make", 0) with { Id = "t:near.Box.make", Parent = "t:near.Box" },
+                    Value("Box.inner", "Inner") with { Id = "t:near.Box.inner", Parent = "t:near.Box" },
+                    Type("Inner") with { Id = "t:near.Inner" }, Member("Inner.go", 0) with { Id = "t:near.Inner.go", Parent = "t:near.Inner" },
+                ]),
+            File("helper.t", [Member("other", 0) with { Id = "t:far.other" }]));
+
+        Assert.Equal(
+            [
+                Edge("t:Bare", "t:near.solo", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Named", "t:near.Box.make", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Valued", "t:near.Inner.go", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+            ],
+            linked.Edges.Where(edge => edge.From is "t:Bare" or "t:Named" or "t:Valued"));
+        Assert.Equal(
+            ["file:tools/run.t: candidate-imports", "t:Bare: candidate-imports", "t:Named: candidate-imports", "t:Valued: candidate-imports"],
+            SignsOf(linked));
+    }
+
+    /// <summary>The signs each node of <paramref name="linked"/> gave, a line a node, in the order of their ids.</summary>
+    private static string[] SignsOf(CodeGraphLinked linked)
+        => [.. linked.Signs.OrderBy(signs => signs.Key, StringComparer.Ordinal).Select(signs => $"{signs.Key}: {string.Join(", ", signs.Value)}")];
 
     /// <summary>Two files of one path are no tree: the linker refuses them.</summary>
     [Fact]
@@ -1886,6 +2434,7 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(whole.Edges, again.Edges);
         Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
         Assert.Equal([.. whole.External], [.. again.External]);
+        Assert.Equal(SignsOf(whole), SignsOf(again));
         Assert.True(again.References <= whole.References);
         return again;
     }
@@ -1972,6 +2521,11 @@ public sealed class CodeGraphLinkerTests
             references.Add(RandomReference(random, Pick(random, nodes).Id.Whole(), made, Pick(random, nodes).Id.Whole()));
         }
 
+        // Now and then a file of a language that binds its names within it, one that keeps its names' kinds apart, one that writes its type names
+        // whole, one that says its directory is a unit of its layout or declares a root of it, and one that publishes names - and what its own
+        // imports that take published names take.
+        IReadOnlyList<string>? published = Chance(random, 3) ? [.. RandomNames.Where(_ => Chance(random, 4))] : null;
+
         return new CodeGraphFile(path, Chance(random, 12) ? "u" : "t", new FileExtract(nodes)
         {
             References = references,
@@ -1979,8 +2533,18 @@ public sealed class CodeGraphLinkerTests
             Imports = RandomImports(random),
             AddressRoots = Chance(random, 5) ? [RandomRoot(random)] : [],
             Literals = nodes.Count > 0 && Chance(random, 3) ? LiteralRow.Table(new LiteralRow(Pick(random, RandomData), 1)) : [],
+            BoundWithin = Chance(random, 4),
+            KindsApart = Chance(random, 4),
+            WrittenWhole = Chance(random, 4),
+            FolderUnit = Chance(random, 4),
+            LayoutRoots = Chance(random, 6) ? [Pick(random, RandomLayoutRoots)] : null,
+            Published = published,
+            PublishesTaken = published is not null && Chance(random, 2),
         });
     }
+
+    /// <summary>The roots of the layout a file made at random declares, each beside it: some a directory of the tree's paths, one the file's own, one out of the tree.</summary>
+    private static readonly string[] RandomLayoutRoots = ["lib", "app", ".", "..", "../../out"];
 
     /// <summary>The names a tree made at random gives its data and its literals: some a member's name is, as a naming policy writes it.</summary>
     private static readonly string[] RandomData = ["run", "stop", "Run", "Make", "next_one", "timeout"];
@@ -2075,12 +2639,14 @@ public sealed class CodeGraphLinkerTests
         => new(from, Pick(random, [CodeEdgeKinds.Calls, CodeEdgeKinds.Calls, CodeEdgeKinds.References, CodeEdgeKinds.Uses]), Pick(random, [.. RandomNames, .. RandomData]), line)
         {
             Arity = random.Next(0, 2),
-            Qualifier = random.Next(16) switch
+            Probe = Chance(random, 10),
+            Qualifier = random.Next(17) switch
             {
                 12 => new ExtractQualifier(CodeQualifierKinds.StyleVariable),
                 13 => new ExtractQualifier(CodeQualifierKinds.StyleMixin),
                 14 => new ExtractQualifier(CodeQualifierKinds.Keyframes),
                 15 => new ExtractQualifier(CodeQualifierKinds.Own, own),
+                16 => new ExtractQualifier(CodeQualifierKinds.Fixture),
                 0 or 1 => null,
                 2 => new ExtractQualifier(CodeQualifierKinds.Named, Dotted(random)),
                 3 => new ExtractQualifier(CodeQualifierKinds.Type, Dotted(random)),
@@ -2109,9 +2675,14 @@ public sealed class CodeGraphLinkerTests
     }
 
     private static ExtractImport RandomImport(Random random)
-        => random.Next(5) switch
+        => random.Next(6) switch
         {
-            3 => Import(CodeImportForms.Directory, Pick(random, [.. RandomScopes, "lib.A", "app.B"])),
+            3 => Import(CodeImportForms.Directory, Pick(random, [.. RandomScopes, "lib.A", "app.B"])) with { Serves = Chance(random, 3) ? CodeQualifierKinds.Fixture : null },
+            5 => Import(CodeImportForms.Rooted, Pick(random, ["x.t", "in/w.t", "m.t", "ui/v.t", "y.t"])) with
+            {
+                Prefix = Chance(random, 2) ? "p" : null,
+                Reexports = Chance(random, 3),
+            } is var rooted && rooted.Prefix is null && Chance(random, 4) ? rooted with { Published = true } : rooted,
             0 or 1 => Import(CodeImportForms.Scope, Pick(random, [.. RandomScopes, "lib.A", "app.B", "far.C"])) with
             {
                 Prefix = Chance(random, 3) ? Pick(random, ["p", "A"]) : null,
@@ -2124,9 +2695,28 @@ public sealed class CodeGraphLinkerTests
                 Prefix = Chance(random, 3) ? "p" : null,
             } is var file && Chance(random, 4) ? file with { Prefix = null, Export = true, Hide = Chance(random, 3) ? [Pick(random, RandomNames)] : null }
                 : file.Prefix is null && Chance(random, 5) ? file with { Shares = true }
-                : file,
+                : RandomFileImport(random, file),
             _ => Import(CodeImportForms.Address, Pick(random, ["pkg:x.t", "pkg:in/w.t", "q:m.t", "q:ui/v.t"])),
         };
+
+    /// <summary>
+    /// <paramref name="file"/>, an import of a file that is no export, now and then made what a language that binds its names within
+    /// the file writes: its names its importers' too, a place of its layout, one of two places a name may stand at, one whose prefix
+    /// stands for the one name it shows, or one that takes the names a file publishes.
+    /// </summary>
+    private static ExtractImport RandomFileImport(Random random, ExtractImport file)
+    {
+        file = file with
+        {
+            Reexports = Chance(random, 3),
+            Layout = file.Form == CodeImportForms.Relative && Chance(random, 3),
+            Either = Chance(random, 6),
+        };
+
+        return file.Prefix is not null && Chance(random, 3) ? file with { Binds = true, Show = [Pick(random, RandomNames)] }
+            : file.Prefix is null && Chance(random, 5) ? file with { Published = true }
+            : file;
+    }
 
     private static ExtractAddressRoot RandomRoot(Random random)
         => (Chance(random, 3)
@@ -2174,7 +2764,7 @@ public sealed class CodeGraphLinkerTests
             }
         }
 
-        switch (random.Next(20))
+        switch (random.Next(21))
         {
             case 0:
                 Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is null && Chance(random, 2), node => node with { ValueType = Chance(random, 4) ? null : Dotted(random) });
@@ -2188,13 +2778,19 @@ public sealed class CodeGraphLinkerTests
 
             case 14 when imports.Count > 0:
                 var changing = random.Next(imports.Count);
-                imports[changing] = random.Next(4) switch
+                imports[changing] = random.Next(9) switch
                 {
-                    0 => imports[changing] with { Prefix = imports[changing].Prefix is null ? Pick(random, ["p", "A"]) : null },
-                    1 => imports[changing] with { Show = imports[changing].Show is null ? [Pick(random, RandomNames)] : null },
-                    2 => imports[changing] with { Hide = imports[changing].Hide is null ? [Pick(random, RandomNames)] : null },
+                    4 => imports[changing] with { Reexports = !imports[changing].Reexports },
+                    5 when imports[changing].Form == CodeImportForms.Relative && !imports[changing].Export => imports[changing] with { Layout = !imports[changing].Layout },
+                    6 when imports[changing].Form is not (CodeImportForms.Scope or CodeImportForms.Directory) && !imports[changing].Export => imports[changing] with { Either = !imports[changing].Either },
+                    7 when imports[changing] is { Form: not (CodeImportForms.Scope or CodeImportForms.Directory), Prefix: null, Show: null, Hide: null, Export: false, Binds: false } => imports[changing] with { Published = !imports[changing].Published },
+                    8 when imports[changing] is { Form: CodeImportForms.Directory, Global: false } => imports[changing] with { Serves = imports[changing].Serves is null ? CodeQualifierKinds.Fixture : null },
+                    0 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Prefix = imports[changing].Prefix is null ? Pick(random, ["p", "A"]) : null },
+                    1 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Show = imports[changing].Show is null ? [Pick(random, RandomNames)] : null },
+                    2 when imports[changing] is { Binds: false, Published: false } => imports[changing] with { Hide = imports[changing].Hide is null ? [Pick(random, RandomNames)] : null },
                     3 when imports[changing] is { Form: not (CodeImportForms.Scope or CodeImportForms.Directory), Prefix: null } => imports[changing] with { Export = !imports[changing].Export, Shares = false },
-                    _ => imports[changing] with { Global = !imports[changing].Global },
+                    // An import made for the language's every file serves no qualifier's references: one that serves loses it.
+                    _ => imports[changing] with { Global = !imports[changing].Global, Serves = null },
                 };
                 break;
 
@@ -2318,6 +2914,22 @@ public sealed class CodeGraphLinkerTests
                 // Data made another kind under its id - a mixin become a function, a key an element - which what may reach
                 // it reads.
                 Each(node => CodeSubKinds.IsData(node.SubKind) && Chance(random, 2), node => node with { SubKind = Pick(random, RandomDataKinds) });
+                break;
+
+            case 20:
+                // What a file says of itself that another file's finding reads: whether its names are bound within it, whether it keeps its
+                // names' kinds apart, whether it writes its type names whole, whether its directory is a unit of its layout, the roots it
+                // declares, the names it publishes and whether what its imports take is among them.
+                extract = random.Next(7) switch
+                {
+                    0 => extract with { BoundWithin = !extract.BoundWithin },
+                    1 => extract with { FolderUnit = !extract.FolderUnit },
+                    2 => extract with { LayoutRoots = extract.LayoutRoots is null ? [Pick(random, RandomLayoutRoots)] : null },
+                    3 => extract with { Published = extract.Published is null ? [Pick(random, RandomNames)] : null, PublishesTaken = false },
+                    5 => extract with { KindsApart = !extract.KindsApart },
+                    6 => extract with { WrittenWhole = !extract.WrittenWhole },
+                    _ => extract.Published is null ? extract : extract with { PublishesTaken = !extract.PublishesTaken },
+                };
                 break;
 
             default:
@@ -2728,6 +3340,94 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(
             ["Payments.TimeoutSeconds", "Payments.TimeoutSeconds", "Limits[1].Value", null, "Limits.01.Value", null, null],
             new[] { "Payments:TimeoutSeconds", "Payments__TimeoutSeconds", "Limits:1:Value", "Payments::TimeoutSeconds", "Limits:01:Value", "Payments.TimeoutSeconds", ":x" }.Select(CodeKeyPaths.Dotted));
+    }
+
+    /// <summary>
+    /// A literal names a key whose own name holds a dot by its name and by each spelling .NET's configuration reads it by -
+    /// a colon or a double underscore between the places, a dot inside a name staying a dot - and never the nested keys of
+    /// the same dots, which only their own spelling names: <c>Logging:LogLevel:Microsoft.AspNetCore</c> is the key
+    /// <c>Microsoft.AspNetCore</c> under <c>LogLevel</c>, as the ASP.NET Core template writes it, and
+    /// <c>Logging:LogLevel:Microsoft:AspNetCore</c> the nested one.
+    /// </summary>
+    [Fact]
+    public void ALiteral_NamesAKeyWhoseNameHoldsADot_ByItsNameAndEachSpellingDotNetReadsIt_NeverTheNestedKeyOfTheSameDots()
+    {
+        var json = new DssHarness.Core.Codebase.Languages.JsonExtractor().Extract(
+            new CodeFileInput("appsettings.json", """{"Logging":{"LogLevel":{"Microsoft.AspNetCore":"Warning","Microsoft":{"AspNetCore":"Error"}}}}"""));
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("appsettings.json", "json", json),
+            new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 4 }])
+            {
+                Literals = LiteralRow.Table(
+                    new LiteralRow("Logging:LogLevel:Microsoft.AspNetCore", 1),
+                    new LiteralRow("Logging__LogLevel__Microsoft.AspNetCore", 2),
+                    new LiteralRow("Logging:LogLevel:Microsoft:AspNetCore", 3),
+                    new LiteralRow("Microsoft.AspNetCore", 4)),
+            }),
+        ]);
+
+        Assert.Equal(
+            [("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 1), ("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 2), ("json:appsettings.json#Logging.LogLevel.Microsoft.AspNetCore", 3), ("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 4)],
+            linked.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => (edge.To, edge.Line)));
+    }
+
+    /// <summary>
+    /// A literal's path spelled with a colon names a key whose own name holds a dot through a YAML merge as directly as it
+    /// names a nested one: <c>job:a.b</c> reaches the merged mapping's key <c>a.b</c>, <c>job.a.b</c> the nested
+    /// <c>a</c> then <c>b</c> - where both spelled the same path, and one literal named both.
+    /// </summary>
+    [Fact]
+    public void ALiteralsPath_ThroughAYamlMerge_ReachesAKeyWhoseNameHoldsADot_AndNotTheNestedKeyOfItsDots()
+    {
+        const string Config = """
+            base: &base
+              "a.b": 1
+              a:
+                b: 2
+            job:
+              <<: *base
+            """;
+        var yaml = new DssHarness.Core.Codebase.Languages.YamlExtractor().Extract(new CodeFileInput("config.yml", Config));
+
+        string[] Reached(params string[] literals)
+            => [.. CodeGraphLinker.Link(
+                [
+                    new CodeGraphFile("config.yml", "yaml", yaml),
+                    new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = literals.Length }]) { Literals = LiteralRow.Table([.. literals.Select((literal, at) => new LiteralRow(literal, at + 1))]) }),
+                ]).Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => $"{edge.Line} {edge.To}")];
+
+        Assert.Equal(["1 yaml:config.yml#base[\"a.b\"]"], Reached("job:a.b"));
+        Assert.Equal(["1 yaml:config.yml#base.a.b"], Reached("job.a.b"));
+    }
+
+    /// <summary>
+    /// A literal writing a path in brackets - as lodash and JSONPath write one - names the key of that path in either quote
+    /// mark, and a path with each place quoted needlessly the keys of its places. The loose form, a path's quoted names
+    /// written with their own dots as they are, names none: code splits a dotted literal into its places, as .NET's
+    /// configuration and lodash do.
+    /// </summary>
+    [Fact]
+    public void ALiteralWritingAPathInBrackets_EitherQuoteMark_NamesTheKeyOfItsPath_AndTheLooseFormNone()
+    {
+        var json = new DssHarness.Core.Codebase.Languages.JsonExtractor().Extract(
+            new CodeFileInput("appsettings.json", """{"Logging":{"LogLevel":{"Default":"Information","Microsoft.AspNetCore":"Warning"}}}"""));
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("appsettings.json", "json", json),
+            new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 4 }])
+            {
+                Literals = LiteralRow.Table(
+                    new LiteralRow("Logging.LogLevel[\"Microsoft.AspNetCore\"]", 1),
+                    new LiteralRow("Logging.LogLevel['Microsoft.AspNetCore']", 2),
+                    new LiteralRow("""["Logging"]["LogLevel"]["Default"]""", 3),
+                    new LiteralRow("Logging.LogLevel.Microsoft.AspNetCore", 4)),
+            }),
+        ]);
+
+        Assert.Equal(
+            [("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 1), ("json:appsettings.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", 2), ("json:appsettings.json#Logging.LogLevel.Default", 3)],
+            linked.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => (edge.To, edge.Line)));
     }
 
     /// <summary>

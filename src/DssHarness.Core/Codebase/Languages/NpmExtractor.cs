@@ -28,7 +28,7 @@ public sealed class NpmExtractor : ICodeGraphExtractor
     public string Language => "npm";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("package.json")], []);
@@ -40,10 +40,10 @@ public sealed class NpmExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Node packages (package.json): a project node for each, named by its name, its summary from its description, a projectReference to each package it depends on that the repository holds - a workspace's - and its address roots: <name> its entry (its exports' ., source, module, main, types, typings, else an index file, each tried as TypeScript and Node try a path, the first the repository holds), each subpath its exports name, and <name>/ its directory where it has no exports",
         [
-            "a dependency from a registry, from git or from a URL: no project of the repository, unless one of the repository's packages has its name",
-            "an export's conditions (import, require, node, browser, types and the rest): each is tried in the order the file writes them, the first file the repository holds taken",
-            $"an exports subpath that is {ProjectRoots.Unread}: not read",
-            "a workspace's members as references: each member's package.json is a project of its own, and what workspaces lists is not read",
+            ("registry-packages", "a dependency from a registry, from git or from a URL: no project of the repository, unless one of the repository's packages has its name"),
+            ("export-conditions", "an export's conditions (import, require, node, browser, types and the rest): each is tried in the order the file writes them, the first file the repository holds taken"),
+            ("export-patterns", $"an exports subpath that is {ProjectRoots.Unread}: not read"),
+            ("workspace-members", "a workspace's members as references: each member's package.json is a project of its own, and what workspaces lists is not read"),
             JsonOutline.Unread,
         ]);
 

@@ -41,7 +41,7 @@ public interface ICodeGraphExtractor
     /// </summary>
     bool Outlines { get; }
 
-    /// <summary>What it reads, and what it does not see, as <c>help codebase-graph</c> says them for it.</summary>
+    /// <summary>What it reads, and what it does not see, as <c>help codebase-graph-languages</c> says them for it.</summary>
     CodeGraphExtractorHelp Help { get; }
 
     /// <summary>
@@ -94,10 +94,82 @@ public sealed record CodeGraphClaims(IReadOnlyList<CodeGraphClaim> Names, IReadO
 /// </param>
 public sealed record CodeGraphClaim(string Value, Func<CodeText, bool>? ContentTest = null);
 
-/// <summary>What <c>help codebase-graph</c> says of one implementation.</summary>
+/// <summary>
+/// What an implementation does not see: its short name, a clause the help prints after <c>does not see</c>, a line a person reads
+/// before trusting an answer of the graph, and the signs by which a file shows the limit applies to it (<see cref="Signs"/>). A
+/// <c>sites</c> answer says each limit of each language whose files it read: one some of those files show the sign of in full, with
+/// how many show it, and every other by its name alone, on one line for the language that points to
+/// <c>help codebase-graph-languages</c>, which says each in full under its name - so nothing is left unsaid, and an answer stays
+/// small.
+/// </summary>
+/// <param name="Name">
+/// Its short name, the one the help lists it under and a <c>sites</c> answer names it by: lower-case letters, digits and dashes,
+/// beginning with a letter, one implementation's limits each named once (<see cref="IsName"/>).
+/// </param>
+/// <param name="Says">What it does not see: a clause with no final stop.</param>
+public sealed record CodeGraphLimit(string Name, string Says)
+{
+    /// <summary>
+    /// The sign of a file some of whose references the linker left candidates, however few, other than through an import of several
+    /// places (<see cref="CandidateImports"/>) - a receiver's members by their name alone, each override of one
+    /// (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string Candidates = "candidates";
+
+    /// <summary>
+    /// The sign of a file an import of which the linker took as several files - each a candidate: an ending several files of the
+    /// tree end with, two places one name may stand at - or a reference of which it left candidates through such an import, what it
+    /// found there one or several, as the place that found it says (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string CandidateImports = "candidate-imports";
+
+    /// <summary>
+    /// The sign of a file a reference of which the linker bound to nothing, counted external, where the name it is written by - or
+    /// its qualifier's head - is bound by imports of the file alone and none of them names a file of the tree: a module installed
+    /// from outside the tree, or one under a root the graph does not know (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string OutsideImport = "outside-import";
+
+    /// <summary>
+    /// The sign of a file a name written alone in which no scope declares and no import of the file lets, where its language binds
+    /// its names within the file (<see cref="FileExtract.BoundWithin"/>): bound to nothing, counted external
+    /// (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string Unbound = "unbound";
+
+    /// <summary>
+    /// The sign of a file a fixture a test is given by its parameter's name (<see cref="CodeQualifierKinds.Fixture"/>) in which no
+    /// scope of the test declares and no import serving fixtures holds: bound to nothing, counted external
+    /// (<see cref="CodeGraphLinked.Signs"/>).
+    /// </summary>
+    public const string UnprovidedFixture = "unprovided-fixture";
+
+    /// <summary>
+    /// The signs a file gives that the limit applies to it: what the linker found of its references - <see cref="Candidates"/>,
+    /// <see cref="CandidateImports"/>, <see cref="OutsideImport"/>, <see cref="Unbound"/>, <see cref="UnprovidedFixture"/>, each
+    /// one thing it knows, no language named - or the kind of a dynamic mark its reading made (<see cref="ExtractDynamic.Kind"/>),
+    /// which every mark has. A sign names one limit as another may name it, where both tell of that one thing; a limit that says
+    /// what a reader marks names the kind of the mark. None where no sign of it is named: the limit is said of every file of its
+    /// language all the same, by its name, and in full of none.
+    /// </summary>
+    public IReadOnlyList<string> Signs { get; init; } = [];
+
+    /// <summary>A limit no sign is named for: its short name and its clause.</summary>
+    public static implicit operator CodeGraphLimit((string Name, string Says) limit) => new(limit.Name, limit.Says);
+
+    /// <summary>Whether <paramref name="name"/> is a limit's short name: lower-case letters, digits and dashes, beginning with a letter and ending with no dash.</summary>
+    /// <param name="name">A limit's name.</param>
+    public static bool IsName(string? name)
+        => name is { Length: > 0 }
+            && char.IsAsciiLetterLower(name[0])
+            && name[^1] != '-'
+            && name.All(character => char.IsAsciiLetterLower(character) || char.IsAsciiDigit(character) || character == '-');
+}
+
+/// <summary>What <c>help codebase-graph-languages</c> says of one implementation.</summary>
 /// <param name="Reads">One line: what it reads, and through what.</param>
-/// <param name="DoesNotSee">What it does not see, each a line a person reads before trusting an answer of the graph.</param>
-public sealed record CodeGraphExtractorHelp(string Reads, IReadOnlyList<string> DoesNotSee)
+/// <param name="DoesNotSee">What it does not see, each, under its short name, a line a person reads before trusting an answer of the graph, with the signs that tell where it applies.</param>
+public sealed record CodeGraphExtractorHelp(string Reads, IReadOnlyList<CodeGraphLimit> DoesNotSee)
 {
     /// <summary>
     /// What reading a file holds beyond what the implementation keeps of it, where a library it reads through keeps more -

@@ -1,0 +1,25 @@
+[
+  {
+    "data": "largest_area",
+    "sites": [
+      { "place": "src/shape.c:30", "how": "defines" },
+      { "place": "src/shape.c:109", "how": "calls" },
+      { "place": "src/main.c:32", "how": "calls" }
+    ]
+  },
+  {
+    "data": "area_circle",
+    "sites": [
+      { "place": "src/shape.c:4", "how": "defines" },
+      { "place": "src/shape.c:23", "how": "calls" },
+      { "place": "src/shape.c:37", "how": "calls" },
+      { "place": "src/shape.c:56", "how": "calls" },
+      { "place": "src/shape.c:86", "how": "calls" },
+      { "place": "src/shape.c:121", "how": "calls" },
+      { "place": "src/shape.c:201", "how": "calls" },
+      { "place": "src/shape.c:212", "how": "calls" },
+      { "place": "src/shape.c:231", "how": "calls" },
+      { "place": "src/report.c:9", "how": "calls" }
+    ]
+  }
+]

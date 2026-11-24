@@ -1,0 +1,1 @@
+{"nodes":[{"id":"pyproject:pyproject.toml","kind":"project","name":"shop","qualified":"pyproject.toml","start":1,"end":17,"signature":"name = \"shop\"","modifiers":[]}],"scopes":[],"imports":[],"addressRoots":[],"references":[],"dynamic":[],"layoutRoots":["src","lib","tests/helpers"]}

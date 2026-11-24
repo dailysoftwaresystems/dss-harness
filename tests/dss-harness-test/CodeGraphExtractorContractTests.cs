@@ -235,7 +235,8 @@ public static class CodeGraphContract
     /// <summary>
     /// Each fixture's extract leaves every digest to the core and, digested, is a sound model: every span inside the file,
     /// every parent present and holding its child, ids unique and of its implementation, kinds of the model's vocabulary,
-    /// every reference made from a node of it, text whole - and it holds the nodes the fixture names.
+    /// every reference made from a node of it, text whole, every dynamic mark of a kind a limit of its help names
+    /// (<see cref="Signed"/>) - and it holds the nodes the fixture names.
     /// </summary>
     public static void Sound(ICodeGraphExtractor extractor, IReadOnlyList<CodeGraphFixture> fixtures)
     {
@@ -249,6 +250,7 @@ public static class CodeGraphContract
 
             var extract = answered.WithDigests(input.Text);
             Assert.Null(extract.Problem(extractor.Language, lines.Count));
+            Signed(extractor, extract, fixture.Path);
 
             foreach (var expected in fixture.Nodes)
             {
@@ -265,7 +267,8 @@ public static class CodeGraphContract
 
     /// <summary>
     /// Every cut of each fixture's first <see cref="EveryCut"/> characters - and one in <see cref="CutStride"/> past them -
-    /// an empty file and text that is no code at all each give a sound extract, and never an exception.
+    /// an empty file and text that is no code at all each give a sound extract, every mark of it of a kind a limit of the
+    /// implementation's help names (<see cref="Signed"/>), and never an exception.
     /// </summary>
     public static void Tolerant(ICodeGraphExtractor extractor, IReadOnlyList<CodeGraphFixture> fixtures)
     {
@@ -276,6 +279,22 @@ public static class CodeGraphContract
 
             Assert.NotNull(extract);
             Assert.Null(extract.WithDigests(input.Text).Problem(extractor.Language, input.Lines.Count));
+            Signed(extractor, extract, path);
+        }
+    }
+
+    /// <summary>
+    /// Each dynamic mark of <paramref name="extract"/>, <paramref name="extractor"/>'s of the file at <paramref name="path"/>, is of a
+    /// kind some limit of the implementation's help names as its sign: a file that shows what a reader does not see has that limit
+    /// said in full of it, and a reader marks nothing its help says no limit of.
+    /// </summary>
+    public static void Signed(ICodeGraphExtractor extractor, FileExtract extract, string path)
+    {
+        var signs = extractor.Help.DoesNotSee.SelectMany(limit => limit.Signs).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var mark in extract.Dynamic)
+        {
+            Assert.True(signs.Contains(mark.Kind), $"'{extractor.Language}' marks line {mark.Line} of {path} dynamic as '{mark.Kind}' ({mark.Why}), which no limit of its help names as its sign");
         }
     }
 

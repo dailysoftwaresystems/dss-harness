@@ -1,5 +1,6 @@
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
+using DssHarness.Core.Output;
 
 namespace DssHarness.Tests;
 
@@ -76,7 +77,59 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 new("json:package-lock.json#[\"\"].a", CodeNodeKinds.Member, (9, 9)),
             ],
         },
+        new("appsettings.Development.json", Development)
+        {
+            Nodes =
+            [
+                new("json:appsettings.Development.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", CodeNodeKinds.Member, (5, 5)),
+                new("json:appsettings.Development.json#Logging.LogLevel.Microsoft.AspNetCore", CodeNodeKinds.Member, (7, 7)),
+                new("json:appsettings.Development.json#Logging.LogLevel.Microsoft", CodeNodeKinds.Section, (6, 8)),
+                new("json:appsettings.Development.json#[\"Logging:LogLevel:System.Net.Http\"]", CodeNodeKinds.Member, (11, 11)),
+            ],
+        },
+        new(".vscode/settings.json", Editor)
+        {
+            Nodes =
+            [
+                new("json:.vscode/settings.json#[\"[typescript]\"]", CodeNodeKinds.Section, (3, 5)),
+                new("json:.vscode/settings.json#[\"[typescript]\"][\"editor.defaultFormatter\"]", CodeNodeKinds.Member, (4, 4)),
+                new("json:.vscode/settings.json#[\"files.exclude\"][\"[0]\"]", CodeNodeKinds.Member, (8, 8)),
+            ],
+        },
     ];
+
+    /// <summary>
+    /// An appsettings file whose logging levels name one key with a dot of its own beside keys nested by the same dots, and a
+    /// flat key .NET's configuration reads by its colons: the path of each is written so it reads back as the one it is.
+    /// </summary>
+    private const string Development = """
+        {
+          "Logging": {
+            "LogLevel": {
+              "Default": "Information",
+              "Microsoft.AspNetCore": "Warning",
+              "Microsoft": {
+                "AspNetCore": "Error"
+              }
+            }
+          },
+          "Logging:LogLevel:System.Net.Http": "Error"
+        }
+        """;
+
+    /// <summary>A VS Code settings file, whose names hold brackets and dots of their own.</summary>
+    private const string Editor = """
+        {
+          "editor.formatOnSave": true,
+          "[typescript]": {
+            "editor.defaultFormatter": "esbenp.prettier-vscode"
+          },
+          "files.exclude": {
+            "**/.git": true,
+            "[0]": false
+          }
+        }
+        """;
 
     /// <summary>A lockfile of npm's - its root package named by the empty name - and a member of the empty name at the top.</summary>
     private const string Lock = """
@@ -151,9 +204,9 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
         Assert.All(broken, extract => Assert.Empty(extract.Nodes));
         Assert.Equal(
             [
-                new ExtractDynamic(2, "the file stops reading as JSON here (',' is an invalid start of a property name. Expected a '\"'), and nothing of it is read"),
-                new ExtractDynamic(2, "the file stops reading as JSON here ('2' is an invalid end of a number. Expected a delimiter), and nothing of it is read"),
-                new ExtractDynamic(1, "the file stops reading as JSON here ('{' is invalid after a single JSON value. Expected end of data), and nothing of it is read"),
+                new ExtractDynamic(2, "the file stops reading as JSON here (',' is an invalid start of a property name. Expected a '\"'), and nothing of it is read", DataNodes.Stop),
+                new ExtractDynamic(2, "the file stops reading as JSON here ('2' is an invalid end of a number. Expected a delimiter), and nothing of it is read", DataNodes.Stop),
+                new ExtractDynamic(1, "the file stops reading as JSON here ('{' is invalid after a single JSON value. Expected end of data), and nothing of it is read", DataNodes.Stop),
             ],
             broken.SelectMany(extract => extract.Dynamic));
 
@@ -323,6 +376,45 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
         Assert.Equal("tsconfig", registry.Route("tsconfig.json", string.Empty).Extractor?.Language);
         Assert.Equal("composer", registry.Route("composer.json", string.Empty).Extractor?.Language);
         Assert.Equal("json", registry.Route("appsettings.json", string.Empty).Extractor?.Language);
+    }
+
+    /// <summary>
+    /// A key whose name holds a dot or a bracket is one place of its path, quoted in brackets as <see cref="ReportText.Quoted"/>
+    /// writes it, and is named by its own name: <c>Logging.LogLevel["Microsoft.AspNetCore"]</c> is one key and the path of
+    /// the nested <c>Logging.LogLevel.Microsoft.AspNetCore</c> another, where both were written alike and their ids told
+    /// apart by a count. Every reader of data files writes a key's path through the one owner of the join.
+    /// </summary>
+    [Fact]
+    public void AKeyWhoseNameHoldsADotOrABracket_IsOnePlaceQuotedInBrackets_NamedAsItsFileWritesIt()
+    {
+        var development = Read("appsettings.Development.json", Development);
+        var editor = Read(".vscode/settings.json", Editor);
+
+        Assert.Equal(
+            [
+                ("json:appsettings.Development.json#Logging", "Logging", "appsettings.Development.json#Logging", (string?)null),
+                ("json:appsettings.Development.json#Logging.LogLevel", "LogLevel", "appsettings.Development.json#Logging.LogLevel", null),
+                ("json:appsettings.Development.json#Logging.LogLevel.Default", "Default", "Logging.LogLevel.Default", "Information"),
+                ("json:appsettings.Development.json#Logging.LogLevel[\"Microsoft.AspNetCore\"]", "Microsoft.AspNetCore", "Logging.LogLevel[\"Microsoft.AspNetCore\"]", "Warning"),
+                ("json:appsettings.Development.json#Logging.LogLevel.Microsoft", "Microsoft", "appsettings.Development.json#Logging.LogLevel.Microsoft", null),
+                ("json:appsettings.Development.json#Logging.LogLevel.Microsoft.AspNetCore", "AspNetCore", "Logging.LogLevel.Microsoft.AspNetCore", "Error"),
+                ("json:appsettings.Development.json#[\"Logging:LogLevel:System.Net.Http\"]", "Logging:LogLevel:System.Net.Http", "[\"Logging:LogLevel:System.Net.Http\"]", "Error"),
+            ],
+            development.Nodes.Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary)));
+
+        Assert.Equal(
+            [
+                ("json:.vscode/settings.json#[\"editor.formatOnSave\"]", "editor.formatOnSave", "[\"editor.formatOnSave\"]", "true"),
+                ("json:.vscode/settings.json#[\"[typescript]\"]", "[typescript]", ".vscode/settings.json#[\"[typescript]\"]", null),
+                ("json:.vscode/settings.json#[\"[typescript]\"][\"editor.defaultFormatter\"]", "editor.defaultFormatter", "[\"[typescript]\"][\"editor.defaultFormatter\"]", "esbenp.prettier-vscode"),
+                ("json:.vscode/settings.json#[\"files.exclude\"]", "files.exclude", ".vscode/settings.json#[\"files.exclude\"]", null),
+                ("json:.vscode/settings.json#[\"files.exclude\"][\"**/.git\"]", "**/.git", "[\"files.exclude\"][\"**/.git\"]", "true"),
+                ("json:.vscode/settings.json#[\"files.exclude\"][\"[0]\"]", "[0]", "[\"files.exclude\"][\"[0]\"]", "false"),
+            ],
+            editor.Nodes.Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary)));
+
+        Assert.Null(development.WithDigests(Development).Problem("json", CodeFileText.Lines(Development).Count));
+        Assert.Null(editor.WithDigests(Editor).Problem("json", CodeFileText.Lines(Editor).Count));
     }
 
     private static FileExtract Read(string path, string text) => new JsonExtractor().Extract(new CodeFileInput(path, text));

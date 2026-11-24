@@ -256,6 +256,10 @@ public sealed class HostAgentService(
             return answered;
         }
 
+        // From here the agent ends by its last resort: how the request finished is said there, once, and a run that answers
+        // after this says it to nobody.
+        gone.EndByLastResort();
+
         try
         {
             // What was ended is said once it has been tried, never before: said as any other end is, and best read by
@@ -266,7 +270,7 @@ public sealed class HostAgentService(
                     + "child left behind, or a line nobody reads"
                 : "and this agent was stopped before it had stopped";
 
-            await Gone.SayingAsync(
+            var saying = Gone.SayingAsync(
                 error,
                 [
                     FailureLine.For(
@@ -275,7 +279,18 @@ public sealed class HostAgentService(
                             $"what the request started here was cancelled{(gone.Why is { } why ? $" - {why}" : string.Empty)} - {still}: "
                             + $"{ended}, and this process ends")),
                     .. request.Nonce is { Length: > 0 } nonce ? [HostAgentProtocol.CompletionLine(nonce, HarnessExit.Cancelled)] : Array.Empty<string>(),
-                ]).Begun.ConfigureAwait(false);
+                ]);
+
+            // The end stands behind the saying only where the stream can still take it, and no time of the code's own says
+            // so: this agent was stopped meanwhile, so the lines are awaited - taken before this process ends, be the machine
+            // slow to take it, where ending as soon as the writing began let a busy machine end it between the lines - unless
+            // a line said before is still unwritten (ReadsNothing). Where the run waits on what will never end, among its
+            // causes a line nobody reads, the saying is begun alone and the process ends now: a host held by a run nobody
+            // reads is what this is here to end. A stream whose reader has gone takes the write at once, as if written.
+            if (waited.Kind == WaitEndKind.Cancelled && !gone.ReadsNothing)
+            {
+                await saying.Written.ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -658,6 +673,14 @@ public sealed class HostAgentService(
         gone.Served();
         await gone.SaidAsync().ConfigureAwait(false);
 
+        // A run that answers once the agent has taken its last resort writes no completion line of its own: how the request
+        // finished is said there, once, with the code the agent ends by - said here again, a reader taking the last line
+        // read the run's code.
+        if (gone.Ending)
+        {
+            return exitCode;
+        }
+
         await error.WriteLineAsync(HostAgentProtocol.CompletionLine(request.Nonce, exitCode)).ConfigureAwait(false);
         await error.FlushAsync(CancellationToken.None).ConfigureAwait(false);
 
@@ -871,8 +894,24 @@ public sealed class HostAgentService(
         /// <summary>Settles one answer, under <see cref="_said"/>: whichever of a sign and the run's own ending reaches it first is the one that is said.</summary>
         private bool _settled;
 
+        /// <summary>Whether the agent is ending by its last resort (<see cref="EndByLastResort"/>), read by the run's own completion on another thread.</summary>
+        private volatile bool _ending;
+
         /// <summary>Why the machine that asked was taken to have gone; <see langword="null"/> where it was not.</summary>
         public string? Why { get; private set; }
+
+        /// <summary>
+        /// Whether the agent is ending by its last resort (<see cref="EndByLastResort"/>): how the request finished is said
+        /// there, once. Read by the run's own completion, which then writes no line of its own.
+        /// </summary>
+        public bool Ending => _ending;
+
+        /// <summary>
+        /// The agent is ending by its last resort. Set once what the request started has been waited for and it has not
+        /// answered, before anything is ended: a run that answers after this was set answers to nobody, and its completion
+        /// line - the run's own code, beside the one that says how the request finished - is not written.
+        /// </summary>
+        public void EndByLastResort() => _ending = true;
 
         /// <summary>Holds settling a sign against what every settled sign said, so the two are one.</summary>
         private readonly object _said = new();
@@ -910,6 +949,24 @@ public sealed class HostAgentService(
         }
 
         /// <summary>
+        /// Whether nothing this one writes now is read: a line said to it is still unwritten, where one whose reader had
+        /// stopped reading never returns - as the console's own writer does not where the pipe it writes to is full. Read
+        /// as the agent is about to end, once what the request started has been ended, so a line said before has had the
+        /// whole unwinding of the request to be taken in, and a stream that takes lines takes one in far less; never a time
+        /// of the code's own.
+        /// </summary>
+        public bool ReadsNothing
+        {
+            get
+            {
+                lock (_said)
+                {
+                    return _saidWrites.Any(said => !said.IsCompleted);
+                }
+            }
+        }
+
+        /// <summary>
         /// Begins writing what a wait told while the request unwinds, as <see cref="BecauseAsync"/> says a sign, and holds
         /// the writing among what this one has said: each tell is a say of this one's, told on the thread the wait runs
         /// on, so the line that says a run finished stands behind it. Nothing where this one says nothing.
@@ -931,11 +988,10 @@ public sealed class HostAgentService(
         }
 
         /// <summary>
-        /// The machine that asked has gone, <paramref name="why"/> saying how that was told, and <paramref name="say"/>
+        /// Whether the machine that asked has gone, <paramref name="why"/> saying how that was told, and <paramref name="say"/>
         /// whether it is written where that machine would read it.
         /// </summary>
-        public async Task BecauseAsync(string why, bool say)
-        {
+        public async Task BecauseAsync(string why, bool say)        {
             Task? begun = null;
 
             // Settling and the say it makes are one: a run that answers as this is told either holds this say's writing
@@ -976,11 +1032,15 @@ public sealed class HostAgentService(
         /// the writing begun and the writing itself: the begun, so nothing waits on a line nobody reads - the console's
         /// own writer writes where it is called and hands back nothing to stop waiting on, and one whose reader had
         /// stopped reading held the cancellation it came before, for as long as the connection stood; the writing, so
-        /// what is said after it can stand behind it.
+        /// what is said after it can stand behind it, and so a process about to end can stand behind the last thing said.
+        /// The lines are handed to the writer as one write - each ended as the writer ends a line, the last included - and
+        /// flushed once, so nothing the run says is written between them; that the last of them is written before the
+        /// process ends is the awaiting of the writing - the Written this answers - not the one call.
         /// </summary>
         public static (Task Begun, Task Written) SayingAsync(TextWriter error, IReadOnlyList<string> lines)
         {
             var begun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var said = string.Concat(lines.Select(line => line + error.NewLine));
 
             var written = Task.Run(async () =>
             {
@@ -988,11 +1048,7 @@ public sealed class HostAgentService(
 
                 try
                 {
-                    foreach (var line in lines)
-                    {
-                        await error.WriteLineAsync(line).ConfigureAwait(false);
-                    }
-
+                    await error.WriteAsync(said).ConfigureAwait(false);
                     await error.FlushAsync(CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)

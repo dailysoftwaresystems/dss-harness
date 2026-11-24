@@ -226,11 +226,18 @@ public sealed class ClassClosureStepRunner(
         {
             if (queries?.OutlineFile(path) is { } outlined && queries.UnsureOfFile(path) is null)
             {
+                // Read as the queries and the context pack read a name, by the one owner of a key path's form
+                // (CodeKeyPaths): a declaration's own name; its whole path, as the writer writes one with a quoted place - a
+                // symbol typed with single quotes or with quotes a name needs not is read so; or some of its places, ending
+                // where one of the path's places begins - a key whose own name holds a dot,
+                // Logging.LogLevel["Microsoft.AspNetCore"], among the declarations as a class's member is.
+                var whole = CodeKeyPaths.Canonical(symbol);
+
                 return outlined
                     .Where(card => CodeNodeKinds.Declarations.Contains(card.Kind, StringComparer.Ordinal))
                     .Any(card => string.Equals(card.Name, symbol, StringComparison.Ordinal)
-                        || string.Equals(card.Qualified, symbol, StringComparison.Ordinal)
-                        || card.Qualified.EndsWith("." + symbol, StringComparison.Ordinal));
+                        || string.Equals(card.Qualified, whole, StringComparison.Ordinal)
+                        || CodeKeyPaths.EndsWithPlaces(card.Qualified, symbol));
             }
 
             return worktree is null

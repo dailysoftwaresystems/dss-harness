@@ -6,7 +6,7 @@ namespace DssHarness.Core.Codebase;
 
 /// <summary>
 /// The one owner of the implementations of <see cref="ICodeGraphExtractor"/>: which reads a file, the names
-/// <c>codebaseGraph.languages</c> may hold, <c>help codebase-graph</c>'s table, and each extract's name on disk all come
+/// <c>codebaseGraph.languages</c> may hold, <c>help codebase-graph-languages</c>'s table, and each extract's name on disk all come
 /// from it and from nothing else.
 /// </summary>
 /// <remarks>
@@ -35,7 +35,8 @@ public sealed class CodeGraphExtractors
     /// <exception cref="HarnessException">
     /// Two implementations share a <see cref="ICodeGraphExtractor.Language"/>, or claim one exact name or one extension of
     /// which either lacks a content test; there is no fallback, or more than one; a version is below 1; a name is not one
-    /// a node id and a file name can carry (<see cref="HarnessExit.InternalError"/>: a defect of this build).
+    /// a node id and a file name can carry; a limit's short name is none, or two limits of one implementation share one
+    /// (<see cref="CodeGraphLimit.Name"/>) (<see cref="HarnessExit.InternalError"/>: a defect of this build).
     /// </exception>
     public CodeGraphExtractors(IEnumerable<ICodeGraphExtractor> extractors)
     {
@@ -51,6 +52,10 @@ public sealed class CodeGraphExtractors
         {
             Refuse(!IsName(extractor.Language) ? $"'{extractor.Language}' ({extractor.GetType().FullName}) is not a language's name: lower-case letters and digits, beginning with a letter, and not '{CodeNodeKinds.File}', which names a file's node"
                 : extractor.Version < 1 ? $"'{extractor.Language}' is at version {extractor.Version.ToString(CultureInfo.InvariantCulture)}; a version is a positive integer, raised whenever what the implementation answers changes"
+                : extractor.Help.DoesNotSee.FirstOrDefault(limit => !CodeGraphLimit.IsName(limit.Name)) is { } unnamed
+                ? $"'{extractor.Language}' names a limit '{unnamed.Name}', which is no short name: lower-case letters, digits and dashes, beginning with a letter and ending with no dash - the name the help lists it under and an answer names it by"
+                : extractor.Help.DoesNotSee.GroupBy(limit => limit.Name, StringComparer.Ordinal).FirstOrDefault(named => named.Count() > 1) is { } shared
+                ? $"'{extractor.Language}' names {shared.Count().ToString(CultureInfo.InvariantCulture)} of its limits '{shared.Key}': each is named once, so the name an answer says finds one in the help"
                 : null);
         }
 
@@ -98,7 +103,7 @@ public sealed class CodeGraphExtractors
 
     /// <summary>
     /// The registry of this build's own implementations, each made with no argument as the container makes it: for what
-    /// has no container to ask - <c>help codebase-graph</c>.
+    /// has no container to ask - the help topics <c>codebase-graph</c> and <c>codebase-graph-languages</c>.
     /// </summary>
     public static CodeGraphExtractors OfThisBuild
         => LazyInitializer.EnsureInitialized(ref _thisBuild, () => new(CoreImplementations<ICodeGraphExtractor>.OfThisBuild));
@@ -247,10 +252,10 @@ public sealed class CodeGraphExtractors
 
     /// <summary>
     /// <paramref name="extractors"/> named in one line, each quoted: every one that fits, and for the rest how many and
-    /// where every implementation and its claims are listed - <c>help codebase-graph</c> (<see cref="Names.Line"/>).
+    /// where every implementation and its claims are listed - <c>help codebase-graph-languages</c> (<see cref="Names.Line"/>).
     /// </summary>
     private static string Named(IReadOnlyList<ICodeGraphExtractor> extractors)
-        => Names.Line([.. extractors.Select(extractor => $"'{extractor.Language}'")], "help codebase-graph");
+        => Names.Line([.. extractors.Select(extractor => $"'{extractor.Language}'")], $"help {Help.HelpTopics.CodebaseGraphLanguages}");
 
     /// <summary>Whether <paramref name="language"/> is a name a node id and an extract's file name can carry.</summary>
     private static bool IsName(string? language)

@@ -13,7 +13,7 @@ public sealed class DartExtractor : ICodeGraphExtractor
     public string Language => "dart";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".dart");
@@ -25,14 +25,14 @@ public sealed class DartExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Dart (.dart), through the structural scanner C and C++ are read by: every class, mixin, extension, extension type, enum, typedef, function, getter, setter, operator, field and constructor with its signature, summary and body; imports, exports and parts, a library and its parts one scope whose private names no importer sees; base lists and @override; each call with what its receiver is where the file says; each member a member reads or writes without calling it, and each string literal the file holds - a raw one's and a triple-quoted one's too, an interpolated one's constant parts each one of its own - by its value as Dart reads its escapes, its line and the node it is written in; test, testWidgets and group calls in test files",
         [
-            "types inferred: a call on a value whose type the file does not write - a local given a call's result, a closure's parameter, a getter of a type another library declares - is bound by its name alone; one on a value declared dynamic is marked dynamic",
-            "an extension member chosen by the type of its receiver where the file does not write that type: bound by its name alone; one reached only through a deferred import is taken as applying",
-            "a call through a function value - a parameter, a local or a field of a function type, a value's call, Function.apply: marked dynamic, and not linked",
-            "which URI a configurable import (if (dart.library.io) ...) takes: the first of them the repository holds",
-            "a part that names its library by the library's name (part of a.b;) shares the library's names and not its imports; one that names it by a package: URI is taken to be under the lib/ directory its own path is under",
-            "local functions and closures are not nodes: what they call is the calls of the declaration they are written in",
-            "a test written through a helper of its own, and not a test, testWidgets or group call of a test file (under test/, or ending _test.dart), is not seen as a test",
-            "augmentations (augment ...), passed over with their bodies, and code a builder writes into a file the repository does not hold: not read",
+            new CodeGraphLimit("inferred-types", "types inferred: a call on a value whose type the file does not write - a local given a call's result, a closure's parameter, a getter of a type another library declares - is bound by its name alone; one on a value declared dynamic is marked dynamic") { Signs = [CodeGraphLimit.Candidates, DartReading.DynamicValue] },
+            new CodeGraphLimit("extension-members", "an extension member chosen by the type of its receiver where the file does not write that type: bound by its name alone; one reached only through a deferred import is taken as applying") { Signs = [CodeGraphLimit.Candidates] },
+            new CodeGraphLimit("function-values", "a call through a function value - a parameter, a local or a field of a function type, a value's call, Function.apply: marked dynamic, and not linked") { Signs = [DartReading.FunctionValue] },
+            ("configurable-imports", "which URI a configurable import (if (dart.library.io) ...) takes: the first of them the repository holds"),
+            ("part-of-name", "a part that names its library by the library's name (part of a.b;) shares the library's names and not its imports; one that names it by a package: URI is taken to be under the lib/ directory its own path is under"),
+            ("local-functions", "local functions and closures are not nodes: what they call is the calls of the declaration they are written in"),
+            ("test-helpers", "a test written through a helper of its own, and not a test, testWidgets or group call of a test file (under test/, or ending _test.dart), is not seen as a test"),
+            ("augmentations", "augmentations (augment ...), passed over with their bodies, and code a builder writes into a file the repository does not hold: not read"),
         ]);
 
     /// <inheritdoc/>

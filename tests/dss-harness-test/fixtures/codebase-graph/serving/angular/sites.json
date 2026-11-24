@@ -1,0 +1,32 @@
+[
+  {
+    "data": "total",
+    "sites": [
+      { "place": "src/cart.component.ts:25", "how": "defines" },
+      { "place": "src/cart.component.html:5", "how": "calls" }
+    ]
+  },
+  {
+    "data": "app-line",
+    "sites": [
+      { "place": "src/line.component.ts:6", "how": "defines" },
+      { "place": "src/cart.component.html:3", "how": "instantiates" }
+    ]
+  },
+  {
+    "data": ".btn-primary",
+    "sites": [
+      { "place": "src/cart.component.css:5", "how": "defines" },
+      { "place": "src/cart.component.html:4", "how": "uses" },
+      { "place": "src/cart.component.ts:61", "how": "holds the literal" },
+      { "place": "src/cart.component.ts:66", "how": "holds the literal" }
+    ]
+  },
+  {
+    "data": "lineText",
+    "sites": [
+      { "place": "src/line.component.ts:14", "how": "defines" },
+      { "place": "src/line.component.html:1", "how": "calls" }
+    ]
+  }
+]

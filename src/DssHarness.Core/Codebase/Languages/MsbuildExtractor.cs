@@ -30,7 +30,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
     public string Language => "msbuild";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 5;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".csproj", ".slnx");
@@ -42,12 +42,12 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "MSBuild projects (.csproj) and solutions (.slnx): a project node for each, named by its file name, a project's summary from its Description, a projectReference to each project it names that the repository holds, each property its own PropertyGroup declares a key of the project's alone with its value as its summary, each $(Name) an attribute or an element's text writes a uses of the property it reads - the project's own of that name, those declared before it where it is read as properties are (in a PropertyGroup or an Import), every one elsewhere, else the key of that name an XML file declares, a .props or .targets PropertyGroup's property - and each Import Project an import of the file it names",
         [
-            "what MSBuild evaluates: a reference under a condition is taken whatever the condition, a property in a path is left as written, and a property declared under several conditions is an edge of candidates to each declaration a use may read",
-            "a project's own property from any other file - another project, a C# literal of its name: it is the project's alone, and the keys' join never reaches it",
-            "a $(Name) a comment writes, and a name neither the project nor an XML file declares as a key - a property of the SDK's, one only a C# member or a JSON key is named by: no use",
-            "a project named by a wildcard, and two projects of one file name, which a reference names both of",
-            "a solution in the older .sln form",
-            "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason",
+            ("evaluation", "what MSBuild evaluates: a reference under a condition is taken whatever the condition, a property in a path is left as written, and a property declared under several conditions is an edge of candidates to each declaration a use may read"),
+            ("foreign-properties", "a project's own property from any other file - another project, a C# literal of its name: it is the project's alone, and the keys' join never reaches it"),
+            ("unkeyed-names", "a $(Name) a comment writes, and a name neither the project nor an XML file declares as a key - a property of the SDK's, one only a C# member or a JSON key is named by: no use"),
+            ("wildcard-projects", "a project named by a wildcard, and two projects of one file name, which a reference names both of"),
+            ("sln-files", "a solution in the older .sln form"),
+            new CodeGraphLimit("broken-xml", "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason") { Signs = [DataNodes.Stop] },
         ]);
 
     /// <inheritdoc/>
@@ -151,7 +151,9 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
                 // A property a project's own PropertyGroup declares - one of the root Project's - is a key of the project's alone.
                 if (!solution && open is ["Project", "PropertyGroup"])
                 {
-                    var key = new ExtractNode(ids.Next($"{id}#{ExtractText.Whole(element)}"), CodeNodeKinds.Member, element, element, line, line, ExtractText.Signature(element))
+                    var place = DataPlace.Named(element);
+                    var path = ExtractText.Whole(place.Written);
+                    var key = new ExtractNode(ids.Next($"{id}#{path}"), CodeNodeKinds.Member, place.NodeName, path, line, line, ExtractText.Signature(path))
                     {
                         SubKind = CodeSubKinds.Key,
                         Scope = OwnProperties,
@@ -210,7 +212,8 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
         {
             // What follows the first fault is not read: the file is graphed as far as it parses, and its extract says where
             // it stopped, so a reference missing after it is never taken for one the project does not make.
-            dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(ex.LineNumber, lines.Count), XmlExtractor.Stopped(ex, lines, refusesDtd: false)));
+            var stopped = XmlExtractor.Stopped(ex, lines, refusesDtd: false);
+            dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(ex.LineNumber, lines.Count), stopped.Why, stopped.Kind));
         }
 
         var node = new ExtractNode(id, CodeNodeKinds.Project, name, input.Path, 1, Math.Max(lines.Count, 1), signature ?? name)

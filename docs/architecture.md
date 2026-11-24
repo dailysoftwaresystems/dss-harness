@@ -101,6 +101,15 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
   a page is read by seeking to its own, so a two-gigabyte log costs a page's memory.
 - `Walks\`: a walk on an explicit stack or queue that keeps a set of what it met (`Walk`); a memo that answers each key
   once from its dependencies' answers, and a key met again while it is being answered by the cycle's own rule (`Memo`);
+  answers made once where making one asks for others as it is made, through any store sharing its makings, a memo
+  given them among them (`MadeOnce`, `Makings`), the makings taken as the graph they make and its strongly connected sets
+  found as they close, on the making stack alone and with no recursion: a key asked again while it is being made -
+  directly or through any store that shares the makings - is a cycle; every key of a strongly connected set of makings
+  that holds a cycle answers its placeholder, nothing known, with whatever its store keeps beside it of what the whole set
+  read, and every read of such a key, while the set is made and after, is given that answer; every other key keeps the
+  answer its making made; each key is made once, each set is closed once as its outermost making ends, and nothing kept
+  is ever made again - so the answer a key keeps does not depend on which key of it is asked first, and the work is
+  linear in the makings and the reads, however deep the cycles nest;
   a chain followed to its end or its first revisit (`Chain`); a step repeated until it says it is done or its state
   repeats, which is told as a cycle (`Fixpoint`); and a recursion moved onto a thread of a larger stack where the stack
   runs short - our own at each level (`DeepCalls.Run`), a library's we do not own on a thread whose stack holds the depth
@@ -2166,8 +2175,11 @@ in two - a `build` step, which fails red and is taken by the recovery and built 
 beside the baseline's tests and the CI read (`onFailure: continue`, for a run goes on without a map);
 every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11 set
 each type's value, its steps saying the graph keys only where a type is served otherwise than by
-default (`graph: off` on the request triage, the plan audit and the item audit, whose work is text the map
-does not light - the audits searching the data by their own text search - and on the scribe's; `graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
+default (`graph: off` on the request triage, whose work is text the map does not light, and on the scribe's;
+`graph: tools` with `graphPromptTokens: 0` on the plan audit and the item audit - the tool and no pack: the measurement ran
+them with `graph: off` before the graph's `sites` was built, when their work was text the map does not light, and a class's
+sites, which they now search, are what `sites` answers, beside their own text search, while a pack still lights none of it;
+`graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
 on the reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes
 on with another's work starting its own pack where it says; the implementer, the planner and the
 pre-existing-issue triage saying nothing, for the tool and their task's seeds are their default - the
@@ -4463,10 +4475,23 @@ tree lists is a node, every declaration an implementation reads is one, and the 
 sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language. Everything that reads a file's contents
 is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
 `Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
-language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`) and
-the scope whose declarations alone see it (`SeenIn`) among what they say - the scopes they are put in (open to
-other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending or directory (a scope every file under a directory imports), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
-address roots, references by name with their qualifiers, the string literals the file holds - every
+language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`), the
+scope whose declarations alone see it (`SeenIn`), the element selectors a component is named by (`Selectors`), the
+files that are its templates (`Templates`) and whether its members are reached from their own code by a receiver alone and
+never by a name written alone (`MembersByReceiver`: a name such members' code writes by itself is looked for past the scope
+they are declared in and its bases - said by a type of its own members, and by a member a file adds to a type from outside
+its body of the members of the scope it is declared in) among what they say - the scopes they are put in (open to
+other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending, directory (a scope every file under a directory imports) or a path under a root of the layout (`Rooted`), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`), an import of a file whose imports this one shares (`Shares`), one whose names are the file's importers' too (`Reexports`), one that takes the names a file publishes alone (`Published`), one that names a place a bare name is looked for (`Layout`), one whose prefix stands for the one name it shows (`Binds`), one of two places a name may stand at that the file cannot tell apart (`Either`) and one that serves one qualifier's references alone (`Serves`),
+address roots, the names the file publishes (`Published`, with `PublishesTaken` where what its own such imports take is
+among them), whether its names are bound within it (`BoundWithin`), whether it keeps its names' kinds apart (`KindsApart`:
+a call reaches a member taking arguments alone, a use a value alone, neither a type), whether it writes its type names
+whole (`WrittenWhole`: a qualifier's or a value's type is the type of that whole name alone), whether its directory is a
+unit of its language's layout (`FolderUnit`) and the roots of the layout it declares (`LayoutRoots`), references by name
+with their qualifiers -
+one that asks whether a declaration is there, and is no external callee where none is (`Probe`), one made around the node
+it is made from rather than in that node's body - a decorator, a parameter's annotation or default - looked for from where
+the node is declared, its body's own closed scope passed over (`Around`), and one whose qualifier names a fixture, reached by
+the nodes of the fixture sub-kind alone (`CodeQualifierKinds.Fixture`, `CodeSubKinds.Fixture`), among them - the string literals the file holds - every
 one that holds a character, however short and however many, each value once in the file's own
 table (`ExtractLiteral`) with every place it is written, its line and the node whose code holds it
 (none where the file's own
@@ -4476,27 +4501,47 @@ value `ScanLiteral` decodes from what each lexer saw of the literal's form - a p
 triple quote, a heredoc's label and closing indentation - by its language's escapes, a `String.raw` template's as
 written, an HTML character reference by its grammar whatever its length; an interpolated or template string's
 constant parts each a literal of its own, its holes read as code, a character constant, a regular
-expression and JSX markup none, a JSX attribute's text one - and five marks - a prototype, a test, a part of a
-declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it cannot
-bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three. Beside the calls, every
-reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++ gives each member a member reads or writes without calling
+expression and JSX markup none, a JSX attribute's text one - and seven marks - a prototype, a test, a test by a type
+another file declares (`TestByType`), a type tests are built on (`TestBase`), a part of a declaration other files hold parts
+of too (`Part`), generated code with why, and each line it saw something it cannot bind or stopped reading at (`dynamic`),
+with why - of which the linker reads the first five; every dynamic mark carries a
+kind (`ExtractDynamic.Kind`), a constant of the reader that makes it, and what an implementation's help says it does not see
+is a limit that names the signs telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, or what the linker
+found of the file's references and imports, each sign one thing it knows and no language named (`CodeGraphLinked.Signs`): a
+reference left candidates (`Candidates`), an import taken as several places and a reference left candidates through one -
+what it found there one or several, as the place that found it says, never told by the files it lies in (`CandidateImports`),
+and of a reference counted external why it named nothing - a name or a qualifier's head only imports
+naming no file of the tree bind (`OutsideImport`), a name written alone nothing binds in a file that binds its names within
+it (`Unbound`), a fixture no scope or serving import provides (`UnprovidedFixture`) - so that an answer says in full of a
+file the limits it shows, and of none it does not. Every limit a reader marks names the kind of its mark, and every limit
+that says a reference is bound by its name alone - a receiver whose type the file does not say, in every language: C's
+`untyped-calls`, C++'s `overloads` and `auto-values`, C#'s `untyped-values` and `generic-extensions`, Dart's
+`inferred-types` and `extension-members`, JavaScript's and PHP's `inferred-types`, TypeScript's `union-types` and
+`any-values`, Python's `duck-typing` - names `Candidates`, what the linker gives such a reference left among several; the
+contract's kit holds every mark of every fixture and of every cut of one to a kind a limit of its implementation's help names; an
+implementation whose code another reads - an HTML page's scripts and styles, a Vue component's, a Razor file's C# - says
+that reader's limits among its own (`JsHelp.Unseen`, `TypeScriptExtractor.TypesUnseen`, `CssExtractor.SheetUnseen`,
+`CSharpExtractor.CodeUnseen`). Beside the calls, every
+reader of C#, JavaScript, TypeScript, PHP, Dart, C, C++ and Python gives each member a member reads or writes without calling
 it - a field, a property, a constant, an enum member, any name a `nameof` names, a `case`'s constant (Dart's pattern
 constants among them), the first name of a receiver's chain - a member's or, in JavaScript and TypeScript, an
 element's - where the reader takes it for a value (JavaScript and TypeScript by what the file says of the name: a
 variable, a function, an import's binding but a namespace's and a type-only one's, whatever its case), a conditional's
 branches - as a `uses` reference, qualified as its receiver is where the file says - a chain of
 any length written as links, each name's use qualified by a link to the use of the name before it
-(`ExtractQualifier.Link`, its names spelt back by `FileExtract.Written`) - one past a C# variable
+(`ExtractQualifier.Link`, its names spelt back by `FileExtract.Written`), but Python's, whose names past the first member
+are values by no name the file types (below) - one past a C# variable
 of a declared type its first name's use qualified by that type, so it is read through each name's
 type as one past a field is - and reads an enum
 member's value as the member's code - C's, C++'s and
 TypeScript's as C#'s, PHP's and Dart's. A type the code writes is no use but a `references` edge, in every reader - a
 declaration's, a cast's, a `sizeof`'s, a template's or a call's type arguments (a C++ template's value argument read as
-code), a parameter's of a lambda, a closure, an arrow or a function a body writes and its return type, an `as`'s or an
-`is`'s, a pattern's, a TypeScript assertion's (`<T>x`) - C and C++ taking a bare name in parentheses for a type's where
-the file knows it as no value, a C# `x is State.Done` both a reference and a use of `Done`, which the syntax cannot tell
-apart; a declaration is no use either - each declarator of `int a = 1, b`, a pattern's variables, a macro's parameter, a
-function pointer's own parameters, a structured binding, a discard - nor is a type or a namespace a member is reached
+code), a parameter's of a lambda, a closure, an arrow or a function a body writes and its return type, a PHP anonymous
+class's bases, traits and member types, an `as`'s or an `is`'s, a pattern's, a TypeScript assertion's (`<T>x`) - C and C++
+taking a bare name in parentheses for a type's where the file knows it as no value, a C# `x is State.Done` both a
+reference and a use of `Done`, which the syntax cannot tell apart; a declaration is no use either - each declarator of
+`int a = 1, b`, a pattern's variables, a macro's parameter, a function pointer's own parameters, a structured binding, a
+discard - nor is a type or a namespace a member is reached
 through, nor a label a `goto`, a `break` or a `continue` names (`ScanCalls.NamesLabel`), and a member named as a word of
 the language - PHP's `$node->parent`, `FieldType::String` - is its member's use. A use that names nothing the
 repository declares is the common case and counts nowhere: a use is recall, never a doubt, so it makes neither a node
@@ -4511,9 +4556,14 @@ recursion - a summary and a signature put on one line and kept whole - a key's v
 whole, no sentence of it ending it (`ExtractText.Value`) - so no data file's extract is one the
 core refuses. A
 key's path is written, and read back, by one owner (`CodeKeyPaths`): each name joined by a dot, an item's place and a
-name empty, of white space or holding a control character in brackets, quoted as `ReportText.Quoted` writes it, so a
-path is always one line (`targets.x64.callingConvention`, `limits[1].value`, `packages[""].name`,
-`messages["Sure?\nIt cannot be undone."]`).
+name empty, of white space, holding a control character, or holding a dot or a bracket - the characters a path is parted
+by - in brackets, quoted as `ReportText.Quoted` writes it and read back by `ReportText.Unquoted`, so a path is one line
+and one sequence of places (`targets.x64.callingConvention`, `limits[1].value`, `packages[""].name`,
+`messages["Sure?\nIt cannot be undone."]`, `Logging.LogLevel["Microsoft.AspNetCore"]`); a place in single quotes is read
+as the same place (`['Microsoft.AspNetCore']`, its own mark and a backslash escaped as `Quoted` escapes a double quote -
+one escape rule, `ReportText.QuotedBy`, with the mark its parameter) and never written; a key node is named by its own
+name where it stands alone on a line (`Microsoft.AspNetCore`), every reader of data files - JSON, YAML, XML, MSBuild -
+writing its keys' paths through the owner.
 `json` (`.json`, `.jsonc`, `.json5`, the named manifests keeping their own extractors) and `yaml` (`.yml`, `.yaml`, but
 `pubspec.yaml`) each make every scalar key anywhere in the file a key named by its path, its value as its summary, and
 each member that holds others a section over its lines. JSON is read on a stack of the reader's own however deep it
@@ -4534,7 +4584,8 @@ and solutions `msbuild` keeps) reads every element however deep, makes its root 
 attribute (`name`, `key`, `id`, `x:Name`) an element named by its path and that attribute - the path told only where a
 node is named by it, so elements that name nothing cost no more than their reading - and keys of a `.resx`'s
 `data name=`, of a `.props` or `.targets`'s `PropertyGroup` children and of a `.config`'s `appSettings` `<add key>` and
-`connectionStrings` `<add name>` (`appSettings.Timeout`, `connectionStrings.Main`, the value or connection string the
+`connectionStrings` `<add name>` (`appSettings.Timeout`, `connectionStrings.Main`,
+`appSettings["Serilog.MinimumLevel"]`, the value or connection string the
 summary), a `.props` or `.targets`'s `Import Project` an import of the file it names. A `.xaml` view's elements it names
 by `x:Name` are fields of its `x:Class` type, of the element's type, as the build generates them, so the code-behind
 reaches one by the field's name as it reaches a field of its own. An MSBuild project's own `PropertyGroup` properties
@@ -4547,13 +4598,17 @@ are reached only by a reference that says it names one - a `key` qualifier, a `s
 `style-variable`, `style-mixin`, `style-function`, `keyframes` or `font-face` qualifier (`CodeSubKinds.ReachedBy`), a
 use through an import's prefix, a use an import makes visible by a name the file that declares the node exports it by
 (`import { btn } from './x.module.css'`) - and by the keys' join, never by a name alone as code names code (`Takes`, the
-one place that says what a reference may reach), so a PHP `$radius` reaches no SCSS `$radius` and a C# `Button()` no
-mixin `Button`. The linker joins each key to the code
+one place that says what a reference may reach; from a file that keeps its names' kinds apart a call reaches what takes
+arguments alone, a use a value alone and a new a type alone), so a PHP `$radius` reaches no SCSS `$radius` and a C#
+`Button()` no mixin `Button`. The linker joins each key to the code
 that names it: a string literal equal to the key's last segment, its whole path, the path as .NET's configuration spells
-it (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`, `Limits:1:Value`, read by `CodeKeyPaths.Dotted`) or a path
+it (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`, `Limits:1:Value`, `Logging:LogLevel:Microsoft.AspNetCore`
+naming `Logging.LogLevel["Microsoft.AspNetCore"]`, read by `CodeKeyPaths.Dotted`) or a path
 that runs through a YAML alias or merge to it - the longest part of the path its file holds deciding, a mapping's own
 key shadowing a merged one's, each place looked for once and a path that comes round to itself through its references
-ending there - and each field or property whose name is the segment as a naming policy the repository declares
+ending there - and a literal writing a path in brackets, in either quote mark (lodash's `"a['b.c']"`), names the key of
+the path the writer writes (`CodeKeyPaths.Canonical`), never the loose form of a key's path, its names' own dots as they
+are, which code splits as .NET's configuration does; and each field or property whose name is the segment as a naming policy the repository declares
 (`codebaseGraph.keyNaming`: `camelCase`, `snake_case`, `kebab-case` or `exact`, `camelCase` and `exact` the default)
 writes it - each a `uses` edge of `candidates`, for nothing says the code reads that key; every key a literal or a name
 names is joined, however many keys share it, and a key its file keeps to itself - an MSBuild project's own property -
@@ -4568,11 +4623,13 @@ An implementation is registered by being written: the one scan of the core (`Cor
 `CodeGraphExtractors.Implementations` reads) finds each, `AddDssHarness` registers each type of it
 (`AddCoreImplementationsOf<T>`), and the registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
-extension no file has, and a version below 1 - so a clash is a red test, never an order. A file goes to the
+extension no file has, a version below 1, and a limit (`CodeGraphLimit`) with no short name - lower-case letters, digits and
+dashes - or one whose name another limit of its implementation bears - so a clash is a red test, never an order. A file goes to the
 claimants of its exact name, else of an ending `codebaseGraph.claims` maps, else of its extension, else to the fallback
 (`listed`); their content tests decide among
 several, and none or several saying yes lists it `ambiguous`. Everything else about the graph - `codebaseGraph.languages`,
-V52's names and `help codebase-graph`'s table - is read from the registry. A test keeps the core from mentioning
+V52's names and `help codebase-graph-languages`, which says each implementation and each of its limits under its short
+name - is read from the registry. A test keeps the core from mentioning
 anything under `Codebase\Languages\`. Every span counts lines as `CodeFileText.Lines` cuts them - CR LF, LF and CR
 alone, as an editor and git count - and an implementation that reads a parser's positions turns each into a line by
 `CodeFileText.LineIndex`, since a parser may also break lines at NEL and the Unicode separators.
@@ -4599,7 +4656,15 @@ implementation that breaks it) hold it to fixtures for each claim, determinism w
 from many threads, a sound model, tolerance of any cut of a fixture, pure content tests that never both say yes with
 another's, the same answer read over a file in blocks of three characters as from its string, the
 extracts stored with the tests for its version (`fixtures/codebase-graph/<language>/v<version>/`,
-written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker.
+written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker. The saving
+itself is measured (`CodebaseGraphServingTests`) over nine fixture repositories under `fixtures/codebase-graph/serving/` - C#,
+C and Dart, and one each of HTML, CSS and TypeScript, of Vue, of Angular, of Razor and Blazor, of JSON, YAML and XML read by C#, of Python
+- each with its `tasks.json`, the declarations a task's reference answer needs, and its `sites.json`, the data a site task
+decides by and every place that decides it, each with how it decides: the bytes the pack and the bodies serve against the whole
+files', the bytes each `sites` answer serves against the files its places stand in - the lines that end it among them, every
+limit of each language whose files the graph read - each pinned, and every place checked to be in its answer as the card of the
+node at its line saying the way the task says it decides, never any card that spans the line, so a change that drops a use, a
+literal's place, a key's join or a selector's reach from an answer, or leaves a place the graph reads to the text search, goes red.
 
 A language no parser this tool can carry reads goes through the structural scanner (`Codebase\Languages\Scanning\`),
 whose core knows no language: a language's lexer cuts the text into tokens (`ScanToken`), its comments apart and each
@@ -4668,7 +4733,98 @@ member, `eval`, a function a parameter, a local or a function-typed field holds,
 import of a module the code computes - is marked dynamic. A function a body declares is the body's own wherever it calls
 it. A declaration file's (`.d.ts`) members are prototypes, and code at a module's top is held by its file's `(module)`
 node - over the file's lines, or, in code a markup file embeds, over the lines that code is written on, from the first
-to the last, never the markup's - CommonJS exports its blocks hold read as the top's. `npm`, over `JsonOutline` (the reader of a project file's
+to the last, never the markup's - CommonJS exports its blocks hold read as the top's. The frameworks are read by the
+reader of the file kind they live in, each turned into the same vocabulary. A JSX attribute's string - `className`,
+`class`, `id` - is a use of each rule it names, as markup's own are (`JsReading.Selects`, which asks the JSX dialect's
+one rule of a class and an id, `MarkupDialect.Selected`, by the attribute's name the lexer keeps beside its string -
+`ScanLiteral.Names` - so a `data-id` names no rule). Each decorator is a call of what it names, of as many arguments as
+it is given, and its arguments' code is read whatever the decorator is; one an import of a package binds asks whether
+the repository declares it (`ExtractReference.Probe`), as a framework's does. A type Backbone builds by a call of
+`extend` on a chain that names a type - `var View = Backbone.View.extend({...}, {...})`, the link before `extend`
+written as a type's name is or a type the file declares, given one object or two and the whole of the value, so a merge
+of objects (`_.extend({}, a)`, `$.extend({...}, b)`) is a variable - is a type inheriting what the chain names, the first
+object's keys its members and the second's its static ones, each function a method and each value a field
+(`Extended`), its `events` hash's keys uses of the rules their selectors name and its handlers, and its `routes`'
+handlers, calls of the methods they name (`Watched`, the one reading of a hash by its framework's rule, a Vue `watch`'s
+among them). A member a prototype assignment adds - `X.prototype.y = function () {}`, or each key of
+`X.prototype = {...}` - is a member of X in X's own scope where the file declares X at its top, a function whose
+prototype the file writes being a type, a constructor function whose `constructor` is its body (`Constructors`,
+`Constructed`) - a chain the file assigns one, `App.Cart = function () {}`, among them, the type named by the chain's last
+name in an open scope of the names before it and seen wherever the object is (`AssignedConstructor`), which a chain naming
+it, `new App.Cart()`, finds by its names together where no declaration stands for the names before the last
+(`CodeGraphLinker.InChain`) - and the type holds those members wherever the file writes them, its lines widened over theirs;
+else it is a member extending the type the chain names (`Prototyped`, `ExtractNode.Extends`, as a Dart extension's members
+are reached), in a scope of X's name that no name of the file binds, the chain written as a call or a `new` of it is - a
+name an import binds as the export it binds, a `require`'s or a default import's binding followed by its module's
+`default` (`JsReading.Called`, the one reading a call, a `new`, a base and a prototype's type share). Its own `this` is read
+on that type (`CodeGraphLinker.EnclosingTypes`: every type its scope or its `Extends` names, several a unique finding and
+never the first of them) - and where no type of X's name is, on the constructor function another file declares, found as a
+call of X is (`CodeGraphLinker.Extended`: a name alone in the scopes, the imports and the repository, a chain's last name
+as what the names before it hold by it statically - through the import its prefix is, `Prefixed`, else in the types and
+scopes those names name - a declaration no type holds, or a type's member its own code says is `static` (`OfAnInstance`),
+never an instance's member, a member a prototype is given among them whether `Lib`'s own file gives it or another -
+`Lib.Widget` is never `Lib.prototype.Widget` - so what one extension extends is never found from what another extends,
+and no finding of it asks for itself), whose own `this` is read on it too and whose `new` makes it (`Constructs`, by the
+members extending each name it is reached by, its own and each it is exported by - save a `new` written in a file that
+keeps its names' kinds apart, `FileExtract.KindsApart`, which makes none); two chains naming a type the
+repository does not declare name it alike where one is the other or ends it at a name (`WrittenAlike`), never two modules'
+`default`s. Such a member is the type's own wherever the type is (`ExtractNode.Joined`) - the assignment adds it to the type itself when its file runs - so a
+call on a value of the type, or of a type built on it, reaches it whatever loaded the file that writes it, an import for its
+side effect alone that binds no name among them, where a C# or a Dart extension is reached only where the call's file
+reaches it (`Reaches`); a value of a type a chain names that no type is, is of the constructor function a call of the chain
+finds, as an extension finds the one it extends (`CodeGraphLinker.FunctionsCalled`), the chain read in the file of the value
+it types, which writes it - so a field one file's `this.cart = new Cart()` declares is of that `Cart` where a class another
+file builds on its class, binding no `Cart` of its own, calls on it; and a member extending a type the repository does not
+declare - a library's, `Backbone.View.prototype.close` - is reached on a value of a type written alike and on a type built
+on one as its base is written (`WrittenBasesOf`, the type's key holding how its bases are written). A jQuery plugin,
+`$.fn.y = function () {}`, is such a member of `$` - `fn` after `$` or `jQuery` is jQuery's name for its prototype
+(`JsReading.PrototypeOf`) - reached by its name alone from what a call of `$` gives. A member a constructor, a method or an
+accessor of a type the file declares assigns through `this` - `this.lines = []` - is a field of the type where it
+declares nothing of that name, from the first such assignment (`JsReading.ThisFields`), as Python's `self` fields are, of
+the type the assignment's `new` makes where it is one, as a field the type's body declares is (`ValueTypeOf`). A
+class's, an extend type's and a constructor function's members, and those a file adds to a type it does not declare,
+are reached by a receiver alone (`ExtractNode.MembersByReceiver`): a name their code writes by itself is looked for past
+that scope and its bases, so a method's `render(x)` reaches the module's `render`, never the method; a namespace
+TypeScript merges with the class into one scope keeps its own names, which its own code finds and the class's members
+do not, in their scopes nor past them (`CodeGraphLinker.Scoped`, `Sees`, `ByReceiver`), so what a name is from one scope is
+found once for what is reached by a receiver alone and once for what is not (`NamedContainers`); and `this.a.b()` is read
+on the type `this` is, link by link (`CodeQualifierKinds.This` with the chain's names), by its name alone where a link is
+none the type it comes to declares - a member the code adds at run time, or one a base the repository does not hold
+gives - never by nothing (`CodeGraphLinker.OfThis`). An AMD module's `define` given its factory and a function called where it is written at the file's top - an
+IIFE, `(function ($) {...})(jQuery)` - are wrappers (`JsReading.Wrapped`), whose body is read as the file's top is, in a
+closed scope of its own as a function's body is (`Wrapping`): its code outside its declarations is the calls of a node of
+its own, `(wrapper 3:2)` by its function's line and column, and the scope is under that node's name, which the linker
+looks the node's references up from (`CodeGraphLinker.LookedFrom`), its parent the module's scope, the wrapper's around
+it, or in a script a closed scope of the file's path that declares nothing; what the body declares keeps the file's path
+before its name and, as what a member's body declares, is seen from the body's own code alone, so no other code of the
+file sees it or finds it by its name, and the reader looks a name of the top's - an export's, a prototype's type's - up
+from the wrapper it is written in outward (`TopKeys`): what the body exports in any CommonJS form - `module.exports =
+{ helper }`, `exports.total = function () {}`, `module.exports = class {}`, `exports.rate = 0.2` - is its importers' by
+the name it is exported by (`ExtractNode.Exports`), its own name still the body's, a declaration an export makes where it
+is written exported by the one rule every export is (`JsReading.ExportedValue`). Each parameter an AMD factory is given a dependency for is an import of it by that name,
+as a `require` declared by it is - but `require`, `exports` and `module`, the loader's own (`AmdOwn`), none - each other a
+value, and an AMD factory's own `return` the module's export, read as `module.exports =`'s is - a name, an object's names
+and functions, a function, a class or any other value. An Angular `@Component`'s, `@Directive`'s or
+`@Pipe`'s object is read (`Angular`) where the decorator is what an import of `@angular/core` binds, never by its name
+alone: its `selector`'s element selectors, each with a dash as a custom element's name has (`ExtractNode.IsSelector`),
+are names the repository finds the class by as its own (`ExtractNode.Selectors`, among the linker's names - `app-cart`,
+which no code writes), so a template's `<app-cart>` instantiates it, and a pipe's `name` is one after a bar
+(`|currency`), which a template's pipe instantiates; its `templateUrl` is the file that is the class's template
+(`ExtractNode.Templates`), imported as a page's script is, and its `styleUrl` and each of its `styleUrls` a file
+imported. A file whose content is an Angular template - an element's `(click)`, `[x]`, `*ngFor` or `#x`, a
+control-flow block or a `{{ }}` in its text - and that writes no other engine's tags is read by the one template reader
+every framework's template shares (`MarkupTemplates`, which a Vue component's template block is read by too, over
+`MarkupDialect`: each kind says which tag is a component's and which closes itself, what each attribute's value is to
+it, how a loop's or a structural directive's value is read - Angular's microsyntax with its `let`, its `as` and its
+context's `$index` - which blocks its text writes and what each binds, how an expression's pipes are read, and which
+names a view declares): each attribute's, mustache's and block's code by the JavaScript reader as the framework's
+compiler writes it, a pipe's arguments its expression's and its name an `instantiates` of `|name`; a `#ref` declared over
+its whole view - the template, an `ng-template`'s content, a structural element or a block's body - and a `let-x` over
+its element; and each name it reads by itself a `this` reference, which the linker finds on the class that names the
+template's file its template, where the template declares no type of its own (the `Templates` key of a link: a
+component that names, renames or drops a template file makes that file's references found again). A template's text is
+held by the innermost section around it, as a page's is.
+`npm`, over `JsonOutline` (the reader of a project file's
 JSON, which keeps the line each value begins on as the core counts lines and says where and why a file is no object),
 names a package by its name, refers to each package it depends on, and declares its address roots: its name alone each
 file its entry may be - its `exports`' `.` conditions in the order written, then `source`, `module`, `main`, `types`
@@ -4686,10 +4842,24 @@ where a double-quoted string's or a heredoc's `{$...}` and `${...}` hold code, a
 token. The reader writes PHP's `\` as the model's dot: each namespace - in braces, or ended by its semicolon to the next -
 is an open scope and a node of each file that declares it, each type an open scope in it; each name a reference writes
 is written out as PHP resolves it, by the file's `use` declarations and its namespace - a class in the namespace that
-names it alone, a function in its namespace and then the global one (a `scope` qualifier) - and each `use` is an import
-of the class it names, its alias the prefix, or of a function's or a constant's namespace, showing its name. A property
+names it alone, a function and a constant - a `use function`'s or a `use const`'s (matched by its case) where one names
+it - in its namespace and then the global one (a `scope` qualifier), so a name written alone never reaches a member of
+the class it is written in, which PHP reaches through `$this->`, `self::`, `static::` and `parent::` alone: no reference
+PHP's reader writes is unqualified, and its types say no `MembersByReceiver`, whose lookup past a class's members goes
+on through the scopes around it, which PHP's does not - and each `use` is an import of the class it names, its alias the
+prefix, or of a function's or a constant's namespace, showing its name; its `new` an `instantiates` reference; its
+extracts say `KindsApart` - a function, a constant and a class never one another's - and `WrittenWhole`, every class
+name found as the whole name it is written out to, never from where the code stands. A property
 is named by its variable (`$name`), a constructor's promoted parameters properties of its type, and what a property's
-hooks call its calls. A receiver's type is the call's qualifier where the file states it - a typed parameter, a local a
+hooks call its calls. What a body declares is read as declared: the classes an anonymous class - or a class a function's
+body declares - extends, implements and uses, and the types its properties and constants write, are references of the
+code it is written in; the names it declares, an enum's cases and a property's hooks among them, no use, what a hook
+calls and reads being the code's own; a constructor's promoted parameter is read past its attributes and modifiers as a
+type's own member's are, a visibility of setting's `(set)` being one modifier; and `yield from`'s `from` no name. A
+`define` whose first argument is a text naming a name is a constant of the namespace that name writes - the current one
+does not apply - held by that namespace's node, the file's own where it declares the namespace, else one of its own over
+the define's lines, an open scope. A receiver's type is the call's qualifier
+where the file states it - a typed parameter, a local a
 `new` made, a caught exception, a typed property reached through `$this` - `self::`, `static::` and `$this::` a `this`
 qualifier and `parent::` a `base` one. `require` and `include` of a path the code writes - a text, or one joined to
 `__DIR__` or `dirname(__DIR__)` - import it by a path from the file's directory; one the code computes is marked dynamic,
@@ -4702,17 +4872,166 @@ package by its name and refers to each package its `require` and `require-dev` n
 platform's: `php`, `ext-*`, `lib-*`, `composer-plugin-api` - none; it declares no address root, since a class is found by
 its namespace.
 
+`pyproject` reads a Python project's `pyproject.toml` and `setup.cfg` - TOML and the INI form a setup.cfg is written in, a line
+at a time, a value over several lines read whole and its arrays and tables nested on a stack of the reading's own - into a
+project node named by the project's name, and declares the roots of the layout its words name (`FileExtract.LayoutRoots`),
+each a directory beside the file under which a bare Python import is looked for: setuptools' `package-dir` root and
+`packages.find`'s `where`, Poetry's `packages`' `from`, the directory of each of Hatch's wheel `packages`, PDM's `package-dir`
+and pytest's `pythonpath` - each read as its tool reads it, a string of pytest's paths split into its words as pytest splits it
+(`shlex`) and a setup.cfg's `where` the first entry of its list, the one directory setuptools looks in. A string's value is TOML's: a basic one's escapes decoded, a multi-line one's line break right
+after its opener none of it, one or two quotes before its closer its own and a backslash that ends a line's text taking the
+blanks and line breaks after it. A setup.cfg's options are configparser's: a line indented deeper than the last line that
+continued none continues its option, a comment or a blank line ends none, and a section's name is the text from its `[` to
+its last `]`. A value no string writes, or one a setup.cfg's interpolation computes, names none; a value whose bracket or
+string never closes is read to the file's end - a one-line string to its line's - the line it begins on marked dynamic. The
+file is outlined, as every manifest is: no key of it is a node and no value a literal, so the sites operation searches it by
+its text.
+
+Python's reader (`PythonReading`, over `PythonLexer`) reads by indentation, which is no token: each token says its line, and
+the reader finds its column from where it begins - counted, as Python's tokenizer counts it, from past the last form feed
+among the blanks its line begins with. A statement ends where the next logical line begins - the first token on a later line
+outside every bracketed group, one a backslash ending its line's code does not continue (a comment's backslash is the
+comment's) - that starts no deeper than the statement's own column; a header's suite is deeper than its header and is passed
+over whole however deep it nests, and a decorator's line is the declaration's it stands above. The file's logical lines and
+where each one's block ends are found once, in one pass with a stack of the lines still open, so a block nested any depth
+costs its lines once. `async for`, `async with` and `match` head compound statements of their own; `match`, `case` and
+`type` are soft keywords, names wherever they head no statement of their own. The module is a namespace named by its dotted
+path - `pkg/sub/mod.py` is `pkg.sub.mod`, an
+`__init__.py` its directory's package - one open scope that every name it declares is reachable from and that its own
+top-level code is looked up in. A class is a type and a scope; a function's body is a closed scope under the function's
+qualified name, whose parent is the function or the module around it and never a class, as Python looks a body's names up -
+what it declares is held by the function as its `Parent` and named under it. What a function's or a class's head runs where it
+is defined - its decorators, bases, annotations and defaults, the fixtures its parameters name - is made around it
+(`ExtractReference.Around`), and its names are bound where the declaration stands - by an import of the function or the
+class around it, a method's head by its class's - never by the declaration's own imports. A declaration's head and body are
+read once every declaration of the file is made - each before the declarations it holds, the functions around a body open
+while it is read - so a name the file declares or imports below a function is the file's there too, and a closure's names,
+and the names the imports of the functions around it bind, are its own; what a body's statements name that the walk meets
+first - an `except`'s types, a `case`'s class pattern, an annotation, a class's values - is read by the body's run where it
+reaches it, in the order the text writes it. Each name of a target list - `a, *b = ...`, `(a, b) =
+...` - is a constant or a field at the top and in a class and a local in a function; an attribute a method first assigns
+through `self` or `cls` is a field of its class where the class declares no member of its name; `type X = ...` is a type of
+sub-kind `alias`; and a type parameter - `def f[T]`, `class C[T: Base]` - is its declaration's own and the code's of every declaration it holds,
+a class's its methods', naming no type; a function's decorators and defaults run outside its own. A local,
+a parameter, a lambda's parameter, a comprehension's target and a name a function around the code binds are the code's own,
+nearer than an import or a builtin of the name; a name a class's own code reads that the class declares is the class's, a
+`this` reference, as a class's body sees its names and none of its bases'; and a builtin the file declares or imports is the
+file's. The lexer keeps a string whole with its prefix - raw, bytes, formatted (an f-string or a t-string), combined, in any
+case - a triple-quoted one over lines, a backslash escaping the character after it for where the string ends, a raw one's
+too, as Python's tokenizer reads one; and it says where an f-string's fields hold code (`LiteralStack`, as Dart's,
+JavaScript's and PHP's lexers do): a field's code ends at the `=` of a debugging field, the `!` of a conversion or the `:`
+of a format, and what follows to the brace that closes the field is the field's tail (`LiteralStack.InTail`), none of it the
+value's, each field a format holds code of its own; a debugging field's text, to its `=` and the blanks after it, is the
+value's as written, going on from the part before the field as Python's value holds it (`f"a{x=}"` holds `ax=`;
+`ScanLiteralPart.Written`). Its escapes are Python's - one Python does not know kept with its backslash, a character's name
+(`\N{...}`) its character, by the names and aliases of Unicode 17.0.0 embedded in the core (`UnicodeNames`, generated by
+`.github/scripts/unicode-names.cs` from the Unicode Character Database, read into memory once a process and fetched from
+nowhere, no machine's ICU read) and matched as CPython 3.15 matches one: in any case, the first prefix a name
+begins with deciding - `HANGUL SYLLABLE` and the syllable's three jamo, or a prefix the table holds (`CJK UNIFIED IDEOGRAPH-` and
+`, `TANGUT IDEOGRAPH-`, `CJK COMPATIBILITY IDEOGRAPH-`, `EGYPTIAN HIEROGLYPH-`, `KHITAN SMALL SCRIPT CHARACTER-`,
+`NUSHU CHARACTER-`) and four to six hex digits without a leading zero inside that prefix's ranges - and every other name a
+stored name or an alias, never a named sequence; a bytes string's the escapes of bytes, a formatted one's doubled braces a
+brace. A bracket or a string that never closes, which Python refuses, marks its line `dynamic`
+(`unclosed`, a limit's sign), since what follows it is read as held in it; and an escape Python refuses, kept as written, marks
+the line it stands on `dynamic` (`refused-escape`, a limit's sign): a name Unicode has not, a `\N` with no name in braces, a
+`\x`, `\u` or `\U` short of its digits, a `\U` past every character - text a file being edited may hold, which Python does not
+compile. Each import is looked for by the package layout, which the extract says and the linker reads without
+knowing the language. `import a.b.c` binds `a`, the package `a`, and reaches the module `a.b.c` by the dotted names to it; a
+step between them, `a.b`, is an import of its own the first time the code reaches through it, so what the extract holds of a
+dotted import grows with the chains the code writes and never with the square of its names. A bare module is tried in the
+file's own directory and in each one above it to the tree's root, the nearest first, as the package's `__init__.py` and else
+the module's `.py`, every place an import marked `Layout` that stands in for the one before it (`Fallback`); a package's
+`__init__.py` is the one file that knows its directory is a package - whatever it holds, nothing or comments alone among
+it - and its extract says so (`FolderUnit`), so the linker passes a layout's place over where its directory is a unit around
+the file - the first directory above the file's package is tried first, as a Python import is searched from above its
+package. A file in a directory that is no package marks its own directory's places `Either`: where one names a file and a
+place above names one too, the two are candidates, since the file is its directory's script and a namespace package's module
+alike, and what a name is found to be through either - a function, a type, a member of that type - is a candidate of each,
+though one place alone declares it. Last, a module is tried under the roots of the layout (`CodeImportForms.Rooted`): the directory each outermost unit
+stands in - `src/` of a project whose packages it holds - and each directory a project file declares
+(`FileExtract.LayoutRoots`); one root that holds it is the module, `unique`, and several are each a candidate. A relative
+import is a path beside the file. What `from m import c` binds is tried at each place as the module `m.c` and else as the
+name `m` binds (`ExtractImport.Binds`), whose prefix then stands for that name, so `c.f()` reaches `f` in the module or in
+the class `m` binds. An import at the module's top - in its conditional blocks too - binds names of the module, its
+importers' too (`ExtractImport.Reexports`): `from pkg import Cart` reaches what the package's `__init__.py` imports, under
+the name it gives it, and `from . import views` there makes the module a name of the package; one in a function binds for
+its own code and the functions it holds, as a closure finds a name, and one in a class for the class's own code alone, as no
+class's names are a method's - each by a prefix no other code of the file writes, and no name of the module. `from m import *` is an import marked `Published`,
+which makes visible the names the module publishes alone (`FileExtract.Published`): its `__all__` where it is a list or a
+tuple of string literals the code changes nowhere, else every name bound at its top that is not written with a leading
+underscore - one the code computes or changes marked `dynamic` - and, where it names no literal `__all__`, what its own `*`
+imports take (`PublishesTaken`), which the linker follows from file to file, each once; at the module's top such an import
+is its importers' too, so a package that star-imports its modules gives their names. A Python file's extract says its names
+are bound within it (`BoundWithin`), so a name a file neither declares nor imports is not looked for through the repository,
+nor is a qualifier the type or scope of its whole qualified name or of its ending: a reference the file binds by no import
+it makes is counted external, and why it bound nothing is the sign of the limit that says so - a name only an import naming
+no file of the tree binds (`CodeGraphLimit.OutsideImport`) of the roots the tree does not show, a name nothing binds (`Unbound`) of the
+names a file neither declares nor imports, and a fixture no scope and no serving import provides (`UnprovidedFixture`) of
+the fixtures no `conftest.py` above the test declares - so a call into the standard library shows the first alone; a bare
+import of two places, and a reference left candidates through it - one place or both declaring what it names - is the sign
+(`CandidateImports`) of the limit that says which module such an import names. `self` and `cls` qualify a
+`this` reference, `super()` a `base` one; a chain whose head an import binds is qualified by what the import reaches - the
+`prefix` of the module the longest run of its names before the member reaches, else the `type` those names stand for inside
+it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain - and
+where every member of the chain is a use, each `type` past the first member is written as a link to the use of the member
+before it (`ExtractQualifier.Link`), so a chain writes each of its names once and never the names before each again, and a
+name the language keeps to itself on the way - a module's `__version__`, a class's `__init__` - is a probe of what the module
+or the type declares (`ExtractReference.Probe`), the chain read on through it; a
+name read alone and the head of a chain the file declares or imports - `CONFIG` of `CONFIG.get()` - is a `uses` of what it
+names, whatever that is, an imported class or constant alike (a `references` where it names a class the file declares), and
+each member a chain passes on its way to its last - `items` of `self.items.append(x)` - is a `uses`, those after the first
+of a chain no import's head is values by no name the file types rather than links, since a `self` chain's head writes no name to link to and a function's body sees no
+name of its class; a call of a name written with a capital first letter is an `instantiates`, as a method's `cls(...)` and
+`type(self)(...)` are, of the class the method is of (an `own` qualifier); a type an annotation, a string
+annotation, an `isinstance`, an `except` or a `case`'s class pattern names - dotted or not, through the import its head is -
+is a `references`, every one read by the one reader of a type expression, which reads `Literal`'s values and `Annotated`'s
+metadata as code; a `case`'s dotted value is a `uses` and its captures are bound. A decorator is read whole as code and kept
+as a modifier by its dotted name: the name it calls with what it decorates is a call - of one argument where it is written
+alone - a probe (`ExtractReference.Probe`) where an import of a package binds it, and one the language answers to names
+nothing; no decorator is told by the name it is written with. A parameter a test or a fixture
+requires is a reference with a `fixture` qualifier (`CodeQualifierKinds.Fixture`), reached by the fixtures alone - nodes of
+sub-kind `fixture`, functions pytest's or pytest-asyncio's fixture decorator decorates, told by the import that binds the
+decorator's head and named by its `name=` where one is given - as pytest finds one: what the test's scopes declare, its
+class's and its module's, else what the nearest `conftest.py` that declares it holds of its directory and each above it - a
+`conftest.py`'s module is a `directory` import that serves the fixture references of every file under its directory alone
+(`ExtractImport.Serves`), which only such an import may do - and nowhere else; a fixture that requires its own name is given
+the one a level out, which it overrides, and never itself; and a name a `parametrize` mark gives a test - the test's own, each
+class's around it, its decorators' and its `pytestmark`'s, and the module's `pytestmark`'s, as pytest reads the marks of a test
+and of each node it is collected under, one reader of them all - is no fixture of it, but one the mark's `indirect=` routes to
+the fixture of that name, which the test still requires: every name where it is `True`, those of a list or a tuple of strings. A
+class's own marks pytest applies to every class built on it too, so the class says the names they give in place of a fixture
+(`ExtractNode.Parametrizes`), and the linker finds no fixture of such a name for a test of a class built on it, any number of
+levels up along the bases it found, each type once: the reference is none, counted nowhere and signed nothing.
+A test is what a runner collects: a pytest file - `test_*.py` or `*_test.py`, pytest's default `python_files` - holds tests in
+its `test*` functions and its `Test*` classes, and no other file's names make one, so a `testing.py` or a `testclient.py`
+holds none of them; a `TestCase` subclass - built on a class an import reaches by a name ending in `TestCase`, or on a class
+of the file that is one - is a test class wherever it is declared, as unittest runs it by its type, and a type tests are built
+on (`ExtractNode.TestBase`); and a test class's `test*` methods are tests. A class of a file a runner collects by its name -
+pytest's, and unittest's and Django's `test*.py`, `tests.py` among them - built on a base another file declares, or on one a
+`*` import may bind, says it may be a test class by that base (`ExtractNode.TestByType`), as does each `test*` method it
+holds, and the link makes them tests where a type tests are built on is among its bases, any number of levels up; a base the
+language answers to, or a class of the file that is no test class, makes none. A method is bound by its name alone, so each carries an `overrides`
+reference of its own name with a `base` qualifier, an edge where a base of its type declares it along the chain; no word of
+the language says a method overrides, so the reference is a probe
+(`ExtractReference.Probe`) - it asks whether a declaration is there, and where none is it is no external callee.
+
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
 scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
 for what that import stands for; the file's imports in order, filters applied - a file imported making visible what it
 declares at its top, what it declares exported by another name by that name, the open scopes it declares and what each
 file it exports does, each export's filter applied and
 each file once, an export making nothing visible to the file that makes it, and a file that shares another's imports
-(`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity - a
+(`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity, but
+for a file whose names are bound within it (`FileExtract.BoundWithin`), whose name no import binds is bound by nothing (a
+type's name written by a file that writes its type names whole, `FileExtract.WrittenWhole`, being the type or scope of that
+whole qualified name alone and no other, and a call, a use and a `new` written in a file that keeps its names' kinds apart,
+`FileExtract.KindsApart`, reaching a member taking arguments, a value and a type alone) - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
 that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
 prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`,
-`tests` and `partOf` from the `implements` edges and the marks, and the keys' join from the literals and the fields
+`tests` and `partOf` from the `implements` edges and the marks - a declaration marked a test by its type a test where a
+type tests are built on is among the bases its type is built on, along the `inherits` and `mixesIn` edges any number of
+levels up and through types no file marks, each type walked once - and the keys' join from the literals and the fields
 and properties that name a key. A type is looked in before its bases and its bases a level at a
 time, each level nearest first, the first rank that holds the name deciding with all it holds: the mixins each type of
 the level names, a rank each, the last first - each applied over what comes before it - then one rank of everything
@@ -4724,15 +5043,28 @@ earlier round found (`Fixpoint`): a base named through bases of bases any number
 found, and what a base is never hangs on the order the files come in. A declaration kept to a scope (`ExtractNode.SeenIn`) is seen only from the
 declarations written in that scope or inside it, as the scopes they are written in climb. A closed scope at a file's top - one no scope holds and that is no type's or namespace's own, as a C
 file's for its `static` names - is one every declaration of the file is written in, looked in after its own scopes, so
-what it declares is found `exact` from anywhere in the file. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
+what it declares is found `exact` from anywhere in the file. A closed scope under a member's own qualified name is that
+member's body - a Python function's, whose parent is the function or the module around it and never a class, and a
+JavaScript wrapper's: a reference the member makes is looked for from that scope, then its parent, so a body never reaches
+the names of a class around it but through what qualifies them; one made around the member (`ExtractReference.Around`) - its
+decorators', its annotations', its defaults', the fixtures its parameters name - is looked for where the member is declared.
+What a member's body declares is seen from that body and the scopes inside it alone (`CodeGraphLinker.Placed`, `Bodies`),
+whatever its extract keeps it to: no other code of its file - a member's body is no closed scope at its file's top - no lookup
+from outside the body, a qualifier's or a type's name among them, and no name the repository's step looks up reaches it. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
 path's ending where the including file's folder lacks it - and is taken only where that one names no file; a
 prototype found beside its body - the same language and qualified name - is that body; and a member defined outside
 its type's body, as C++ writes `T::f`, is in the type its declaration's scope names. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
 scope found as a name is - nearest first in the scopes it is written in, then the container of its whole qualified
-name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
-a value a scope it is written in holds (a base's among them) is nearer; a `scope` one is the scope it names alone, else
-the declarations in no scope - with no name those alone - each of its own language, `exact`, as PHP finds a function in
-its namespace and then the global one. A value - and a `value` qualifier - is
+name, an alias, an import's, the repository's - else every container its name ends, or, where the file writes its type
+names whole (`WrittenWhole`), the container of that whole qualified name alone and no other; a `named` one is that too,
+unless a value a scope it is written in holds (a base's among them) is nearer; a `scope` one is the scope it names alone,
+else the declarations in no scope - with no name those alone - each of its own language, `exact`, as PHP finds a function
+or a constant in its namespace and then the global one. A `type` or `named` qualifier written as links is the chain its links write
+(`ExtractQualifier.Link`), found as its names written out are: past an import's prefix it is or begins with - however many
+names the prefix writes, Python's `pkg.mod` - its first name what the import makes visible by it, each next a member of what
+the one before came to, each chain of a file answered once from the chain before its last name (`AliasedBy`), so a chain of
+any length costs a step a link; and a reference whose chain found nothing, or left candidates, is bound - for the sign it
+gives - where the chain's head is (`Head`). A value - and a `value` qualifier - is
 followed through its member's `ValueType`, each name of a chain, from a value or from a type,
 through the one before's
 type, a chain written as links read a link at a time, each link stepped once for each
@@ -4760,15 +5092,27 @@ which says the key (`Named`, `ScopeNamed`, `ContainersOf`, `ParentOf`, `PartsOf`
 the rest); `CodeGraphLinker.Relink` takes the link it is made from (`CodeGraphLinked.Memory`, held in memory alone)
 and finds again only the references of the files not given as the very object that link was given, and those whose
 finding read a key whose part - what each changed file holds of it - is not what it was, the bases each round found moved
-among them; every other reference keeps its finding, and `References` counts what was found. A global import is read from the file that makes it, so a relative one
-names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
+among them; every other reference keeps its finding, and `References` counts what was found. What findings ask again -
+what a written name is from a file and a scope, what an extension extends, what a file imported makes visible by a name -
+is found once, with what finding it read (`CodeGraphLinker.Cached`), every cache of the link - those, the chains' and the
+aliases' memos, the links of chains stepped - sharing one set of makings (`MadeOnce`, `Makings`), the makings taken as the
+graph they make and its strongly connected sets found as they close, on the making stack alone and with no recursion: a
+key asked again while it is being made - directly or through any store that shares the makings - is a cycle; every key of a
+strongly connected set of makings that holds a cycle answers its placeholder, nothing known, with whatever its store keeps beside
+it of what the whole set read - here each member's made reads, joined once into the one `KeptReads` every member's kept answer
+carries - and every read of such a key, while the set is made and after, is given that answer; every other key keeps the answer
+its making made; each key is made once, each set is closed once as its outermost making ends, and nothing kept is ever made
+again - so the link's work is linear in the makings and the reads, whatever key is asked first and however deep the cycles nest. No
+making of the link reaches a cycle: what comes round in a language's imports, re-exports or bases is walked inside one
+making, each file once, the union of what it reaches. A global import is read from the file that makes it, so a
+relative one names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
 own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as
 the least sure edge on its way up, each of several bases that answer alike is one of the candidates, however many, and
 an edge found more than one way is listed once, as sure as its surest finding. Every declaration a reference may be is
 an edge of its own - two or more of `candidates`, none picked and none dropped, however many - through the name index,
 so no reference is counted as naming too many, and a link result counts only what references named outside the
-repository.
+repository - never a probe that found nothing, since nothing it depends on is missing.
 A linker that answers otherwise raises `CodeGraphLinker.Revision`,
 which every link result names: a graph linked by another revision is linked again, though no file changed and none is
 read again.
@@ -4782,7 +5126,9 @@ component's as written, `/>` closing any element, so no tag is dropped as a brow
 and a component named as a raw-text element is - a `<Title>`, a `<Textarea>` - or as one no end tag closes - a
 `<Link>`, an `<Input>` - holds the markup it is written around as any component does.
 What one element says is one rule over a table each kind gives (`MarkupDialect`): each class a `uses` of the rule
-`.name`, split at ASCII white space as HTML splits a class list, and an id a `uses` of `#id`, looked for among rules
+`.name`, split at ASCII white space as HTML splits a class list - a tag of the markup's own expressions or of another
+engine written into a name (Angular's `{{ }}`; on a page, `{{ }}`, `{% %}` and `{# #}`, `HtmlExtractor.EngineAny`) one
+piece with it, whatever white space it holds, and no class (`MarkupDialect.Classes`) - and an id a `uses` of `#id`, looked for among rules
 alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; and what each attribute's
 value is (`MarkupRole`) - a handler's code, a bound expression, a loop, the names a slot declares, or nothing the graph
 reads. What that code calls, uses and declares is never the dialect's to say but its language's reader's: each
@@ -4807,7 +5153,12 @@ it, given `event`, read by the JavaScript reader - `return validate(this)` a cal
 each inline `<script>` of JavaScript read by the JavaScript reader as a program of its own, from where its
 start tag ends - a module where its type is `module`, and one of another type, a template a framework reads, no code -
 and each `<style>` by the style sheet's reader in the syntax its `lang` or its `type` names (`text/less`,
-`text/x-scss`; CSS where it names neither), one of a syntax no style sheet's reader reads read as none.
+`text/x-scss`; CSS where it names neither), one of a syntax no style sheet's reader reads read as none. The text runs
+a page holds leave out a script's and a style's raw text (`MarkupText.Texts`, one flag of the walk), so neither is read
+as a template's; a page whose text or attribute values write another template engine's tags - Jinja's, Django's or
+Twig's `{% %}` and `{# #}`, Handlebars' `{{#`, `{{/`, `{{>` and `{{!--` - is read as a page and never as an Angular
+template, each of the engine's tags marked dynamic of the kind `template-engine` (`HtmlExtractor.OtherEngine`), which
+makes the file one the graph's sites search by text and is the sign of the limit that says so.
 
 `css` (`.css`, `.scss`, `.sass`, `.less`) reads a sheet over the structural scanner's core, as the code readers do:
 `CssLexer` cuts it into tokens - a string to its own quote not escaped, an unquoted `url(...)` one token, `/* */` a
@@ -4985,9 +5336,9 @@ newest earlier run's manifest
 that reads, its extracts copied as they are reused and a file whose extract that run lacks read again. Its records go
 through `OrchestrationStore`, each strict with its `Problem()` and placed by `OrchestratorLayout`: `graph.json`, the
 manifest with its digest; `symbols.jsonl`, the link result naming the manifest's digest and the linker's revision, made
-again where either does not match - as lines, its head counting what follows and then each node, edge and count on one
-of its own - a node's id written against the id of the node that contains it where that is shorter, an edge and a
-count naming each node by its place - since it grows with the repository and a list read or written whole is held whole while it is
+again where either does not match - as lines, its head counting what follows and then each node, edge, count and node's
+signs of what the graph does not see on one of its own - a node's id written against the id of the node that contains it
+where that is shorter, an edge, a count and signs naming each node by its place - since it grows with the repository and a list read or written whole is held whole while it is
 (`JsonLineWriter`, `JsonLineReader`); `extracts/<ab>/<blob>-<path>.<language>-<version>.json`, written once, before the manifest that names them - each node's names written against its parent's and each node a field names by its place (`StoredName`, `FileExtractJson`), so a file nested any depth is kept in bytes that grow with its depth and reads back to the very ids it was given;
 `views/<agent>.json`, an agent's view (`CodeGraphView`); and `sync.jsonl`, one line for each sync - what it listed,
 hashed, read, reused and removed, the references it found, how many files it could not read (`Unreadable`) and, for one
@@ -5055,7 +5406,7 @@ the hook looks for it, which its runner finds as it does.
 `delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
 
 What an agent asks of the graph is one tool, `graph` (`Agents\Runtime\CodebaseGraphTool`), whose `op` is `find`, `node`,
-`related`, `outline`, `body`, `pack`, `changes`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
+`related`, `outline`, `body`, `sites`, `pack`, `changes`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
 handle, qualified name (one written with its language's `::` or `\` read as the model's `.`, or with only its last
 parts, `Order.Total`) and simple name and `path:line`, each file's nodes, each node's edges in and out by kind, the words its
 name splits into weighed by how rare they are - built once
@@ -5067,7 +5418,106 @@ pack or a working set it was given, a file its `writes` covers, a file its agent
 holds) and then by id; `related` walks as many hops as asked, from 1, going through every node it reaches: it keeps the
 nodes it reached and never reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that
 reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
-found its lines moved, and reads a file whole whatever it holds. No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`, the graph's use of
+found its lines moved, and reads a file whole whatever it holds. `sites` answers "every place that decides this" of one datum
+(`data`: a symbol as `symbol` takes one - a handle, an id or a `path:line`, which names its one node, or a qualified or simple
+name - a key path, dotted - a name holding a dot or a bracket quoted in brackets, `Logging.LogLevel["Microsoft.AspNetCore"]`
+or `Logging.LogLevel['Microsoft.AspNetCore']`, or with its names' own dots as they are - or as .NET's configuration spells
+one (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`), a
+diagnostic id, a rule's selector as a rule writes it, or a quoted literal, asked by its value alone and never by the symbols):
+every definer of it across files and languages (`CodebaseGraphQueries.DefinersOf`, by the one reading of what an agent writes
+`Resolve` reads too - the node a handle, an id or a `path:line` names alone, else every node any rule of a name finds, a
+qualified name, a simple one, one written with a language's `::` or `\` outside a quoted name, one spelt as the one owner of a
+key path's spellings reads it (`CodeKeyPaths.Dotted`) - a path typed with single quotes, with both quote marks or with quotes a
+name needs not read first as the writer writes it (`CodeKeyPaths.Canonical`), every rule after reading that form - or with some
+of its scopes, of a key path every key whose own name spells it as .NET's configuration reads a key's name - an environment
+variable's, a settings file's flat key (`CodeKeyPaths.Spellings`: `Payments__TimeoutSeconds` under a compose file's
+`environment`) - so a key path in any spelling finds the same keys, and, last of the rules, the loose form of a dotted path,
+its names' own dots written as they are, naming every key whose path so written is that text (`CodeKeyPaths.Unescaped`, one
+index built once a view, in the queries alone and never the linker, for code splits a dotted literal), where `Resolve` takes
+the first rule that finds one - a selector's own leading dot kept, so `.header` is never the element rule `header` or a key of
+that name), then one hop off every definer's own edges, a definer the step's reads do not reach among
+them, each place it reaches held to the reads where it stands (`CodebaseGraphQueries.SitesOf`, each way a group read from the
+relations' own edges - `GraphRelations.Edges` - and the `node` operation's): their callers, their users, what makes them, what
+names them by their kind - a type mention, an `isinstance`, an `instanceof`, a `catch` or an `except` - what inherits them or
+mixes them in, what implements them or answers an interface's member for a type through its dispatches, what overrides them
+and what they override, a part of a declaration walked as the node itself, each node with how sure the surest edge that
+reaches it is - and no site's own edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds
+it as a whole word (`CodebaseGraphQueries.LiteralSites`, read once an ask over the literals of every extract the view holds -
+no node of the graph is a literal's, so the read is the one index of them) - the datum searched for by the name of the node it
+names by itself, by a selector whole, else by its last name (`CodebaseGraphQueries.SitesSearch`, `CodeKeyPaths.LastName`, a
+path's places read by `CodeKeyPaths.Places`, which reads a place in brackets only as a key's path writes one - an item's digits,
+a quoted name, whose dot parts nothing and whose own text is the last name (`Microsoft.AspNetCore` of
+`Logging.LogLevel["Microsoft.AspNetCore"]`) - so `this[]` of `Canvas.this[]` and `operator[]` of `Vec::operator[]` are names; and
+a name written with some of its places ends a path only where one of the path's places begins (`CodeKeyPaths.EndsWithPlaces`),
+as the context pack reads a class's site too - for a
+name written with its scopes and a key path in any spelling are written in code and in data by their last name (`shape.Area()`,
+`"TimeoutSeconds": 30`) - a datum spelt as .NET's configuration spells a key path read as one where it names a key, where
+only the path it spells finds its definers, code's members, none a key (`Secret` of `JwtSettings:Secret`, a member the
+options pattern binds a section to), or where nothing names it and it is written as no node's id and no file's line, and as
+the name code declares where a definer, none of them a key, is found by it as it is written - by its name, its qualified
+name or with some of its scopes, each rule of the one reading of a name saying which form found what it found
+(`CodebaseGraphQueries.NamedBy`): `RETRY__LIMIT` of `Retry.RETRY__LIMIT`, `__validate` of `Foo.__validate`; a selector
+never, so `.card__title` is the class a BEM element names and never the path `.card.title` - and each key path it names by
+its places as an environment variable writes them too, every key's among its definers however many and the path it spells
+where it is read as one (`CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which no whole word of its last key is held
+by) - by the one whole-word rule every search of the graph reads (`GraphWord.Whole`: a boundary beside each edge of the word
+that is a word character, an edge that is none its own boundary, so `.btn-primary` is held by `button.btn-primary`) and, for a selector, the selector with no character of a class's name after it, so `.btn` is not held by
+`.btn-primary`, and its bare name as a whole word of a class list too (`class="btn btn-primary"`, `addClass('btn-primary')`), the
+one owner of what a value or a line holds of the datum (`GraphSitesSearch`): no pattern is compiled of the word or of the key
+paths, so none is refused for its length - a quoted value of twenty thousand characters is searched as one of five - and none
+grows with how many key paths the datum names: the word is looked for by its characters, every place it stands at found in one
+pass of a line however its characters repeat (`GraphWord`, Knuth, Morris and Pratt), and the key paths whole, every one of
+them looked for in one pass of it (`GraphSitesSearch.Holds`), so no key path is left out; and every key the datum names
+(`CodeSubKinds.Key`), held and never defined. What the graph does not answer of the datum is
+searched by text, each line asked whether the search holds it, by the one search the text fallback runs too, and said
+(`CodebaseGraphQueries.TextScopeOf`, each file for the first of these it is): a file the view does not hold; one it holds in
+a state no implementation of a language read it in - listed by the fallback alone, which no extractor reads the language of,
+unreadable, ambiguous; one it holds read but no longer the extract of (`CodebaseGraphQueries.Unheld`), its declarations in no
+answer; one it is unsure of (`CodebaseGraphQueries.UnsureOfFile`); one an implementation outlines, whose values
+and text no literal of the graph holds; one a node of which makes a reference of the datum's name the linker bound to nothing of
+that name (`CodebaseGraphQueries.UnboundNaming` - an import it could not follow, a receiver it could not type), the sign the
+graph may be silent of one datum, for counting every external reference toward a file's unsureness would make a file unsure
+for every library call it makes; and, for a quoted value, every other file, for the graph holds a value only where code writes
+it as a string literal - each file told by the one path its listing names it by, which the search takes it by before it asks
+whether the reader may read it, and each hit and each read names (`AgentFiles.SearchAsync`'s take), so a backslash a file's
+name holds where it is no separator stays the name's, and a file the graph answers of is passed over by the search's own will
+and counted nowhere, never as one the reader may not read. Each place is one card, the node at it, saying every way
+it decides - an edge's other than exact with how sure it is, as the `node` operation marks a candidates edge - with the lines
+a literal and a text hit stand on beneath it, a hit at a line a literal already names passed over - a hit's node the one at
+its line (`CodebaseGraphQueries.AtLine`: at a line nodes begin on, the outermost of them - of those that end last, the one no
+other of them is declared inside, whatever their count, so a one-line type is the type and not its one member, a positional
+record the record of one parameter or several, a one-line enum the enum, a one-line object the object of one key or several,
+and a method that begins on a field's line the method - where several are, the one of them that makes a reference at the line,
+else the nearest node they are all declared inside; at any other line, the innermost node that holds it - of the nodes that
+begin last, of those the ones that end first, the innermost, one no other of them is declared inside; where several are, the
+one of those lines they are all declared inside, else the one of them that makes a reference at the line, else the nearest
+node they are all declared inside; never the file's own node where another holds the line, nor one by the order of the ids -
+so a Vue component spanning its file is never the file's node, a page's landmark never its body of the same lines, and a Razor
+page's markup never the class it compiles to - read from each file's line index, made once a file a view by one sweep of its
+nodes with an explicit stack of those open at a line, each node's declaration in the file looked up in an index of every
+declaration made once a view, so a search of a file's every line costs its nodes and references once, never the other files a
+node it shares - a namespace, a partial type - is declared in); or a raw line where the graph read no node of the file. The cards are grouped by file kind and tier, as part 02 has it (`CodebaseGraphQueries.KindOf`: the
+language that read the file, else its extension or its name; `CodebaseGraphQueries.TierOf`: the project nearest above it as
+the repository's map names its projects, else its top directory as the outline names it), at `CodebaseGraphTool.RelatedLines`
+places a page, each place a block its card heads - the place counted once, its lines riding on it - so a page holds it whole
+where a page can, a page that gives anything before it ending before it, and one no page holds is given in parts, each page
+after its first beginning with its card again (`Pages\Paging`); and every place passes the step's reads at one gate, a definer, a node an edge reaches, a literal's place and a
+hit alike, those they do not reach counted. Every `sites` answer ends with its coverage lines: how many files of each kind of
+what the graph does not answer were searched - each counted once the search read it to its end, never as it was chosen - with
+their hits, the kinds of them named, the files it lists only and those it is unsure of said where none was; the forms a
+selector and a key path were searched in; and, where any file the graph lists only was searched, that nothing is assumed of a language with no
+extractor, its files read by text alone - so a plan's site list is never read as covered where the graph was silent. Where none
+of it holds a place, the answer says only what was searched: no line of the files searched by text, never no line at all. It
+ends besides with every limit of each language whose files the graph read, one rule for every language (`CodebaseGraphTool.Unseen`):
+a limit some of those files show the sign of - the kind of a dynamic mark it holds, or what the linker found of its references
+and its imports (`CodebaseGraphQueries.SignsOf`) - said in full, with how many show it, and every other limit of the
+language by its short name (`CodeGraphLimit.Name`), on one line for the language that points to `help codebase-graph-languages`,
+which says each in full under its name - so nothing is left unsaid, and an answer about a few small files is not outweighed by
+the limits of the languages it read. The prompts that search for a class's sites - `plan.md`,
+`plan-audit.md`, `item-audit.md` and the plan's `searches` - name `sites` first; the plan's text search after it for what the
+graph does not see, each said in `notCovered`, and each audit's own text search across every tier, format, target and file
+kind beside it, never the plan's searches.
+No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`, the graph's use of
 `Pages\Paging`, the one owner of an answer's pages and of the one rule a piece is cut by, over the graph's own entry,
 `GraphEntry`: `GraphSection`, `GraphPageSection` and `GraphPageAnswer` are its `PageSection`, `PageOfSection` and
 `PageAnswer`, by the graph's names), an operation's page holding up to
@@ -5076,7 +5526,10 @@ less what the pages reserve and the answer's leading lines - an entry wider than
 boundaries, never inside a surrogate pair, a page each, each marked with `…` where it goes on or went on, and the page
 that ends inside one saying it goes on; the notes an answer ends with follow its last entry within the same room, each
 whole or in pieces, on as many pages as they take, every file whose extract is gone named; a block's head rides only with its block's first counted line, so the page that
-serves a node's lines names it, and a block is told by its node's id, so two overloads are two blocks. An answer of more
+serves a node's lines names it, and a block is told by its node's id, so two overloads are two blocks; a result's block - its
+head an entry that counts, the lines beneath it riding on it, as a `sites` place's card and its lines are - is given whole on
+a page that holds it, a page that gives anything before it ending before it, and one wider than a page in parts, each page
+after its first beginning with the head again, said as going on and counting nothing. An answer of more
 than one page starts with the line `page k of n` - on every page but the last the exact total, counted never estimated,
 and how to ask for the next with `page`, from 1, `offset` and `limit` refused naming it; the last says it is the last -
 and an answer with no header holds all of it; a page past the last is refused with the answer's range. A write is no
@@ -5114,8 +5567,8 @@ holds (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where
 matched, a name it does not hold, an edge of `candidates` - in a `node`, but a use's, which is recall and never a doubt
 (`CodeEdgeKinds.Recall`, the one rule `CodebaseGraphQueries.Doubts` judges an edge an answer gives by) - a node named
 with external callees or in a file `dynamic` or generated - the answer adds the lines that hold the name as a whole word, searched by
-`AgentFiles.SearchAsync` as `search_files` searches - but in every file whatever it holds, the whole word matched in time
-linear in a line and so never timed, each hit's line whole - a section of their own at `CodebaseGraphTool.TextHits` a page of
+`AgentFiles.SearchAsync` as `search_files` searches - but in every file whatever it holds, the whole word looked for by its
+characters (`GraphWord.Whole`) in time linear in a line and so never timed, no word refused for its length, each hit's line whole - a section of their own at `CodebaseGraphTool.TextHits` a page of
 each word, a body's among them, all of them paged - none left out - and saying what it did not read in the notes the
 answer ends with (`AgentSearch.LeftOut`), through the read rule the tool is handed, which leaves out and counts every
 node, edge and hit of a file it refuses; a path or a `path:line`
@@ -5872,9 +6325,19 @@ one that counts from the machine's start, so that held against the agent's own s
 runtime tells it every child read as older than its parent and none was ended - and never the
 console the agent runs in, which Windows lists as its child (`conhost`) and ends everything in the
 console with. The agent's last line says what that came to: each process ended, by its id, each it
-could not end, or why none could be listed. The one thing started on a host to outlast the request
-that asked for it is the process holding the host awake between commands (`holdAwakeSeconds`),
-which ends on its own seconds. There is no verb that stops a run on its hosts, because stopping
+could not end, or why none could be listed. That line and the request's completion line are handed
+to the stream as one write (`Gone.SayingAsync`), and where the agent itself was stopped meanwhile
+the end stands behind that write: it is awaited, so a machine slow to take it is waited for as long
+as it takes - begun alone and not waited for, a busy machine once ended the agent between the two
+lines - and a stream whose reader has gone takes it at once, as if written. Where the run waits on
+what will never end, a line nobody reads among the causes, the saying is begun alone and the agent
+ends as it always did, at once; and where a line the agent said before is still unwritten, nothing
+written now is read either (`Gone.ReadsNothing`). A run that answers once the last resort is taken
+writes no completion line of its own (`Gone.Ending`): how the request finished is said there, once.
+The one thing started on a host to outlast the
+request that asked for it is the process holding the host awake between commands
+(`holdAwakeSeconds`), which ends on its own seconds. There is no verb that stops a run on its hosts,
+because stopping
 the command that dispatched it is that verb, on every carriage.
 
 The beat can fail at this end too: the process that carries the request - ssh, wsl.exe - stops

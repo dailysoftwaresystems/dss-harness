@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Ci;
+using DssHarness.Core.Codebase;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -183,6 +184,48 @@ public sealed partial class HelpTests
 
         Assert.True(recognised);
         Assert.Contains(".harness-config", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README's sentence of what the codebase graph reads names every implementation the registry holds: the table here
+    /// holds the words that name each, its languages the registry's every one, so an implementation the sentence does not name
+    /// - one written since, or one left out - is a red test.
+    /// </summary>
+    [Fact]
+    public void TheReadmesGraphSentence_NamesEveryImplementationTheRegistryHolds()
+    {
+        var named = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["csharp"] = "C# through the compiler's own parser",
+            ["msbuild"] = "MSBuild's projects and solutions",
+            ["c"] = "C and C++ through a structural scanner",
+            ["cpp"] = "C and C++ through a structural scanner",
+            ["dart"] = "Dart through the same scanner",
+            ["pubspec"] = "each Dart package's `pubspec.yaml`",
+            ["javascript"] = "JavaScript and TypeScript through it too",
+            ["typescript"] = "JavaScript and TypeScript through it too",
+            ["npm"] = "`package.json`",
+            ["tsconfig"] = "`tsconfig.json` and `jsconfig.json`",
+            ["php"] = "PHP through it too",
+            ["composer"] = "`composer.json`",
+            ["python"] = "Python through it too",
+            ["pyproject"] = "each `pyproject.toml` and `setup.cfg`",
+            ["css"] = "style sheets through it too",
+            ["html"] = "an HTML page's sections",
+            ["vue"] = "a Vue component's template, script and styles",
+            ["razor"] = "Razor's views and Blazor's components",
+            ["json"] = "data files of JSON, YAML and XML",
+            ["yaml"] = "data files of JSON, YAML and XML",
+            ["xml"] = "data files of JSON, YAML and XML",
+            ["markdown"] = "Markdown's headings",
+            ["listed"] = "every other file by its name and size",
+        };
+        var readme = Prose.Document("README.md");
+        var from = readme.IndexOf("each declaration a language's implementation reads", StringComparison.Ordinal);
+        var sentence = readme[from..readme.IndexOf("and the edges between them", from, StringComparison.Ordinal)];
+
+        Assert.Equal(CodeGraphExtractors.OfThisBuild.All.Select(extractor => extractor.Language).Order(StringComparer.Ordinal), named.Keys.Order(StringComparer.Ordinal));
+        Assert.All(named, pair => Assert.Contains(pair.Value, sentence, StringComparison.Ordinal));
     }
 
     [GeneratedRegex(@"^\s{2}(?<name>\S+)(\s+\[?<\S+)*\s{2,}(?<description>.+)$")]

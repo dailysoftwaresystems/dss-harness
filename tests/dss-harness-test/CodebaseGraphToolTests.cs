@@ -685,10 +685,10 @@ public sealed partial class CodebaseGraphToolTests
     /// was not given is refused by the schema and by the tool.
     /// </summary>
     [Theory]
-    [InlineData(false, false, "find,node,related,outline,body", "")]
-    [InlineData(true, false, "find,node,related,outline,body,edit", "hash,text")]
-    [InlineData(false, true, "find,node,related,outline,body,wholeFile", "reason")]
-    [InlineData(true, true, "find,node,related,outline,body,edit,wholeFile", "hash,text,reason")]
+    [InlineData(false, false, "find,node,related,outline,body,sites", "data")]
+    [InlineData(true, false, "find,node,related,outline,body,sites,edit", "data,hash,text")]
+    [InlineData(false, true, "find,node,related,outline,body,sites,wholeFile", "data,reason")]
+    [InlineData(true, true, "find,node,related,outline,body,sites,edit,wholeFile", "data,hash,text,reason")]
     public async Task TheSchemaMadeForAStep_HoldsOnlyTheOperationsItIsGiven(bool write, bool narrow, string ops, string extra)
     {
         var given = CodebaseGraphTool.Operations(write, narrow);
@@ -712,8 +712,8 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>An operation given a member it does not read, missing one it needs, or one out of its bounds is refused with a usage line.</summary>
     [Theory]
-    [InlineData("""{}""", "op is required: one of find, node, related, outline, body, edit, wholeFile")]
-    [InlineData("""{"op":"teleport"}""", "op 'teleport' is not one this step may use: find, node, related, outline, body, edit, wholeFile")]
+    [InlineData("""{}""", "op is required: one of find, node, related, outline, body, sites, edit, wholeFile")]
+    [InlineData("""{"op":"teleport"}""", "op 'teleport' is not one this step may use: find, node, related, outline, body, sites, edit, wholeFile")]
     [InlineData("""{"op":"find"}""", "op 'find' needs query: the words to match, split at case changes, underscores, digits and dots as a name is.")]
     [InlineData("""{"op":"node","symbol":"Total","query":"x"}""", "op 'node' does not read query: it reads symbol, page")]
     [InlineData("""{"op":"related","symbol":"Total"}""", "op 'related' needs relation: which edge to follow.")]
@@ -953,6 +953,8 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Contains("edit - a node's lines replaced where the hash you give is its hash now; wholeFile", writing, StringComparison.Ordinal);
         Assert.Contains("related - the nodes a relation reaches, as many hops as you ask, 60 a page", reading, StringComparison.Ordinal);
         Assert.Contains("body - the lines of the nodes you name, read fresh and numbered, 600 lines a page", reading, StringComparison.Ordinal);
+        Assert.Contains("; sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, 60 places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help codebase-graph-languages' saying each in full. Every node is named", reading, StringComparison.Ordinal);
+        Assert.Contains("\"data\"", CodebaseGraphTool.Schema(CodebaseGraphTool.Operations(write: false, narrow: false)), StringComparison.Ordinal);
         Assert.Contains("wholeFile - lifts the narrowing of reads for one file", writing, StringComparison.Ordinal);
     }
 

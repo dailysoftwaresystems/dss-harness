@@ -10,7 +10,8 @@ namespace DssHarness.Core.Pages;
 /// (<see cref="PageRoom"/>): an entry wider than a whole page is given in pieces at character boundaries, never inside a
 /// surrogate pair, each piece marked with <see cref="TextCut.Ellipsis"/> where the entry goes on or went on before it
 /// (<see cref="Pieces"/>), and each section a page ends inside one of, or inside a block, says it goes on after what the
-/// page gave of it, whatever sections follow it on the page. The notes an answer ends with follow its last entry within the
+/// page gave of it, whatever sections follow it on the page; a page that begins inside a result's block - an entry that
+/// counts and the lines riding on it - says that entry again first. The notes an answer ends with follow its last entry within the
 /// same room, every one of them given, on as many pages as they take. The graph's answers are laid by it
 /// (<see cref="Codebase.GraphPages"/>), and a text's pages, streamed from its file, keep its header, its range and its
 /// pieces (<see cref="TextPages"/>).
@@ -65,9 +66,13 @@ public static class Paging
     /// to the section's size while the page has <paramref name="room"/> - a section's caption charged with the first it
     /// gives - and an entry no room is left for begins the page after; the notes the answer ends with follow its last
     /// entries, held within the same room, on as many pages as they take. A block's head goes with its first counted
-    /// entry, so the page that gives a block's lines names it. Where a page would hold nothing, it takes as much of the
-    /// first entry not yet given as its room holds, marked as going on: a page always moves the answer on, and none passes
-    /// its room. Every page of it is given from what this fill found, so a later page is never filled again.
+    /// entry, so the page that gives a block's lines names it. A result's block - its head an entry that counts, the lines
+    /// beneath it riding on it and counting nothing - is given whole on one page where a page holds it, a page that gives
+    /// anything before it ending before it; one wider than a page is given in parts, each page after its first beginning
+    /// with the head again, said as going on and counting nothing, so no line of it stands on a page without its result.
+    /// Where a page would hold nothing, it takes as much of the first entry not yet given as its room holds, marked as going
+    /// on: a page always moves the answer on, and none passes its room. Every page of it is given from what this fill
+    /// found, so a later page is never filled again.
     /// </summary>
     /// <typeparam name="TEntry">The entries' kind.</typeparam>
     /// <param name="sections">The answer's sections, in their order; each page holds of every section what its size leaves.</param>
@@ -134,6 +139,9 @@ public static class Paging
     /// <summary>What a page that ends inside an entry, or a block, says goes on.</summary>
     internal static string GoesOnLine(string what) => $"{TextCut.Ellipsis} {what} goes on";
 
+    /// <summary>What a page that begins inside a result's block says at its head: the result's own entry, said again as going on (<see cref="Lay{TEntry}"/>).</summary>
+    internal static string Again(string head) => $"{head} {TextCut.Ellipsis} goes on";
+
     /// <summary>Whether <paramref name="other"/> is of the same block as <paramref name="entry"/>: the same block, said by the same name.</summary>
     internal static bool SameBlock<TEntry>(TEntry entry, TEntry other)
         where TEntry : IPageEntry
@@ -154,8 +162,27 @@ public static class Paging
         /// <summary>How many characters of the entry at <see cref="Cursor"/> the pages so far have given: none where they gave none of it.</summary>
         public int Offset { get; set; }
 
+        /// <summary>Where the head of the last block the pages so far began stands, given whole; null before any.</summary>
+        public int? Head { get; set; }
+
+        /// <summary>The result's block last weighed whole: where it begins, its characters and what it counts.</summary>
+        public (int At, int Cost, int Counts)? Weighed { get; set; }
+
         /// <summary>Whether every entry of the section is given.</summary>
         public bool Done => Cursor >= Section.Entries.Count;
+
+        /// <summary>Whether the entry at <paramref name="at"/> begins a block: one of a block, after none of it.</summary>
+        public bool Begins(int at)
+            => Section.Entries[at].BlockName is not null && (at == 0 || !SameBlock(Section.Entries[at - 1], Section.Entries[at]));
+
+        /// <summary>Whether the entry at <paramref name="at"/> heads a result's block: it begins a block, and counts.</summary>
+        public bool HeadsAResult(int at) => Begins(at) && Section.Entries[at].Counts > 0;
+
+        /// <summary>The head of the result's block the entry at <see cref="Cursor"/> rides on, where it is a later entry of one; null else.</summary>
+        public TEntry? Riding()
+            => !Done && Head is { } head && head < Cursor && Section.Entries[head].Counts > 0 && SameBlock(Section.Entries[head], Section.Entries[Cursor])
+                ? Section.Entries[head]
+                : default;
     }
 
     /// <summary>
@@ -163,7 +190,8 @@ public static class Paging
     /// entries up to the section's size while the page has room - a section's caption charged with the first it gives -
     /// and an entry no room is left for begins the page after; <paramref name="notes"/> are taken once every section is
     /// given, on the page its last entry is and the pages after. A block's head goes with its first counted entry, so the
-    /// page that gives a block's lines names it. Where a page would hold nothing, it takes as much of the first entry not
+    /// page that gives a block's lines names it; a result's block goes whole onto a page that holds it, and a page that
+    /// begins inside one gives its head again first. Where a page would hold nothing, it takes as much of the first entry not
     /// yet given as its room holds, marked as going on: a page always moves the answer on, and none passes its room.
     /// </summary>
     private static List<List<SectionOfPage<TEntry>>> Fills<TEntry>(IReadOnlyList<PageSection<TEntry>> sections, PageSection<TEntry> notes, int room, Func<TEntry, string, bool, TEntry> piece)
@@ -196,12 +224,27 @@ public static class Paging
                 var caption = fill.Section.Caption is { } said ? said.Length + 1 : 0;
                 var cutInside = false;
 
+                // A page that begins inside a result's block gives its head again first, said as going on and counting
+                // nothing: charged, with the section's caption, to the first entry the page gives of the section. A head no
+                // page has room for beside anything is not given again - it was itself given in pieces, its pages saying so.
+                var again = fill.Riding() is { } riding ? piece(riding, Again(riding.Text), false) : default;
+                var lead = caption + (again is null ? 0 : again.Text.Length + 1);
+
+                if (again is not null && given == 0 && lead >= left)
+                {
+                    again = default;
+                    lead = caption;
+                }
+
                 while (!fill.Done)
                 {
                     var entry = fill.Section.Entries[fill.Cursor];
                     var whole = fill.Offset == 0;
                     var rest = Pieces.Rest(entry.Text, fill.Offset);
-                    var cost = rest.Length + 1 + (shown.Count == 0 ? caption : 0);
+                    var cost = rest.Length + 1 + (shown.Count == 0 ? lead : 0);
+
+                    // An entry a result's head is given before rides on it: no head of a block of its own.
+                    var rides = fill.Riding() is not null;
 
                     if (whole)
                     {
@@ -212,8 +255,15 @@ public static class Paging
 
                         // A block's head rides only with the block's first counted entry: a page with no room or no size left
                         // for that entry ends before the head, and the next page begins with both.
-                        if (Opens(entry, shown) && HeadWithItsLine(fill, caption, shown.Count) is var (headCost, headCounts)
+                        if (!rides && Opens(entry, shown) && HeadWithItsLine(fill, caption, shown.Count) is var (headCost, headCounts)
                             && ((headCounts > budget && shown.Count > 0) || (headCost > left && given > 0)))
+                        {
+                            break;
+                        }
+
+                        // A result's block a page that gives anything before it cannot hold whole begins the page after.
+                        if (given > 0 && fill.HeadsAResult(fill.Cursor) && WholeBlock(fill, shown.Count == 0 ? lead : 0) is var (blockCost, blockCounts)
+                            && (blockCost > left || (blockCounts > budget && shown.Count > 0)))
                         {
                             break;
                         }
@@ -221,9 +271,11 @@ public static class Paging
 
                     if (cost <= left)
                     {
-                        var heads = (given == 0 || (headed && SameBlock(heading!, entry))) && whole && entry.Counts == 0 && entry.BlockName is not null;
+                        GivenAgain(shown, again);
+                        var heads = (given == 0 || (headed && SameBlock(heading!, entry))) && whole && entry.Counts == 0 && entry.BlockName is not null && !rides;
                         heading = heads ? (headed ? heading : entry) : default;
                         headed = heads;
+                        Given(fill, whole);
                         shown.Add(Piece(entry, rest, whole, last: true, piece));
                         left -= cost;
                         budget -= whole ? entry.Counts : 0;
@@ -240,12 +292,14 @@ public static class Paging
 
                     // The page holds nothing yet and the entry alone passes its room: as much of it as the page holds, the
                     // rest on the pages after - by the one rule a piece is cut by.
-                    var head = Pieces.Head(rest, continued: !whole, left - (shown.Count == 0 ? caption : 0));
+                    var head = Pieces.Head(rest, continued: !whole, left - (shown.Count == 0 ? lead : 0));
+                    GivenAgain(shown, again);
 
                     // A piece that would hold the whole rest is no piece: it is given whole, past the room only where the
                     // room left holds less than one character of it.
                     if (head.Length == rest.Length)
                     {
+                        Given(fill, whole);
                         shown.Add(Piece(entry, rest, whole, last: true, piece));
                         budget -= whole ? entry.Counts : 0;
                         fill.Cursor++;
@@ -286,6 +340,51 @@ public static class Paging
         }
 
         return !fill.Done && SameBlock(last, fill.Section.Entries[fill.Cursor]) ? last.BlockName : null;
+    }
+
+    /// <summary>Notes the entry at <paramref name="fill"/>'s cursor as given: where it is given whole and begins a block, it is the block's head.</summary>
+    private static void Given<TEntry>(SectionFill<TEntry> fill, bool whole)
+        where TEntry : IPageEntry
+    {
+        if (whole && fill.Begins(fill.Cursor))
+        {
+            fill.Head = fill.Cursor;
+        }
+    }
+
+    /// <summary>Gives <paramref name="again"/> - the head of the result's block a page begins inside - before the first entry the page gives of its section.</summary>
+    private static void GivenAgain<TEntry>(List<TEntry> shown, TEntry? again)
+        where TEntry : IPageEntry
+    {
+        if (shown.Count == 0 && again is not null)
+        {
+            shown.Add(again);
+        }
+    }
+
+    /// <summary>
+    /// What the result's block that begins at <paramref name="fill"/>'s cursor costs given whole - its characters, with
+    /// <paramref name="lead"/>, and what it counts - weighed once a block, however many pages ask it before it is given.
+    /// </summary>
+    private static (int Cost, int Counts) WholeBlock<TEntry>(SectionFill<TEntry> fill, int lead)
+        where TEntry : IPageEntry
+    {
+        if (fill.Weighed is not { } weighed || weighed.At != fill.Cursor)
+        {
+            var entries = fill.Section.Entries;
+            var cost = 0;
+            var counts = 0;
+
+            for (var at = fill.Cursor; at < entries.Count && (at == fill.Cursor || SameBlock(entries[fill.Cursor], entries[at])); at++)
+            {
+                cost += entries[at].Text.Length + 1;
+                counts += entries[at].Counts;
+            }
+
+            fill.Weighed = weighed = (fill.Cursor, cost, counts);
+        }
+
+        return (weighed.Cost + lead, weighed.Counts);
     }
 
     /// <summary>Whether <paramref name="entry"/> opens a block here: an entry that counts nothing, of a block, after none of that block's.</summary>

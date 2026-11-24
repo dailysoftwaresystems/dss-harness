@@ -13,8 +13,11 @@ namespace DssHarness.Core.Codebase;
 /// </summary>
 /// <remarks>
 /// The linker resolves every reference by the same steps for every language - the qualifier's scope, the enclosing
-/// scopes from the inside out, the imports in order, the repository by name and arity (<see cref="CodeGraphLinker"/>) -
-/// so a language says in its extract what its scopes and imports are, and never adds a rule to the linker.
+/// scopes from the inside out, the imports in order, the repository by name and arity where the file's names are not bound
+/// within it (<see cref="BoundWithin"/>), the type of a name's whole qualified name alone where the file writes them whole
+/// (<see cref="WrittenWhole"/>), and a declaration of the kind a reference names alone where the file keeps its names' kinds
+/// apart (<see cref="KindsApart"/>) (<see cref="CodeGraphLinker"/>) - so a language says in its extract what its scopes,
+/// imports and names are, and never adds a rule to the linker.
 /// <para>
 /// Its record (<see cref="FileExtractJson"/>) writes each node's names against its parent's and every node a field names
 /// by its place, so what is kept of a file nested any depth grows with the file, never with the square of its depth; read
@@ -74,6 +77,68 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
 
     /// <summary>
+    /// The names an import of the file that takes what it publishes alone makes visible (<see cref="ExtractImport.Published"/>):
+    /// what the file publishes to such an import - a Python module's <c>__all__</c> where it is a list or a tuple of string
+    /// literals, else every name bound at its top that is not written with a leading underscore, as the implementation says - and,
+    /// where <see cref="PublishesTaken"/>, what its own such imports take besides. <see langword="null"/> where nothing of the
+    /// file's language imports it so.
+    /// </summary>
+    public IReadOnlyList<string>? Published { get; init; }
+
+    /// <summary>
+    /// Whether what the file publishes holds, besides <see cref="Published"/>, every name each of its own imports that takes a
+    /// file's published names takes (<see cref="ExtractImport.Published"/>), those files' own taken in turn: a Python module with
+    /// no literal <c>__all__</c>, whose <c>from m import *</c> binds names that are its own, so a <c>*</c> import of it binds them
+    /// too. The linker walks such imports with every file visited once, so imports that come round end.
+    /// </summary>
+    public bool PublishesTaken { get; init; }
+
+    /// <summary>
+    /// The directories a project file says its language's layout looks a bare name up in, each relative to the file's own
+    /// directory with forward separators - a Python project's <c>package-dir</c> or <c>where</c> - besides the ones the tree
+    /// itself shows, the directory each outermost unit of the layout stands in (<see cref="FolderUnit"/>,
+    /// <see cref="CodeImportForms.Rooted"/>). <see langword="null"/> where it names none.
+    /// </summary>
+    public IReadOnlyList<string>? LayoutRoots { get; init; }
+
+    /// <summary>
+    /// Whether a name the file's code reads that none of its scopes declares and none of its imports makes visible is bound by
+    /// nothing: the linker then does not look for it among the repository's declarations, as a Python module's name is bound by
+    /// its module's own names and its imports or not at all - nor, where a qualifier names a type or a scope, for the type or
+    /// scope whose whole qualified name it is or whose name ends with it. False where a name bound by neither may still be one
+    /// any file declares.
+    /// </summary>
+    public bool BoundWithin { get; init; }
+
+    /// <summary>
+    /// Whether the file's language keeps the kinds of its names apart - a function's, a value's, a type's each its own, as PHP keeps
+    /// its functions, its constants and its classes: a call it makes then reaches a member that takes arguments alone, a use a value
+    /// alone - a constant, a property, an enum's case - and neither a type, which a <c>new</c> (<see cref="CodeEdgeKinds.Instantiates"/>)
+    /// and a type's place (<see cref="CodeEdgeKinds.References"/>) name; nor is a <c>new</c> of it ever a constructor function's.
+    /// False where one name may stand for any of them, as a C# or a JavaScript name may.
+    /// </summary>
+    public bool KindsApart { get; init; }
+
+    /// <summary>
+    /// Whether every type or scope name the file writes - a qualifier's (<see cref="CodeQualifierKinds.Type"/>), a value's type
+    /// (<see cref="ExtractNode.ValueType"/>) - is written whole, as its language resolved it: the linker then finds the type or scope
+    /// whose whole qualified name it is, and no other - never one the scopes its code is in declare by that name, one an import makes
+    /// visible, the repository's of its last name, nor one whose name ends with it - as PHP's reader writes every class name out by
+    /// the file's <c>use</c> declarations and its namespace. False where a name may be written from where the code stands.
+    /// </summary>
+    public bool WrittenWhole { get; init; }
+
+    /// <summary>
+    /// Whether the file is the one that says its directory is one unit of its language's layout - a Python package's
+    /// <c>__init__.py</c>, whatever it holds, an empty one among them. An import marked <see cref="ExtractImport.Layout"/> is passed
+    /// over where it names a place in a unit around its file, so a bare name is looked for from the first directory above the units
+    /// the file is in, as a Python import is from above the file's package; and the directory an outermost unit stands in - one
+    /// whose own directory is no unit - is a root of the layout (<see cref="CodeImportForms.Rooted"/>), as <c>src/</c> is of the
+    /// packages in it.
+    /// </summary>
+    public bool FolderUnit { get; init; }
+
+    /// <summary>
     /// What is wrong with this extract of a file of <paramref name="lineCount"/> lines made by
     /// <paramref name="language"/>; <see langword="null"/> where nothing is. The shape alone: a node's digest is checked
     /// against the file's lines where the lines are at hand.
@@ -114,6 +179,12 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 if (holder.Start > node.Start || holder.End < node.End)
                 {
                     return $"its node '{node.Id}' (lines {Lines(node)}) is declared inside '{parent}' (lines {Lines(holder)}), whose lines do not hold it";
+                }
+
+                // A member is a test by its type where the type that holds it is: one held by anything else never is.
+                if (node is { TestByType: true, Kind: CodeNodeKinds.Member } && holder.Kind != CodeNodeKinds.Type)
+                {
+                    return $"its node '{node.Id}' is a test by its type, and '{parent}', which holds it, is no type";
                 }
             }
         }
@@ -171,8 +242,13 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 : reference.Qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } && !ids.ContainsKey(own) ? $"a reference to '{reference.Name}' names the node '{own}' of its own file, which it holds no node of"
                 : null).FirstOrDefault(found => found is not null)
             ?? (FolderScope is { Length: > 0 } folder && folder.Split('.').Any(string.IsNullOrWhiteSpace) ? $"the scope its directory gives it, '{folder}', holds a name that is empty" : null)
+            ?? (Published is { } published && published.Any(string.IsNullOrWhiteSpace) ? "a name it publishes is empty" : null)
+            ?? (PublishesTaken && Published is null ? "it publishes what its imports take, and publishes nothing of its own: only a file it publishes names of does" : null)
+            ?? (LayoutRoots is { } layoutRoots && (layoutRoots.Count == 0 || layoutRoots.Any(string.IsNullOrWhiteSpace)) ? "a root of its layout it names is empty, or it names none" : null)
             ?? (Generated is { } generated && string.IsNullOrWhiteSpace(generated) ? "it says it is generated and not why" : null)
             ?? (Dynamic ?? []).Select(dynamic => dynamic is null || string.IsNullOrWhiteSpace(dynamic.Why) ? "it marks a line dynamic and not why"
+                : dynamic.Kind is null ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic and names no kind of what it saw"
+                : string.IsNullOrWhiteSpace(dynamic.Kind) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic with a kind that is empty"
                 : !Within(dynamic.Line, lineCount) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
                 : null).FirstOrDefault(found => found is not null)
             ?? LinkProblem()
@@ -224,7 +300,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// <summary>
     /// What is wrong with the chains its references write as links (<see cref="ExtractQualifier.Link"/>); none where
     /// nothing is. A link names a reference made before its own, so following links always ends; a linked qualifier is a
-    /// chain's - of a value or a name - and names nothing itself; and the reference it links writes names of its own or
+    /// chain's - of a value, a name or a type - and names nothing itself; and the reference it links writes names of its own or
     /// links on, so the chain's names are read whole.
     /// </summary>
     private string? LinkProblem()
@@ -245,9 +321,9 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 return $"{named} links its qualifier to reference {link.ToString(CultureInfo.InvariantCulture)}, which is not one made before it";
             }
 
-            if (qualifier.Kind is not (CodeQualifierKinds.Value or CodeQualifierKinds.Named))
+            if (qualifier.Kind is not (CodeQualifierKinds.Value or CodeQualifierKinds.Named or CodeQualifierKinds.Type))
             {
-                return $"{named} links its qualifier of kind '{qualifier.Kind}', and only a chain of a value or of a name is written as links";
+                return $"{named} links its qualifier of kind '{qualifier.Kind}', and only a chain of a value, of a name or of a type is written as links";
             }
 
             if (qualifier.Name is not null)
@@ -479,12 +555,14 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id.ToString(), node.Kind, node.Name, node.Qualified.ToString(), node.Signature, node.SubKind, node.Scope?.ToString(), node.Parent?.ToString(), node.Summary, node.ValueType, node.Extends, node.SeenIn?.ToString(), .. node.Modifiers ?? [], .. node.Exports ?? [], .. (node.SuffixOf ?? []).Select(id => id.ToString())])
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id.ToString(), node.Kind, node.Name, node.Qualified.ToString(), node.Signature, node.SubKind, node.Scope?.ToString(), node.Parent?.ToString(), node.Summary, node.ValueType, node.Extends, node.SeenIn?.ToString(), .. node.Modifiers ?? [], .. node.Exports ?? [], .. (node.SuffixOf ?? []).Select(id => id.ToString()), .. node.Selectors ?? [], .. node.Templates ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name.ToString(), scope.Parent?.ToString()]))
-            .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
+            .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, import.Serves, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
+            .Concat(Published ?? [])
+            .Concat(LayoutRoots ?? [])
             .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From.ToString(), reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name?.ToString()]))
-            .Concat((Dynamic ?? []).Select(dynamic => dynamic.Why))
+            .Concat((Dynamic ?? []).SelectMany(dynamic => (string?[])[dynamic.Why, dynamic.Kind]))
             .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, .. (literal.Places ?? []).Select(place => place?.Node?.ToString())]))
             .Append(FolderScope)
             .Append(Generated)
@@ -551,6 +629,37 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public bool Test { get; init; }
 
     /// <summary>
+    /// Whether it is a test where a type is a test type that its own file cannot tell is one - a type built on bases, of which
+    /// one may be a type tests are built on that another file declares (<see cref="TestBase"/>), and each member such a type
+    /// holds that is named as its language names a test: a type so marked is a test type where a type tests are built on is
+    /// among its bases, along the bases the linker found, however many levels up and through whatever types between, and a
+    /// member so marked is a test where the type that holds it is - as a Python test file's class built on a <c>TestCase</c>
+    /// subclass another module declares is, with its <c>test*</c> methods. The linker gives each such test its <c>tests</c>
+    /// edges as it gives a marked one (<see cref="Test"/>). Only a type and a member a type holds say it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TestByType { get; init; }
+
+    /// <summary>
+    /// Whether it is a type tests are built on: a type every type built on it, any number of levels down, is a test type by -
+    /// a Python <c>TestCase</c> subclass, which unittest runs by its type wherever it is declared - where that type says it
+    /// may be one (<see cref="TestByType"/>). The types the linker walks from to the tests by their type. Only a type says it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TestBase { get; init; }
+
+    /// <summary>
+    /// The names a type's own marks give a value to in each test it holds and in each test of every type built on it, any number
+    /// of levels down, in place of the fixture of that name - a pytest class's <c>parametrize</c> marks, its decorators' and its
+    /// <c>pytestmark</c>'s, which pytest applies to the classes built on it - those a mark routes to the fixture of the name, which
+    /// the test still requires, left out. Its own file reads what it gives its own tests; for a test of a type built on it, a
+    /// reference of one of these names with a fixture qualifier (<see cref="CodeQualifierKinds.Fixture"/>) is none, found nowhere
+    /// and counted nowhere - the linker reads it along the bases it found, each type once. Only a type says it;
+    /// <see langword="null"/> where it gives none.
+    /// </summary>
+    public IReadOnlyList<string>? Parametrizes { get; init; }
+
+    /// <summary>
     /// Whether it says it is one part of a declaration another file holds the rest of - a XAML view whose
     /// <c>x:Class</c> names a C# partial type, a Blazor component and its code-behind - which the linker joins as
     /// <see cref="CodeEdgeKinds.PartOf"/> to every other part of the same qualified name that says so.
@@ -559,8 +668,20 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public bool Part { get; init; }
 
     /// <summary>
+    /// Whether members are reached from their own code by a receiver alone - <c>this</c> - and never by a name written alone,
+    /// as a JavaScript class's are: said by a type of its own members, and by a member a file adds to a type from outside its
+    /// body (<see cref="Extends"/>) of the members of the scope it is declared in. A name such members' code writes by itself
+    /// is looked for past that scope, its bases passed over too, so a method's call of a function of the module that shares
+    /// its name reaches the function, not the method. Only a type and a member that extends one say it, and the extract is
+    /// refused where any other node does.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MembersByReceiver { get; init; }
+
+    /// <summary>
     /// The type a value of it is declared with - a field's, a property's, an event's - as a type qualifier names it, where
-    /// the code says one: what a call on that value is looked for through.
+    /// the code says one: what a call on that value is looked for through; where the file writes its names whole
+    /// (<see cref="FileExtract.WrittenWhole"/>), the type or scope of that whole qualified name alone.
     /// </summary>
     public string? ValueType { get; init; }
 
@@ -572,6 +693,16 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public string? Extends { get; init; }
 
     /// <summary>
+    /// Whether, a member that extends a type (<see cref="Extends"/>), it is the type's own wherever the type is - a member a
+    /// prototype is given, which the assignment adds to the type itself when its file runs - and no member a file must reach to
+    /// call, as an extension method is, whose namespace or library a call's file imports: a call on a value of the type, or of a
+    /// type built on it, finds it wherever the call is written, whatever loaded the file that adds it - an import for its side
+    /// effect alone, which binds no name, or none of the caller's. Only a member that extends a type says it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Joined { get; init; }
+
+    /// <summary>
     /// The scope whose declarations alone see it, by its qualified name, where it is kept to them: a declaration written in
     /// that scope, or in a scope inside it, sees it, and one anywhere else does not - a Dart library's private name, which
     /// the library's file and its parts see and no importer does. <see langword="null"/> where every declaration that
@@ -581,10 +712,11 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
 
     /// <summary>
     /// The names another file imports it by besides its own, where it is exported so - a JavaScript module's
-    /// <c>default</c>, the name an <c>export { a as b }</c> gives it: an import of its file - or of a file that exports
-    /// that file's names - finds it by one of them whatever scope <see cref="SeenIn"/> keeps it to, and nothing else finds
-    /// it by one: no reference written in its own file, and none in the repository by name; <see langword="null"/> where it
-    /// is exported by none.
+    /// <c>default</c>, the name an <c>export { a as b }</c> gives it - and its own among them where what it is declared in keeps
+    /// even that from its importers, as a member's body does what it declares (<see cref="ExtractScope"/>): an import of its
+    /// file - or of a file that exports that file's names - finds it by one of them whatever scope keeps it, and nothing else
+    /// finds it by one: no reference written in its own file, and none in the repository by name; <see langword="null"/> where
+    /// it is exported by none.
     /// </summary>
     public IReadOnlyList<string>? Exports { get; init; }
 
@@ -599,6 +731,26 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     /// <see langword="null"/> where it is a name of its own.
     /// </summary>
     public IReadOnlyList<QualifiedName>? SuffixOf { get; init; }
+
+    /// <summary>
+    /// The names markup reaches a declaration by, each a name the repository finds it by as its own, from markup alone: an
+    /// element selector a component or a directive declares itself by, as Angular's <c>@Component</c> and <c>@Directive</c>
+    /// write them - <c>app-cart</c>, an element's name with a dash, so a tag markup writes (<c>&lt;app-cart&gt;</c>)
+    /// instantiates the component whose selector it is - and a pipe's name after a bar, as a <c>@Pipe</c>'s <c>name</c> gives
+    /// it - <c>|money</c>, so a template's <c>{{ total | money }}</c> instantiates the pipe. No code's name holds a dash or a bar,
+    /// so nothing code writes reaches one (<see cref="IsSelector"/>). A selector naming a class, an attribute or a combinator, or
+    /// an element with no dash, names none. <see langword="null"/> where it declares none.
+    /// </summary>
+    public IReadOnlyList<string>? Selectors { get; init; }
+
+    /// <summary>
+    /// The files that are a component's templates, each a path relative to its own file's directory as Angular's
+    /// <c>templateUrl</c> names one: what a template's code reads by itself is a member of this declaration, as
+    /// <c>this</c> reads one, wherever the template names no type of its own - the linker finds each such name on
+    /// the declarations that name the template theirs (<see cref="CodeQualifierKinds.This"/>). <see langword="null"/>
+    /// where it has none.
+    /// </summary>
+    public IReadOnlyList<string>? Templates { get; init; }
 
     /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest(CodeText, int, int)"/>): set by the core once the implementation has answered,
@@ -625,13 +777,31 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : MinArity is < 0 || (MaxArity is { } most && (MinArity is not { } least || most < least)) ? "its arity is no range of argument counts"
             : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
+            : Joined && Extends is null ? "it is the own member of the type it extends, and it extends none"
             : SeenIn is { } seenIn && seenIn.WhitespaceOnly() ? "the scope it is seen in is empty"
             : Exports is { } exports && (exports.Count == 0 || exports.Any(string.IsNullOrWhiteSpace)) ? "a name it is exported by is empty, or it lists none"
             : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(id => string.IsNullOrWhiteSpace(id.Whole()))) ? "a node its names are written onto is empty, or it names none"
             : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
             : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
+            : TestByType && Kind is not (CodeNodeKinds.Type or CodeNodeKinds.Member) ? $"it is a test by its type, and a node of kind '{Kind}' is neither a type nor a member a type holds"
+            : TestByType && Kind == CodeNodeKinds.Member && Parent is null ? "it is a member that is a test by its type, and no type holds it"
+            : TestBase && Kind != CodeNodeKinds.Type ? $"it is a type tests are built on, and a node of kind '{Kind}' is no type"
+            : Parametrizes is { } parametrizes && (parametrizes.Count == 0 || parametrizes.Any(string.IsNullOrWhiteSpace)) ? "a name it parametrizes tests by is empty, or it names none"
+            : Parametrizes is not null && Kind != CodeNodeKinds.Type ? $"it parametrizes the tests of the types built on it, and a node of kind '{Kind}' is no type"
+            : MembersByReceiver && Kind != CodeNodeKinds.Type && (Kind != CodeNodeKinds.Member || Extends is null) ? $"its members are reached by a receiver alone, and a node of kind '{Kind}' is no type, nor a member that extends one"
+            : Selectors is { } selectors && (selectors.Count == 0 || !selectors.All(IsSelector)) ? "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"
+            : Templates is { } templates && (templates.Count == 0 || templates.Any(string.IsNullOrWhiteSpace)) ? "a template it names is empty, or it names none"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
+
+    /// <summary>
+    /// Whether <paramref name="selector"/> is one a declaration may be reached by from markup (<see cref="Selectors"/>): an element's
+    /// name - an ASCII letter, then letters, digits and dashes - holding a dash; or a bar, then a name of ASCII letters, digits,
+    /// <c>_</c> and <c>$</c> that does not begin with a digit.
+    /// </summary>
+    internal static bool IsSelector(string selector)
+        => selector is ['|', var first, .. var rest] ? (char.IsAsciiLetter(first) || first is '_' or '$') && rest.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '$')
+            : selector.Length > 0 && char.IsAsciiLetter(selector[0]) && selector.Contains('-', StringComparison.Ordinal) && selector.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
 }
 
 /// <summary>One named container a file's declarations are put in.</summary>
@@ -644,6 +814,15 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
 /// file that declares it; a closed scope is its file's alone, and what is declared in it - and the type or scope it is
 /// the scope of - is seen from no other file.
 /// </param>
+/// <remarks>
+/// A closed scope a file declares under the qualified name of one of its members - no type's and no namespace's - is that
+/// member's body: what the member declares inside it is put in it, and a reference the member makes is looked for from it
+/// first, then from its parent, save one made around the member (<see cref="ExtractReference.Around"/>) - as a Python
+/// function's body is, whose parent is the function or the module around it and never a class, which encloses no
+/// function's body. What is declared in a body is seen from it and the scopes inside it alone, whatever
+/// <see cref="ExtractNode.SeenIn"/> says: no other code of its file finds it, by its name or through a qualifier, and an
+/// importer by a name it is exported by alone (<see cref="ExtractNode.Exports"/>).
+/// </remarks>
 public sealed record ExtractScope(QualifiedName Name, bool Open)
 {
     /// <summary>The scope it is declared in, by its qualified name, which the linker looks in next; <see langword="null"/> where none is.</summary>
@@ -688,6 +867,59 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     public bool Export { get; init; }
 
     /// <summary>
+    /// Whether the names it binds in the file that makes it are that file's importers's too, and not only its own: a module's
+    /// own imported names are names of the module, so an importer of the module reaches them through it - <c>from pkg import
+    /// a</c> reaches what a package's <c>__init__.py</c> binds by <c>from .x import a</c>, by the name it binds it under, and what it
+    /// binds by <c>from .x import *</c> where <c>x</c> publishes it. One by a prefix that shows nothing is reached by its prefix as the
+    /// file it names, whose own open scopes are what the name stands for: <c>from . import views</c> in a package's
+    /// <c>__init__.py</c> makes the module <c>views</c> a name of the package.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Reexports { get; init; }
+
+    /// <summary>
+    /// Whether it makes visible the names the file it names publishes alone (<see cref="FileExtract.Published"/>), and none of
+    /// its others: an import that takes every name the module gives, as a Python <c>from m import *</c> does.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Published { get; init; }
+
+    /// <summary>
+    /// Whether it names one place a bare name of the file's language is looked for - in the file's own directory or in one above
+    /// it, each further place standing in for the one before it - and is passed over where that directory is a unit of the layout
+    /// around the file (<see cref="FileExtract.FolderUnit"/>): the first directory above the units the file is in is tried first.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Layout { get; init; }
+
+    /// <summary>
+    /// Whether its prefix stands for the one name it shows, rather than for the file it names: what the code reaches through the
+    /// prefix is a member of what the file makes visible by that name - a Python <c>from m import a</c> where <c>a</c> is no module
+    /// of <c>m</c>'s but a class <c>m</c> binds, so <c>a.f()</c> reaches the class's <c>f</c>. Its <see cref="Show"/> is that one name.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Binds { get; init; }
+
+    /// <summary>
+    /// Whether it is one of two places its run's name may stand at that its file cannot tell apart: where it names a file of the
+    /// tree, the next place of its run that names one is taken beside it, and what each makes visible is a candidate - a Python
+    /// file in a directory that is no package, whose bare import is its own directory's module when the file is run as a script
+    /// and the one above when it is imported as a module of a namespace package.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Either { get; init; }
+
+    /// <summary>
+    /// The kind of qualifier whose references alone it serves (<see cref="CodeQualifierKinds"/>), and no other reference of the
+    /// files it is made for: a <c>conftest.py</c>'s fixtures, which pytest gives every test under its directory by a parameter's
+    /// name (<see cref="CodeQualifierKinds.Fixture"/>) and no other name of a test file reaches. Only an import of the
+    /// <see cref="CodeImportForms.Directory"/> form that is not every file's (<see cref="Global"/>) serves one, and the extract is
+    /// refused where any other does. <see langword="null"/> where it serves every reference.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Serves { get; init; }
+
+    /// <summary>
     /// Whether the file it names shares its imports with this one: what that file imports - each import's filters and
     /// prefix with it - this file imports too, after its own, as a Dart part does its library's. What the file it names
     /// shares in turn is not followed.
@@ -718,6 +950,15 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : Fallback && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and stands in for another import: only an import of a file does"
             : Export && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and is an export: only an import of a file is exported"
             : Export && Prefix is not null ? "it is an export with a prefix: an export makes names visible by themselves"
+            : Published && (Prefix is not null || Show is not null || Hide is not null || Export || Binds) ? "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"
+            : Published && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and takes the names a file publishes: only an import of a file does"
+            : Layout && Form != CodeImportForms.Relative ? "it names a place of a layout, which only a path relative to the file does"
+            : Layout && Export ? "it names a place a name is looked for, which is no export: an export names a file"
+            : Binds && (Prefix is null || Show is not [_] || Hide is not null) ? "its prefix stands for the one name it shows, and so it has a prefix and shows one name, hiding none"
+            : Binds && (Export || Form is CodeImportForms.Scope or CodeImportForms.Directory) ? "its prefix stands for a name a file shows, which only an import of a file that is no export does"
+            : Either && (Export || Form is CodeImportForms.Scope or CodeImportForms.Directory) ? "it is one of two places a name may stand at, which only an import of a file that is no export is"
+            : Serves is { } serves && !CodeQualifierKinds.All.Contains(serves, StringComparer.Ordinal) ? $"it serves the references of the qualifier '{serves}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
+            : Serves is not null && (Form != CodeImportForms.Directory || Global) ? "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"
             : Shares && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and shares its imports: only a file's are shared"
             : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
             : Namespace && (Form != CodeImportForms.Directory || Prefix is not null || Show is not null || Hide is not null) ? "it is the scope a directory's files are declared in, and is no import of a directory's whole scope"
@@ -746,8 +987,16 @@ public static class CodeImportForms
     /// </summary>
     public const string Directory = "directory";
 
+    /// <summary>
+    /// A file, by its path under a root of the layout the importing file's language looks a bare name up by: the directory each
+    /// outermost unit of the layout stands in - a unit whose own directory is no unit (<see cref="FileExtract.FolderUnit"/>), as
+    /// <c>src/</c> holds a Python package's top - and each directory a project file declares one (<see cref="FileExtract.LayoutRoots"/>).
+    /// Every root that holds it: one a <c>unique</c> place, several each a candidate.
+    /// </summary>
+    public const string Rooted = "rooted";
+
     /// <summary>Every form.</summary>
-    public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending, Directory];
+    public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending, Directory, Rooted];
 }
 
 /// <summary>
@@ -788,6 +1037,27 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
     /// <summary>Where the name is looked for, and nowhere else, where the code says: a receiver's type or value, a type's name, <c>this</c>, an import's prefix, a scope.</summary>
     public ExtractQualifier? Qualifier { get; init; }
 
+    /// <summary>
+    /// Whether it asks whether a declaration is there rather than naming one the code depends on: where none is, that is no doubt -
+    /// never counted an external callee of the node it is made from, so it makes no node unsure - as a method's name asked of its
+    /// type's bases is in a language where no word says it overrides, and a decorator an import of a package binds is, which is that
+    /// package's where the repository declares none; where one is, an edge is made as of any reference.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Probe { get; init; }
+
+    /// <summary>
+    /// Whether it is made around the node it is made from rather than in that node's body - a function's decorator, a
+    /// parameter's annotation or default, a fixture a parameter names - where the body is a scope of its own: a closed scope
+    /// the file declares under the node's qualified name (<see cref="ExtractScope"/>), which every other reference the node
+    /// makes is looked for from first, and that scope's parent after it, as a Python function's body is looked up, which the
+    /// class around it does not enclose. One made around the node is looked for from where the node itself is declared, as
+    /// Python evaluates a function's header where the function is defined. Of a node whose body is no scope of its own, it
+    /// changes nothing.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Around { get; init; }
+
     /// <summary>What is wrong with this reference; <see langword="null"/> where nothing is.</summary>
     internal string? Problem(int lineCount)
         => !CodeEdgeKinds.Referenced.Contains(Kind, StringComparer.Ordinal) ? $"its kind is '{Kind}', which is none of {string.Join(", ", CodeEdgeKinds.Referenced)}"
@@ -796,8 +1066,8 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
             : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && (named.Name is not { } namedName || namedName.WhitespaceOnly())
-                && named is not { Kind: CodeQualifierKinds.Named, Name: null, Link: not null } ? "its qualifier names nothing"
-            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && value.WhitespaceOnly() ? "its qualifier's name is empty"
+                && named is not { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type, Name: null, Link: not null } ? "its qualifier names nothing"
+            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.This or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && value.WhitespaceOnly() ? "its qualifier's name is empty"
             : null;
 }
 
@@ -811,8 +1081,9 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
 public sealed record ExtractQualifier(string Kind, QualifiedName? Name = null)
 {
     /// <summary>
-    /// Where the qualifier is a chain of two names or more - a receiver's <c>a.b.c</c> - of a value or of a name
-    /// (<see cref="CodeQualifierKinds.Value"/>, <see cref="CodeQualifierKinds.Named"/>): the place, among its extract's
+    /// Where the qualifier is a chain of two names or more - a receiver's <c>a.b.c</c> - of a value, of a name or of a type
+    /// (<see cref="CodeQualifierKinds.Value"/>, <see cref="CodeQualifierKinds.Named"/>, <see cref="CodeQualifierKinds.Type"/>,
+    /// as a type a module's names write past an import's prefix, <c>models.Cart.Line</c>): the place, among its extract's
     /// references, of the reference made for the chain's last name - <c>c</c>'s - which is made before this one and whose
     /// own qualifier writes the names before it, by a name or by a link in turn. So a chain of n names is n references of
     /// one name each, never each name written again by every reference after it, and the linker reads each link once
@@ -825,7 +1096,14 @@ public sealed record ExtractQualifier(string Kind, QualifiedName? Name = null)
 /// <summary>The kinds of qualifier.</summary>
 public static class CodeQualifierKinds
 {
-    /// <summary>The type the reference is written in, and its bases.</summary>
+    /// <summary>
+    /// The type the reference is written in, and its bases. With a name, a value of that type by the names the code writes after
+    /// <c>this</c> - <c>this.cart.lines</c> - each a member of what the one before is, the reference looked for in the type the last
+    /// is declared with, by its name alone where nothing says that type, or where a name the chain passes through is none the type
+    /// it comes to declares - a member the code adds at run time, or one a base the repository does not hold gives - never by
+    /// nothing: what a receiver reaches through <c>this</c>, never a name written alone, which a type whose members are reached by
+    /// a receiver alone does not answer (<see cref="ExtractNode.MembersByReceiver"/>).
+    /// </summary>
     public const string This = "this";
 
     /// <summary>The bases of the type the reference is written in, and not the type itself.</summary>
@@ -840,7 +1118,8 @@ public static class CodeQualifierKinds
 
     /// <summary>
     /// A type, by its name as the code writes it where the code says it is a type's - a variable's declared type, a type
-    /// made or cast, a type named in a declaration: looked for as a type or a scope alone, never as a value.
+    /// made or cast, a type named in a declaration: looked for as a type or a scope alone, never as a value; where the file
+    /// writes its names whole (<see cref="FileExtract.WrittenWhole"/>), the type or scope of that whole qualified name alone.
     /// </summary>
     public const string Type = "type";
 
@@ -860,8 +1139,8 @@ public static class CodeQualifierKinds
 
     /// <summary>
     /// A scope by its qualified name, and past it the repository's own top: the name is looked for as that scope declares
-    /// it, else as a declaration in no scope, and nowhere else - as PHP finds a function its namespace declares, else the
-    /// global one; with no name, among the declarations in no scope alone - a name PHP writes from its global namespace,
+    /// it, else as a declaration in no scope, and nowhere else - as PHP finds a function or a constant its namespace declares,
+    /// else the global one; with no name, among the declarations in no scope alone - a name PHP writes from its global namespace,
     /// or after a leading <c>\</c>. Either is looked for among the declarations of the reference's own language alone.
     /// </summary>
     public const string Scope = "scope";
@@ -918,7 +1197,8 @@ public static class CodeQualifierKinds
     /// <summary>
     /// A node of the reference's own file, by its id, which its implementation names where it knows it: the one node it
     /// names, exact, of whatever kind - a YAML alias to the node its anchor names, a mapping to each mapping its merge key
-    /// merges. The file reads what it repeats once, and each reference to it is this.
+    /// merges, a Python method's <c>cls(...)</c> or <c>type(self)(...)</c> to the class its receiver is. The file reads what it
+    /// repeats once, and each reference to it is this.
     /// </summary>
     public const string Own = "own";
 
@@ -930,14 +1210,30 @@ public static class CodeQualifierKinds
     /// </summary>
     public const string Module = "module";
 
+    /// <summary>
+    /// A fixture a test is given a parameter by, as pytest names one - by the parameter's name alone, never by an import: the
+    /// name is looked for among the fixtures (<see cref="ExtractNode.SubKind"/> <c>fixture</c>) the test's own scopes declare -
+    /// its class, its module - then among those of each import made for the test's file that serves fixtures alone
+    /// (<see cref="ExtractImport.Serves"/>), the nearest directory's first - a conftest.py's, which pytest gives every test under its
+    /// directory and no test imports - the first that holds one deciding, exact; and nowhere else, so a fixture a plugin provides
+    /// names nothing the repository declares. The node the reference is made from is never what it reaches: a fixture that asks for
+    /// its own name is given the one a level out, which it overrides.
+    /// </summary>
+    public const string Fixture = "fixture";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own, Module];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own, Module, Fixture];
 }
 
-/// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>
+/// <summary>A place an implementation saw something it cannot bind, or stopped reading, and the kind of thing it saw there.</summary>
 /// <param name="Line">The line.</param>
 /// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer, a file that stops parsing there.</param>
-public sealed record ExtractDynamic(int Line, string Why);
+/// <param name="Kind">
+/// The kind of thing it saw: the sign of the limit of its implementation's help that says it (<see cref="CodeGraphLimit.Signs"/>),
+/// the same word in that limit and in every mark of the kind, so an answer says in full of a file the limits its marks show. Every
+/// mark has one, a constant of the reader that makes it: a reader marks nothing its help says no limit of.
+/// </param>
+public sealed record ExtractDynamic(int Line, string Why, string Kind);
 
 /// <summary>
 /// One string value a file's literals hold, kept once however many literals of it the file writes, with every place one

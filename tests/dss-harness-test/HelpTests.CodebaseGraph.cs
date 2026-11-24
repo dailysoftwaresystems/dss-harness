@@ -52,11 +52,44 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words("by where its new text stands once there - every place, with replace_all - else by the lines it names"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("a deletion writes no lines, and is counted with the writes placed nowhere, as a whole file's write is where the file does not read as the step left it."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("body and edit reach a file only inside the tree, each link resolved, never through a link out of it."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"{DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Sites)} - every place that decides data - a symbol as node takes one, its handle, its id, a path:line or a name, the node a handle, an id or a path:line names asked of alone and searched for by its name, never read as a key path, a name written with its scopes searched for by its last part, as code writes it - this[] of Canvas.this[]; a key path, dotted - a key whose own name holds a dot or a bracket quoted in brackets, in double or single quotes, Logging.LogLevel[\"Microsoft.AspNetCore\"] or Logging.LogLevel['Microsoft.AspNetCore'], or with its names' own dots as they are, Logging.LogLevel.Microsoft.AspNetCore, which asks of every key it may mean - or as .NET's configuration writes one (Payments:TimeoutSeconds, Payments__TimeoutSeconds, Logging:LogLevel:Microsoft.AspNetCore), asked of every key that names it in any spelling - one whose own name spells it, an environment variable's, among them - searched for by its last key, as data writes it, and by the path of every key it names as an environment variable writes one, however many - a name spelt so read as a key path where it names a key, where only the path it spells finds its definers, code's members, none a key (Secret of JwtSettings:Secret, as the options pattern binds a section), or where nothing names it, and as the name code declares where a definer, none of them a key, is found by it as it is written - by its name, its qualified name or with some of its scopes (RETRY__LIMIT of Retry.RETRY__LIMIT, __validate of Foo.__validate); a diagnostic id; a rule's selector as a rule writes it (.btn, #main, .card__title), never a key path, asked by its name as a class list writes it too; or a quoted literal, asked by its value alone:"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a text search of what the graph does not answer of it: the files the view does not hold, those it holds in a state no implementation of a language read them in - listed only, for no extractor reads their language, unreadable, ambiguous - those whose extract it no longer holds, those it is unsure of, those it outlines, whose values and text no literal of it holds, those whose nodes make a reference of the data's name it bound to nothing of that name, and, for a quoted literal, every file;"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("what defines it, holds it as a key, calls it, uses it, makes it, names it by its kind - a type mention, an isinstance, an instanceof, a catch - inherits it or mixes it in, implements it or answers it for a type, overrides it or is overridden by it"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a literal's and a text hit's lines beneath it, never on a page without it - a place no page holds whole given in parts, each page after its first beginning with its card again -"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"the cards grouped by file kind - the language that read the file, else its extension or its name - and tier - the project nearest above the file, else its top directory - {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.RelatedLines} places a page; every place held to the step's reads, those they do not reach counted;"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("with the coverage lines that end every such answer - how many files of each kind of what the graph does not answer were searched once they were read, with their hits, the files it lists only and those it is unsure of said where none was, the forms a selector and a key path were searched in, and, where any file the graph lists only was searched, that nothing is assumed of a language with no extractor - and every limit of each language whose files the graph read - one some of those files show the sign of in full, with how many show it, and every other by its short name, on one line for the language that points to 'help codebase-graph-languages', which says each in full under its name;"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("--body <symbol>... or --sites <data>, any of them with --page <n>"), prose, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// The codebase-graph topic, under each of its names, says every implementation this build holds - its version, what it
-    /// claims, what it reads and what it does not see - every key of codebaseGraph, the graph's files, the step's output,
+    /// The codebase-graph-languages topic, under each of its names, says every implementation this build holds - its version, what
+    /// it claims, what it reads and each limit it does not see under its short name, the name a sites answer gives a limit no file
+    /// it read shows the sign of - each read from the code; and the codebase-graph topic points to it.
+    /// </summary>
+    [Fact]
+    public void TheCodebaseGraphLanguagesTopic_SaysEveryImplementationAndEachLimitUnderItsName_FromTheCode()
+    {
+        var topic = HelpText.Of(HelpTopics.CodebaseGraphLanguages).StandardOutput;
+        var prose = Prose.Words(topic);
+
+        Assert.Equal(topic, HelpText.Of("graph-languages").StandardOutput);
+
+        foreach (var extractor in DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.All)
+        {
+            Assert.Contains($"{extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)};", topic, StringComparison.Ordinal);
+            Assert.Contains(Prose.Words($"reads {extractor.Help.Reads}."), prose, StringComparison.Ordinal);
+            Assert.All(extractor.Help.DoesNotSee, limit => Assert.Contains(Prose.Words($"{limit.Name}: does not see {limit.Says}."), prose, StringComparison.Ordinal));
+        }
+
+        Assert.Contains("listed (version 1; every file no other claims)", topic, StringComparison.Ordinal);
+        Assert.Contains("markdown (version 2; .md)", topic, StringComparison.Ordinal);
+        Assert.Contains("    fenced-headings: does not see a heading inside a fenced block, which is code.", topic, StringComparison.Ordinal);
+        Assert.Contains(HelpTopics.Described, described => described.Name == HelpTopics.CodebaseGraphLanguages);
+        Assert.Contains(Prose.Words("Each implementation this build holds - its language, its version and what it claims, what it reads, and each limit it does not see under its short name - is said by 'help codebase-graph-languages'."), Prose.Words(HelpText.Of("codebase-graph").StandardOutput), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The codebase-graph topic, under each of its names, says every key of codebaseGraph, the graph's files, the step's output,
     /// its failOn and its time limit, each read from the code; and the orchestrators topic lists the graph's files.
     /// </summary>
     [Fact]
@@ -67,16 +100,6 @@ public sealed partial class HelpTests
 
         Assert.Equal(topic, HelpText.Of("graph").StandardOutput);
         Assert.Equal(topic, HelpText.Of("graphify-codebase").StandardOutput);
-
-        foreach (var extractor in DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.All)
-        {
-            Assert.Contains($"{extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)};", topic, StringComparison.Ordinal);
-            Assert.Contains(Prose.Words($"reads {extractor.Help.Reads}."), prose, StringComparison.Ordinal);
-            Assert.All(extractor.Help.DoesNotSee, unseen => Assert.Contains(Prose.Words($"does not see {unseen}."), prose, StringComparison.Ordinal));
-        }
-
-        Assert.Contains("listed (version 1; every file no other claims)", topic, StringComparison.Ordinal);
-        Assert.Contains("markdown (version 2; .md)", topic, StringComparison.Ordinal);
         Assert.All(WorkflowKeys.CodebaseGraph, key => Assert.Contains(key.Name, topic, StringComparison.Ordinal));
         Assert.Contains($"failOn: {WorkflowStepTypes.GraphIncomplete}, which fails it ({HarnessExit.CommandFailed.ToString(CultureInfo.InvariantCulture)})", prose, StringComparison.Ordinal);
         Assert.Contains("30 minutes where it says no timeoutMinutes", prose, StringComparison.Ordinal);

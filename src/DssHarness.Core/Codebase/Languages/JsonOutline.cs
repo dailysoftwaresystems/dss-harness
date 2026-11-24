@@ -14,8 +14,11 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </summary>
 internal static class JsonOutline
 {
-    /// <summary>What a file that is no object gives, as an extractor's help says it.</summary>
-    public const string Unread = "a file that is no JSON object - one that does not parse or holds another value: nothing in it is read, the line it stops at marked dynamic";
+    /// <summary>The kind of the mark of the line a manifest that is no JSON object stops at, the sign of <see cref="Unread"/>.</summary>
+    public const string NotAnObject = "no-object";
+
+    /// <summary>What a file that is no object gives, as an extractor's help says it, under its short name, with the sign of its mark.</summary>
+    public static CodeGraphLimit Unread { get; } = new("non-object-files", "a file that is no JSON object - one that does not parse or holds another value: nothing in it is read, the line it stops at marked dynamic") { Signs = [NotAnObject] };
 
     /// <summary>Why a file that stops parsing is no object.</summary>
     private const string NoJson = "the file stops reading as JSON here";

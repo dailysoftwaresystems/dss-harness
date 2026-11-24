@@ -18,7 +18,7 @@ public sealed class TsconfigExtractor : ICodeGraphExtractor
     public string Language => "tsconfig";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("tsconfig.json"), new("jsconfig.json")], []);
@@ -30,10 +30,10 @@ public sealed class TsconfigExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "TypeScript and JavaScript projects (tsconfig.json, jsconfig.json, comments and trailing commas allowed): a project node for each, named by its path, a projectReference to each project its references name, and address roots for its compilerOptions.paths from its baseUrl, which the files in its directory and below resolve a bare import by before any other root, each place a pattern lists tried in turn",
         [
-            "what a configuration takes by extends - its baseUrl, its paths - and a configuration named otherwise (tsconfig.app.json, tsconfig.base.json): not read, so a mapping is taken from the file's own baseUrl or its directory, and the paths such a file declares are no roots",
-            "the configuration that holds a file by its include, files or exclude: a file resolves by the mappings of every configuration in whose directory it is, the nearest first",
-            "a baseUrl with no paths: a bare import is not looked for under it",
-            $"a path mapping that is {ProjectRoots.Unread}, and the catch-all *: not read",
+            ("extends", "what a configuration takes by extends - its baseUrl, its paths - and a configuration named otherwise (tsconfig.app.json, tsconfig.base.json): not read, so a mapping is taken from the file's own baseUrl or its directory, and the paths such a file declares are no roots"),
+            ("include-files", "the configuration that holds a file by its include, files or exclude: a file resolves by the mappings of every configuration in whose directory it is, the nearest first"),
+            ("bare-base-url", "a baseUrl with no paths: a bare import is not looked for under it"),
+            ("path-patterns", $"a path mapping that is {ProjectRoots.Unread}, and the catch-all *: not read"),
             JsonOutline.Unread,
         ]);
 
@@ -73,7 +73,7 @@ public sealed class TsconfigExtractor : ICodeGraphExtractor
         {
             References = references,
             AddressRoots = roots,
-            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why)],
+            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why, JsonOutline.NotAnObject)],
         };
     }
 

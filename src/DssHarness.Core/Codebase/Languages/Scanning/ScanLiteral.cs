@@ -53,13 +53,57 @@ internal enum ScanEscapes
     /// any other character after a backslash itself, a space among them.
     /// </summary>
     Css,
+
+    /// <summary>
+    /// Python's, in a string no prefix makes raw, bytes or formatted: a backslash before a line break dropping both;
+    /// <c>\\</c>, <c>\'</c> and <c>\"</c> the character, <c>\n</c> and the other letters, an octal of up to three digits,
+    /// <c>\x</c> of two, <c>\u</c> of four and <c>\U</c> of eight, and <c>\N{...}</c> the character its name stands for, as CPython
+    /// 3.15 reads one (<see cref="UnicodeNames.Python"/>); any other backslash kept, with the character after it, as Python keeps one
+    /// it does not know - <c>"\d"</c> two characters. An escape Python refuses - a name Unicode has not, a <c>\N</c> with no name
+    /// in braces, an escape short of its digits, a <c>\U</c> past every character - is kept as written and said refused
+    /// (<see cref="ScanLiteralValue.RefusedLines"/>), its line for the reader to mark.
+    /// </summary>
+    Python,
+
+    /// <summary>
+    /// Python's in a bytes string no prefix makes raw: as in any other string, but an octal's and a <c>\x</c>'s bytes - a
+    /// run of them read as UTF-8 - and <c>\u</c>, <c>\U</c> and <c>\N</c> no escape of bytes, each kept with its backslash,
+    /// which Python warns of and never refuses.
+    /// </summary>
+    PythonBytes,
+
+    /// <summary>Python's in an f-string or a t-string no prefix makes raw: as in any other string, and <c>{{</c> and <c>}}</c> a brace.</summary>
+    PythonFormatted,
+
+    /// <summary>Python's in an f-string or a t-string a prefix makes raw: the text as written, but <c>{{</c> and <c>}}</c> a brace.</summary>
+    PythonRawFormatted,
 }
 
 /// <summary>One constant part of a literal's value as its text writes it.</summary>
 /// <param name="Start">Where it begins in the text.</param>
 /// <param name="End">Where it ends: the first character after it.</param>
 /// <param name="Line">The line it begins on, from 1: the part's own, for each part of a literal over lines.</param>
-internal readonly record struct ScanLiteralPart(long Start, long End, int Line);
+internal readonly record struct ScanLiteralPart(long Start, long End, int Line)
+{
+    /// <summary>
+    /// Where the text is written that the part's value goes on with as written, never decoded: a debugging field's source - an
+    /// f-string's <c>{x=}</c> to its <c>=</c> and the blanks after it - which Python's value holds after the text before the
+    /// field, <c>f"a{x=}"</c> holding <c>ax=</c>; <see langword="null"/> where the part goes on with none, as every other
+    /// language's.
+    /// </summary>
+    public (long Start, long End)? Written { get; init; }
+}
+
+/// <summary>
+/// One constant part of a literal's value, decoded (<see cref="ScanLiteral.Reads"/>): the value; the line it begins on; and the
+/// lines its refused escapes stand on - kept as written in the value, since Python compiles none of them - one a refused escape,
+/// in the order the text writes them, however many stand on one line; none where the part holds none. That a line is marked
+/// once is the reader's rule, not the list's.
+/// </summary>
+/// <param name="Value">The part's value, decoded.</param>
+/// <param name="Line">The line it begins on, from 1: the part's own, for each part of a literal over lines.</param>
+/// <param name="RefusedLines">The lines, from 1, its refused escapes stand on: one for each escape, in order; none where the part holds none.</param>
+internal readonly record struct ScanLiteralValue(string Value, int Line, IReadOnlyList<int> RefusedLines);
 
 /// <summary>
 /// One string literal as its lexer read it: where each constant part of its value is written - a plain string's one part,
@@ -79,6 +123,13 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     public bool Markup { get; init; }
 
     /// <summary>
+    /// Where it is <see cref="Markup"/>, where the name of the attribute each part is the value of stands, by the part's place
+    /// among <see cref="Parts"/> - an empty stretch where no name and <c>=</c> stand before it - as its lexer read the tag;
+    /// <see langword="null"/> for a string.
+    /// </summary>
+    public IReadOnlyList<(long Start, long End)>? Names { get; init; }
+
+    /// <summary>
     /// How many characters of white space each of its lines begins with that are no part of its value - a heredoc's
     /// closing indentation, which PHP takes off every line - none past that many, and none of a part's that begins after
     /// a hole on its line.
@@ -94,12 +145,33 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// <summary>Each constant part's value, decoded, with the line it begins on.</summary>
     /// <param name="source">The text the literal is written in.</param>
     public IEnumerable<(string Value, int Line)> Values(CodeText source)
-        => Parts.Select(part => (Decode(source, part.Start, part.End, Escapes, Indent, Indent > 0 && part.Start == Content), part.Line));
+        => Reads(source).Select(value => (value.Value, value.Line));
+
+    /// <summary>
+    /// Each constant part's value, decoded, with the line it begins on and the lines its refused escapes stand on, one an escape
+    /// (<see cref="ScanLiteralValue"/>): what a reader that marks a refusal, as Python's does, reads a literal by.
+    /// </summary>
+    /// <param name="source">The text the literal is written in.</param>
+    public IEnumerable<ScanLiteralValue> Reads(CodeText source)
+        => Parts.Select(part => Read(source, part, Indent > 0 && part.Start == Content));
 
     /// <summary>Its whole value, decoded, where it is one closed string of one part and no holes; <see langword="null"/> where it is not.</summary>
     /// <param name="source">The text the literal is written in.</param>
     public string? Whole(CodeText source)
-        => Interpolated || Markup || LeftOpen || Parts.Count != 1 ? null : Decode(source, Parts[0].Start, Parts[0].End, Escapes, Indent, Indent > 0);
+        => Interpolated || Markup || LeftOpen || Parts.Count != 1 ? null : Read(source, Parts[0], Indent > 0).Value;
+
+    /// <summary>
+    /// The part <paramref name="part"/> decoded (<see cref="ScanLiteralValue"/>): its text by the literal's escapes - its
+    /// first line's indentation taken off where <paramref name="lineStart"/> - and the text it goes on with as written
+    /// (<see cref="ScanLiteralPart.Written"/>), which holds no escape of its own to refuse.
+    /// </summary>
+    private ScanLiteralValue Read(CodeText source, ScanLiteralPart part, bool lineStart)
+    {
+        var decoded = Decode(source, part.Start, part.End, Escapes, Indent, lineStart, out var refused);
+        var value = part.Written is { } written ? decoded + source.Slice(written.Start, written.End) : decoded;
+
+        return new ScanLiteralValue(value, part.Line, refused.Count == 0 ? [] : [.. refused.Select(source.LineIndex.LineAt)]);
+    }
 
     /// <summary>
     /// The value the text from <paramref name="start"/> to <paramref name="end"/> writes, by <paramref name="escapes"/>:
@@ -107,12 +179,36 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// of each line after a line break - and of the first, where <paramref name="lineStart"/>.
     /// </summary>
     internal static string Decode(CodeText source, long start, long end, ScanEscapes escapes, long indent, bool lineStart)
+        => Decode(source, start, end, escapes, indent, lineStart, out _);
+
+    /// <summary>
+    /// The value the text from <paramref name="start"/> to <paramref name="end"/> writes, by <paramref name="escapes"/>:
+    /// each escape decoded, each line break kept as written, and up to <paramref name="indent"/> blanks taken off the start
+    /// of each line after a line break - and of the first, where <paramref name="lineStart"/>; and where each escape the language
+    /// refuses stands, kept as written - Python's alone refuses any.
+    /// </summary>
+    /// <param name="source">The text.</param>
+    /// <param name="start">Where the value's text begins.</param>
+    /// <param name="end">Where it ends.</param>
+    /// <param name="escapes">How its backslashes are read.</param>
+    /// <param name="indent">How many blanks each line after a line break begins with that are no part of the value.</param>
+    /// <param name="lineStart">Whether the first line's blanks are taken off too.</param>
+    /// <param name="refused">Where the backslash of each refused escape stands, in order; none where the text holds none.</param>
+    internal static string Decode(CodeText source, long start, long end, ScanEscapes escapes, long indent, bool lineStart, out IReadOnlyList<long> refused)
     {
         // A value with nothing to decode is its text.
-        var marker = escapes switch { ScanEscapes.None => (char?)null, ScanEscapes.Html => '&', _ => '\\' };
-
-        if (indent == 0 && (marker is not { } escape || source.Find(escape, start, end) < 0))
+        var markers = escapes switch
         {
+            ScanEscapes.None => "",
+            ScanEscapes.Html => "&",
+            ScanEscapes.PythonFormatted => "\\{}",
+            ScanEscapes.PythonRawFormatted => "{}",
+            _ => "\\",
+        };
+
+        if (indent == 0 && (markers.Length == 0 || source.FindAny(markers, start, end) < 0))
+        {
+            refused = [];
             return source.Slice(start, end);
         }
 
@@ -143,12 +239,16 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
 
             at = source[at] switch
             {
-                '\\' when escapes is not (ScanEscapes.None or ScanEscapes.Html) && at + 1 < end => Escape(source, at, end, escapes, value),
+                '\\' when escapes is not (ScanEscapes.None or ScanEscapes.Html or ScanEscapes.PythonRawFormatted) && at + 1 < end => Escape(source, at, end, escapes, value),
                 '&' when escapes == ScanEscapes.Html => Reference(source, at, end, value),
+
+                // A brace a formatted string doubles is one brace of its value.
+                '{' or '}' when escapes is (ScanEscapes.PythonFormatted or ScanEscapes.PythonRawFormatted) && at + 1 < end && source[at + 1] == source[at] => value.Char(source[at], at + 2),
                 _ => value.Char(source[at], at + 1),
             };
         }
 
+        refused = value.Refused;
         return value.ToString();
     }
 
@@ -304,6 +404,42 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
                 };
             }
 
+            case ScanEscapes.Python or ScanEscapes.PythonBytes or ScanEscapes.PythonFormatted:
+            {
+                if (ScanLexing.LineBreakAt(source, at + 1, end) is var spliced and > 0)
+                {
+                    return at + 1 + spliced;
+                }
+
+                var bytes = escapes == ScanEscapes.PythonBytes;
+
+                return next switch
+                {
+                    '\\' or '\'' or '"' => value.Char(next, after),
+                    'a' => value.Char('\a', after),
+                    'b' => value.Char('\b', after),
+                    'f' => value.Char('\f', after),
+                    'n' => value.Char('\n', after),
+                    'r' => value.Char('\r', after),
+                    't' => value.Char('\t', after),
+                    'v' => value.Char('\v', after),
+                    >= '0' and <= '7' => Number(source, at + 1, end, 8, 3, value, asByte: bytes),
+                    'x' when Hex(source, after, end, 2) is not null => Number(source, after, end, 16, 2, value, asByte: bytes),
+
+                    // \x4 - in bytes too - and \u12: short of the digits Python writes them with, which it refuses as truncated.
+                    'x' => Short(at, value),
+                    'u' when !bytes && Hex(source, after, end, 4) is { } code => value.Code(code, after + 4),
+                    'u' when !bytes => Short(at, value),
+                    'U' when !bytes => Universal(source, at, after, end, value),
+
+                    // \N{LATIN SMALL LETTER A} names a character as no number does: the one its name stands for, by Unicode's names and aliases as CPython 3.15 reads one.
+                    'N' when !bytes => Named(source, at, after, end, value),
+
+                    // An escape Python does not know - and in bytes \u, \U and \N - is kept: the backslash, and the character after it read as any.
+                    _ => value.Char('\\', at + 1),
+                };
+            }
+
             default:
                 return next switch
                 {
@@ -321,6 +457,43 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
         }
     }
 
+    /// <summary>
+    /// The escape whose backslash is at <paramref name="at"/>, short of what Python writes it with - a <c>\N</c> with no brace, a
+    /// <c>\x</c>, a <c>\u</c> or a <c>\U</c> before fewer hex digits than its own - which Python refuses: kept as it is, the backslash
+    /// and then the character after it read as any, and said refused (<see cref="Decoded.Refuse"/>); answers where the text goes on,
+    /// past the backslash.
+    /// </summary>
+    private static long Short(long at, Decoded value)
+    {
+        value.Refuse(at);
+        return value.Char('\\', at + 1);
+    }
+
+    /// <summary>
+    /// The <c>\U</c> whose backslash is at <paramref name="at"/>, its eight hex digits from <paramref name="after"/>: a code no greater
+    /// than every character's is that character - a lone surrogate kept, as a <c>\u</c>'s is - and any other, or fewer digits than eight,
+    /// Python refuses: the first kept as written to its last digit (<see cref="Refused"/>), the second as a short escape
+    /// (<see cref="Short"/>).
+    /// </summary>
+    private static long Universal(CodeText source, long at, long after, long end, Decoded value)
+        => Hex(source, after, end, 8) is not { } code ? Short(at, value) : code <= 0x10FFFF ? value.Code(code, after + 8) : Refused(source, at, after + 8, value);
+
+    /// <summary>
+    /// The <c>\N{...}</c> whose backslash is at <paramref name="at"/>, its brace at <paramref name="after"/> where one stands: the
+    /// character its name stands for (<see cref="UnicodeNames.Python"/>), the name read to the first <c>}</c> of the part whatever stands
+    /// before it - a line break included - as CPython's decoder reads one. A name Python refuses - none Unicode has, an empty one, or one
+    /// no brace closes - is kept as written: to its brace (<see cref="Refused"/>), or as a short escape where the part closes none
+    /// (<see cref="Short"/>).
+    /// </summary>
+    private static long Named(CodeText source, long at, long after, long end, Decoded value)
+    {
+        var close = after < end && source[after] == '{' ? source.Find('}', after, end) : -1;
+
+        return close > after + 1 && UnicodeNames.Python(source.Slice(after + 1, close).AsSpan()) is { } code ? value.Code(code, close + 1)
+            : close > 0 ? Refused(source, at, close + 1, value)
+            : Short(at, value);
+    }
+
     /// <summary>Where the <c>}</c> closing the <c>{</c> at <paramref name="open"/> stands, past one hex digit at least and none but hex digits; 0 where none does.</summary>
     private static long Braced(CodeText source, long open, long end)
     {
@@ -332,6 +505,20 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
         }
 
         return at > open + 1 && at < end && source[at] == '}' ? at : 0;
+    }
+
+    /// <summary>The text from <paramref name="start"/> to <paramref name="end"/> as written, added to <paramref name="value"/>; answers <paramref name="end"/>.</summary>
+    private static long Kept(CodeText source, long start, long end, Decoded value)
+    {
+        value.Text(source.Slice(start, end));
+        return end;
+    }
+
+    /// <summary>The text from <paramref name="start"/> to <paramref name="end"/> as written, an escape Python refuses - said refused (<see cref="Decoded.Refuse"/>); answers <paramref name="end"/>.</summary>
+    private static long Refused(CodeText source, long start, long end, Decoded value)
+    {
+        value.Refuse(start);
+        return Kept(source, start, end, value);
     }
 
     /// <summary>The character the hex digits from <paramref name="start"/> to the <c>}</c> at <paramref name="close"/> name, added; answers past the brace.</summary>
@@ -438,6 +625,16 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     {
         private readonly StringBuilder _value = new();
         private readonly List<byte> _bytes = [];
+
+        /// <summary>Where the backslash of each escape the language refused stands, in the text decoded, in order; <see langword="null"/> until one is.</summary>
+        private List<long>? _refusedAt;
+
+        /// <summary>Where the backslash of each escape the language refuses stands, in the text decoded, in order; none where no escape was refused.</summary>
+        public IReadOnlyList<long> Refused => _refusedAt ?? [];
+
+        /// <summary>Says the escape whose backslash is at <paramref name="at"/> is one the language refuses, which keeps it as written.</summary>
+        /// <param name="at">Where its backslash stands, in the text decoded.</param>
+        public void Refuse(long at) => (_refusedAt ??= []).Add(at);
 
         /// <summary>Adds <paramref name="character"/>; answers <paramref name="past"/>, where the text goes on.</summary>
         public long Char(char character, long past)

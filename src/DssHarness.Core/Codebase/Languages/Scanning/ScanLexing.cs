@@ -212,6 +212,15 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// <summary>What the lexer keeps of the literal the reading is in.</summary>
         public TMark Mark => _frames[^1].Mark;
 
+        /// <summary>How many braces the interpolation's code the reading is in holds open: a closing brace stands at none of them ends it.</summary>
+        public int Depth => _frames[^1].Depth;
+
+        /// <summary>
+        /// Whether the reading is in the tail of a field of the literal it is in - what stands between where <see cref="EndCode"/>
+        /// ended the field's code and the field's closer, an f-string's conversion and format - none of it the value's constant text.
+        /// </summary>
+        public bool InTail => _frames[^1] is { Code: false, Tails: > 0 };
+
         /// <summary>The constant parts of the literal's own value read so far.</summary>
         public IReadOnlyList<ScanLiteralPart> Parts => _outermost?.Parts ?? [];
 
@@ -257,10 +266,11 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         public void OpenCode(long sigil, long at)
         {
             var holder = _frames[^1];
+            var follows = holder.Part >= 0;
 
             EndPart(holder, sigil);
             holder.Holes = true;
-            _frames.Add(new LiteralFrame(default!, code: true, at, at));
+            _frames.Add(new LiteralFrame(default!, code: true, at, at) { Follows = follows ? holder.Parts.Count - 1 : -1 });
         }
 
         /// <summary>
@@ -289,6 +299,52 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
             EndPart(holder, sigil);
             holder.Holes = true;
             holder.Part = past;
+        }
+
+        /// <summary>
+        /// Ends the interpolation's code the reading is in at <paramref name="at"/>, where the language's own syntax ends it
+        /// short of its closer - an f-string's <c>=</c> of a debugging field, <c>!</c> before a conversion and <c>:</c> before
+        /// its format - recorded as the code of the literal that holds it; what stands from there to the closer is the field's
+        /// tail (<see cref="InTail"/>), none of it the value's constant text, which <see cref="CloseCode"/> says goes on. A
+        /// field the tail holds - a format's own - is opened as any interpolation is (<see cref="OpenCode"/>), and closing it
+        /// leaves the reading in the tail. Where <paramref name="written"/> is given, the code's own text to it - a debugging
+        /// field's, to its <c>=</c> and the blanks after it - is the value's as written, going on from the part that ended where
+        /// the field began (<see cref="ScanLiteralPart.Written"/>); of a field a format holds, which stands in no value's text,
+        /// nothing is.
+        /// </summary>
+        public void EndCode(long at, long written = -1)
+        {
+            var top = _frames[^1];
+
+            _frames.RemoveAt(_frames.Count - 1);
+
+            var holder = _frames[^1];
+            Span(holder, top.Start, at);
+
+            if (written > top.Start && top.Follows >= 0)
+            {
+                holder.Parts[top.Follows] = holder.Parts[top.Follows] with { Written = (top.Start, written) };
+            }
+
+            holder.Part = -1;
+            holder.Tails++;
+        }
+
+        /// <summary>
+        /// The closer at <paramref name="at"/> of an interpolation whose code <see cref="EndCode"/> ended short of it: the
+        /// reading leaves its tail, and the constant text of the literal's value goes on past it - where it is in the tail of
+        /// no field around it, a field a format holds being closed in the tail of the field it is the format of.
+        /// </summary>
+        public void CloseCode(long at)
+        {
+            var holder = _frames[^1];
+
+            holder.Tails = Math.Max(0, holder.Tails - 1);
+
+            if (holder.Tails == 0)
+            {
+                holder.Part = at + 1;
+            }
         }
 
         /// <summary>Ends the constant part of <paramref name="holder"/>'s value being read at <paramref name="at"/>.</summary>
@@ -355,7 +411,8 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
         /// <summary>
         /// A brace in an interpolation's code at <paramref name="at"/>: an opening one held open; a closing one closing the
-        /// last held open, else the code itself - recorded as the code of the literal that holds it.
+        /// last held open, else the code itself - recorded as the code of the literal that holds it, whose value's constant
+        /// text goes on past it but in a field's tail (<see cref="InTail"/>), where the code was a format's own field.
         /// </summary>
         private void Brace(bool opens, long at)
         {
@@ -371,7 +428,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
             var holder = _frames[^1];
             Span(holder, top.Start, at);
-            holder.Part = at + 1;
+            holder.Part = holder.Tails > 0 ? -1 : at + 1;
         }
 
         /// <summary>
@@ -429,6 +486,18 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
             /// <summary>Whether a literal holds holes of its own.</summary>
             public bool Holes { get; set; }
+
+            /// <summary>
+            /// How many fields a literal's reading is in the tail of (<see cref="InTail"/>): the field whose code ended short of
+            /// its closer, and each a format of it holds whose own code did, the innermost last.
+            /// </summary>
+            public int Tails { get; set; }
+
+            /// <summary>
+            /// The index, among the parts of the literal that holds it, of the part code's field follows - the one that ended where
+            /// the field began; -1 where it follows none, as a field a format holds does.
+            /// </summary>
+            public int Follows { get; init; } = -1;
         }
     }
 
@@ -554,4 +623,7 @@ internal sealed record ScanLiteralRead(long End, IReadOnlyList<ScanLiteralPart> 
 
     /// <summary>Where the name of each tag it opens stands, where it is a JSX element; <see langword="null"/> where it is a string.</summary>
     public IReadOnlyList<(long Start, long End)>? Tags { get; init; }
+
+    /// <summary>Where it is a JSX element, where the name of the attribute each of its parts is the value of stands (<see cref="ScanLiteral.Names"/>); <see langword="null"/> where it is a string.</summary>
+    public IReadOnlyList<(long Start, long End)>? Names { get; init; }
 }

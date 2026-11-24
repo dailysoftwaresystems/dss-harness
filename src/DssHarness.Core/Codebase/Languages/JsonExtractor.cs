@@ -7,7 +7,8 @@ namespace DssHarness.Core.Codebase.Languages;
 /// data it holds, its nodes made as every data file's are (<see cref="DataNodes"/>): each member that holds others a
 /// <c>section</c> over its lines inside the section that holds it, and each scalar key a <c>member</c> SubKind <c>key</c>
 /// named by its path (<c>targets.x64.callingConvention</c>, an item by its place <c>limits[1].value</c>, a name that is
-/// empty or white space in brackets <c>packages[""].name</c>), its value as its summary - every one, however deep. A <c>$schema</c> or a <c>$ref</c> that names another file by a path relative to this one - its <c>#</c> pointer
+/// empty or white space in brackets <c>packages[""].name</c>, a name holding a dot or a bracket quoted in brackets
+/// <c>Logging.LogLevel["Microsoft.AspNetCore"]</c>), its value as its summary - every one, however deep. A <c>$schema</c> or a <c>$ref</c> that names another file by a path relative to this one - its <c>#</c> pointer
 /// into that file left out - is an import of it; a pointer into this file alone, an address with a scheme and a rooted path
 /// name none. The named manifests - <c>package.json</c>, <c>tsconfig.json</c>, <c>jsconfig.json</c>, <c>composer.json</c> -
 /// keep their own extractors, an exact name winning over an extension; where the file stops reading as JSON, nothing of it
@@ -19,7 +20,7 @@ public sealed class JsonExtractor : ICodeGraphExtractor
     public string Language => "json";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".json", ".jsonc", ".json5");
@@ -29,11 +30,11 @@ public sealed class JsonExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "JSON data files (.json, .jsonc, .json5, comments and trailing commas allowed): each scalar key anywhere in the file, however deep, as a key node named by its path (an item by its place, [0]; a name empty or of white space in brackets, [\"\"]) with its value as its summary, each member that holds others as a section over its lines inside the one that holds it, and a $schema or a $ref naming another file by a relative path - its # pointer left out - as an import of it",
+        "JSON data files (.json, .jsonc, .json5, comments and trailing commas allowed): each scalar key anywhere in the file, however deep, as a key node named by its path (an item by its place, [0]; a name that is empty or white space, holds a control character, a dot or a bracket quoted in brackets, [\"\"], Logging.LogLevel[\"Microsoft.AspNetCore\"]; the key named by its own name, Microsoft.AspNetCore) with its value as its summary, each member that holds others as a section over its lines inside the one that holds it, and a $schema or a $ref naming another file by a relative path - its # pointer left out - as an import of it",
         [
-            "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number: where the reader stops, nothing in it is read, the line it stops at marked dynamic with the reader's reason",
-            "a $ref of a pointer into this file, of an address with a scheme (https:, urn:) or of a rooted path: no import",
-            "the named manifests - package.json, tsconfig.json, jsconfig.json, composer.json - which their own extractors read",
+            new CodeGraphLimit("json5", "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number - and any other text that is no JSON: where the reader stops, nothing in it is read, the line it stops at marked dynamic with the reader's reason") { Signs = [DataNodes.Stop] },
+            ("external-refs", "a $ref of a pointer into this file, of an address with a scheme (https:, urn:) or of a rooted path: no import"),
+            ("manifests", "the named manifests - package.json, tsconfig.json, jsconfig.json, composer.json - which their own extractors read"),
         ]);
 
     /// <inheritdoc/>

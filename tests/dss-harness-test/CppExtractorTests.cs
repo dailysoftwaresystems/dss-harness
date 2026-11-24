@@ -340,6 +340,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(4, "a call through the function pointer done"), (5, "a call through the function pointer cb"), (6, "a call through a pointer to a member")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(Enumerable.Repeat(CFamilyReading.PointerCall, 3), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new CppExtractor(), extract, "r.cc");
         Assert.Equal(["real"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
     }
 
@@ -432,6 +434,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(5, "a call through the function pointer cb_"), (5, "a call through the function pointer cb_"), (5, "a call through the function pointer later"), (5, "a call through the function pointer read"), (8, "a call through the function pointer read")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)).Order());
+        Assert.Equal(Enumerable.Repeat(CFamilyReading.PointerCall, 5), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new CppExtractor(), extract, "o.cc");
         Assert.Equal(["read"], extract.References.Where(reference => reference is { Kind: CodeEdgeKinds.Calls } && reference.From.Is("cpp:top()")).Select(reference => reference.Name));
         Assert.DoesNotContain(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls && (reference.From.Is("cpp:Obj.go()") || reference.From.Is("cpp:use(Obj*)")));
     }
@@ -553,6 +557,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(2, "the macro DECLARE_MODULE stands here in the place of a declaration, which is not seen"), (4, "the macro Q_OBJECT stands here in the place of a declaration, which is not seen")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(Enumerable.Repeat(CFamilyReading.UnexpandedMacro, 2), extract.Dynamic.Select(dynamic => dynamic.Kind));
+        CodeGraphContract.Signed(new CppExtractor(), extract, "m.hpp");
         Assert.Equal(["cpp:app", "cpp:app.Widget", "cpp:app.Widget.show()"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
     }
 

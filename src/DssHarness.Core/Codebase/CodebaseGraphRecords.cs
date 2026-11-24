@@ -191,7 +191,8 @@ public sealed record CodeGraphStoredExtract(int Schema, string Language, int Ver
 
 /// <summary>
 /// The base's link result, <c>symbols.jsonl</c>: every node with its handle and the files that declare it, every edge,
-/// and what each node's references named that the graph does not hold - with the digest of the manifest it was made
+/// what each node's references named that the graph does not hold and the signs they gave of what it does not see - with
+/// the digest of the manifest it was made
 /// from and the revision of the linker that made it, so one that does not match either is made again and never read.
 /// Kept as lines (<see cref="Write"/>): it grows with the repository, to tens of megabytes, and a list read or written
 /// whole is held whole while it is.
@@ -210,6 +211,12 @@ public sealed record CodeGraphSymbolsFile(
     IReadOnlyList<CodeEdge> Edges,
     IReadOnlyDictionary<string, int> External)
 {
+    /// <summary>
+    /// For each node, the signs its references - a file's node's, its imports - gave of what the graph does not see
+    /// (<see cref="CodeGraphLinked.Signs"/>); a node that gave none is not here.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Signs { get; init; } = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
     /// <summary>What is wrong with this link result; <see langword="null"/> where nothing is.</summary>
     public string? Problem()
     {
@@ -265,12 +272,17 @@ public sealed record CodeGraphSymbolsFile(
             return $"it counts {bad.Value.ToString(CultureInfo.InvariantCulture)} of what the references of '{bad.Key}' named outside the repository, and that is no count of one of its nodes";
         }
 
+        if ((Signs ?? new Dictionary<string, IReadOnlyList<string>>()).FirstOrDefault(signs => !ids.Contains(signs.Key) || signs.Value is not { Count: > 0 } || signs.Value.Any(string.IsNullOrWhiteSpace)) is { Key: not null } unsigned)
+        {
+            return $"it says signs of what the graph does not see of '{unsigned.Key}', and that is no node of it or no sign of one";
+        }
+
         return null;
     }
 
     /// <summary>
-    /// Writes it as lines: its head, which counts what follows, then each node, each edge and each node's count of what its
-    /// references named outside the repository, in that order. A node's id is written against the id of the node that
+    /// Writes it as lines: its head, which counts what follows, then each node, each edge, each node's count of what its
+    /// references named outside the repository and each node's signs of what the graph does not see, in that order. A node's id is written against the id of the node that
     /// contains it, where that one is shorter (<see cref="StoredName"/>), and an edge and a count name each node by its place
     /// among the nodes - so the file grows with the graph, never with the square of how deep a file nests its declarations.
     /// </summary>
@@ -280,7 +292,7 @@ public sealed record CodeGraphSymbolsFile(
     {
         ArgumentNullException.ThrowIfNull(lines);
 
-        lines.Write(new CodeGraphSymbolsHead(Schema, Graph, Linker, Nodes.Count, Edges.Count, External.Count));
+        lines.Write(new CodeGraphSymbolsHead(Schema, Graph, Linker, Nodes.Count, Edges.Count, External.Count) { Signs = Signs.Count });
 
         var places = new Dictionary<string, int>(StringComparer.Ordinal);
 
@@ -318,6 +330,11 @@ public sealed record CodeGraphSymbolsFile(
         {
             lines.Write(new CodeGraphCountLine(Place(node), count));
         }
+
+        foreach (var (node, signs) in Signs)
+        {
+            lines.Write(new CodeGraphSignLine(Place(node), signs));
+        }
     }
 
     /// <summary>
@@ -333,7 +350,7 @@ public sealed record CodeGraphSymbolsFile(
 
         var head = lines.Next<CodeGraphSymbolsHead>("its head");
 
-        if (head is { Nodes: < 0 } or { Edges: < 0 } or { External: < 0 })
+        if (head is { Nodes: < 0 } or { Edges: < 0 } or { External: < 0 } or { Signs: < 0 })
         {
             throw new JsonException("its head counts fewer than no lines of a kind");
         }
@@ -380,9 +397,22 @@ public sealed record CodeGraphSymbolsFile(
             }
         }
 
+        var signs = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+        for (var at = 0; at < head.Signs; at++)
+        {
+            var line = lines.Next<CodeGraphSignLine>("the signs a node gave of what the graph does not see");
+            var node = IdAt(line.Node, "the signs a node gave of what the graph does not see");
+
+            if (!signs.TryAdd(node, line.Signs ?? []))
+            {
+                throw new JsonException($"it says the signs of the node '{node}' twice");
+            }
+        }
+
         lines.End();
 
-        return new CodeGraphSymbolsFile(head.Schema, head.Graph, head.Linker, nodes, edges, external);
+        return new CodeGraphSymbolsFile(head.Schema, head.Graph, head.Linker, nodes, edges, external) { Signs = signs };
     }
 }
 
@@ -393,7 +423,11 @@ public sealed record CodeGraphSymbolsFile(
 /// <param name="Nodes">How many nodes follow.</param>
 /// <param name="Edges">How many edges follow them.</param>
 /// <param name="External">How many counts of what references named outside the repository follow them.</param>
-public sealed record CodeGraphSymbolsHead(int Schema, string Graph, int Linker, int Nodes, int Edges, int External);
+public sealed record CodeGraphSymbolsHead(int Schema, string Graph, int Linker, int Nodes, int Edges, int External)
+{
+    /// <summary>How many nodes' signs of what the graph does not see follow the counts.</summary>
+    public int Signs { get; init; }
+}
 
 /// <summary>One node of a link result, on a line of its file: its id, whole or written against the id of the node that contains it.</summary>
 /// <param name="Id">Its id, as <see cref="CodeGraphSymbolsFile.Write"/> writes it.</param>
@@ -414,6 +448,11 @@ internal sealed record CodeGraphEdgeLine(int From, int To, string Kind, int Line
 /// <param name="Node">The node's place.</param>
 /// <param name="Count">The count.</param>
 internal sealed record CodeGraphCountLine(int Node, int Count);
+
+/// <summary>One node's signs of what the graph does not see, on a line of a link result's file: the node by its place among the file's nodes.</summary>
+/// <param name="Node">The node's place.</param>
+/// <param name="Signs">Its signs, each once, in order (<see cref="CodeGraphLinked.Signs"/>).</param>
+internal sealed record CodeGraphSignLine(int Node, IReadOnlyList<string> Signs);
 
 /// <summary>One node of a link result.</summary>
 /// <param name="Id">Its id.</param>

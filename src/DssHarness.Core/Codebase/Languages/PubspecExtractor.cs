@@ -18,11 +18,14 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
     /// <summary>The sections that name a package's dependencies.</summary>
     private static readonly string[] Sections = ["dependencies", "dev_dependencies", "dependency_overrides"];
 
+    /// <summary>The kind of the mark of the line a pubspec that is no mapping of keys stops at, the sign of the limit of its help that says so (<see cref="CodeGraphLimit.Signs"/>).</summary>
+    internal const string NotAMapping = "no-mapping";
+
     /// <inheritdoc/>
     public string Language => "pubspec";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("pubspec.yaml")], []);
@@ -34,9 +37,9 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Dart packages (pubspec.yaml): a project node for each, named by its name, its summary from its description, a projectReference to each package it depends on by a path: that the repository holds, and the address root package:<name>/ its lib/ directory is",
         [
-            "a dependency from a package host, from git or from an SDK: no project of the repository",
-            "a workspace's members (workspace:), and resolution: workspace: what a root pubspec lists is not read as references",
-            "a file that is no mapping of keys - one that does not parse, holds an alias, is empty or holds several documents: nothing in it is read, the line it stops at marked dynamic; a file is read however deep it nests",
+            ("hosted-packages", "a dependency from a package host, from git or from an SDK: no project of the repository"),
+            ("workspaces", "a workspace's members (workspace:), and resolution: workspace: what a root pubspec lists is not read as references"),
+            new CodeGraphLimit("non-mapping-files", "a file that is no mapping of keys - one that does not parse, holds an alias, is empty or holds several documents: nothing in it is read, the line it stops at marked dynamic; a file is read however deep it nests") { Signs = [NotAMapping] },
         ]);
 
     /// <inheritdoc/>
@@ -79,7 +82,7 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
         {
             References = references,
             AddressRoots = name is not null ? [new ExtractAddressRoot($"package:{name}/", "lib")] : [],
-            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), $"the file stops reading here: {stop.Why}")],
+            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), $"the file stops reading here: {stop.Why}", NotAMapping)],
         };
     }
 

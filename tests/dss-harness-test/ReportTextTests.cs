@@ -113,6 +113,54 @@ public sealed class ReportTextTests
                 "the record 'r.json'"));
     }
 
+    /// <summary>
+    /// A quoted text is read back as the text it quotes, and nothing else is: the form <see cref="ReportText.Quoted"/> writes
+    /// is the only one read - each escape the rule writes, and none it never does, as a <c>\u</c> of a character written as
+    /// it is, a quote left unescaped or an escape of no rule. What a line prints is read back as before, through that one
+    /// reader.
+    /// </summary>
+    [Fact]
+    public void AQuotedText_IsReadBackAsTheTextItQuotes_AndNothingElseIs()
+    {
+        foreach (var text in new[] { "Microsoft.AspNetCore", "say \"hi\" \\ there", "a\nb\r\tc", "\u0001\u001f", string.Empty, "Ünïcode.ключ" })
+        {
+            Assert.Equal(text, ReportText.Unquoted(ReportText.Quoted(text)));
+        }
+
+        Assert.Null(ReportText.Unquoted("plain"));
+        Assert.Null(ReportText.Unquoted("\"a\"b\""));
+        Assert.Null(ReportText.Unquoted("\"a\\qb\""));
+        Assert.Null(ReportText.Unquoted("\"\\u0041\""));
+        Assert.Null(ReportText.Unquoted("\"a\\\""));
+
+        Assert.Equal("a\nb", ReportText.Unprinted("\"a\\nb\""));
+        Assert.Equal("\"plain\"", ReportText.Unprinted("\"plain\""));
+        Assert.Equal("\"it's \\\"x\\\"\"", ReportText.Quoted("it's \"x\""));
+    }
+
+    /// <summary>
+    /// A text in single quotes is read back by the same rule, with the single quote as its mark: its own mark and a
+    /// backslash escaped, the line breaks as the double-quoted rule writes them. It is never the form a line prints, so
+    /// what is printed is not read back from it.
+    /// </summary>
+    [Fact]
+    public void ASingleQuotedText_IsReadBackAsTheSameRuleWritesItWithThatMark()
+    {
+        Assert.Equal("it's \"x\".y", ReportText.Unquoted("'it\\'s \"x\".y'"));
+        Assert.Equal(@"a\b", ReportText.Unquoted(@"'a\\b'"));
+        Assert.Equal("a\nb", ReportText.Unquoted("'a\\nb'"));
+        Assert.Equal("\u0001", ReportText.Unquoted("'\\u0001'"));
+        Assert.Equal(string.Empty, ReportText.Unquoted("''"));
+        Assert.Equal("A", ReportText.Unquoted("'A'"));
+
+        Assert.Null(ReportText.Unquoted("'a\""));
+        Assert.Null(ReportText.Unquoted("'a\\\"b'"));
+        Assert.Null(ReportText.Unquoted("'a'b'"));
+        Assert.Null(ReportText.Unquoted("'\\u0041'"));
+
+        Assert.Equal("'a\\nb'", ReportText.Unprinted("'a\\nb'"));
+    }
+
     /// <summary>The room of a line's list, past which an item is counted rather than named.</summary>
     private const int PageRoomLine = DssHarness.Core.Pages.PageRoom.Line;
 

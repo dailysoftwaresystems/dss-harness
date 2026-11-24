@@ -32,10 +32,26 @@ namespace DssHarness.Core.Help;
 public static partial class HelpTopics
 {
     /// <summary>
-    /// Writes the codebase-graph topic's part on how each language is read: the line that opens it, then each
-    /// implementation this build holds - its language, its version and what it claims, what it reads and what it does
-    /// not see. Each implementation's own Help is what it prints, so what the topic says of a language is what its
-    /// reader says of itself.
+    /// The topic that says each language the codebase graph reads in full: what a <c>sites</c> answer names a limit by points to
+    /// it, and finds each limit under its short name (<see cref="CodeGraphLimit.Name"/>).
+    /// </summary>
+    public const string CodebaseGraphLanguages = "codebase-graph-languages";
+
+    /// <summary>Renders the codebase-graph-languages topic: each implementation this build holds (<see cref="AppendLanguageReading"/>).</summary>
+    private static string RenderCodebaseGraphLanguages()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Codebase graph languages");
+        builder.AppendLine();
+        AppendLanguageReading(builder, CodeGraphExtractors.OfThisBuild);
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Writes how each language is read: the line that opens it, then each implementation this build holds - its language, its
+    /// version and what it claims, what it reads and each limit it does not see, under its short name, which a <c>sites</c>
+    /// answer names a limit by where no file it read shows the limit's sign. Each implementation's own Help is what it prints, so
+    /// what the topic says of a language is what its reader says of itself.
     /// </summary>
     /// <param name="builder">The topic's text.</param>
     /// <param name="extractors">The implementations this build holds.</param>
@@ -43,7 +59,8 @@ public static partial class HelpTopics
     {
         AppendWrapped(
             builder,
-            "The implementations this build holds, each with what it reads and what it does not see. Each reads its file's "
+            "The implementations of the codebase graph this build holds, each with what it reads and each limit it does not see "
+            + "under its short name - the name a sites answer gives a limit no file it read shows the sign of. Each reads its file's "
             + "text by position, a block at a time, never as one string of the whole file: a file of any size is read, and "
             + "what reading it holds is what its reader keeps - its tokens, its nodes - and, where a library it reads through "
             + "keeps more, what that library holds:");
@@ -63,9 +80,9 @@ public static partial class HelpTopics
                 AppendWrapped(builder, $"    holds {holds}.");
             }
 
-            foreach (var unseen in extractor.Help.DoesNotSee)
+            foreach (var limit in extractor.Help.DoesNotSee)
             {
-                AppendWrapped(builder, $"    does not see {unseen}.");
+                AppendWrapped(builder, $"    {limit.Name}: does not see {limit.Says}.");
             }
 
             builder.AppendLine();

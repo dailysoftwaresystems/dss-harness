@@ -17,7 +17,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// template's elements, nested templates among them: a component's tag - <c>&lt;FooBar&gt;</c> or
 /// <c>&lt;foo-bar&gt;</c>, each naming <c>FooBar</c> - an <c>instantiates</c>, and each class and id a use of the rule
 /// that styles it; and its code - each directive's value, a dynamic argument, a <c>v-for</c>'s list, a slot's pattern,
-/// each <c>{{ }}</c> - read by the JavaScript reader as Vue's compiler compiles it (<see cref="Template"/>), each name it
+/// each <c>{{ }}</c> - read by the JavaScript reader as Vue's compiler compiles it (<see cref="MarkupTemplates.Read"/>), each name it
 /// reads by itself a member of the component, looked for on it as the template compiles them, but Vue's globals and a
 /// name a <c>v-for</c> or a <c>v-slot</c> declares where it stands.
 /// Each style block is read by the style sheet's reader in the syntax its <c>lang</c> names: CSS, SCSS, Sass's indented
@@ -33,19 +33,11 @@ public sealed class VueExtractor : ICodeGraphExtractor
     /// <summary>The name a <c>&lt;style module&gt;</c> that gives none binds its classes by, as Vue binds them.</summary>
     private const string ModuleBinding = "$style";
 
-    /// <summary>The globals Vue's template compiler leaves to themselves, as its own list has them: no member of the component.</summary>
-    private static readonly HashSet<string> Globals = new(StringComparer.Ordinal)
-    {
-        "Infinity", "undefined", "NaN", "isFinite", "isNaN", "parseFloat", "parseInt", "decodeURI", "decodeURIComponent", "encodeURI",
-        "encodeURIComponent", "Math", "Number", "Date", "Array", "Object", "Boolean", "String", "RegExp", "Map", "Set", "JSON", "Intl", "BigInt",
-        "console", "Error", "Symbol",
-    };
-
     /// <inheritdoc/>
     public string Language => "vue";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".vue");
@@ -57,12 +49,15 @@ public sealed class VueExtractor : ICodeGraphExtractor
     public CodeGraphExtractorHelp Help { get; } = new(
         "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself, its options object - or the one defineComponent is given - declaring its members: each prop and injection, method and computed property, each function it holds (data, setup, a lifecycle hook) and each property data() and setup() return a member of the component, as is each prop a <script setup>'s defineProps declares, and each watch key a use of the member it watches; a template, script or style block that names its file by src an import of it; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates and its classes and ids as uses of the rules that style them, and its code read by the JavaScript reader as Vue compiles it - a v-on or @ value that names a member a call of it, a function its handler, anything else statements the event runs with $event; a v-bind, :, v-model, v-if and every other directive's expression, a dynamic argument, a v-for's list and {{ }} what their expressions read - each name read by itself a member of the component, but Vue's globals (Math) and a v-for's alias or a v-slot's name, the template's own, and a slot's defaults read once; and each style block read by the style sheet's reader in the syntax its lang names - CSS where it names none, scss, sass, less - a <style scoped>'s rules the component's own, reached from its template alone, and a <style module>'s classes, ids and keyframes bound by the name it gives ($style where it gives none), so $style.red in the template or this.$style.red in the script is a use of what the module exports as red, exact, and a class=\"red\" none of it",
         [
-            "a template written in another language (lang=\"pug\"), and one that names its file by src: not read as the component's - the file is read as its own",
-            "a style block of another language (lang=\"stylus\"): not read",
-            "a component with no script block: the type alone, and nothing of its own members",
-            "what a mixin or an extends option adds, a prop defineModel declares and one defineProps is given by a type another file declares: no member of the component",
-            "a module block's classes read through what useCssModule() returns, or by a string ($style['red-x']): no use of them",
-            "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why",
+            ("other-templates", "a template written in another language (lang=\"pug\"), and one that names its file by src: not read as the component's - the file is read as its own"),
+            ("other-styles", "a style block of another language (lang=\"stylus\"): not read"),
+            ("scriptless", "a component with no script block: the type alone, and nothing of its own members"),
+            ("mixins", "what a mixin or an extends option adds, a prop defineModel declares and one defineProps is given by a type another file declares: no member of the component"),
+            ("module-strings", "a module block's classes read through what useCssModule() returns, or by a string ($style['red-x']): no use of them"),
+            new CodeGraphLimit("huge-files", "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why") { Signs = [MarkupText.HugeFile] },
+            .. JsHelp.Unseen,
+            .. TypeScriptExtractor.TypesUnseen,
+            .. CssExtractor.SheetUnseen,
         ])
     {
         Holds = "AngleSharp's text source, which keeps every character the tokenizer decodes - its HTML tokenizer reads a source of its buffered kind alone (a TextSource over a stream), and the source that lets go of what it read is offered to its parser alone, which builds a document rather than the tokens this reader matches - so reading a file holds its markup's text once, in pieces, never as one string",
@@ -112,9 +107,9 @@ public sealed class VueExtractor : ICodeGraphExtractor
         var typescript = languages.Any(written => written is "ts" or "tsx");
 
         if (blocks.FirstOrDefault(block => block.Name == "template") is { } template && template.Attribute("src") is null && template.Attribute("lang") is null or "html"
-            && Template(markup, template, component.Id, references) is { Count: > 0 } regions)
+            && MarkupTemplates.Read(markup, MarkupDialect.Vue, component.Id, references, template) is { Count: > 0 } regions)
         {
-            embedded.Add(Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript)));
+            embedded.Add(MarkupTemplates.Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript), MarkupDialect.Vue));
         }
 
         if (scripts.Count > 0)
@@ -162,167 +157,10 @@ public sealed class VueExtractor : ICodeGraphExtractor
     private static FileExtract Bound(FileExtract merged, IReadOnlyDictionary<string, QualifiedName> bindings)
         => bindings.Count == 0 ? merged : merged with
         {
-            References = [.. merged.References.Select(reference => reference is { Kind: CodeEdgeKinds.Uses, Qualifier: { Kind: CodeQualifierKinds.Value, Name: { } binding } }
+            References = [.. merged.References.Select(reference => reference is { Kind: CodeEdgeKinds.Uses, Qualifier: { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.This, Name: { } binding } }
                 && bindings.TryGetValue(binding.Whole(), out var kept)
                     ? reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Module, kept) }
                     : reference)],
-        };
-
-    /// <summary>
-    /// What the template says, in one walk over its elements and its texts in the order they are written. Each element -
-    /// nested templates among them - is read by the markup's one rule, its tag and its classes and id references of the
-    /// component's; and the code its attributes and its text's <c>{{ }}</c> hold is given the JavaScript reader as Vue's
-    /// compiler writes it (<see cref="Handler"/>), each piece the body of a function of its own whose parameters are the
-    /// names the template declares where it stands that it names (<see cref="DeclaredNames"/>): the aliases of each
-    /// <c>v-for</c> around it - for that element's own attributes too, its list read outside them - and the names each
-    /// <c>v-slot</c> around it gives what it holds, its pattern a function's parameters where it is written, so its
-    /// defaults are code read once; answers those functions, each the component's.
-    /// </summary>
-    private static List<CodeRegion> Template(MarkupText markup, MarkupElement template, QualifiedName component, List<ExtractReference> references)
-    {
-        var elements = markup.Elements;
-        var regions = new List<CodeRegion>();
-        var declared = new DeclaredNames();
-        var texts = markup.Texts.Where(text => text.Start >= template.OpenEnd && text.End <= template.Close).ToList();
-        var nextText = 0;
-
-        for (var at = 0; at <= elements.Count; at++)
-        {
-            var start = at < elements.Count ? elements[at].Start : int.MaxValue;
-
-            // Each run of text before the element, in the elements around it.
-            for (; nextText < texts.Count && texts[nextText].Start < start; nextText++)
-            {
-                var (textStart, textEnd) = texts[nextText];
-                declared.Leave(textStart);
-
-                foreach (Match mustache in Mustaches.Matches(markup.Text.Slice(textStart, textEnd)))
-                {
-                    if (mustache.Groups["code"] is { Value.Length: > 0 } code && !string.IsNullOrWhiteSpace(code.Value))
-                    {
-                        Add(textStart + code.Index, $"({code.Value});");
-                    }
-                }
-            }
-
-            if (at == elements.Count)
-            {
-                break;
-            }
-
-            var element = elements[at];
-
-            if (!markup.Inside(element, template))
-            {
-                continue;
-            }
-
-            var end = Math.Max(element.Close, element.OpenEnd);
-            declared.Leave(element.Start);
-            MarkupDialect.Vue.Read(element, component, references);
-
-            // A loop's list is read in the scope around the element; its aliases are the element's own, its attributes' too.
-            var lists = new Dictionary<MarkupAttribute, CodeRegion>();
-            var aliases = new List<string>();
-
-            foreach (var attribute in element.Attributes)
-            {
-                if (MarkupDialect.Vue.Role(attribute) == MarkupRole.Loop && MarkupDialect.Loop(attribute.Value) is var (bound, list, listAt))
-                {
-                    lists[attribute] = Piece(attribute.ValueAt + listAt, $"({list});");
-                    aliases.AddRange(JsReading.Binds(bound));
-                }
-            }
-
-            declared.Declare(aliases, end);
-            var slots = new List<string>();
-
-            foreach (var attribute in element.Attributes)
-            {
-                // A directive's dynamic argument - :[key], @[event], #[slot] - is an expression of its own, as written.
-                if (MarkupDialect.Vue.Role(attribute) != MarkupRole.None && Argument(markup.Text, attribute) is var (argumentAt, argument))
-                {
-                    Add(argumentAt, $"({argument});");
-                }
-
-                if (string.IsNullOrWhiteSpace(attribute.Value))
-                {
-                    continue;
-                }
-
-                switch (MarkupDialect.Vue.Role(attribute))
-                {
-                    case MarkupRole.Loop when lists.TryGetValue(attribute, out var listed):
-                        regions.Add(listed);
-                        break;
-
-                    case MarkupRole.Handler:
-                        Add(attribute.ValueAt, Handler(attribute.Value));
-                        break;
-
-                    case MarkupRole.Binding:
-                        Add(attribute.ValueAt, $"({attribute.Value});");
-                        break;
-
-                    // A slot's pattern is a function's parameters, read where it is written; the names it binds are what
-                    // the element holds.
-                    case MarkupRole.Declares:
-                        var given = declared.Given(attribute.Value);
-                        regions.Add(new CodeRegion(component, given.Length > 0 ? $"{given}, {attribute.Value}" : attribute.Value, attribute.ValueAt, string.Empty));
-                        slots.AddRange(JsReading.Binds(attribute.Value));
-                        break;
-
-                    default:
-                        break;
-                }
-            }
-
-            declared.Declare(slots, end);
-        }
-
-        return regions;
-
-        // A piece of code, in a function of the names declared where it stands that it names.
-        CodeRegion Piece(long offset, string code) => new(component, declared.Given(code), offset, code);
-
-        void Add(long offset, string code) => regions.Add(Piece(offset, code));
-    }
-
-    /// <summary>
-    /// The dynamic argument a directive's name holds - <c>v-bind:[key]</c>, <c>@[event]</c>, <c>#[slot]</c> - read where the
-    /// text writes it, in its own case, as Vue's compiler reads it: the expression between the brackets after the directive's
-    /// name, with where it begins; <see langword="null"/> where the name holds none.
-    /// </summary>
-    private static (long At, string Code)? Argument(CodeText text, MarkupAttribute attribute)
-    {
-        var written = text.Substring(attribute.NameAt, Math.Min(attribute.Name.Length, text.Length - attribute.NameAt)).AsSpan();
-        var open = written.IndexOf('[');
-        var close = written.LastIndexOf(']');
-
-        return open > 0 && close > open + 1 && written[open - 1] is ':' or '@' or '#' or '.' ? (attribute.NameAt + open + 1, written[(open + 1)..close].ToString()) : null;
-    }
-
-    /// <summary>
-    /// The JavaScript a <c>v-on</c>'s value is compiled to, as Vue's compiler writes it: a member path - <c>pay</c>,
-    /// <c>cart.add</c> - the handler it names, called with what the event gives; a function expression the handler itself;
-    /// anything else statements the event runs, its value <c>$event</c>.
-    /// </summary>
-    private static string Handler(string value)
-        => MemberPath.IsMatch(value) ? $"((...args) => {value}(...args));"
-            : FunctionExpression.IsMatch(value) ? $"({value});"
-            : $"(function ($event) {{ {value} }});";
-
-    /// <summary>
-    /// <paramref name="template"/>, what the JavaScript reader made of the template's code, with each name it reads by
-    /// itself - no receiver's, no local's, which the reader keeps to itself - a member of the component, as Vue's compiler
-    /// reads it from the component's instance; but the globals its compiler leaves to themselves.
-    /// </summary>
-    private static FileExtract Members(FileExtract template)
-        => template with
-        {
-            References = [.. template.References.Select(reference => reference is { Qualifier: null, Kind: CodeEdgeKinds.Uses or CodeEdgeKinds.Calls } && !Globals.Contains(reference.Name)
-                ? reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.This) }
-                : reference)],
         };
 
     /// <summary>
@@ -362,13 +200,4 @@ public sealed class VueExtractor : ICodeGraphExtractor
 
         return pascal.Length > 0 ? pascal : simple.Length > 0 ? simple : file;
     }
-
-    /// <summary>A <c>{{ }}</c> a template's text holds, over lines or on one.</summary>
-    private static readonly Regex Mustaches = LinearRegex.Compile(@"\{\{(?<code>.*?)\}\}", RegexOptions.Singleline);
-
-    /// <summary>A member path, as Vue's compiler tells a handler a <c>v-on</c> names from code it runs: names, each after a dot, an optional chain's <c>?.</c> or between brackets.</summary>
-    private static readonly Regex MemberPath = LinearRegex.Compile(@"^\s*[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*|\['[^']*?'\]|\[""[^""]*?""\]|\[\d+\]|\[[A-Za-z_$][\w$]*\])*\s*$");
-
-    /// <summary>A function expression, as Vue's compiler tells one a <c>v-on</c> gives: an arrow's head, or a <c>function</c>'s.</summary>
-    private static readonly Regex FunctionExpression = LinearRegex.Compile(@"^\s*(?:async\s*)?(?:\([^)]*?\)|[\w$]+)\s*(?::[^=]+)?=>|^\s*(?:async\s+)?function(?:\s+[\w$]+)?\s*\(");
 }

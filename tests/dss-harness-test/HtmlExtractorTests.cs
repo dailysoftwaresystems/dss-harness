@@ -340,8 +340,9 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         var alone = new JavaScriptExtractor().Extract(new CodeFileInput("a.js", "handlers[name](); eval(code);"));
         var page = Read("a.html", "<script>handlers[name](); eval(code);</script>");
 
-        Assert.Equal(2, alone.Dynamic.Count);
+        Assert.Equal([JsReading.FunctionValue, JsReading.ComputedCode], alone.Dynamic.Select(dynamic => dynamic.Kind));
         Assert.Equal(alone.Dynamic, page.Dynamic);
+        CodeGraphContract.Signed(new HtmlExtractor(), page, "a.html");
     }
 
     /// <summary>
@@ -411,6 +412,282 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         Assert.Equal(
             [".ghost"],
             Read("plain.html", "<style>\n// .ghost { a: b; }\n</style>\n").Nodes.Where(node => CodeSubKinds.IsData(node.SubKind)).Select(node => node.Name));
+    }
+
+    /// <summary>
+    /// A file whose content is an Angular template is read as one: each component tag - a component's selector - an instantiates of
+    /// that component; each event attribute's handler, each binding, each loop's list, each <c>{{ }}</c> and each control-flow block
+    /// read by the JavaScript reader as Angular compiles it, each name read by itself a member of the component that names the file
+    /// its template - the linker joining the template's names to that component (<see cref="ExtractNode.Templates"/>) and the tag to
+    /// the class by its selector (<see cref="ExtractNode.Selectors"/>); a loop's alias a parameter of its own - its <c>trackBy</c>
+    /// read around the element and a <c>@for</c>'s <c>track</c> where its alias is declared - and a name the component does not
+    /// declare reached by nothing.
+    /// </summary>
+    [Fact]
+    public void AnAngularTemplate_IsReadAsOne_AndLinkedToItsComponentByItsSelectorAndItsTemplate()
+    {
+        const string Template = """
+            <h2>{{ title }}</h2>
+            <button (click)="save()" [disabled]="busy" #box>Save</button>
+            <app-cart [items]="items" (added)="onAdded($event)"></app-cart>
+            <li *ngFor="let item of items; trackBy: trackItem">{{ item.name }}</li>
+            @if (shown) { <p>{{ message }}</p> }
+            @for (line of lines; track line.id) { <span>{{ line }}</span> }
+            """;
+        const string Component = """
+            import { Component } from '@angular/core';
+
+            @Component({ selector: 'app-cart', templateUrl: './cart.component.html' })
+            export class CartComponent {
+              title = 'Cart';
+              items = [];
+              save() {}
+              onAdded(event) {}
+              trackItem(index, item) {}
+            }
+            """;
+        var extract = Read("src/cart.component.html", Template);
+        var body = "html:src/cart.component.html#body";
+
+        Assert.Equal("body", Assert.Single(extract.Nodes, node => node.Id == body).SubKind);
+
+        // Each reference is the template's own, made from its node: the component by its selector, each name by itself the component's.
+        Assert.Equal(
+            [
+                ("app-cart", CodeEdgeKinds.Instantiates, 3, (string?)null), ("title", CodeEdgeKinds.Uses, 1, CodeQualifierKinds.This),
+                ("save", CodeEdgeKinds.Calls, 2, CodeQualifierKinds.This), ("busy", CodeEdgeKinds.Uses, 2, CodeQualifierKinds.This),
+                ("items", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.This), ("onAdded", CodeEdgeKinds.Calls, 3, CodeQualifierKinds.This),
+                ("items", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.This), ("trackItem", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.This),
+                ("name", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.Value), ("shown", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This),
+                ("message", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This), ("lines", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.This),
+                ("id", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.Value),
+            ],
+            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Qualifier?.Kind)));
+
+        // Linked with the component that names this file its template: the tag reaches the class by its selector, each name the
+        // template reads by itself is the component's member, exact, and a name it does not declare reaches nothing.
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("src/cart.component.ts", "typescript", new TypeScriptExtractor().Extract(new CodeFileInput("src/cart.component.ts", Component))),
+            new CodeGraphFile("src/cart.component.html", "html", extract),
+        ]);
+        var component = "typescript:src/cart.component.ts.CartComponent";
+
+        Assert.Contains(new CodeEdge(body, component, CodeEdgeKinds.Instantiates, 3, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("file:src/cart.component.ts", "file:src/cart.component.html", CodeEdgeKinds.Imports, 3, CodeConfidences.Exact), linked.Edges);
+        Assert.Equal(
+            [($"{component}.title", CodeEdgeKinds.Uses, 1, CodeConfidences.Exact), ($"{component}.save", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), ($"{component}.items", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
+             ($"{component}.onAdded", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact), ($"{component}.items", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact),
+             ($"{component}.trackItem", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact)],
+            [.. linked.Edges.Where(edge => edge.From == body && edge.To.StartsWith(component, StringComparison.Ordinal) && edge.To != component).Select(edge => (edge.To, edge.Kind, edge.Line, edge.Confidence))]);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == body && new[] { $"{component}.busy", $"{component}.shown", $"{component}.message", $"{component}.lines" }.Contains(edge.To));
+    }
+
+    /// <summary>
+    /// The text runs a page holds leave out a script's and a style's raw text, so neither is read as a template's: a control-flow
+    /// block a script's string or a style's content writes makes no Angular template of the page.
+    /// </summary>
+    [Fact]
+    public void AScriptsAndAStylesText_AreNoTemplatesText()
+    {
+        var extract = Read("page.html", "<p>Plain</p>\n<script>\nvar t = '@if (shown) { x }';\n</script>\n<style>\n.a::after { content: '@for (b of cs) {'; }\n</style>\n");
+
+        Assert.DoesNotContain(extract.References, reference => reference.Name is "shown" or "cs" || reference.Qualifier?.Kind == CodeQualifierKinds.This);
+    }
+
+    /// <summary>
+    /// A page is read in work to its length - each of its elements and its runs of text read a fixed number of times, by the walk
+    /// that makes them and by every reader, never again for each run - a plain page's and an Angular template's, whose test, views,
+    /// blocks and references read them in turn: a page of three times as many elements costs as much more than one of twice as many
+    /// as that one costs more than one of as many, where a reading that walks the elements for each run grows by the square.
+    /// </summary>
+    [Fact]
+    public void APage_IsReadInWorkToItsLength_APlainPageAndAnAngularTemplate()
+    {
+        // The page, and an Angular template's markup read again as Angular closes its elements.
+        foreach (var (unit, reads) in new[] { ("<p>x</p>\n", 1), ("<p #r (click)=\"go(r)\">{{ x }} {{ r.v }}</p>\n@if (a) { <b>{{ y }}</b> }\n", 2) })
+        {
+            var work = new[] { 1, 2, 3 }.Select(times =>
+            {
+                var read = new List<MarkupText>();
+                var extract = new HtmlExtractor().Extract(new CodeFileInput("src/big.component.html", string.Concat(Enumerable.Repeat(unit, times * 500))), read);
+
+                Assert.Equal(reads, read.Count);
+                Assert.Equal(["body"], extract.Nodes.Select(node => node.Name));
+                return read.Sum(markup => markup.Visited);
+            }).ToList();
+
+            Assert.True(work[0] > 0, unit);
+            Assert.Equal(work[1] - work[0], work[2] - work[1]);
+        }
+    }
+
+    /// <summary>
+    /// An Angular template reference (<c>#x</c>) is seen from its whole view, before it and from its siblings - the template's
+    /// own, a structural element's, an <c>ng-template</c>'s content - and from no other view; a <c>let-x</c> over its element alone.
+    /// </summary>
+    [Fact]
+    public void AnAngularReference_IsSeenOverItsWholeView()
+    {
+        var extract = Read("src/search.component.html", """
+            <input #query (keyup)="search(query.value)">
+            <button (click)="clear(query)">Clear</button>
+            <p>{{ box.value }}</p>
+            <div *ngIf="shown"><span #inner>{{ inner.title }}</span></div>
+            <em>{{ inner.title }}</em>
+            <ng-template let-row><b>{{ row.id }}</b></ng-template>
+            <i #box></i>
+            <ng-template><s #held>{{ held.v }}</s></ng-template>
+            <u>{{ held.w }} {{ row.x }}</u>
+            """);
+
+        // An ng-template's content a view of its own, whose #x no other view sees; a let-x seen over its own element alone.
+        Assert.Equal(
+            [
+                ("search", CodeEdgeKinds.Calls, 1), ("clear", CodeEdgeKinds.Calls, 2), ("shown", CodeEdgeKinds.Uses, 4), ("inner", CodeEdgeKinds.Uses, 5),
+                ("held", CodeEdgeKinds.Uses, 9), ("row", CodeEdgeKinds.Uses, 9),
+            ],
+            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.This).Select(reference => (reference.Name, reference.Kind, reference.Line)));
+    }
+
+    /// <summary>
+    /// An Angular expression's pipes are no code: each an instantiates of the pipe by its name after a bar - none of the pipes
+    /// Angular's common package declares - its operand and its arguments the code; linked, the template's pipe reaches the class
+    /// whose <c>@Pipe</c> names it.
+    /// </summary>
+    [Fact]
+    public void AnAngularPipe_IsAnInstantiatesOfThePipe_ItsOperandAndArgumentsCode()
+    {
+        var extract = Read("src/total.component.html", """
+            <p>{{ total | money: 'USD' | date }}</p>
+            <span [title]="name | shout">x</span>
+            """);
+        var body = "html:src/total.component.html#body";
+
+        Assert.Equal(
+            [("|money", CodeEdgeKinds.Instantiates, 1, (string?)null), ("|shout", CodeEdgeKinds.Instantiates, 2, null), ("total", CodeEdgeKinds.Uses, 1, CodeQualifierKinds.This), ("name", CodeEdgeKinds.Uses, 2, CodeQualifierKinds.This)],
+            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Qualifier?.Kind)));
+
+        var pipe = new TypeScriptExtractor().Extract(new CodeFileInput("src/money.pipe.ts", """
+            import { Pipe } from '@angular/core';
+
+            @Pipe({ name: 'money' })
+            export class MoneyPipe {}
+            """));
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("src/money.pipe.ts", "typescript", pipe), new CodeGraphFile("src/total.component.html", "html", extract)]);
+
+        Assert.Equal(["|money"], Assert.Single(pipe.Nodes, node => node.Name == "MoneyPipe").Selectors);
+        Assert.Contains(new CodeEdge(body, "typescript:src/money.pipe.ts.MoneyPipe", CodeEdgeKinds.Instantiates, 1, CodeConfidences.Unique), linked.Edges);
+    }
+
+    /// <summary>
+    /// What an Angular template writes, each form of it: a structural directive's microsyntax - its <c>let</c>s, its <c>as</c>, its
+    /// keys' expressions read around the element - <c>on-</c>, <c>bind-</c> and <c>ref-</c>; <c>@if</c> with <c>@else if</c> and
+    /// <c>@else</c>, <c>@switch</c> with its <c>@case</c> and <c>@default</c>, <c>@for</c> with its <c>track</c>, its <c>let</c> and
+    /// its <c>@empty</c>, an escaped brace no block's, <c>@let</c> a name of its view, <c>@defer</c>'s <c>when</c> code and its
+    /// <c>on</c> trigger none; an attribute's <c>{{ }}</c> code, a class written beside one none, <c>[class.x]</c> a use of the
+    /// rule; and the framework's own elements no component.
+    /// </summary>
+    [Fact]
+    public void EachFormAnAngularTemplateWrites_IsReadAsAngularReadsIt()
+    {
+        var extract = Read("src/forms.component.html", """
+            <li *ngFor="let item of items; let i = index; trackBy: track">{{ i }} {{ item.name }}</li>
+            <p *ngIf="user$ | async as user; else loading">{{ user.name }}</p>
+            <ng-template #loading>Wait</ng-template>
+            <button on-click="go()" bind-disabled="busy" ref-btn>{{ btn.type }}</button>
+            <ng-container *ngTemplateOutlet="loading"></ng-container>
+            @if (a) { {{ x }} } @else if (b) { {{ y }} } @else { {{ z }} }
+            @switch (mode) { @case (one) { <b>{{ p }}</b> } @default { <i>{{ q }}</i> } }
+            @for (row of rows; track row.id; let n = $index) { {{ n }} {{ row.k }} {{ $first }} {{ $count }} } @empty { {{ none }} }
+            @for (r of rs; track r) { <p>@}</p>{{ r }} }
+            @let total = price * qty;
+            <span title="{{ label }}" [class.on]="active" class="c-{{ tone }} plain">{{ total }}</span>
+            @defer (on viewport; when ready) { {{ d }} } @placeholder { <i>Wait</i> }
+            """);
+
+        Assert.Equal(
+            [
+                ("items", 1), ("track", 1), ("user$", 2), ("go", 4), ("busy", 4), ("a", 6), ("x", 6), ("b", 6), ("y", 6), ("z", 6),
+                ("mode", 7), ("one", 7), ("p", 7), ("q", 7), ("rows", 8), ("none", 8), ("rs", 9), ("price", 10), ("qty", 10),
+                ("label", 11), ("active", 11), ("tone", 11), ("ready", 12), ("d", 12),
+            ],
+            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.This).Select(reference => (reference.Name, reference.Line)));
+        Assert.Equal(
+            [(".on", 11), (".plain", 11)],
+            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Selector).Select(reference => (reference.Name, reference.Line)));
+        Assert.DoesNotContain(extract.References, reference => reference.Kind == CodeEdgeKinds.Instantiates);
+    }
+
+    /// <summary>
+    /// A component's tag closed by its <c>/&gt;</c> holds nothing after it, as Angular closes it; a text is held by the innermost
+    /// section around it, as a page's is; Angular's compiler leaves no global to itself; and an event's value that names a member
+    /// alone is a use of it, statements the event runs.
+    /// </summary>
+    [Fact]
+    public void AnAngularComponentsTag_ClosesItself_ATextIsItsSections_AndNoNameIsAGlobal()
+    {
+        var extract = Read("src/list.component.html", """
+            <app-row *ngIf="items as q" />
+            <p>{{ q }}</p>
+            <section id="cart">{{ total }}</section>
+            <b>{{ parseInt }}</b>
+            <button (click)="save">Save</button>
+            """);
+        var body = "html:src/list.component.html#body";
+
+        Assert.Equal(
+            [("items", CodeEdgeKinds.Uses, body), ("q", CodeEdgeKinds.Uses, body), ("total", CodeEdgeKinds.Uses, "html:src/list.component.html#cart"), ("parseInt", CodeEdgeKinds.Uses, body), ("save", CodeEdgeKinds.Uses, body)],
+            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.This).Select(reference => (reference.Name, reference.Kind, reference.From.Whole())));
+    }
+
+    /// <summary>
+    /// A page another template engine writes - Jinja's, Django's or Twig's <c>{% %}</c> and <c>{# #}</c>, Handlebars' <c>{{#</c> -
+    /// is read as a page and never as an Angular template: each of the engine's tags marked dynamic of its own kind, the sign of
+    /// the limit that says so, which makes the page one the graph's sites search by text.
+    /// </summary>
+    [Fact]
+    public void APageOfAnotherTemplateEngine_IsReadAsAPage_ItsTagsMarkedOfTheirKind()
+    {
+        var extract = Read("templates/list.html", """
+            <ul>{% for item in items %}<li class="row">{{ item.name }}</li>{% endfor %}</ul>
+            <p title="{{ user }}">{# note #}</p>
+            """);
+
+        Assert.Equal([1, 1, 1, 2, 2], extract.Dynamic.Where(dynamic => dynamic.Kind == HtmlExtractor.OtherEngine).Select(dynamic => dynamic.Line));
+        Assert.DoesNotContain(extract.References, reference => reference.Qualifier?.Kind == CodeQualifierKinds.This);
+        Assert.Equal([".row"], extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Selector).Select(reference => reference.Name));
+        Assert.Single(new HtmlExtractor().Help.DoesNotSee, limit => limit.Signs.Contains(HtmlExtractor.OtherEngine));
+        Assert.Empty(Read("templates/plain.html", "<p>{{ shown }}</p>").Dynamic);
+    }
+
+    /// <summary>
+    /// Each tag only another engine writes tells its page, by itself and wherever it stands - Handlebars' and Mustache's
+    /// <c>{{# }}</c>, <c>{{/ }}</c>, <c>{{^ }}</c>, <c>{{&gt; }}</c> and <c>{{!-- --}}</c> in a text, a <c>{% %}</c> in an
+    /// attribute's value alone - and a class one of its tags is written into, its <c>{{ }}</c> among them, is one piece with the
+    /// tag, no class: neither the tag's words nor what it wraps.
+    /// </summary>
+    [Fact]
+    public void AnotherEnginesTag_TellsItsPageWhereverItStands_AndAClassItIsWrittenIntoIsNone()
+    {
+        Assert.All(
+            [("<p>{{# list }}x</p>", 1), ("<p>x{{/ list }}</p>", 1), ("<p>{{^ list }}x</p>", 1), ("<p>{{> row }}</p>", 1), ("<p>{{!-- note --}}</p>", 1), ("<p title=\"{% if a %}b{% endif %}\">x</p>", 2)],
+            page =>
+            {
+                var extract = Read("templates/one.html", page.Item1);
+
+                Assert.Equal(page.Item2, extract.Dynamic.Count(dynamic => dynamic.Kind == HtmlExtractor.OtherEngine));
+                Assert.DoesNotContain(extract.References, reference => reference.Qualifier?.Kind == CodeQualifierKinds.This);
+            });
+
+        var classes = Read("templates/nav.html", """
+            <li class="nav-item {% if request.path == '/' %}active{% endif %}">Home</li>
+            <a class="btn {{#if primary}}btn-primary{{/if}} wide">Go</a>
+            """);
+
+        Assert.Equal(
+            [(".nav-item", 1), (".btn", 2), (".wide", 2)],
+            classes.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Selector).Select(reference => (reference.Name, reference.Line)));
     }
 
     private static FileExtract Read(string path, string text) => new HtmlExtractor().Extract(new CodeFileInput(path, text));

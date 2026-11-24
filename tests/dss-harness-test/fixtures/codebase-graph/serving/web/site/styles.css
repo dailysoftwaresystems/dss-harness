@@ -1,0 +1,21 @@
+/* The shop's styles. */
+.title {
+  font-size: 2rem;
+}
+
+.lines {
+  list-style: none;
+}
+
+.btn {
+  padding: 0.5rem 1rem;
+}
+
+.btn-primary {
+  background: #0a7;
+  color: #fff;
+}
+
+#app {
+  max-width: 40rem;
+}

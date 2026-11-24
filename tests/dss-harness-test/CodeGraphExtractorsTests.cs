@@ -83,6 +83,33 @@ public sealed class CodeGraphExtractorsTests
         Assert.Contains("a version is a positive integer", refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A limit whose short name is none - empty, with a capital, a blank or an underscore, beginning with no letter or ending
+    /// with a dash - is refused: the name is what the help lists a limit under and a sites answer names it by.
+    /// </summary>
+    /// <param name="name">The limit's name.</param>
+    [Theory]
+    [InlineData("")]
+    [InlineData("Macros")]
+    [InlineData("if branches")]
+    [InlineData("if_branches")]
+    [InlineData("1branches")]
+    [InlineData("-branches")]
+    [InlineData("branches-")]
+    public void ALimitNamedByNoShortName_IsRefused(string name)
+        => Assert.Contains($"'toy' names a limit '{name}', which is no short name", Refused(Fake("toy", ".toy") with { Help = new("nothing", [(name, "a thing")]) }, Fallback()).Message, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Two limits of one implementation of one name are refused, so the name an answer says finds one limit in the help; two
+    /// implementations may each name one of theirs alike, for the help lists each under its own language.
+    /// </summary>
+    [Fact]
+    public void TwoLimitsOfOneImplementationOfOneName_AreRefused()
+    {
+        Assert.Contains("'toy' names 2 of its limits 'branches': each is named once", Refused(Fake("toy", ".toy") with { Help = new("nothing", [("branches", "one thing"), ("macros", "another"), ("branches", "a third")]) }, Fallback()).Message, StringComparison.Ordinal);
+        Assert.Equal(["if-branches2", "if-branches2"], new CodeGraphExtractors([Fake("toy", ".toy") with { Help = new("nothing", [("if-branches2", "a thing")]) }, Fake("other", ".other") with { Help = new("nothing", [("if-branches2", "a thing")]) }, Fallback()]).All.SelectMany(extractor => extractor.Help.DoesNotSee).Select(limit => limit.Name));
+    }
+
     /// <summary>A registry with no fallback, or two, is refused: one implementation lists every file no other reads.</summary>
     [Fact]
     public void NoFallback_OrTwo_AreRefused()
@@ -246,7 +273,7 @@ public sealed class CodeGraphExtractorsTests
 
         public bool Outlines => false;
 
-        public CodeGraphExtractorHelp Help { get; } = new("nothing", []);
+        public CodeGraphExtractorHelp Help { get; init; } = new("nothing", []);
 
         public FileExtract Extract(CodeFileInput input) => FileExtract.Empty;
     }

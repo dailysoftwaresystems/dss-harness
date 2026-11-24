@@ -1,0 +1,31 @@
+[
+  {
+    "data": "Total",
+    "sites": [
+      { "place": "src/CartService.cs:15", "how": "defines" },
+      { "place": "src/Cart.razor:13", "how": "calls" },
+      { "place": "src/Pages/_Total.cshtml:3", "how": "calls" }
+    ]
+  },
+  {
+    "data": "AddTea",
+    "sites": [
+      { "place": "src/Cart.razor:12", "how": "calls" },
+      { "place": "src/Cart.razor:16", "how": "defines" }
+    ]
+  },
+  {
+    "data": "Add",
+    "sites": [
+      { "place": "src/CartService.cs:11", "how": "defines" },
+      { "place": "src/Cart.razor:18", "how": "calls" }
+    ]
+  },
+  {
+    "data": ".btn-primary",
+    "sites": [
+      { "place": "src/site.css:1", "how": "defines" },
+      { "place": "src/Cart.razor:12", "how": "uses" }
+    ]
+  }
+]

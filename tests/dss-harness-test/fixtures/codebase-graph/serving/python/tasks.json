@@ -1,0 +1,10 @@
+[
+  {
+    "task": "Find the largest of the shapes by its area",
+    "needs": ["largest", "Shape.area"]
+  },
+  {
+    "task": "Build the report table of the shapes with each described",
+    "needs": ["table", "describe"]
+  }
+]

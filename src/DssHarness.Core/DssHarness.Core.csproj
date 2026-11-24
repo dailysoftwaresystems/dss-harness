@@ -52,6 +52,14 @@
     <EmbeddedResource Include="Agents/Templates/agent-providers.json" LogicalName="DssHarness.Core.AgentProviders" />
     <None Remove="Agents/Templates/web-search-sources.json" />
     <EmbeddedResource Include="Agents/Templates/web-search-sources.json" LogicalName="DssHarness.Core.WebSearchSources" />
+
+    <!-- Unicode's character names, generated from the Unicode Character Database 17.0.0 by
+         .github/scripts/unicode-names.cs (Scanning/UnicodeNames.cs reads it): embedded so that no
+         machine's ICU or network decides a value - a Python string's \N{...} names a character as
+         CPython 3.15 reads a name, the same one on every machine. Data of the Unicode Consortium under
+         the Unicode License v3, its notice in THIRD-PARTY-NOTICES. -->
+    <None Remove="Codebase/Languages/Scanning/unicode-names.bin" />
+    <EmbeddedResource Include="Codebase/Languages/Scanning/unicode-names.bin" LogicalName="DssHarness.Core.UnicodeNames" />
   </ItemGroup>
 
   <ItemGroup>

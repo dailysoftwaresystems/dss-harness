@@ -1,0 +1,28 @@
+[
+  {
+    "data": "largest",
+    "sites": [
+      { "place": "shop/geometry.py:11", "how": "defines" },
+      { "place": "shop/geometry.py:44", "how": "calls" },
+      { "place": "tests/test_shape.py:18", "how": "calls" }
+    ]
+  },
+  {
+    "data": "describe",
+    "sites": [
+      { "place": "shop/report.py:6", "how": "defines" },
+      { "place": "shop/report.py:16", "how": "calls" },
+      { "place": "tests/test_shape.py:22", "how": "calls" }
+    ]
+  },
+  {
+    "data": "Shape.name",
+    "sites": [
+      { "place": "shop/shape.py:11", "how": "defines" },
+      { "place": "shop/shape.py:25", "how": "overrides" },
+      { "place": "shop/shape.py:38", "how": "overrides" },
+      { "place": "shop/shape.py:54", "how": "overrides" },
+      { "place": "shop/report.py:8", "how": "calls" }
+    ]
+  }
+]

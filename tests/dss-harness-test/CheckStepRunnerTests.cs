@@ -890,6 +890,52 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A site's symbol is read by the one owner of a key path's form, as the queries and the context pack read a name: a
+    /// site that is a data key whose own name holds a dot - the ASP.NET Core template's logging level, its name quoted in
+    /// brackets in the file - and marked deleted is still declared where the file holds the key, and said so, written by
+    /// its whole path, by the quoted place alone, or with single quotes; and a class's member is still found written with
+    /// its scopes, as it was. Read by a suffix after a dot alone, the key written by its quoted place or with single quotes
+    /// was found by nothing: a quoted place ends with a bracket, and the file's text holds none.
+    /// </summary>
+    [Fact]
+    public async Task ADeletedSitesSymbol_IsReadByTheOneOwnerOfAKeyPathsForm()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "config/appsettings.json", "{\n  \"Logging\": {\n    \"LogLevel\": {\n      \"Microsoft.AspNetCore\": \"Warning\"\n    }\n  }\n}\n");
+        OrchestrationKit.Write(kit.Main, "src/Old.cs", "namespace Rates;\n\npublic class Old\n{\n    public int Rate() => 1;\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the sites", Token);
+        await kit.CreateAgentAsync("builder");
+        await kit.Harness.CodebaseGraph.SyncAsync(FlowGraphSyncs.RequestOf(await kit.Harness.ContextLoader.LoadAsync(kit.Main, Token), new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, Flow), "test"), Token);
+
+        var runners = new FlowStepRunners([Closure(kit, Weighing("config/appsettings.json", "src/Old.cs"), kit.Harness.CodebaseGraph)], kit.Harness.GraphSyncs);
+
+        (string Path, string Symbol)[] sites =
+        [
+            ("config/appsettings.json", "Logging.LogLevel[\"Microsoft.AspNetCore\"]"),
+            ("config/appsettings.json", "[\"Microsoft.AspNetCore\"]"),
+            ("config/appsettings.json", "Logging.LogLevel['Microsoft.AspNetCore']"),
+            ("src/Old.cs", "Old.Rate"),
+        ];
+
+        foreach (var (path, symbol) in sites)
+        {
+            var run = ClosureRun(
+                kit,
+                Class("c-rate", home: "src/Home.cs", symbol: "Home"),
+                Entry("c-rate", home: "src/Home.cs", sites: [(path, symbol, "deleted")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format"));
+
+            await kit.Harness.GraphSyncs.AtStartAsync(run, Token);
+            var result = await runners.RunAsync(run, Token);
+
+            Assert.Equal(
+                [$"class 'c-rate': the site '{path}' is deleted, but it still declares '{symbol}'"],
+                [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        }
+    }
+
+    /// <summary>
     /// A planned class holds the record to the plan: the record's universe holds every axis the plan names, and the claim
     /// names each; a home other than the planned one is refused unless the record says why it moved; and a deleted site
     /// that names no symbol of its own is judged, and named, by its home's.

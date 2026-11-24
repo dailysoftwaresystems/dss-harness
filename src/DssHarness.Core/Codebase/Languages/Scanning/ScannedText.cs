@@ -59,11 +59,39 @@ internal sealed class ScannedText
         => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Values(Source) : [];
 
     /// <summary>
+    /// The constant parts of the string literal <paramref name="token"/> is, each decoded with the line it begins on and the lines its
+    /// refused escapes stand on (<see cref="ScanLiteralValue"/>) - what a reader that marks a refusal, as Python's does, reads a
+    /// literal by; none of a token that is no string.
+    /// </summary>
+    public IEnumerable<ScanLiteralValue> LiteralValues(ScanToken token)
+        => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Reads(Source) : [];
+
+    /// <summary>
+    /// Each string the markup <paramref name="token"/> holds - a JSX element's attribute values - decoded, with the name of the
+    /// attribute it is the value of as its lexer read the tag (<see cref="ScanLiteral.Names"/>, written as the text writes it -
+    /// <c>className</c>, <c>data-id</c> - and empty where no name and <c>=</c> stand before it), where the string is written,
+    /// past its quote and before it, and its line; none of a token that is no markup.
+    /// </summary>
+    public IEnumerable<(string Name, string Value, long Start, long End, int Line)> MarkupStrings(ScanToken token)
+        => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) && literal.Markup
+            ? literal.Parts.Select((part, at) => (
+                literal.Names is { } names && at < names.Count ? Source.Slice(names[at].Start, names[at].End) : string.Empty,
+                ScanLiteral.Decode(Source, part.Start, part.End, literal.Escapes, 0, lineStart: false),
+                part.Start,
+                part.End,
+                part.Line))
+            : [];
+
+    /// <summary>
     /// The value of the string literal at <paramref name="at"/>, decoded, where it is one string with no holes - what an
     /// import, an include or a directive names; <see langword="null"/> where the token is no such string.
     /// </summary>
     public string? Value(int at)
         => at >= 0 && at < Tokens.Count && Tokens[at].Kind == ScanTokenKind.Text && _literals.TryGetValue(Tokens[at].Start, out var literal) ? literal.Whole(Source) : null;
+
+    /// <summary>Whether the token at <paramref name="at"/> is a string literal whose closer never came: its line or the text ended first (<see cref="ScanLiteral.LeftOpen"/>).</summary>
+    public bool LeftOpen(int at)
+        => at >= 0 && at < Tokens.Count && Tokens[at].Kind == ScanTokenKind.Text && _literals.TryGetValue(Tokens[at].Start, out var literal) && literal.LeftOpen;
 
     /// <summary>The indices of the brackets a conditional's branch left open that stand for none after it, in order.</summary>
     public IReadOnlyList<int> Stranded { get; }
@@ -360,6 +388,9 @@ internal sealed class ScannedText
         run.Reverse();
         return run;
     }
+
+    /// <summary>Whether a comment begins from <paramref name="start"/> to before <paramref name="end"/>.</summary>
+    public bool HoldsComment(long start, long end) => LastCommentBefore(end) is var last and >= 0 && Comments[last].Start >= start;
 
     /// <summary>The index of the last comment that begins before <paramref name="position"/>; -1 where none does.</summary>
     private int LastCommentBefore(long position)

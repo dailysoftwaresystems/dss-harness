@@ -12,7 +12,10 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>member</c> SubKind <c>element</c> named by its path and that attribute, a <c>.resx</c>'s <c>data name=</c>, a
 /// <c>.props</c> or <c>.targets</c>'s <c>PropertyGroup</c> children and a <c>.config</c>'s <c>appSettings</c>
 /// <c>&lt;add key&gt;</c> and <c>connectionStrings</c> <c>&lt;add name&gt;</c> members SubKind <c>key</c> named by the key
-/// they are, and a <c>.props</c> or <c>.targets</c>'s <c>Import Project=</c> an import of the file it names. A
+/// they are - each key's path written by the one owner of the join (the DataNodes.Key a reader hands places to), a key
+/// holding a dot one
+/// place quoted in brackets, <c>appSettings["Serilog.MinimumLevel"]</c> and a <c>.resx</c>'s <c>["button1.Text"]</c> - and
+/// a <c>.props</c> or <c>.targets</c>'s <c>Import Project=</c> an import of the file it names. A
 /// <c>.xaml</c> root's <c>x:Class</c> makes the root a <c>type</c> marked a part of that C# type, which the linker joins
 /// to it, and each element it names by <c>x:Name</c> a field of that type, of the element's type, as the build generates
 /// one - which its code-behind reaches by the field's name, as it reaches any field of its own. Every element is read,
@@ -24,11 +27,14 @@ public sealed class XmlExtractor : ICodeGraphExtractor
     /// <summary>The attributes an element is named by, in the order they are looked for.</summary>
     private static readonly string[] Named = ["name", "key", "id"];
 
+    /// <summary>The kind of the mark of a DTD the reader refuses, the sign of the limit of the help that says so (<see cref="CodeGraphLimit.Signs"/>).</summary>
+    internal const string RefusedDtd = "dtd";
+
     /// <inheritdoc/>
     public string Language => "xml";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".xml", ".config", ".props", ".targets", ".resx", ".xaml", ".manifest", ".nuspec");
@@ -38,15 +44,15 @@ public sealed class XmlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "XML data files (.xml, .config, .props, .targets, .resx, .xaml, .manifest, .nuspec), every element however deep: the root element as a section, each element with a name, key, id or x:Name attribute as an element node named by its path and that attribute, a .resx's data name=, a .props or .targets's PropertyGroup children and a .config's appSettings <add key> and connectionStrings <add name> as keys named by the key they are (appSettings.Timeout, connectionStrings.Main), their value or connection string as the summary, a .props or .targets's Import Project= as an import of the file it names, a .xaml root's x:Class as a part of that C# type, and each element the view names by x:Name as a field of that type, of the element's type, which its code-behind reaches by the field's name",
+        "XML data files (.xml, .config, .props, .targets, .resx, .xaml, .manifest, .nuspec), every element however deep: the root element as a section, each element with a name, key, id or x:Name attribute as an element node named by its path and that attribute, a .resx's data name=, a .props or .targets's PropertyGroup children and a .config's appSettings <add key> and connectionStrings <add name> as keys named by the key they are (appSettings.Timeout, connectionStrings.Main, a key holding a dot quoted in brackets: appSettings[\"Serilog.MinimumLevel\"]), their value or connection string as the summary, a .props or .targets's Import Project= as an import of the file it names, a .xaml root's x:Class as a part of that C# type, and each element the view names by x:Name as a field of that type, of the element's type, which its code-behind reaches by the field's name",
         [
-            "MSBuild projects and solutions (.csproj, .slnx), which the msbuild extractor reads",
-            "a file with a DTD: refused, nothing in it read",
-            "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason",
-            "an attribute named otherwise than name, key, id or x:Name, and an element with none of them: no node of its own, its lines its parent's",
-            "a key that is no .resx's data, .props's property or .config's appSettings or connectionStrings entry - an <add key> of a custom configuration section among them: an element node, which the keys' join does not reach",
-            "an element a XAML view names by Name alone, without the x: prefix, and an x:Name of a view with no x:Class: an element node, which no code reaches",
-            "an Import Project= of any file but a .props or a .targets: no import",
+            ("msbuild-files", "MSBuild projects and solutions (.csproj, .slnx), which the msbuild extractor reads"),
+            new CodeGraphLimit("dtd", "a file with a DTD: refused, nothing in it read, the line of the DTD marked dynamic") { Signs = [RefusedDtd] },
+            new CodeGraphLimit("broken-xml", "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason") { Signs = [DataNodes.Stop] },
+            ("unnamed-elements", "an attribute named otherwise than name, key, id or x:Name, and an element with none of them: no node of its own, its lines its parent's"),
+            ("other-keys", "a key that is no .resx's data, .props's property or .config's appSettings or connectionStrings entry - an <add key> of a custom configuration section among them: an element node, which the keys' join does not reach"),
+            ("xaml-names", "an element a XAML view names by Name alone, without the x: prefix, and an x:Name of a view with no x:Class: an element node, which no code reaches"),
+            ("other-imports", "an Import Project= of any file but a .props or a .targets: no import"),
         ]);
 
     /// <inheritdoc/>
@@ -120,7 +126,8 @@ public sealed class XmlExtractor : ICodeGraphExtractor
         {
             // What follows the first fault is not read: the file is graphed as far as it parses, and its extract says where
             // it stopped, so a reference missing after it is never taken for one the file does not make.
-            nodes.Stopped(ex.LineNumber, Stopped(ex, lines, refusesDtd: true));
+            var stopped = Stopped(ex, lines, refusesDtd: true);
+            nodes.Stopped(ex.LineNumber, stopped.Why, stopped.Kind);
         }
 
         // Whatever is still open - a file that stopped reading among them - ends at the file's last line: a parent holds
@@ -141,13 +148,14 @@ public sealed class XmlExtractor : ICodeGraphExtractor
     }
 
     /// <summary>
-    /// Why a reader of XML stopped at <paramref name="exception"/>, as an extract marks it: a DTD the file declares, where
-    /// the reader refuses one, or the reader's own reason, without the place it says - the mark's line says it.
+    /// Why a reader of XML stopped at <paramref name="exception"/>, as an extract marks it, and the mark's kind: a DTD the file
+    /// declares, where the reader refuses one (<see cref="RefusedDtd"/>), or the reader's own reason, without the place it says - the
+    /// mark's line says it (<see cref="DataNodes.Stop"/>).
     /// </summary>
     /// <param name="exception">What the reader threw.</param>
     /// <param name="lines">The file's lines.</param>
     /// <param name="refusesDtd">Whether the reader refuses a DTD, so one on the line it stopped at is why.</param>
-    internal static string Stopped(XmlException exception, IReadOnlyList<string> lines, bool refusesDtd)
+    internal static (string Why, string Kind) Stopped(XmlException exception, IReadOnlyList<string> lines, bool refusesDtd)
     {
         ArgumentNullException.ThrowIfNull(exception);
         ArgumentNullException.ThrowIfNull(lines);
@@ -155,8 +163,8 @@ public sealed class XmlExtractor : ICodeGraphExtractor
         var line = FileExtract.LineWithin(exception.LineNumber, lines.Count);
 
         return refusesDtd && lines.Count > 0 && lines[line - 1].Contains("<!DOCTYPE", StringComparison.Ordinal)
-            ? "the file declares a DTD, which is never read, and nothing after it is read"
-            : $"the file stops reading as XML here ({Place.Replace(exception.Message, string.Empty).Trim().TrimEnd('.')}), and nothing after it is read";
+            ? ("the file declares a DTD, which is never read, and nothing after it is read", RefusedDtd)
+            : ($"the file stops reading as XML here ({Place.Replace(exception.Message, string.Empty).Trim().TrimEnd('.')}), and nothing after it is read", DataNodes.Stop);
     }
 
     /// <summary>The place a reader of XML writes at the end of its message.</summary>
@@ -191,21 +199,22 @@ public sealed class XmlExtractor : ICodeGraphExtractor
         }
         else if (parent is null)
         {
-            node = nodes.Section(element, element, line, line, null);
+            node = nodes.Section([DataPlace.Named(element)], line, line, null);
         }
         else if (element == "data" && kind == "resx" && Attribute(reader, "name") is { } data)
         {
-            node = nodes.Key(data, data, line, null, holder);
+            node = nodes.Key([DataPlace.Named(data)], line, null, holder);
         }
         else if (parent.Name == "PropertyGroup" && kind == "props")
         {
-            node = nodes.Key(element, element, line, null, holder);
+            node = nodes.Key([DataPlace.Named(element)], line, null, holder);
         }
         else if (kind == "config" && element == "add" && Setting(reader, parent.Name) is { } setting)
         {
             // .NET's configuration names a setting by its key alone - AppSettings["Timeout"], ConnectionStrings["Main"] - and
-            // the section it is read from by its own name.
-            node = nodes.Key(setting.Key, $"{setting.Section}.{setting.Key}", line, setting.Value, holder);
+            // the section it is read from by its own name. Its path is written by the one owner of the join (DataNodes.Key
+            // given places), a key holding a dot one place quoted in brackets: appSettings["Serilog.MinimumLevel"].
+            node = nodes.Key([DataPlace.Named(setting.Section), DataPlace.Named(setting.Key)], line, setting.Value, holder);
         }
         else if (view is { } type && Attribute(reader, "x:Name") is { } field)
         {

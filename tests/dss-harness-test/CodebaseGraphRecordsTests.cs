@@ -55,13 +55,17 @@ public sealed class CodebaseGraphRecordsTests
             AddressRoots = [new ExtractAddressRoot("package:x/", "lib")],
             References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 2) { Arity = 1, Qualifier = new ExtractQualifier(CodeQualifierKinds.Named, "B") }],
             Generated = "a generator wrote it",
-            Dynamic = [new ExtractDynamic(3, "a call through a pointer")],
+            Dynamic = [new ExtractDynamic(3, "a call through a pointer", "pointer-call")],
         };
 
         Assert.Null(sound.Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Summary = "An \U0001F600 A." }] }).Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Exports = ["default"] }], AddressRoots = [new ExtractAddressRoot("pkg", "src/index.ts") { Whole = true }] }).Problem("toy", 3));
         Assert.Null((sound with { Literals = LiteralRow.Table(new LiteralRow("held by a node", 2, "toy:A.b"), new LiteralRow("held by the file", 3)) }).Problem("toy", 3));
+        Assert.Null((sound with { Nodes = [Node with { Selectors = ["app-cart", "x-1", "|money", "|$x_2"] }] }).Problem("toy", 3));
+
+        // A chain of a type is written as links as a chain of a value or of a name is: the type the names its links write.
+        Assert.Null((sound with { References = [.. sound.References, new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Run", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 } }] }).Problem("toy", 3));
 
         var wrong = new (FileExtract Extract, string Problem)[]
         {
@@ -89,6 +93,11 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { Exports = [] }] }, "a name it is exported by is empty, or it lists none"),
             (sound with { Nodes = [Node with { Exports = ["default", " "] }] }, "a name it is exported by is empty, or it lists none"),
             (sound with { Nodes = [Node with { Exports = ["x\uD83D"] }] }, "a surrogate cut from its pair"),
+            (sound with { Nodes = [Node with { Selectors = ["cart"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = ["app-cart", ".cart"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = ["|"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = ["|1x"] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Selectors = [] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
             (sound with { Nodes = [Node with { ValueType = "x\uD83D" }] }, "a surrogate cut from its pair"),
             (sound with { Nodes = [Node, Node with { Id = "toy:B", Parent = "toy:Z" }] }, "is declared inside 'toy:Z', which it holds no node of"),
             (sound with { Nodes = [Node with { End = 2 }, Node with { Id = "toy:B", Start = 2, End = 3, Parent = "toy:A" }] }, "whose lines do not hold it"),
@@ -125,13 +134,140 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) }] }, "its qualifier names nothing"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "") }] }, "its qualifier's name is empty"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, " ") }] }, "its qualifier's name is empty"),
+            (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.This, " ") }] }, "its qualifier's name is empty"),
+            (sound with { References = [.. sound.References, new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Run", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.This) { Link = 0 } }] }, "a reference to 'Run' links its qualifier of kind 'this', and only a chain of a value, of a name or of a type is written as links"),
+            (sound with { References = [.. sound.References, new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Run", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type, "B") { Link = 0 } }] }, "a reference to 'Run' links its qualifier and names 'B' too: a linked chain's names are its links'"),
             (sound with { Generated = " " }, "it says it is generated and not why"),
-            (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
-            (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "", "macro")] }, "it marks a line dynamic and not why"),
+            (sound with { Dynamic = [new ExtractDynamic(9, "macro", "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
             (sound with { Literals = LiteralRow.Table(new LiteralRow("value", 2, "toy:Z")) }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
+            (sound with { Nodes = [Node with { Selectors = ["app-cart", " "] }] }, "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, TestByType = true }] }, "it is a test by its type, and a node of kind 'namespace' is neither a type nor a member a type holds"),
+            (sound with { Nodes = [Node with { Id = "toy:b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "b", TestByType = true }] }, "its node 'toy:b': it is a member that is a test by its type, and no type holds it"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace }, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", TestByType = true }] }, "its node 'toy:A.b' is a test by its type, and 'toy:A', which holds it, is no type"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, TestBase = true }] }, "it is a type tests are built on, and a node of kind 'namespace' is no type"),
+            (sound with { Nodes = [Node, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", TestBase = true }] }, "it is a type tests are built on, and a node of kind 'member' is no type"),
+            (sound with { Nodes = [Node with { Joined = true }] }, "it is the own member of the type it extends, and it extends none"),
+            (sound with { Nodes = [Node with { Parametrizes = [] }] }, "a name it parametrizes tests by is empty, or it names none"),
+            (sound with { Nodes = [Node with { Parametrizes = ["user", " "] }] }, "a name it parametrizes tests by is empty, or it names none"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, Parametrizes = ["user"] }] }, "it parametrizes the tests of the types built on it, and a node of kind 'namespace' is no type"),
+            (sound with { Nodes = [Node with { Kind = CodeNodeKinds.Namespace, MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'namespace' is no type, nor a member that extends one"),
+            (sound with { Nodes = [Node, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", MembersByReceiver = true }] }, "its members are reached by a receiver alone, and a node of kind 'member' is no type, nor a member that extends one"),
+            (sound with { Nodes = [Node with { Templates = [] }] }, "a template it names is empty, or it names none"),
+            (sound with { Nodes = [Node with { Templates = [""] }] }, "a template it names is empty, or it names none"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Published = true, Prefix = "m" }] }, "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Published = true, Show = ["A"] }] }, "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Published = true, Export = true }] }, "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Published = true }] }, "it is of a scope, and takes the names a file publishes: only an import of a file does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Layout = true }] }, "it names a place of a layout, which only a path relative to the file does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Rooted, "m.py", 1) { Layout = true }] }, "it names a place of a layout, which only a path relative to the file does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Layout = true, Export = true }] }, "it names a place a name is looked for, which is no export: an export names a file"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Binds = true, Show = ["A"] }] }, "its prefix stands for the one name it shows, and so it has a prefix and shows one name, hiding none"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Binds = true, Prefix = "A", Show = ["A", "B"] }] }, "its prefix stands for the one name it shows, and so it has a prefix and shows one name, hiding none"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Binds = true, Prefix = "A", Show = ["A"], Hide = ["B"] }] }, "its prefix stands for the one name it shows, and so it has a prefix and shows one name, hiding none"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Binds = true, Prefix = "A", Show = ["A"] }] }, "its prefix stands for a name a file shows, which only an import of a file that is no export does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Either = true }] }, "it is one of two places a name may stand at, which only an import of a file that is no export is"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Either = true, Export = true }] }, "it is one of two places a name may stand at, which only an import of a file that is no export is"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Directory, "tests", 1) { Serves = "fixtures" }] }, "it serves the references of the qualifier 'fixtures', which is none of"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Serves = CodeQualifierKinds.Fixture }] }, "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Relative, "m.py", 1) { Serves = CodeQualifierKinds.Fixture, Export = true }] }, "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"),
+            (sound with { Imports = [new ExtractImport(CodeImportForms.Directory, "tests", 1) { Serves = CodeQualifierKinds.Fixture, Global = true }] }, "it serves one qualifier's references, which only an import of a directory's every file, made for that directory's files alone, does"),
+            (sound with { Published = ["A", " "] }, "a name it publishes is empty"),
+            (sound with { Published = ["A\uD83D"] }, "a surrogate cut from its pair"),
+            (sound with { PublishesTaken = true }, "it publishes what its imports take, and publishes nothing of its own"),
+            (sound with { LayoutRoots = [] }, "a root of its layout it names is empty, or it names none"),
+            (sound with { LayoutRoots = ["src", ""] }, "a root of its layout it names is empty, or it names none"),
+            (sound with { LayoutRoots = ["src\uD83D"] }, "a surrogate cut from its pair"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__", null!)] }, "it marks line 1 dynamic and names no kind of what it saw"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__", " ")] }, "it marks line 1 dynamic with a kind that is empty"),
+            (sound with { Dynamic = [new ExtractDynamic(1, "a computed __all__", "computed\uD83D")] }, "a surrogate cut from its pair"),
         };
 
         Assert.All(wrong, pair => Assert.Contains(pair.Problem, pair.Extract.Problem("toy", 3), StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Every field an extract may set is written by the store and read back as it was: a node's element selectors, its templates, the
+    /// type it extends, whether its members are reached by a receiver alone, whether it is a test by its type and whether tests are built on it,
+    /// the names it parametrizes the tests of the types built on it by, whether it is the own member of the type it extends; an import's prefix
+    /// standing for the name it shows, whether its names are its importers' too, whether it takes a file's published names, whether it
+    /// names a place of a layout, whether it is one of two places, whether it is under a root of the layout and the qualifier it
+    /// serves; a reference that is a probe, and one made around its node; the names a file publishes, whether what its imports take
+    /// is among them, whether its names are bound within it, whether it keeps its names' kinds apart, whether it writes its type names whole,
+    /// whether its directory is a unit of its layout and the roots it declares; and a dynamic mark's kind. Written again, the extract read back
+    /// is the very text it was read from.
+    /// </summary>
+    [Fact]
+    public void EveryFieldOfAnExtract_IsWrittenByTheStore_AndReadBackAsItWas()
+    {
+        var extract = new FileExtract(
+        [
+            Node with { Selectors = ["app-cart", "cart-view"], Templates = ["cart.html"], MembersByReceiver = true, TestByType = true, TestBase = true, Parametrizes = ["db", "user"] },
+            Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", Extends = "Shape", Joined = true, MembersByReceiver = true },
+        ])
+        {
+            Imports =
+            [
+                new ExtractImport(CodeImportForms.Relative, "lines.py", 1) { Prefix = "Line", Show = ["Line"], Binds = true, Reexports = true, Layout = true, Either = true },
+                new ExtractImport(CodeImportForms.Relative, "stars.py", 1) { Published = true, Reexports = true },
+                new ExtractImport(CodeImportForms.Rooted, "pkg/cart.py", 2) { Fallback = true },
+                new ExtractImport(CodeImportForms.Directory, "tests", 1) { Serves = CodeQualifierKinds.Fixture },
+            ],
+            References =
+            [
+                new ExtractReference("toy:A.b", CodeEdgeKinds.Overrides, "b", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Base), Probe = true },
+                new ExtractReference("toy:A.b", CodeEdgeKinds.References, "Shape", 2) { Around = true },
+            ],
+            Published = ["A", "b"],
+            PublishesTaken = true,
+            BoundWithin = true,
+            KindsApart = true,
+            WrittenWhole = true,
+            FolderUnit = true,
+            LayoutRoots = ["src", "."],
+            Dynamic = [new ExtractDynamic(3, "a module's __all__ the code computes", "computed-exports")],
+        };
+
+        Assert.Null(extract.Problem("toy", 3));
+
+        var text = Json(extract);
+        var back = JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)!;
+
+        Assert.Equal(text, Json(back));
+        Assert.Equal(["app-cart", "cart-view"], back.Nodes[0].Selectors!);
+        Assert.Equal(["cart.html"], back.Nodes[0].Templates!);
+        Assert.Equal(("Shape", true), (back.Nodes[1].Extends, back.Nodes[1].Joined));
+        Assert.Equal([(true, true, true), (true, false, false)], back.Nodes.Select(node => (node.MembersByReceiver, node.TestByType, node.TestBase)));
+        Assert.Equal(["db", "user"], back.Nodes[0].Parametrizes!);
+        Assert.Null(back.Nodes[1].Parametrizes);
+        Assert.Equal(
+            [
+                (CodeImportForms.Relative, "Line", "Line", true, true, false, true, true, false, (string?)null),
+                (CodeImportForms.Relative, null, null, false, true, true, false, false, false, null),
+                (CodeImportForms.Rooted, null, null, false, false, false, false, false, true, null),
+                (CodeImportForms.Directory, null, null, false, false, false, false, false, false, CodeQualifierKinds.Fixture),
+            ],
+            back.Imports.Select(import => (import.Form, import.Prefix, import.Show is { } show ? string.Join(',', show) : null, import.Binds, import.Reexports, import.Published, import.Layout, import.Either, import.Fallback, import.Serves)));
+        Assert.Equal([(true, false), (false, true)], back.References.Select(reference => (reference.Probe, reference.Around)));
+        Assert.Equal(["A", "b"], back.Published!);
+        Assert.Equal((true, true, true), (back.PublishesTaken, back.BoundWithin, back.FolderUnit));
+        Assert.Equal((true, true), (back.KindsApart, back.WrittenWhole));
+        Assert.Equal(["src", "."], back.LayoutRoots!);
+        Assert.Equal("computed-exports", Assert.Single(back.Dynamic).Kind);
+
+        // A field left at its default is not written, so an extract that sets none of them is written as it was before they were.
+        var plain = Json(new FileExtract([Node]) { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 2)] });
+
+        Assert.DoesNotContain("membersByReceiver", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("testByType", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("testBase", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("around", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("publishesTaken", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("layoutRoots", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("folderUnit", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("boundWithin", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("kindsApart", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("writtenWhole", plain, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -243,7 +379,7 @@ public sealed class CodebaseGraphRecordsTests
                 new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Save", 3) { Arity = 0, Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "repo.Store") },
             ],
             Generated = "a generator wrote it",
-            Dynamic = [new ExtractDynamic(3, "a call through a pointer")],
+            Dynamic = [new ExtractDynamic(3, "a call through a pointer", "pointer-call")],
         }.WithDigests(Text);
         var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "toy", 1, Blob, "src/a.toy", lines.Count, extract);
         var file = layout.GraphExtractFile(CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 1));
@@ -502,6 +638,50 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName("toy:A.Inner"), "654321", CodeNodeKinds.Type, ["a.toy"])), written[3]);
         Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName(".Deepest", Kept: 11, At: 2), "fedcba", CodeNodeKinds.Type, ["a.toy"])), written[4]);
         Assert.Equal(Json(nested), Json(store.ReadGraphSymbols(layout)!));
+    }
+
+    /// <summary>
+    /// A link result keeps each node's signs of what the graph does not see on a line of its own after the counts - the node by its
+    /// place, its signs in order - and reads them back as written; signs of no node it holds, a node given no sign or an empty one,
+    /// and a node's signs said twice are refused.
+    /// </summary>
+    [Fact]
+    public void ALinkResult_KeepsEachNodesSigns_AfterItsCounts_AndRefusesThoseOfNoNodeOrNoSign()
+    {
+        using var directory = new TempDirectory();
+        var (store, layout) = Store(directory);
+        var symbols = Symbols() with
+        {
+            Signs = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["file:a.toy"] = [CodeGraphLimit.CandidateImports], ["toy:A"] = [CodeGraphLimit.OutsideImport, CodeGraphLimit.Unbound] },
+        };
+
+        Assert.Null(symbols.Problem());
+        store.WriteGraphSymbols(layout, symbols);
+
+        Assert.Equal(
+            [
+                Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1) { Signs = 2 }),
+                Json(new CodeGraphSymbolLine(new StoredName("file:a.toy"), "abcdef", CodeNodeKinds.File, ["a.toy"])),
+                Json(new CodeGraphSymbolLine(new StoredName("toy:A"), "123456", CodeNodeKinds.Type, ["a.toy"])),
+                Json(new CodeGraphEdgeLine(0, 1, CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)),
+                Json(new CodeGraphCountLine(1, 1)),
+                Json(new CodeGraphSignLine(0, [CodeGraphLimit.CandidateImports])),
+                Json(new CodeGraphSignLine(1, [CodeGraphLimit.OutsideImport, CodeGraphLimit.Unbound])),
+                "",
+            ],
+            File.ReadAllText(layout.GraphSymbolsFile).Split('\n'));
+        Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
+
+        const string NoSign = "that is no node of it or no sign of one";
+
+        Assert.Equal($"it says signs of what the graph does not see of 'toy:Z', and {NoSign}", (symbols with { Signs = new Dictionary<string, IReadOnlyList<string>> { ["toy:Z"] = [CodeGraphLimit.Unbound] } }).Problem());
+        Assert.Equal($"it says signs of what the graph does not see of 'toy:A', and {NoSign}", (symbols with { Signs = new Dictionary<string, IReadOnlyList<string>> { ["toy:A"] = [] } }).Problem());
+        Assert.Equal($"it says signs of what the graph does not see of 'toy:A', and {NoSign}", (symbols with { Signs = new Dictionary<string, IReadOnlyList<string>> { ["toy:A"] = [CodeGraphLimit.Unbound, " "] } }).Problem());
+
+        var lines = File.ReadAllLines(layout.GraphSymbolsFile);
+        string[] twice = [.. lines[..5], lines[6], lines[6]];
+        File.WriteAllText(layout.GraphSymbolsFile, string.Concat(twice.Select(line => line + "\n")));
+        Assert.Contains("it says the signs of the node 'toy:A' twice", Assert.Throws<HarnessException>(() => store.ReadGraphSymbols(layout)).Message, StringComparison.Ordinal);
     }
 
     /// <summary>

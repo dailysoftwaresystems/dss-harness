@@ -60,6 +60,10 @@ internal static class PhpLexer
     /// <summary>Whether <paramref name="character"/> may stand in a PHP name past its first: a letter, a digit or <c>_</c>.</summary>
     private static bool InName(char character) => char.IsLetterOrDigit(character) || character == '_' || character > '\u007f';
 
+    /// <summary>Whether <paramref name="written"/> is a name PHP writes: parts of a name's characters, a <c>\</c> between each.</summary>
+    internal static bool IsName(string written)
+        => written.Length > 0 && written.Split('\\').All(part => part.Length > 0 && StartsName(part[0]) && part.All(InName));
+
     /// <summary>One run of the lexer over a text.</summary>
     private sealed class Lexing(CodeText text, CodeLineIndex lines, ScanCloses? closes) : ScanLexing(lines, closes)
     {

@@ -17,8 +17,11 @@ namespace DssHarness.Core.Codebase;
 /// import's prefix, a value's type. One without is looked for in the scopes it is written in, from the inside out, then
 /// as a scope import's prefix (an alias) for what that import stands for, then in what its file imports, in order, each
 /// import's filter applied - a file imported making visible what it declares, what it declares exported by another
-/// name by that name, and what it exports, an export's filter applied in turn - then in the repository by name and arity. A type qualifier is a type or a scope found as
-/// such a name is: in those scopes, by its whole qualified name, as an alias it is or begins with, in the imports, in
+/// name by that name, and what it exports, an export's filter applied in turn - then in the repository by name and arity - a
+/// call to what takes arguments alone and a use to a value alone where the file keeps its names' kinds apart
+/// (<see cref="FileExtract.KindsApart"/>). A type qualifier is a type or a scope found as such a name is: where the file writes
+/// its names whole (<see cref="FileExtract.WrittenWhole"/>), the one of that whole qualified name alone; else in those scopes,
+/// by its whole qualified name, as an alias it is or begins with, in the imports, in
 /// the repository; else every type or scope its name ends. A named qualifier is that too, unless a value the scopes hold
 /// is nearer - a member, and the call goes through the type that member is declared with, a chain of names through each
 /// one's type in turn. A value of a type the code does not say is looked for through the member it is, else by the
@@ -37,8 +40,9 @@ namespace DssHarness.Core.Codebase;
 /// <para>
 /// What a closed scope declares is seen from its file alone, as is a type or a scope whose own scope is closed; a
 /// declaration kept to a scope (<see cref="ExtractNode.SeenIn"/>) is seen from the declarations written in that scope or
-/// inside it alone. A file that shares another's imports (<see cref="ExtractImport.Shares"/>) imports what that one
-/// does, after its own. A name an import's prefix is stands for that import wherever a value or a type is written with
+/// inside it alone; and what a member's body declares - a closed scope under the member's qualified name - from that body
+/// and the scopes inside it alone, whatever its extract keeps it to, and by no name the repository's step looks up. A file
+/// that shares another's imports (<see cref="ExtractImport.Shares"/>) imports what that one does, after its own. A name an import's prefix is stands for that import wherever a value or a type is written with
 /// it. A type is looked in before its bases, and its bases nearest first: a mixin before what it is applied over, the last
 /// one first, the first base that holds the name deciding. A type's bases are found a round at a time - the first with no
 /// base known, each next through the bases the round before found - until a round finds what the one before did, or
@@ -53,8 +57,10 @@ namespace DssHarness.Core.Codebase;
 /// once (<see cref="KeptReads"/>), the reads of the link before it read through whole, so a chain of n links keeps n links'
 /// reads however many of its references read it. A chain whose head names a type - a qualifier's, or the declared type of a
 /// variable - is looked for as the whole name its links write, that name carried as the one before it and the link's own,
-/// never written out: it is found through the declarations' qualified names split at their dots, so a chain of n links
-/// costs a step a link however long the name it writes grows.
+/// never written out: it is found through the declarations' qualified names split at their dots, and past an import's prefix
+/// it begins with - however many names the prefix writes - a name at a time from what the import makes visible, so a chain of
+/// n links costs a step a link however long the name it writes grows. A chain is bound where its head is: the imports its
+/// head's qualifier is reached by are the chain's, for the sign a reference of it gives.
 /// </para>
 /// <para>
 /// What a file exposes through the files it exports, an export's filter applied in turn, is walked once for each file and
@@ -80,7 +86,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 9;
+    public const int Revision = 12;
 
     /// <summary>
     /// Links <paramref name="files"/>, one tree's every file, into its symbols and edges. The keys of the configuration
@@ -113,6 +119,67 @@ public static class CodeGraphLinker
         ArgumentNullException.ThrowIfNull(previous);
         ArgumentNullException.ThrowIfNull(files);
         return new Linking(files, previous.Memory, CodebaseGraphShape.NamingOf(keyNaming)).Link();
+    }
+
+    /// <summary>
+    /// The declarations of <paramref name="nodes"/> that are tests by their type (<see cref="ExtractNode.TestByType"/>), by id, as
+    /// <paramref name="edges"/> - a link's - say: each type so marked that is built on a type tests are built on
+    /// (<see cref="ExtractNode.TestBase"/>) - along the <c>inherits</c> and <c>mixesIn</c> edges, however many levels up and
+    /// through whatever types stand between, a type no file marks among them - and each member so marked that such a type holds.
+    /// Walked from the types tests are built on out along the edges, each type once, so a chain of bases of any length, a cycle
+    /// among them, is walked once. The one owner of which those are: the link's <c>tests</c> edges are made from them, and a view
+    /// counts a file that declares one as test code (<see cref="CodebaseGraphQueries"/>) - never one only marked so, which a
+    /// runner may not collect.
+    /// </summary>
+    /// <param name="nodes">Every declaration the link holds, each as its extract says it.</param>
+    /// <param name="edges">The link's edges: its <c>inherits</c> and <c>mixesIn</c> among them.</param>
+    internal static List<string> TestsByType(IEnumerable<ExtractNode> nodes, IEnumerable<CodeEdge> edges)
+    {
+        var all = nodes.ToList();
+        var bases = all.Where(node => node is { TestBase: true, Kind: CodeNodeKinds.Type }).Select(node => node.Id.Whole()).ToList();
+        var found = new List<string>();
+
+        if (bases.Count == 0)
+        {
+            return found;
+        }
+
+        var marked = all.Where(node => node.TestByType).ToList();
+        var types = marked.Where(node => node.Kind == CodeNodeKinds.Type).Select(node => node.Id.Whole()).ToHashSet(StringComparer.Ordinal);
+        var built = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var edge in edges.Where(edge => edge.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.MixesIn))
+        {
+            Add(built, edge.To, edge.From);
+        }
+
+        // Every type built on one tests are built on is reached, so a type between them that no file marks - a base of a test
+        // file's class built on another module's TestCase subclass, declared where no runner looks - passes the walk on.
+        var reached = new HashSet<string>(bases, StringComparer.Ordinal);
+        var tested = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>(bases);
+
+        while (pending.TryPop(out var type))
+        {
+            foreach (var derived in built.GetValueOrDefault(type) ?? [])
+            {
+                if (!reached.Add(derived))
+                {
+                    continue;
+                }
+
+                if (types.Contains(derived))
+                {
+                    tested.Add(derived);
+                    found.Add(derived);
+                }
+
+                pending.Push(derived);
+            }
+        }
+
+        found.AddRange(marked.Where(node => node.Kind == CodeNodeKinds.Member && node.Parent is { } holder && tested.Contains(holder.Whole())).Select(node => node.Id.Whole()));
+        return found;
     }
 
     /// <summary>One declaration of one file, placed.</summary>
@@ -185,7 +252,12 @@ public static class CodeGraphLinker
         /// <summary>The paths of one file name.</summary>
         FileName,
 
-        /// <summary>The open scopes one file declares: what an import of it by its path makes visible.</summary>
+        /// <summary>
+        /// The open scopes one file declares - what an import of it by its path makes visible - and, under its path, what it says of itself
+        /// that a finding made in another file reads: the names it publishes and whether what its own such imports take is among them,
+        /// whether it binds its names within it and whether it writes its type names whole, each a part the link keeps of the file
+        /// (<c>Parts</c>).
+        /// </summary>
         Opens,
 
         /// <summary>What one file imports, and its language.</summary>
@@ -199,22 +271,52 @@ public static class CodeGraphLinker
 
         /// <summary>The parts a Blazor component's file and its code-behind's declare, by the component's path: which parts their files join.</summary>
         Siblings,
+
+        /// <summary>
+        /// The declarations of other files that name one file their template (<see cref="ExtractNode.Templates"/>), by the
+        /// template's path: what a template's code reads by itself is found on.
+        /// </summary>
+        Templates,
+
+        /// <summary>
+        /// The directories a unit of their language's layout is around the files in them (<see cref="FileExtract.FolderUnit"/>), each by
+        /// its path: what an import of a layout's place in one is passed over by.
+        /// </summary>
+        Unit,
+
+        /// <summary>
+        /// The roots of the layout, under no one key's text: every unit's directory, which says whether a unit is outermost, and the
+        /// roots each project file declares (<see cref="FileExtract.LayoutRoots"/>) - what an import under a root is found through
+        /// (<see cref="CodeImportForms.Rooted"/>).
+        /// </summary>
+        LayoutRoots,
+
+        /// <summary>
+        /// The members declared to extend a type of one name (<see cref="ExtractNode.Extends"/>), by the name's last part: what tells a
+        /// function their prototype's members extend - a constructor function - from any other.
+        /// </summary>
+        Extending,
     }
 
-    /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
+    /// <summary>One reference's finding: its edges, whether it named nothing, the sign it gives of what the graph does not see, and every key it read.</summary>
     /// <param name="Edges">The edges it makes.</param>
     /// <param name="External">Whether it named nothing the repository declares, so it makes none and is counted external.</param>
+    /// <param name="Sign">
+    /// What the finding shows the graph does not see where the reference is made (<see cref="CodeGraphLimit.Signs"/>): why it named
+    /// nothing, or why it left candidates, where the linker knows; <see langword="null"/> where it gives none.
+    /// </param>
     /// <param name="Reads">Every key its finding read.</param>
-    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, KeptReads Reads);
+    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, string? Sign, KeptReads Reads);
 
     /// <summary>
     /// What a finding read, kept so that a part many findings read is kept once: the keys read directly, as
     /// <see cref="LinkKeys"/> numbers them, and the reads read through whole - a chain's link's, its own keys and the reads
     /// of the link before it - so a chain of n links keeps each link's keys once, however many of its references read it.
+    /// What one is read through is never one made after it, so reads read through never come round.
     /// </summary>
     /// <param name="keys">The keys read directly.</param>
     /// <param name="through">The reads read through, each whole.</param>
-    internal sealed class KeptReads(int[] keys, KeptReads[] through)
+    internal sealed class KeptReads(int[] keys, IReadOnlyList<KeptReads> through)
     {
         /// <summary>No read at all.</summary>
         public static KeptReads None { get; } = new([], []);
@@ -223,7 +325,27 @@ public static class CodeGraphLinker
         public int[] Keys { get; } = keys;
 
         /// <summary>The reads read through, each whole.</summary>
-        public KeptReads[] Through { get; } = through;
+        public IReadOnlyList<KeptReads> Through { get; } = through;
+    }
+
+    /// <summary>
+    /// What a cycle of the link's makings read, all of it (<see cref="Linking.Cached"/>): one <see cref="KeptReads"/> read through
+    /// every member's made reads, each joined in as the cycle closes, so that the same object is what every member's kept
+    /// answer carries and a finding reading any member after the cycle closed reads the whole cycle. Grown only while the
+    /// cycle closes, read only after: a member's made reads are the placeholder's, none, where it read another member.
+    /// </summary>
+    private sealed class CycleReads(List<KeptReads> through)
+    {
+        /// <summary>The reads of the whole cycle, which every member's kept answer carries.</summary>
+        public KeptReads Joined { get; } = new([], through);
+
+        /// <summary>Joins what a member <paramref name="made"/> its reads into the cycle's, and gives the cycle's.</summary>
+        /// <param name="made">The member's made reads.</param>
+        public KeptReads Joins(KeptReads made)
+        {
+            through.Add(made);
+            return Joined;
+        }
     }
 
     /// <summary>
@@ -407,6 +529,15 @@ public static class CodeGraphLinker
         /// <summary>Each file read in the scope a directory above it names, by its path (<see cref="Folded"/>).</summary>
         private readonly Dictionary<string, FolderRead> _folders = new(StringComparer.Ordinal);
         private readonly HashSet<string> _paths;
+
+        /// <summary>The directories a file of the tree says are a unit of their language's layout (<see cref="FileExtract.FolderUnit"/>): what an import of a layout's place in one is passed over by (<see cref="IsUnit"/>).</summary>
+        private readonly HashSet<string> _units = new(StringComparer.Ordinal);
+
+        /// <summary>The directories project files of the tree declare roots of the layout (<see cref="FileExtract.LayoutRoots"/>), each from the tree's root.</summary>
+        private readonly HashSet<string> _declaredRoots = new(StringComparer.Ordinal);
+
+        /// <summary>The roots of the layout (<see cref="LayoutRoots"/>), made where first asked.</summary>
+        private IReadOnlyList<string>? _layoutRoots;
         private readonly Dictionary<string, CodeGraphFile> _byPath = new(StringComparer.Ordinal);
         private readonly LinkMemory? _previous;
         private readonly LinkKeys _keys;
@@ -421,7 +552,7 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, List<string>> _byFileName = new(StringComparer.Ordinal);
 
         /// <summary>The files each import of each file names, once found, with what finding them read.</summary>
-        private readonly Dictionary<CodeGraphFile, Dictionary<ExtractImport, (IReadOnlyList<string> Value, KeptReads Reads)>> _imported = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<CodeGraphFile, MadeOnce<ExtractImport, (IReadOnlyList<string> Value, KeptReads Reads)>> _imported = new(ReferenceEqualityComparer.Instance);
         private readonly List<Declaration> _declarations = [];
 
         /// <summary>Each file's declarations by id: the one a reference of that file is made from.</summary>
@@ -482,14 +613,24 @@ public static class CodeGraphLinker
         /// <summary>The names of the closed scopes each file's extract declares: found once a file, as every key of one of its names is.</summary>
         private readonly Dictionary<CodeGraphFile, HashSet<QualifiedName>> _closed = new(ReferenceEqualityComparer.Instance);
 
-        /// <summary>The containers a written name was found to be, from one file and scope: a name such as a type no file declares is looked for once.</summary>
-        private readonly Dictionary<(string Path, ScopeKey? Scope, string Written), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _containersFound = [];
+        /// <summary>The chains of names the bases of each type a file declares are written as, by the file and the type's id (<see cref="WrittenBases"/>): read once a file.</summary>
+        private readonly Dictionary<CodeGraphFile, ILookup<QualifiedName, string>> _writtenBases = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Each member whose body is a scope of its own, as what the references made in that body are looked for from (<see cref="LookedFrom"/>): made once a member.</summary>
+        private readonly Dictionary<Declaration, Declaration> _bodies = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// The containers a written name was found to be, as doubted as they are, from one file and scope, by whether what asks is
+        /// reached by a receiver alone (<see cref="ByReceiver"/>) - everything the answer depends on
+        /// (<see cref="NamedContainers(Declaration, string)"/>): a name such as a type no file declares is looked for once.
+        /// </summary>
+        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, string Written), (Finds Value, KeptReads Reads)> _containersFound = Store<(string Path, ScopeKey? Scope, bool ByReceiver, string Written), Finds>(Finds.None);
 
         /// <summary>Every type's and scope's qualified name by the run of a name's characters it ends with, in ordinal order: where an ending is looked for.</summary>
         private readonly Dictionary<string, List<QualifiedName>> _byTrailing = new(StringComparer.Ordinal);
 
         /// <summary>The containers each written name ends, as the last way a qualifier is found: looked for once.</summary>
-        private readonly Dictionary<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = new(StringComparer.Ordinal);
+        private readonly MadeOnce<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = Store<string, IReadOnlyList<Declaration>>([], StringComparer.Ordinal);
 
         /// <summary>Each chain of names written as links, by the chain before its last name and that name: one for each such names, however many write them.</summary>
         private readonly Dictionary<(ChainName? Before, string Name), ChainName> _chainNames = [];
@@ -497,11 +638,17 @@ public static class CodeGraphLinker
         /// <summary>The names the chain each linked reference ends writes, by its file and its place among the file's references.</summary>
         private readonly Dictionary<(CodeGraphFile File, int At), ChainName> _chainOf = [];
 
-        /// <summary>The containers a chain of names was found to be, from one file and scope (<see cref="NamedContainers(Declaration, ChainName)"/>).</summary>
-        private readonly Dictionary<(string Path, ScopeKey? Scope, ChainName Written), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _chainContainersFound = [];
+        /// <summary>The place of the first reference of the chain each linked reference ends, by its file and its place (<see cref="HeadOf"/>).</summary>
+        private readonly Dictionary<(CodeGraphFile File, int At), int> _chainHeadOf = [];
+
+        /// <summary>
+        /// The containers a chain of names was found to be, as doubted as they are, from one file and scope, by whether what asks is
+        /// reached by a receiver alone (<see cref="NamedContainers(Declaration, ChainName)"/>).
+        /// </summary>
+        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, ChainName Written), (Finds Value, KeptReads Reads)> _chainContainersFound = Store<(string Path, ScopeKey? Scope, bool ByReceiver, ChainName Written), Finds>(Finds.None);
 
         /// <summary>The containers each chain of names ends (<see cref="Ending(Declaration, ChainName)"/>), looked for once.</summary>
-        private readonly Dictionary<ChainName, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _chainEndings = new(ReferenceEqualityComparer.Instance);
+        private readonly MadeOnce<ChainName, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _chainEndings = Store<ChainName, IReadOnlyList<Declaration>>([], ReferenceEqualityComparer.Instance);
 
         /// <summary>Every type's and scope's qualified name as the names its dots part it into, made where a chain is first looked for in it.</summary>
         private NameTrie? _qualifiedTrie;
@@ -511,22 +658,42 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// Where each chain of names stands in <see cref="_qualifiedTrie"/> and in <see cref="_dottedTrie"/> - its first name
-        /// walked from their tops - and where the names past its first stand from each scope an alias stands for: each found
-        /// once, from where the chain before it stands.
+        /// walked from their tops: each found once, from where the chain before it stands.
         /// </summary>
-        private readonly Dictionary<(NameTrie From, ChainName Chain, bool PastFirst), NameTrie?> _chainsAt = [];
+        private readonly Dictionary<(NameTrie From, ChainName Chain), NameTrie?> _chainsAt = [];
+
+        /// <summary>What each chain of names stands for past the prefixes of its file's imports, by the file's path (<see cref="AliasedBy"/>).</summary>
+        private Memo<(string Path, ChainName Chain), AliasAnswer> _aliases;
+
+        /// <summary>The imports each file makes by a prefix, by the chain of names the prefix writes (<see cref="PrefixedBy"/>), found once for the file.</summary>
+        private readonly MadeOnce<string, (Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> Value, KeptReads Reads)> _prefixesFound = Store<string, Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>>>(NoPrefixes, StringComparer.Ordinal);
+
+        /// <summary>No import by a prefix: what is known of a file's imports by a prefix while they are being found, and of one of a cycle kept (<see cref="Cached"/>), which nothing adds to.</summary>
+        private static readonly Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> NoPrefixes = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file imported by path makes visible of each name, its exports followed: found once, every later finding reading it again.</summary>
-        private readonly Dictionary<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _visible = [];
+        private readonly MadeOnce<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _visible = Store<(string Path, string Name, bool Suffixed), IReadOnlyList<Declaration>>([]);
+
+        /// <summary>Whether each file publishes each name to an import that takes its published names (<see cref="Publishes"/>): found once.</summary>
+        private readonly MadeOnce<(string Path, string Name), (bool Value, KeptReads Reads)> _publishes = Store<(string Path, string Name), bool>(false);
+
+        /// <summary>The names each file's own list publishes, as a set (<see cref="PublishedOf"/>).</summary>
+        private readonly Dictionary<CodeGraphFile, HashSet<string>> _publishedSets = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file imported makes visible by each name an extension is let by (<see cref="Exposed"/>): found once, every later check reading it again.</summary>
-        private readonly Dictionary<(string Start, string Shown), (Exposure Value, KeptReads Reads)> _exposed = [];
+        private readonly MadeOnce<(string Start, string Shown), (Exposure Value, KeptReads Reads)> _exposed = Store<(string Start, string Shown), Exposure>(Exposure.None);
 
         /// <summary>Every member declared to extend a type, by its name: what a call a type does not hold may be.</summary>
         private readonly Dictionary<string, List<Declaration>> _extensions = new(StringComparer.Ordinal);
 
-        /// <summary>The types each extension extends, by id, as its own file names the type: found once.</summary>
-        private readonly Dictionary<Declaration, (IReadOnlyList<QualifiedName> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
+        /// <summary>Every member declared to extend a type, by the last part of the name it extends: what a constructor function's prototype holds (<see cref="Constructs"/>).</summary>
+        private readonly Dictionary<string, List<Declaration>> _extending = new(StringComparer.Ordinal);
+
+        /// <summary>What each extension extends, as its own file names it (<see cref="Extended"/>): found once.</summary>
+        private readonly MadeOnce<Declaration, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _extended = Store<Declaration, IReadOnlyList<Declaration>>([], ReferenceEqualityComparer.Instance);
+
+        /// <summary>Whether each function is a constructor function another file writes the prototype of (<see cref="Constructs"/>): found once.</summary>
+        private readonly MadeOnce<Declaration, (bool Value, KeptReads Reads)> _constructs = Store<Declaration, bool>(false, ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file's references found, by the file.</summary>
         private readonly Dictionary<CodeGraphFile, FileFound> _found = new(ReferenceEqualityComparer.Instance);
@@ -537,6 +704,9 @@ public static class CodeGraphLinker
         private readonly List<CodeEdge> _edges = [];
         private readonly Dictionary<string, int> _external = new(StringComparer.Ordinal);
 
+        /// <summary>The signs each node's references and each file's imports gave of what the graph does not see, by the node's id (<see cref="CodeGraphLinked.Signs"/>).</summary>
+        private readonly Dictionary<string, SortedSet<string>> _signs = new(StringComparer.Ordinal);
+
         /// <summary>
         /// Each type's bases, by id, that a finding looks through now - none in the first round of the bases - as
         /// <see cref="BaseRanksOf"/> ranks them.
@@ -546,11 +716,18 @@ public static class CodeGraphLinker
         /// <summary>What the finding under way has read; null outside one.</summary>
         private Reading? _reads;
 
+        /// <summary>
+        /// The makings under way of every cache a finding asks - each <see cref="Cached"/> store, the chains' and the aliases' memos,
+        /// the links of chains stepped: one for them all, so a making that asks for its own key through another cache is told as one
+        /// that asks it directly, and every key of a cycle keeps nothing known of it, with all that the cycle read.
+        /// </summary>
+        private readonly Makings _makings = new();
+
         /// <summary>What each chain a link ends comes to, from each declaration that reads through it (<see cref="ChainTo"/>).</summary>
         private Memo<ChainKey, ChainAnswer> _chains;
 
         /// <summary>Each link of a chain stepped, by its declaration, the chain before it and its names (<see cref="NewChains"/>).</summary>
-        private readonly Dictionary<ChainLink, ChainAnswer> _chainSteps = new(ChainLink.Comparer);
+        private readonly MadeOnce<ChainLink, ChainAnswer> _chainSteps = new(_ => ChainAnswer.None, (_, made, cycle) => NothingKnown(made, cycle), ChainLink.Comparer);
 
         /// <summary>How many links of chains were stepped (<see cref="CodeGraphLinked.ChainLinks"/>).</summary>
         private int _chainLinks;
@@ -561,9 +738,23 @@ public static class CodeGraphLinker
         /// <summary>The parts each type's files join to it though their qualified names differ (<see cref="CodeBehinds"/>), by the type's id: each of the other side, by id.</summary>
         private readonly Dictionary<QualifiedName, List<QualifiedName>> _siblings = [];
 
+        /// <summary>
+        /// The declarations that name the file at a path their template (<see cref="ExtractNode.Templates"/>), each resolved
+        /// beside the file that names it: what a template's own names are members of, where its file declares no type.
+        /// </summary>
+        private readonly Dictionary<string, List<Declaration>> _templates = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// The scopes that hold members reached by a receiver alone (<see cref="ExtractNode.MembersByReceiver"/>) - a type's own,
+        /// and the one a member added to a type from outside its body is declared in: where a name written alone passes those
+        /// members over (<see cref="ByReceiver"/>), and their type's bases, and finds the rest the scope holds.
+        /// </summary>
+        private readonly HashSet<ScopeKey> _byReceiver = [];
+
         public Linking(IReadOnlyList<CodeGraphFile> files, LinkMemory? previous, IReadOnlyList<string> keyNaming)
         {
             _chains = NewChains();
+            _aliases = NewAliases();
             // In one order whatever order they came in: a link made again is the whole link of the same files.
             _files = [.. Folded(files, previous).OrderBy(file => file.Path, StringComparer.Ordinal)];
             _previous = previous;
@@ -590,6 +781,7 @@ public static class CodeGraphLinker
                 var owners = _owners[file] = [];
                 var top = _topByFile[file] = new(StringComparer.Ordinal);
                 var closed = _closed[file] = Closed(extract);
+                var bodies = Bodies(extract, closed);
 
                 foreach (var import in extract.Imports.Where(import => import.Global && file.Language is not null))
                 {
@@ -620,11 +812,26 @@ public static class CodeGraphLinker
                     _suffixesByFile[file] = suffixes;
                 }
 
+                // The file that says its directory is a unit of its language's layout: the files in it look a bare name up from above it.
+                if (extract.FolderUnit)
+                {
+                    _units.Add(DirectoryOf(file.Path));
+                }
+
+                // A root a project file declares that climbs out of the tree stands for nothing in it.
+                foreach (var root in extract.LayoutRoots ?? [])
+                {
+                    if (CodeGraphIds.Beside(file.Path, root) is { } directory)
+                    {
+                        _declaredRoots.Add(directory);
+                    }
+                }
+
                 foreach (var node in extract.Nodes)
                 {
                     _mostExports = Math.Max(_mostExports, node.Exports?.Count ?? 0);
-                    var (scopeKey, fileOnly) = Placed(file, node, closed);
-                    var declaration = new Declaration(node, file, scopeKey, fileOnly, node.SeenIn is { } seenIn ? KeyOf(file, seenIn, closed) : null);
+                    var (scopeKey, fileOnly, seenKey, local) = Placed(file, node, closed, bodies);
+                    var declaration = new Declaration(node, file, scopeKey, fileOnly, seenKey);
                     _declarations.Add(declaration);
                     Add(_byId, node.Id, declaration);
                     owners.TryAdd(node.Id, declaration);
@@ -645,18 +852,44 @@ public static class CodeGraphLinker
                         Add(_byScope.TryGetValue(key, out var names) ? names : _byScope[key] = new(StringComparer.Ordinal), node.Name, declaration);
                     }
 
-                    if (declaration.FileOnly)
+                    // The names the repository's step looks up: any file's, and a closed scope's its file's alone - but what a member's
+                    // body declares, which is found from that body alone, through the scopes its code is written in, and by no name the
+                    // repository's step looks up, from its own file either.
+                    if (!local)
                     {
-                        Add(_closedByFile.TryGetValue(file.Path, out var names) ? names : _closedByFile[file.Path] = new(StringComparer.Ordinal), node.Name, declaration);
+                        var named = !declaration.FileOnly ? _byName
+                            : _closedByFile.TryGetValue(file.Path, out var kept) ? kept : _closedByFile[file.Path] = new(StringComparer.Ordinal);
+                        Add(named, node.Name, declaration);
                     }
-                    else
+
+                    // A component's element selectors and a pipe's name after its bar are names the repository finds it by, as
+                    // its own: a tag or a pipe markup writes names one, and no code's name does - nothing code writes holds a dash
+                    // or a bar (ExtractNode.IsSelector).
+                    foreach (var selector in node.Selectors ?? [])
                     {
-                        Add(_byName, node.Name, declaration);
+                        Add(_byName, selector, declaration);
+                    }
+
+                    // A file a declaration names its template: what that file's code reads by itself is its member.
+                    foreach (var template in node.Templates ?? [])
+                    {
+                        if (CodeGraphIds.Beside(file.Path, template) is { } named)
+                        {
+                            Add(_templates, named, declaration);
+                        }
                     }
 
                     if (node.Extends is not null)
                     {
                         Add(_extensions, node.Name, declaration);
+                        Add(_extending, SimpleName(node.Extends), declaration);
+                    }
+
+                    // Members reached by a receiver alone: a type's own scope, or the one a member added from outside its type's
+                    // body is declared in, holds members a name written alone passes over.
+                    if (node.MembersByReceiver && (node.Kind == CodeNodeKinds.Type ? KeyOf(file, node.Qualified, closed) : declaration.ScopeKey) is { } passed)
+                    {
+                        _byReceiver.Add(passed);
                     }
 
                     if (IsContainer(node))
@@ -858,6 +1091,7 @@ public static class CodeGraphLinker
 
             return new CodeGraphLinked(symbols, edges, _external, _resolved.Count)
             {
+                Signs = _signs.ToDictionary(signs => signs.Key, IReadOnlyList<string> (signs) => [.. signs.Value], StringComparer.Ordinal),
                 Memory = new LinkMemory(_keys, _byPath, _found.ToDictionary(found => found.Key.Path, found => found.Value, StringComparer.Ordinal), rounds, _folders),
                 ChainLinks = _chainLinks,
                 ExposedFiles = _exposedFiles,
@@ -1035,10 +1269,28 @@ public static class CodeGraphLinker
                 return;
             }
 
-            if (finding.External)
+            // A reference that asked whether a declaration is there, and found none (<see cref="ExtractReference.Probe"/>), is no
+            // external callee: nothing it depends on is missing.
+            if (finding.External && !reference.Probe)
             {
                 Count(_external, from.Id.Whole());
             }
+
+            if (finding.Sign is { } sign)
+            {
+                Signed(from.Id.Whole(), sign);
+            }
+        }
+
+        /// <summary>Keeps <paramref name="sign"/> among those the node <paramref name="id"/> gave, each once.</summary>
+        private void Signed(string id, string sign)
+        {
+            if (!_signs.TryGetValue(id, out var signs))
+            {
+                _signs[id] = signs = new SortedSet<string>(StringComparer.Ordinal);
+            }
+
+            signs.Add(sign);
         }
 
         /// <summary>What a written name or a chain was found to be while other bases were known may be otherwise now.</summary>
@@ -1047,7 +1299,9 @@ public static class CodeGraphLinker
             _containersFound.Clear();
             _chainContainersFound.Clear();
             _extended.Clear();
+            _constructs.Clear();
             _chains = NewChains();
+            _aliases = NewAliases();
             _chainSteps.Clear();
         }
 
@@ -1068,12 +1322,19 @@ public static class CodeGraphLinker
 
             try
             {
-                var (all, confidence) = Found(from, reference, new ReferenceAt(file, at));
+                // A fixture a type a test's own type is built on gives the test a value of in its place is none: found nowhere, and
+                // counted nowhere (ExtractNode.Parametrizes).
+                if (reference.Qualifier?.Kind == CodeQualifierKinds.Fixture && (from.Node.Test || from.Node.TestByType) && Parametrized(from, reference.Name))
+                {
+                    return new Finding([], External: false, null, _reads.Kept());
+                }
+
+                var (all, confidence, doubt) = Found(LookedFrom(from, reference), reference, new ReferenceAt(file, at));
                 var found = Bodied(all);
 
                 if (found.Count == 0)
                 {
-                    return new Finding([], External: true, _reads.Kept());
+                    return new Finding([], External: true, SignOf(from, reference, file, found, doubt), _reads.Kept());
                 }
 
                 var sure = found.Count == 1 ? confidence : CodeConfidences.Candidates;
@@ -1086,6 +1347,7 @@ public static class CodeGraphLinker
                         reference.Line,
                         sure))],
                     External: false,
+                    sure == CodeConfidences.Candidates ? SignOf(from, reference, file, found, doubt) : null,
                     _reads.Kept());
             }
             finally
@@ -1095,15 +1357,114 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// What <paramref name="reference"/> names, one declaration for each id, and how sure the place it was found makes
-        /// it: none where nothing the repository declares has that name.
+        /// The sign <paramref name="reference"/>, made from <paramref name="from"/>, gives of what the graph does not see there
+        /// (<see cref="CodeGraphLimit.Signs"/>), told by what it found - nothing, or <paramref name="found"/>, left candidates - and the
+        /// way it is written, no language named. Where it found nothing: a fixture no scope of the test declares and no import serving fixtures
+        /// holds (<see cref="CodeGraphLimit.UnprovidedFixture"/>); a name, or its qualifier's head, that imports of the file bind and none
+        /// of them names a file of the tree (<see cref="CodeGraphLimit.OutsideImport"/>); a name written alone that no import lets, in a
+        /// file that binds its names within it (<see cref="CodeGraphLimit.Unbound"/>). Where it left candidates: found through an import
+        /// the linker takes as several places, as the place that found it says (<paramref name="doubt"/>, <see cref="ImportDoubt"/>) -
+        /// whatever it found there, one or several (<see cref="CodeGraphLimit.CandidateImports"/>) - else
+        /// <see cref="CodeGraphLimit.Candidates"/>; never told by the files what it found lies in. None of a use, which is recall and never
+        /// a doubt, of a probe that found nothing, which misses nothing, nor where nothing tells why. Read while the finding reads, so a
+        /// change that would tell otherwise finds the reference again. <paramref name="file"/> is the file whose references hold it, which
+        /// a chain written as links is read in.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Found(Declaration from, ExtractReference reference, ReferenceAt place)
+        private string? SignOf(Declaration from, ExtractReference reference, CodeGraphFile file, IReadOnlyList<Declaration> found, ImportDoubt doubt)
         {
-            bool Accepts(Declaration target) => Takes(from, reference, target, imported: false) && Sees(from, target);
+            if (CodeEdgeKinds.Recall(reference.Kind) || (found.Count == 0 && reference.Probe))
+            {
+                return null;
+            }
+
+            if (found.Count == 0 && reference.Qualifier is { Kind: CodeQualifierKinds.Fixture })
+            {
+                return CodeGraphLimit.UnprovidedFixture;
+            }
+
+            if (found.Count > 0)
+            {
+                return doubt == ImportDoubt.None ? CodeGraphLimit.Candidates : CodeGraphLimit.CandidateImports;
+            }
+
+            var binding = BindingImports(from.File, Head(file, reference));
+
+            return binding.Count > 0 ? binding.All(made => FilesOf(made.Import, made.File).Count == 0) ? CodeGraphLimit.OutsideImport : null
+                : reference.Qualifier is null && BoundWithin(from) ? CodeGraphLimit.Unbound
+                : null;
+        }
+
+        /// <summary>
+        /// The imports <paramref name="file"/> makes, or is given, that bind the name <paramref name="reference"/> is reached by: each whose
+        /// prefix its qualifier's name - or the name itself, written alone - is, or begins with at a name's boundary
+        /// (<see cref="BeginsWith"/>), as an import's prefix is read past the scopes; and, for a name written alone, each with no prefix
+        /// that lets it. None of a scope, which binds no name of its own, nor of a directory, which is the scope import of the files under
+        /// it and names no file - another file's that every file of the language is given among them - nor where the qualifier names no
+        /// head an import could bind - <c>this</c>, a base, a selector, a value by no name.
+        /// </summary>
+        private List<(ExtractImport Import, CodeGraphFile File)> BindingImports(CodeGraphFile file, ExtractReference reference)
+        {
+            var written = reference.Qualifier switch
+            {
+                null => reference.Name,
+                { Kind: CodeQualifierKinds.Prefix or CodeQualifierKinds.Type or CodeQualifierKinds.Named or CodeQualifierKinds.Value, Name: { } name } => name.Whole(),
+                _ => null,
+            };
+
+            return written is null
+                ? []
+                : [.. ImportsOf(file).Where(made => made.Import.Form is not (CodeImportForms.Scope or CodeImportForms.Directory)
+                    && (made.Import.Prefix is { } prefix ? BeginsWith(written, prefix) : reference.Qualifier is null && made.Import.Lets(written)))];
+        }
+
+        /// <summary>
+        /// <paramref name="reference"/>, of <paramref name="file"/>, where its qualifier writes its names itself; where it is a chain
+        /// written as links (<see cref="ExtractQualifier.Link"/>), the reference its first link ends at, whose qualifier writes the
+        /// chain's head - a chain is bound where its head is, as its names written out begin with the head's.
+        /// </summary>
+        private ExtractReference Head(CodeGraphFile file, ExtractReference reference)
+            => reference.Qualifier is { Link: { } link } ? file.Extract!.References[HeadOf(file, link)] : reference;
+
+        /// <summary>Whether <paramref name="written"/>, a name of dots, is <paramref name="prefix"/> or begins with it and a dot: the prefix at a name's boundary.</summary>
+        private static bool BeginsWith(string written, string prefix)
+            => written.StartsWith(prefix, StringComparison.Ordinal) && (written.Length == prefix.Length || written[prefix.Length] == '.');
+
+        /// <summary>
+        /// Where <paramref name="reference"/>, made from <paramref name="member"/>, is looked for from: the member's body, where
+        /// its file declares a closed scope under the qualified name of the member it is (<see cref="ExtractScope"/>) - that
+        /// scope first and its parent after it, as a Python function's body is, which the class around it does not enclose -
+        /// save a reference made around the member (<see cref="ExtractReference.Around"/>), looked for where the member is
+        /// declared; else the member itself, from the scope it is declared in. Its edges are the member's either way.
+        /// </summary>
+        private Declaration LookedFrom(Declaration member, ExtractReference reference)
+        {
+            if (reference.Around || !_closed.TryGetValue(member.File, out var closed) || !IsBody(member.Node, closed))
+            {
+                return member;
+            }
+
+            if (!_bodies.TryGetValue(member, out var body))
+            {
+                _bodies[member] = body = member with { ScopeKey = ClosedKey(member.File.Path, member.Node.Qualified) };
+            }
+
+            return body;
+        }
+
+        /// <summary>
+        /// What <paramref name="reference"/> names, one declaration for each id, how sure the place it was found makes it, and the
+        /// doubt the imports it was found through leave on it: none where nothing the repository declares has that name.
+        /// </summary>
+        private Finds Found(Declaration from, ExtractReference reference, ReferenceAt place)
+        {
+            bool Accepts(Declaration target) => (Takes(from, reference, target, imported: false) || Made(target)) && Sees(from, target);
 
             // What an import of the file that declares it makes visible: a name it binds may be data the file exports.
-            bool Imports(Declaration target) => Takes(from, reference, target, imported: true) && Sees(from, target);
+            bool Imports(Declaration target) => (Takes(from, reference, target, imported: true) || Made(target)) && Sees(from, target);
+
+            // A new of a constructor function another file writes the prototype of makes one, as a new of a type does - save in a file
+            // that keeps its names' kinds apart (FileExtract.KindsApart), where a new names a type alone.
+            bool Made(Declaration target) => from.File.Extract is not { KindsApart: true } && reference.Kind == CodeEdgeKinds.Instantiates && Constructs(target);
 
             // A value of a type the code does not say: through the type of the member it is - nothing the repository
             // declares where that type is not the repository's - else, where no value is so named and an import's prefix
@@ -1114,14 +1475,14 @@ public static class CodeGraphLinker
             {
                 if (value.Name is not null || value.Link is not null)
                 {
-                    if (ValuesOf(from, value, place) is { } values)
+                    if (ValuesOf(from, value, place) is { Values: { } values } chain)
                     {
-                        return Through(from, values, reference.Name, Accepts);
+                        return Doubted(Through(from, values, reference.Name, Accepts), chain.Doubt);
                     }
 
                     if (value.Name is { } written && ImportsOf(from.File).Any(made => string.Equals(made.Import.Prefix, written.Whole(), StringComparison.Ordinal)))
                     {
-                        return (Prefixed(from, written.Whole(), reference.Name, Imports), CodeConfidences.Exact);
+                        return Prefixed(from, written.Whole(), reference.Name, Imports);
                     }
                 }
 
@@ -1143,8 +1504,8 @@ public static class CodeGraphLinker
         /// in declare, nearest first - exact - else what lies beyond them (<see cref="Beyond"/>), what an import makes
         /// visible taken by <paramref name="imported"/>.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Unqualified(Declaration from, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
-            => Scoped(from, name, accepts) is { Count: > 0 } scoped ? (scoped, CodeConfidences.Exact) : Beyond(from, name, accepts, imported);
+        private Finds Unqualified(Declaration from, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
+            => Scoped(from, name, accepts) is { Count: > 0 } scoped ? new Finds(scoped, CodeConfidences.Exact) : Beyond(from, name, accepts, imported);
 
         /// <summary>What the file at <paramref name="path"/> declares that another file imports by the name <paramref name="name"/> besides its own.</summary>
         private IReadOnlyList<Declaration> ExportedNamed(string path, string name)
@@ -1153,12 +1514,30 @@ public static class CodeGraphLinker
             return _byPath.TryGetValue(path, out var file) && _exportedByFile.TryGetValue(file, out var exported) && exported.TryGetValue(name, out var named) ? named : [];
         }
 
-        /// <summary>What the scopes <paramref name="from"/> is written in declare named <paramref name="name"/>, from the inside out, with each type's bases: the first that holds one decides.</summary>
+        /// <summary>
+        /// What the scopes <paramref name="from"/> is written in declare named <paramref name="name"/>, from the inside out, with each
+        /// type's bases: the first that holds one decides - but the members reached by a receiver alone
+        /// (<see cref="ExtractNode.MembersByReceiver"/>, <see cref="ByReceiver"/>), which a name written alone does not look for, nor
+        /// their type's bases. A scope that holds them holds what else is declared in it all the same - a namespace's members, where
+        /// TypeScript merges a class and a namespace of one name into one scope - which the namespace's own code finds; a member
+        /// reached by a receiver alone finds nothing of the scope it is declared in, its type's members and a merged namespace's alike,
+        /// as a method's body is no scope of its class's.
+        /// </summary>
         private IReadOnlyList<Declaration> Scoped(Declaration from, string name, Func<Declaration, bool> accepts)
         {
             foreach (var scope in Chain(from))
             {
-                if (InScope(scope, name, accepts, withBases: true) is { Count: > 0 } found)
+                // Whether a scope holds members a name written alone passes over is read under the scope's key, which a type come,
+                // gone or changed alters.
+                _reads?.Keys.Add(_keys.Of(scope));
+                var passed = _byReceiver.Contains(scope);
+
+                if (passed && scope == from.ScopeKey && ByReceiver(from))
+                {
+                    continue;
+                }
+
+                if (InScope(scope, name, passed ? declaration => !ByReceiver(declaration) && accepts(declaration) : accepts, withBases: !passed) is { Count: > 0 } found)
                 {
                     return found;
                 }
@@ -1168,26 +1547,37 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
+        /// Whether <paramref name="declaration"/> is reached by a receiver alone (<see cref="ExtractNode.MembersByReceiver"/>): a member of a
+        /// type that says so, or a member added to a type from outside its body, which says so itself.
+        /// </summary>
+        private bool ByReceiver(Declaration declaration)
+            => declaration.Node.Kind != CodeNodeKinds.Type && declaration.Node.MembersByReceiver
+                || (declaration.Node.Parent is { } parent && _owners[declaration.File].TryGetValue(parent, out var holder) && holder.Node is { Kind: CodeNodeKinds.Type, MembersByReceiver: true });
+
+        /// <summary>
         /// What <paramref name="name"/> is past the scopes <paramref name="from"/> is written in: a prefix written alone,
         /// what its import stands for; else what its file imports, in order, and what every file of its language imports,
         /// each taken by <paramref name="imported"/>; else the repository's.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Beyond(Declaration from, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
+        private Finds Beyond(Declaration from, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
         {
-            if (Aliased(from.File, name).Where(accepts).ToList() is { Count: > 0 } aliased)
+            if (Aliased(from.File, name, accepts) is { Found.Count: > 0 } aliased)
             {
-                return (aliased, CodeConfidences.Exact);
+                return aliased;
             }
 
             foreach (var (import, owner) in ImportsOf(from.File).Where(made => made.Import.Prefix is null && made.Import.Lets(name)))
             {
                 if (Imported(import, owner, name, imported) is { Count: > 0 } visible)
                 {
-                    return (visible, CodeConfidences.Unique);
+                    return ThroughRun(import, owner, visible, place => place.Prefix is null && place.Lets(name) ? Imported(place, owner, name, imported) : []);
                 }
             }
 
-            return (Repository(from, name, accepts), CodeConfidences.Unique);
+            // A name this file's language binds within the file alone - by its scopes or its imports - is bound by nothing where
+            // neither does (<see cref="FileExtract.BoundWithin"/>): the repository's names are not looked through for it. Nor is a
+            // member reached by a receiver alone (ByReceiver) one a name written alone reaches, wherever it is declared.
+            return new Finds(BoundWithin(from) ? [] : Repository(from, name, declaration => !ByReceiver(declaration) && accepts(declaration)), CodeConfidences.Unique);
         }
 
         /// <summary>
@@ -1204,14 +1594,14 @@ public static class CodeGraphLinker
         /// (<see cref="Suffixed"/>). The imports are walked as one: a file a walk of one import reached is not walked again
         /// for the next, which would find there what it found the first time - nothing.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Styled(Declaration from, string kind, string name, Func<Declaration, bool> accepts)
+        private Finds Styled(Declaration from, string kind, string name, Func<Declaration, bool> accepts)
         {
             var selector = kind == CodeQualifierKinds.Selector;
             var written = selector ? Suffixed(from.File, name, exported: false) : [];
 
             if (Distinct(RepositoryNamed(from.File, name).Where(target => ReferenceEquals(target.File, from.File)).Concat(written).Where(accepts)) is { Count: > 0 } own)
             {
-                return (own, CodeConfidences.Exact);
+                return new Finds(own, CodeConfidences.Exact);
             }
 
             var member = kind is CodeQualifierKinds.StyleVariable or CodeQualifierKinds.StyleMixin or CodeQualifierKinds.StyleFunction;
@@ -1221,11 +1611,11 @@ public static class CodeGraphLinker
             {
                 if (Imported(import, owner, name, accepts, walked, suffixed: selector) is { Count: > 0 } visible)
                 {
-                    return (visible, CodeConfidences.Unique);
+                    return ThroughRun(import, owner, visible, place => !member || (place.Prefix is null && place.Lets(name)) ? Imported(place, owner, name, accepts, walked, suffixed: selector) : []);
                 }
             }
 
-            return (Distinct(Repository(from, name, accepts).Concat(selector ? Suffixed(from.File, name, exported: false, everywhere: true).Where(accepts) : [])), CodeConfidences.Unique);
+            return new Finds(Distinct(Repository(from, name, accepts).Concat(selector ? Suffixed(from.File, name, exported: false, everywhere: true).Where(accepts) : [])), CodeConfidences.Unique);
         }
 
         /// <summary>
@@ -1329,42 +1719,60 @@ public static class CodeGraphLinker
             => Distinct(RepositoryNamed(from.File, name).Where(accepts));
 
         /// <summary>What the qualifier of a reference names <paramref name="name"/> in, and how sure where it was found makes it; what an import makes visible taken by <paramref name="imported"/>.</summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Qualified(Declaration from, ExtractQualifier qualifier, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported, ReferenceAt place)
+        private Finds Qualified(Declaration from, ExtractQualifier qualifier, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported, ReferenceAt place)
         {
             switch (qualifier.Kind)
             {
                 case CodeQualifierKinds.This:
-                    return EnclosingType(from) is { } self ? Typed(from, [self], null, name, accepts, withSelf: true) : ([], CodeConfidences.Exact);
+                    var selves = Selves(from);
+
+                    // A value this holds, by the names the code writes after it - this.cart.lines: the name is looked for in the
+                    // type the last of them is declared with, by its name alone where nothing says that type - a value whose type
+                    // is not said, or a name what this is declares no value of, which the code adds at run time - as a value's is.
+                    if (qualifier.Name is { } written)
+                    {
+                        return OfThis(from, selves, written.Whole()) is { Values: { } reached } onThis ? Several(selves, Doubted(Through(from, reached, name, accepts), onThis.Doubt)) : ByName(from, name, accepts);
+                    }
+
+                    return selves.Count > 0 ? Several(selves, Typed(from, from, new Finds(selves, CodeConfidences.Exact), null, name, accepts, withSelf: true)) : new Finds([], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Base:
-                    return EnclosingType(from) is { } derived ? Typed(from, [derived], null, name, accepts, withSelf: false) : ([], CodeConfidences.Exact);
+                    return EnclosingTypes(from) is { Count: > 0 } derived ? Several(derived, Typed(from, from, new Finds(derived, CodeConfidences.Exact), null, name, accepts, withSelf: false)) : new Finds([], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Prefix:
-                    return (Prefixed(from, qualifier.Name!.Whole(), name, imported), CodeConfidences.Exact);
+                    return Prefixed(from, qualifier.Name!.Whole(), name, imported);
 
                 case CodeQualifierKinds.Own:
                     // The node of its own file its implementation names by id - what a YAML alias or merge repeats, read
                     // once where it is written: that one, exact. Its file changing finds the reference again, so nothing is read.
-                    return (_owners[from.File].TryGetValue(qualifier.Name!, out var own) && accepts(own) ? [own] : [], CodeConfidences.Exact);
+                    return new Finds(_owners[from.File].TryGetValue(qualifier.Name!, out var own) && accepts(own) ? [own] : [], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Module:
                     // What a module of its own file exports by the name - a Vue component's $style.red - as an import of the
                     // module finds it: each node exported so, a suffix written onto others' by the names it writes, of the
                     // module whose own names are kept to the scope the qualifier names alone; exact.
-                    return (Distinct(ExportedNamed(from.File.Path, name).Concat(Suffixed(from.File, name, exported: true))
+                    return new Finds(Distinct(ExportedNamed(from.File.Path, name).Concat(Suffixed(from.File, name, exported: true))
                         .Where(target => target.Node.SeenIn == qualifier.Name && accepts(target))), CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Type:
-                    return Typed(from, Containers(from, qualifier.Name!.Whole()), qualifier.Name!.Whole(), name, accepts, withSelf: true);
+                    // A type a chain written as links names - its names the ones its links hold - is found as its names written out
+                    // are, a step a link from the chain before its last name, never written out.
+                    if (qualifier.Link is { } typeLink)
+                    {
+                        var typeChain = ChainNameOf(place.File, typeLink);
+                        return InChain(from, Containers(from, typeChain), () => Containers(from, Names(typeChain, name)), typeChain.Name, name, accepts);
+                    }
+
+                    return InChain(from, Containers(from, qualifier.Name!.Whole()), () => Containers(from, $"{qualifier.Name!.Whole()}.{name}"), qualifier.Name!.Whole(), name, accepts);
 
                 case CodeQualifierKinds.Scope:
-                    // The scope the code names, else what no scope holds: a PHP function's namespace, then the global one -
+                    // The scope the code names, else what no scope holds: a PHP function's or constant's namespace, then the global one -
                     // its language's, as another language's top is no namespace of its own.
                     bool Own(Declaration target) => target.File.Language == from.File.Language && accepts(target);
 
                     return qualifier.Name is { } scope && InScope(OpenKey(scope), name, Own, withBases: false) is { Count: > 0 } held
-                        ? (held, CodeConfidences.Exact)
-                        : (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.Scope is null && Own(target))), CodeConfidences.Exact);
+                        ? new Finds(held, CodeConfidences.Exact)
+                        : new Finds(Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.Scope is null && Own(target))), CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Selector or CodeQualifierKinds.StyleVariable or CodeQualifierKinds.StyleMixin or CodeQualifierKinds.StyleFunction
                     or CodeQualifierKinds.Keyframes or CodeQualifierKinds.FontFace:
@@ -1375,63 +1783,160 @@ public static class CodeGraphLinker
                 case CodeQualifierKinds.Key:
                     // A key qualifier names a configuration key wherever the repository declares one so - the property a
                     // project reads - of its own kind alone, as Takes keeps it; one with a name, of the language it names alone.
-                    return (Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Name is null || target.File.Language is { } language && qualifier.Name.Is(language)))), CodeConfidences.Exact);
+                    return new Finds(Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Name is null || target.File.Language is { } language && qualifier.Name.Is(language)))), CodeConfidences.Exact);
+
+                case CodeQualifierKinds.Fixture:
+                    // A fixture a test's parameter names: what the test's own scopes declare so - its class's, its module's -
+                    // else what the scope imports made for the test's file that serve fixtures alone hold, the nearest
+                    // directory's first, the first that holds one deciding - a conftest.py's, which pytest gives every test under
+                    // it and no test imports; exact, and nowhere else: one no file of the tree provides is none of its
+                    // declarations. Takes keeps it to fixtures (<see cref="CodeSubKinds.Fixture"/>). What the reference is made
+                    // from is never what it reaches: a fixture that asks for its own name overrides the one a level out - its
+                    // module's, a conftest.py's above - and is given that one, as pytest gives it.
+                    bool Provided(Declaration target) => accepts(target) && target.Id != from.Id;
+
+                    if (Scoped(from, name, Provided) is { Count: > 0 } near)
+                    {
+                        return new Finds(near, CodeConfidences.Exact);
+                    }
+
+                    foreach (var serving in ServingImports(from.File, CodeQualifierKinds.Fixture))
+                    {
+                        if (InScope(OpenKey(serving.Target), name, Provided, withBases: false) is { Count: > 0 } provided)
+                        {
+                            return new Finds(provided, CodeConfidences.Exact);
+                        }
+                    }
+
+                    return new Finds([], CodeConfidences.Exact);
 
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
                     // found as one is named - its names read whole, a chain written as links as the names its links hold,
                     // the chain before its last name carried as that one's and never written out again; a name that is
                     // neither is every type or scope it ends.
-                    if (ValuesOf(from, qualifier, place) is { } values)
+                    if (ValuesOf(from, qualifier, place) is { Values: { } values } valued)
                     {
-                        return Through(from, values, name, accepts);
+                        return Doubted(Through(from, values, name, accepts), valued.Doubt);
                     }
 
                     if (qualifier.Link is { } link)
                     {
                         var chain = ChainNameOf(place.File, link);
-                        return Typed(from, Containers(from, chain), chain.Name, name, accepts, withSelf: true);
+                        return InChain(from, Containers(from, chain), () => Containers(from, Names(chain, name)), chain.Name, name, accepts);
                     }
 
-                    return Typed(from, Containers(from, qualifier.Name!.Whole()), qualifier.Name!.Whole(), name, accepts, withSelf: true);
+                    return InChain(from, Containers(from, qualifier.Name!.Whole()), () => Containers(from, $"{qualifier.Name!.Whole()}.{name}"), qualifier.Name!.Whole(), name, accepts);
             }
         }
 
-        /// <summary>What <paramref name="name"/> is through each import <paramref name="from"/>'s file makes by the prefix <paramref name="prefix"/>, its filter applied.</summary>
-        private IReadOnlyList<Declaration> Prefixed(Declaration from, string prefix, string name, Func<Declaration, bool> accepts)
-            => Distinct(ImportsOf(from.File)
-                .Where(made => string.Equals(made.Import.Prefix, prefix, StringComparison.Ordinal) && made.Import.Lets(name))
-                .SelectMany(made => Imported(made.Import, made.File, name, accepts)));
+        /// <summary>
+        /// What <paramref name="name"/>, written after a chain of names that names <paramref name="containers"/> - <paramref name="written"/>
+        /// where a name does - is: a member of each type, or a declaration of each scope, as <see cref="Typed"/> finds it; and, where the
+        /// chain names none, the type or the scope the chain and the name name together (<paramref name="whole"/>, as
+        /// <see cref="Containers(Declaration, string)"/> finds it, as sure and as doubted as it is found) - one declared under the
+        /// qualified names of a scope no node stands for, which is no container: a constructor function a chain is assigned,
+        /// <c>App.Cart = function () {}</c>, in a scope <c>App</c> no declaration of the repository's is, so <c>new App.Cart()</c>
+        /// makes it.
+        /// </summary>
+        private Finds InChain(Declaration from, Finds containers, Func<Finds> whole, string? written, string name, Func<Declaration, bool> accepts)
+            => containers.Found.Count == 0 && whole() is var together && Distinct(together.Found.Where(accepts)) is { Count: > 0 } named
+                ? together with { Found = named }
+                : Typed(from, from, containers, written, name, accepts, withSelf: true);
+
+        /// <summary>
+        /// <paramref name="found"/>, what a name was found to be on <paramref name="types"/>, the types a receiver may be: as found where
+        /// they are one; where they are several - each a declaration a written name ends, none it names alone - one found is the one
+        /// of its name among them, unique and never exact, and several are candidates, as a finding says of any.
+        /// </summary>
+        private static Finds Several(IReadOnlyList<Declaration> types, Finds found)
+            => Distinct(types).Count > 1 && found.Confidence == CodeConfidences.Exact ? found with { Confidence = CodeConfidences.Unique } : found;
+
+        /// <summary>
+        /// What <paramref name="name"/> is through each import <paramref name="from"/>'s file makes by the prefix <paramref name="prefix"/>:
+        /// what the import makes visible by it, its filter applied - or, where the prefix stands for the one name the import shows
+        /// (<see cref="ExtractImport.Binds"/>), a member of each type or scope the import makes visible by that name - exact, doubted by
+        /// each import it is found through (<see cref="Joined"/>).
+        /// </summary>
+        private Finds Prefixed(Declaration from, string prefix, string name, Func<Declaration, bool> accepts)
+            => Joined(ImportsOf(from.File)
+                .Where(made => string.Equals(made.Import.Prefix, prefix, StringComparison.Ordinal) && (made.Import.Binds || made.Import.Lets(name)))
+                .Select(made => Doubting(made.Import, made.File, made.Import.Binds ? Inside(Stood(made.Import, made.File), name, accepts, withSelf: true) : Imported(made.Import, made.File, name, accepts))));
+
+        /// <summary>
+        /// What a name is through each of <paramref name="each"/> - what an import makes visible by it, and the doubt that import leaves
+        /// on it (<see cref="Doubting"/>) - all of it, exact, as doubted as the most doubtful import that makes some of it visible
+        /// (<see cref="Doubted"/>).
+        /// </summary>
+        private static Finds Joined(IEnumerable<(IReadOnlyList<Declaration> Visible, ImportDoubt Doubt)> each)
+        {
+            var found = new List<Declaration>();
+            var doubt = ImportDoubt.None;
+
+            foreach (var (visible, through) in each.Where(through => through.Visible.Count > 0))
+            {
+                found.AddRange(visible);
+                doubt = Doubtier(doubt, through);
+            }
+
+            return Doubted(new Finds(Distinct(found), CodeConfidences.Exact), doubt);
+        }
+
+        /// <summary><paramref name="visible"/>, what <paramref name="import"/>, made by <paramref name="file"/>, makes visible by a name, with the doubt the import leaves on it where it makes some visible (<see cref="DoubtOf"/>).</summary>
+        private (IReadOnlyList<Declaration> Visible, ImportDoubt Doubt) Doubting(ExtractImport import, CodeGraphFile file, IReadOnlyList<Declaration> visible)
+            => (visible, visible.Count > 0 ? DoubtOf(import, file) : ImportDoubt.None);
+
+        /// <summary>The types and scopes an import whose prefix stands for the one name it shows (<see cref="ExtractImport.Binds"/>) makes visible by that name.</summary>
+        private IReadOnlyList<Declaration> Stood(ExtractImport import, CodeGraphFile file) => Imported(import, file, import.Show![0], IsContainer);
 
         /// <summary>
         /// What <paramref name="name"/> is in <paramref name="containers"/>, which <paramref name="written"/> names where a
-        /// name does: a member of each type - itself where <paramref name="withSelf"/>, then its bases - or a declaration of
-        /// each scope, exact; else an extension of one of those types that <paramref name="from"/> reaches, unique.
+        /// name does - a chain written where <paramref name="writer"/> is declared, the containers found from there:
+        /// <paramref name="from"/> itself, or the value whose type the chain says: a member of each type - itself where
+        /// <paramref name="withSelf"/>, then its bases - or a declaration of each scope, exact; else an extension of one of those
+        /// types that <paramref name="from"/> reaches, unique - each as doubted as the imports the containers were found through
+        /// leave them (<see cref="Doubted"/>): a member of a type an import of two places reached is a candidate as the type is.
+        /// How sure the way a container was named makes it is the container's, never its members'.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Typed(Declaration from, IReadOnlyList<Declaration> containers, string? written, string name, Func<Declaration, bool> accepts, bool withSelf)
+        private Finds Typed(Declaration from, Declaration writer, Finds containers, string? written, string name, Func<Declaration, bool> accepts, bool withSelf)
         {
-            var found = Distinct(containers.SelectMany(container => container.Node.Kind == CodeNodeKinds.Type
+            var found = Inside(containers.Found, name, accepts, withSelf);
+
+            return Doubted(
+                found.Count > 0 ? new Finds(found, CodeConfidences.Exact) : new Finds(Extensions(from, writer, containers.Found, written, name, accepts, withSelf), CodeConfidences.Unique),
+                containers.Doubt);
+        }
+
+        /// <summary>What <paramref name="containers"/> hold named <paramref name="name"/>: a member of each type - itself where <paramref name="withSelf"/>, then its bases - or a declaration of each scope.</summary>
+        private IReadOnlyList<Declaration> Inside(IReadOnlyList<Declaration> containers, string name, Func<Declaration, bool> accepts, bool withSelf)
+            => Distinct(containers.SelectMany(container => container.Node.Kind == CodeNodeKinds.Type
                 ? InTypes([container], name, accepts, withSelf)
                 : InScope(KeyOf(container.File, container.Node.Qualified), name, accepts, withBases: false)));
 
-            return found.Count > 0 ? (found, CodeConfidences.Exact) : (Extensions(from, containers, written, name, accepts, withSelf), CodeConfidences.Unique);
-        }
-
         /// <summary>
-        /// The members named <paramref name="name"/> declared to extend a type, that <paramref name="from"/> reaches, which
-        /// extend one of the types of <paramref name="containers"/> - itself where <paramref name="withSelf"/> - or one of
-        /// their bases, as its own file names the type it extends; and, where none of <paramref name="containers"/> is, one
-        /// extending a type the repository does not declare named as <paramref name="written"/> is.
+        /// The members named <paramref name="name"/> declared to extend a type, that <paramref name="from"/> reaches - or that are
+        /// the type's own wherever it is (<see cref="ExtractNode.Joined"/>), a prototype's - which extend one of the types of
+        /// <paramref name="containers"/> - itself where <paramref name="withSelf"/> - or one of their bases, as its own file names the
+        /// type it extends (<see cref="Extended"/>), a constructor function among them; and one extending a type the repository does
+        /// not declare written alike (<see cref="WrittenAlike"/>) with <paramref name="written"/>, where none of
+        /// <paramref name="containers"/> is, or with a base one of those types or of their bases is written as built on
+        /// (<see cref="WrittenBasesOf"/>) - a type built on <c>Backbone.View</c> reaching what the repository adds to its prototype.
+        /// The chain is read where <paramref name="writer"/> is declared, which writes it - <paramref name="from"/>, or the value whose
+        /// type it says - and the extensions are those <paramref name="from"/> reaches.
         /// </summary>
-        private IReadOnlyList<Declaration> Extensions(Declaration from, IReadOnlyList<Declaration> containers, string? written, string name, Func<Declaration, bool> accepts, bool withSelf)
+        private IReadOnlyList<Declaration> Extensions(Declaration from, Declaration writer, IReadOnlyList<Declaration> containers, string? written, string name, Func<Declaration, bool> accepts, bool withSelf)
         {
             if (ExtensionsNamed(name) is not { Count: > 0 } named)
             {
                 return [];
             }
 
+            // The types the receiver may be: those the chain names; where it names none, each constructor function a call of the chain
+            // finds, read where the chain is written, as an extension finds the one it extends - a value a new of Cart, whose prototype
+            // another file writes, makes, declared in a file of its own that binds Cart, whatever the caller's binds.
             var receivers = new HashSet<QualifiedName>();
-            var pending = new Queue<QualifiedName>(containers.Where(container => container.Node.Kind == CodeNodeKinds.Type)
+            var typed = containers.Count == 0 && written is not null ? FunctionsCalled(writer, written) : containers;
+            var pending = new Queue<QualifiedName>(typed.Where(container => container.Node.Kind == CodeNodeKinds.Type || IsFunction(container))
                 .SelectMany(type => withSelf ? [type.Id] : BasesOf(type.Id)));
 
             while (pending.TryDequeue(out var id))
@@ -1445,19 +1950,141 @@ public static class CodeGraphLinker
                 }
             }
 
+            // The chains the receivers' bases are written as, by their last name - which a chain written alike ends with too - found
+            // where an extension of a type the repository does not declare first asks.
+            ILookup<string, string>? bases = null;
+
+            bool BuiltOn(string extends)
+                => (bases ??= receivers.SelectMany(WrittenBasesOf).Distinct(StringComparer.Ordinal).ToLookup(SimpleName, StringComparer.Ordinal))[SimpleName(extends)]
+                    .Any(basis => WrittenAlike(extends, basis));
+
             return Distinct(named.Where(extension => accepts(extension)
                 && (Extended(extension) is { Count: > 0 } extended
-                    ? extended.Any(receivers.Contains)
-                    : containers.Count == 0 && written is not null && SimpleName(extension.Node.Extends!) == SimpleName(written))
-                && Reaches(from, extension)));
+                    ? extended.Any(type => receivers.Contains(type.Id))
+                    : (containers.Count == 0 && written is not null && WrittenAlike(extension.Node.Extends!, written)) || BuiltOn(extension.Node.Extends!))
+                && (extension.Node.Joined || Reaches(from, extension))));
         }
 
-        /// <summary>The types <paramref name="extension"/> extends, by id, as its own file names the type: found once.</summary>
-        private IReadOnlyList<QualifiedName> Extended(Declaration extension)
-            => Cached(_extended, extension, () => [.. Containers(extension, extension.Node.Extends!)
-                .Where(container => container.Node.Kind == CodeNodeKinds.Type)
-                .Select(type => type.Id)
-                .Distinct()]);
+        /// <summary>
+        /// The chains of names the bases of the type <paramref name="id"/> are written as, by every file that declares a part of it -
+        /// each base reference's qualifier's names and its own (<see cref="FileExtract.Written"/>): what a type built on one the
+        /// repository does not declare names it by. Read with the type's parts, whose key holds them (<see cref="NodePart"/>).
+        /// </summary>
+        private IEnumerable<string> WrittenBasesOf(QualifiedName id) => PartsOf(id).SelectMany(part => WrittenBases(part.File)[part.Id]);
+
+        /// <summary>The chains of names the bases of each type <paramref name="file"/> declares are written as, by the type's id: found once a file.</summary>
+        private ILookup<QualifiedName, string> WrittenBases(CodeGraphFile file)
+        {
+            if (!_writtenBases.TryGetValue(file, out var bases))
+            {
+                var extract = file.Extract!;
+                _writtenBases[file] = bases = extract.References.Where(reference => IsBase(reference.Kind))
+                    .ToLookup(reference => reference.From, reference => extract.Written(reference.Qualifier) is { } before ? $"{before}.{reference.Name}" : reference.Name);
+            }
+
+            return bases;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="one"/> and <paramref name="other"/>, two chains of names that name a type the repository does not
+        /// declare as two files write it, name it alike: the one is the other, or ends it at a name's boundary - <c>String</c> and
+        /// <c>System.String</c>, <c>View</c> and <c>Backbone.View</c> - never two whose names before a shared last one differ, as two
+        /// modules' defaults do (<c>Pkg.default</c>, <c>Other.default</c>).
+        /// </summary>
+        private static bool WrittenAlike(string one, string other)
+            => string.Equals(one, other, StringComparison.Ordinal) || EndsWithName(one, other) || EndsWithName(other, one);
+
+        /// <summary>
+        /// What <paramref name="extension"/>, a member declared to extend a type (<see cref="ExtractNode.Extends"/>), extends, as
+        /// its own file names it: each type of that name; else, where none is, each function a call of that chain finds from the
+        /// extension (<see cref="FunctionsCalled"/>) - a constructor function another file declares, whose prototype the extension's
+        /// file writes. Found once.
+        /// </summary>
+        private IReadOnlyList<Declaration> Extended(Declaration extension)
+            => Cached(_extended, extension, () =>
+            {
+                var extends = extension.Node.Extends!;
+
+                return Distinct(Containers(extension, extends).Found.Where(container => container.Node.Kind == CodeNodeKinds.Type)) is { Count: > 0 } types
+                    ? types
+                    : FunctionsCalled(extension, extends);
+            });
+
+        /// <summary>
+        /// The functions a call of the chain <paramref name="chain"/> finds from <paramref name="from"/>, that it sees, by the ways a
+        /// call's reference written with it finds what its names hold - a name alone as one written alone is (its scopes, its file's
+        /// imports, the repository's), and a chain's last name as what the names before it hold by it statically: through the import its
+        /// prefix is (<see cref="Prefixed"/>, as a constructor a <c>require</c> or a default import binds is, its module's
+        /// <c>default</c>), else in the types and scopes those names name (<see cref="Inside"/>) - a declaration no type holds, and a
+        /// type's member its own code says is the type's own (<see cref="OfAnInstance"/>) - never an instance's member, a member a
+        /// prototype is given among them, whether the type's own file gives it or another (<see cref="Extensions"/>):
+        /// <c>Lib.Widget</c> is what <c>Lib</c> holds, never <c>Lib.prototype.Widget</c>, wherever that is written. The one reading of
+        /// a chain that names a constructor function, what a prototype's members extend (<see cref="Extended"/>) and what a value of the
+        /// type the chain writes is (<see cref="Extensions"/>) alike; and since it reads no extension, what one extension extends is
+        /// never found from what another extends, so no finding of what an extension extends asks for itself, through however many
+        /// others.
+        /// </summary>
+        private IReadOnlyList<Declaration> FunctionsCalled(Declaration from, string chain)
+        {
+            bool Function(Declaration function) => IsFunction(function) && Sees(from, function);
+
+            if (chain.LastIndexOf('.') is not (var dot and > 0))
+            {
+                return Distinct(Unqualified(from, chain, Function, Function).Found);
+            }
+
+            var (before, last) = (chain[..dot], chain[(dot + 1)..]);
+
+            // What a chain reaches by the names before its last is what they hold statically, never an instance's member.
+            bool Held(Declaration function) => Function(function) && !OfAnInstance(function);
+
+            return Prefixed(from, before, last, Held) is { Found.Count: > 0 } through
+                ? through.Found
+                : Inside(Containers(from, before).Found, last, Held, withSelf: true);
+        }
+
+        /// <summary>
+        /// Whether <paramref name="member"/> is an instance's: a type of its file holds it, and its own code does not say it is the
+        /// type's own (<see cref="StaticModifier"/>) - a method, a member a prototype is given in the type's own file.
+        /// </summary>
+        private bool OfAnInstance(Declaration member)
+            => !member.Node.Modifiers.Contains(StaticModifier, StringComparer.Ordinal)
+                && member.Node.Parent is { } parent && _owners[member.File].TryGetValue(parent, out var holder) && holder.Node.Kind == CodeNodeKinds.Type;
+
+        /// <summary>
+        /// The modifier a member's own code says it is its type's own and no instance's by, as the readers of the languages that
+        /// write it name it (<see cref="ExtractNode.Modifiers"/>): JavaScript's and TypeScript's - a class's <c>static</c> members,
+        /// and Backbone's second object - Dart's, PHP's, C#'s, and C's and C++'s, whose
+        /// <c>static</c> a function or variable outside any type carries too, no type's member to be its own. Python's reader writes
+        /// none - its <c>@staticmethod</c> is read as a call that takes no receiver - and a chain never reaches a Python member
+        /// through it: a chain is read so (<see cref="FunctionsCalled"/>) for what an extension extends, and only C#, Dart and
+        /// JavaScript declare extensions, or for the receivers a value's chain gives an extension of those languages, which no
+        /// Python member is the type of.
+        /// </summary>
+        private const string StaticModifier = "static";
+
+        /// <summary>
+        /// Whether <paramref name="function"/> is a constructor function another file writes the prototype of: a function some member
+        /// declared to extend a type extends (<see cref="Extended"/>) - the type it is, though its own file declares no type, so its
+        /// body's <c>this</c> is read on it (<see cref="EnclosingTypes"/>) and a <c>new</c> of it makes one. The members are looked for
+        /// by each name the function is reached by - its own, and each it is exported by, as a file that imports it writes the
+        /// chain it extends (<c>Cart.default</c>). Found once.
+        /// </summary>
+        private bool Constructs(Declaration function)
+            => IsFunction(function) && Cached(_constructs, function, () =>
+            {
+                foreach (var name in ((string[])[function.Node.Name, .. function.Node.Exports ?? []]).Distinct(StringComparer.Ordinal))
+                {
+                    Touch(Read.Extending, name);
+
+                    if (_extending.TryGetValue(name, out var extending) && extending.Any(extension => Extended(extension).Any(extended => extended.Id == function.Id)))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
 
         /// <summary>
         /// Whether <paramref name="from"/> reaches <paramref name="declaration"/>, an extension: the scope it is declared in,
@@ -1555,47 +2182,53 @@ public static class CodeGraphLinker
             });
 
         /// <summary>What a file imported makes visible by a name (<see cref="Exposed"/>): the files it reaches, and the open scopes they declare.</summary>
-        private sealed record Exposure(HashSet<string> Files, HashSet<ScopeKey> Opens);
+        private sealed record Exposure(HashSet<string> Files, HashSet<ScopeKey> Opens)
+        {
+            /// <summary>Nothing made visible: what is known of an exposure while it is being found, and of one of a cycle kept (<see cref="Cached"/>), which nothing adds to.</summary>
+            public static Exposure None { get; } = new(new HashSet<string>(StringComparer.Ordinal), []);
+        }
 
         /// <summary>
         /// A call of <paramref name="name"/> on the value each of <paramref name="values"/> is: through the type each is
         /// declared with; by its name alone where one does not say its type.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Through(Declaration from, IReadOnlyList<Declaration> values, string name, Func<Declaration, bool> accepts)
+        private Finds Through(Declaration from, IReadOnlyList<Declaration> values, string name, Func<Declaration, bool> accepts)
             => values.Any(value => value.Node.ValueType is null)
                 ? ByName(from, name, accepts)
                 : Of(from, values, name, accepts);
 
         /// <summary>A member of a value whose type nothing says, by its name in the repository alone: never a type, which no call on a value makes.</summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) ByName(Declaration from, string name, Func<Declaration, bool> accepts)
-            => (Repository(from, name, target => accepts(target) && target.Node.Kind != CodeNodeKinds.Type), CodeConfidences.Unique);
+        private Finds ByName(Declaration from, string name, Func<Declaration, bool> accepts)
+            => new(Repository(from, name, target => accepts(target) && target.Node.Kind != CodeNodeKinds.Type), CodeConfidences.Unique);
 
-        /// <summary>What <paramref name="name"/> is in the type each of <paramref name="values"/> is declared with, as that member's own file names it, as sure as the least sure.</summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Of(Declaration from, IReadOnlyList<Declaration> values, string name, Func<Declaration, bool> accepts)
+        /// <summary>
+        /// What <paramref name="name"/> is in the type each of <paramref name="values"/> is declared with, as that member's own file names it -
+        /// the types its chain names, and where it names none the constructor functions a call of it finds, read alike from the value
+        /// (<see cref="Typed"/>) - as sure as the least sure and as doubted as the most doubted of those that find it.
+        /// </summary>
+        private Finds Of(Declaration from, IReadOnlyList<Declaration> values, string name, Func<Declaration, bool> accepts)
         {
-            var each = values.Select(value => Typed(from, Containers(value, value.Node.ValueType!), value.Node.ValueType!, name, accepts, withSelf: true)).ToList();
+            var each = values.Select(value => Typed(from, value, Containers(value, value.Node.ValueType!), value.Node.ValueType!, name, accepts, withSelf: true)).ToList();
+            var finding = each.Where(typed => typed.Found.Count > 0).ToList();
 
-            return (Distinct(each.SelectMany(typed => typed.Found)), each.Where(typed => typed.Found.Count > 0).Select(typed => typed.Confidence).Aggregate(CodeConfidences.Exact, CodeConfidences.Weaker));
+            return new Finds(
+                Distinct(each.SelectMany(typed => typed.Found)),
+                finding.Select(typed => typed.Confidence).Aggregate(CodeConfidences.Exact, CodeConfidences.Weaker),
+                finding.Select(typed => typed.Doubt).Aggregate(ImportDoubt.None, Doubtier));
         }
 
         /// <summary>
-        /// The values <paramref name="written"/>, a chain of names, comes to from where <paramref name="from"/> stands: its
-        /// first name a value the scopes it is written in hold - nearest first, with each type's bases, and none past one
-        /// that declares a type or a scope of that name - or a type's, whose value its second name is; each next one a value
-        /// of the type the one before is declared with; or the values of the first link whose type is not said, which a
-        /// call is looked for through by its name alone. <see langword="null"/> where its first name is no value; none where
-        /// a link's type is not the repository's, or holds no value of the next name.
+        /// What <paramref name="qualifier"/>, the qualifier of the reference at <paramref name="place"/>, comes to from where
+        /// <paramref name="from"/> stands (<see cref="Chained.Values"/>): a chain written as links read link by link, each link's chain
+        /// read once whatever reads it - so a chain of n names costs n steps, the use of each of its names and the call on it reading the
+        /// links before them once - and one that writes its names, by them (<see cref="Fold"/>): its first name a value the scopes it is
+        /// written in hold - nearest first, with each type's bases, and none past one that declares a type or a scope of that name - or a
+        /// type's, whose value its second name is; each next one a value of the type the one before is declared with; or the values of the
+        /// first link whose type is not said, which a call is looked for through by its name alone. No values where its first name is no
+        /// value; none where a link's type is not the repository's, or holds no value of the next name.
         /// </summary>
-        private IReadOnlyList<Declaration>? Values(Declaration from, string written) => Fold(from, written).Values;
-
-        /// <summary>
-        /// The values <paramref name="qualifier"/>, the qualifier of the reference at <paramref name="place"/>, comes to from
-        /// where <paramref name="from"/> stands, as <see cref="Values"/> says of its names: a chain written as links read
-        /// link by link, each link's chain read once whatever reads it - so a chain of n names costs n steps, the use of each
-        /// of its names and the call on it reading the links before them once - and one that writes its names, by them.
-        /// </summary>
-        private IReadOnlyList<Declaration>? ValuesOf(Declaration from, ExtractQualifier qualifier, ReferenceAt place)
-            => qualifier.Link is { } link ? ChainTo(from, place with { At = link }).Values : qualifier.Name is { } written ? Values(from, written.Whole()) : null;
+        private Chained ValuesOf(Declaration from, ExtractQualifier qualifier, ReferenceAt place)
+            => qualifier.Link is { } link ? ChainTo(from, place with { At = link }) : qualifier.Name is { } written ? Fold(from, written.Whole()) : Chained.None;
 
         /// <summary>
         /// What the chain the reference at <paramref name="place"/> ends - its qualifier's names, then its own - comes to from
@@ -1620,40 +2253,42 @@ public static class CodeGraphLinker
             {
                 var reference = key.Place.File.Extract!.References[key.Place.At];
                 var prefix = before.Count > 0 ? before[0] : null;
-                var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name?.Whole() : null, prefix is null && reference.Qualifier?.Kind == CodeQualifierKinds.Type, reference.Name);
+                var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name?.Whole() : null, prefix is null && reference.Qualifier?.Kind is CodeQualifierKinds.Type or CodeQualifierKinds.This ? reference.Qualifier.Kind : null, reference.Name);
 
-                if (_chainSteps.TryGetValue(link, out var stepped))
+                return _chainSteps.Of(_makings, link, () =>
                 {
-                    return stepped;
-                }
+                    var outer = _reads;
+                    var reads = _reads = new Reading();
 
-                var outer = _reads;
-                var reads = _reads = new Reading();
-
-                try
-                {
-                    // A first link's qualifier of a type - a variable's declared type, which no lookup of the variable finds -
-                    // begins the chain at that type's value; any other at what its names come to.
-                    var head = link.Head is not { } written ? Chained.None
-                        : link.TypeHead ? new Chained(ChainedKind.Types, Distinct(Containers(key.From, written).Where(container => container.Node.Kind == CodeNodeKinds.Type)), null)
-                        : Fold(key.From, written);
-                    var state = Step(key.From, prefix?.State ?? head, reference.Name);
-                    _chainLinks++;
-
-                    if (prefix is not null)
+                    try
                     {
-                        reads.Through.Add(prefix.Reads);
-                    }
+                        // A first link's qualifier of a type - a variable's declared type, which no lookup of the variable finds -
+                        // begins the chain at that type's value; one of this at what this is, its names read on it; any other at
+                        // what its names come to.
+                        var head = link.HeadKind == CodeQualifierKinds.This ? OfThis(key.From, Selves(key.From), link.Head)
+                            : link.Head is not { } written ? Chained.None
+                            : link.HeadKind == CodeQualifierKinds.Type ? Typing(Containers(key.From, written))
+                            : Fold(key.From, written);
+                        var state = Step(key.From, prefix?.State ?? head, reference.Name);
+                        _chainLinks++;
 
-                    return _chainSteps[link] = new ChainAnswer(state, reads.Kept());
-                }
-                finally
-                {
-                    _reads = outer;
-                }
+                        if (prefix is not null)
+                        {
+                            reads.Through.Add(prefix.Reads);
+                        }
+
+                        return new ChainAnswer(state, reads.Kept());
+                    }
+                    finally
+                    {
+                        _reads = outer;
+                    }
+                });
             },
-            _ => new ChainAnswer(Chained.None, KeptReads.None),
-            ChainKey.Comparer);
+            _ => ChainAnswer.None,
+            ChainKey.Comparer,
+            _makings,
+            (_, made, cycle) => NothingKnown(made, cycle));
 
         /// <summary>What the chain of names <paramref name="written"/> comes to from where <paramref name="from"/> stands, a name at a time.</summary>
         private Chained Fold(Declaration from, string written)
@@ -1688,23 +2323,20 @@ public static class CodeGraphLinker
             switch (before.Kind)
             {
                 case ChainedKind.Head:
-                    var types = Distinct(NamedContainers(from, before.Head!).Where(container => container.Node.Kind == CodeNodeKinds.Type));
-                    var held = types.Count > 0 ? InTypes(types, name, IsValue, withSelf: true) : [];
-
-                    return held.Count > 0 ? new Chained(ChainedKind.Values, held, null) : Chained.None;
+                    return Step(from, Typing(WrittenWhole(from) ? Containers(from, before.Head!) : NamedContainers(from, before.Head!)), name) is { Kind: ChainedKind.Values } held ? held : Chained.None;
 
                 case ChainedKind.Types:
                     var typed = before.Found.Count > 0 ? InTypes(before.Found, name, IsValue, withSelf: true) : [];
 
-                    return typed.Count > 0 ? new Chained(ChainedKind.Values, typed, null) : new Chained(ChainedKind.Empty, [], null);
+                    return typed.Count > 0 ? new Chained(ChainedKind.Values, typed, null, before.Doubt) : new Chained(ChainedKind.Empty, [], null);
 
                 case ChainedKind.Values when before.Found.Any(value => value.Node.ValueType is null):
                     return before with { Kind = ChainedKind.Untyped };
 
                 case ChainedKind.Values:
-                    var next = Of(from, before.Found, name, IsValue).Found;
+                    var next = Of(from, before.Found, name, IsValue);
 
-                    return next.Count > 0 ? new Chained(ChainedKind.Values, next, null) : new Chained(ChainedKind.Empty, [], null);
+                    return next.Found.Count > 0 ? new Chained(ChainedKind.Values, next.Found, null, Doubtier(before.Doubt, next.Doubt)) : new Chained(ChainedKind.Empty, [], null);
 
                 default:
                     return before;
@@ -1712,34 +2344,71 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// The types and scopes <paramref name="written"/> names from where <paramref name="from"/> stands: those
-        /// <see cref="NamedContainers(Declaration, string)"/> finds, else every one whose qualified name ends with it.
+        /// What the file of <paramref name="from"/> says of itself (<see cref="CodeGraphFile.Extract"/>), read under the file's own key -
+        /// <see cref="Read.Opens"/> by its path, which holds what a file says of itself (<c>Parts</c>): whether it binds its names
+        /// within it (<see cref="BoundWithin"/>) and whether it writes its type names whole (<see cref="WrittenWhole"/>) are read of another
+        /// file through the value it declares, so a finding that read either is found again when it changes. The one place that key is read;
+        /// a file's own findings read it of their own file, and are found again when it changes whatever they read.
         /// </summary>
-        private IReadOnlyList<Declaration> Containers(Declaration from, string written)
-            => NamedContainers(from, written) is { Count: > 0 } named ? named : Ending(from, written);
+        private FileExtract? Said(Declaration from)
+        {
+            Touch(Read.Opens, from.File.Path);
+            return from.File.Extract;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="from"/>'s file writes its type and scope names whole (<see cref="FileExtract.WrittenWhole"/>): a name it
+        /// writes is the type or scope of that whole qualified name alone. The one place that rule is read.
+        /// </summary>
+        private bool WrittenWhole(Declaration from) => Said(from) is { WrittenWhole: true };
+
+        /// <summary>
+        /// The types and scopes <paramref name="written"/> names from where <paramref name="from"/> stands: where <paramref name="from"/>'s
+        /// file writes its names whole (<see cref="WrittenWhole"/>), those whose whole qualified name it is, alone and <c>exact</c> - never
+        /// one looked for from where the code stands; else those <see cref="NamedContainers(Declaration, string)"/> finds, else every one
+        /// whose qualified name ends with it - but where <paramref name="from"/>'s file binds its names within it (<see cref="BoundWithin"/>),
+        /// where a name is no ending's.
+        /// </summary>
+        private Finds Containers(Declaration from, string written)
+            => WrittenWhole(from) ? new Finds(Distinct(ContainersOf(written).Where(container => IsContainer(container) && Sees(from, container))), CodeConfidences.Exact)
+                : NamedContainers(from, written) is { Found.Count: > 0 } named ? named : new Finds(BoundWithin(from) ? [] : Ending(from, written), CodeConfidences.Unique);
+
+        /// <summary>The types among <paramref name="containers"/>, a chain's first types (<see cref="ChainedKind.Types"/>), as doubted as they are.</summary>
+        private static Chained Typing(Finds containers)
+            => new(ChainedKind.Types, Distinct(containers.Found.Where(container => container.Node.Kind == CodeNodeKinds.Type)), null, containers.Doubt);
 
         /// <summary>
         /// The types and scopes <paramref name="written"/> names from where <paramref name="from"/> stands, nearest first:
-        /// one the scopes it is written in declare; else the one whose qualified name it is; else what it is past those
-        /// scopes - an alias it is or begins with, an import's, the repository's.
+        /// one the scopes it is written in declare; else the one whose qualified name it is, where <paramref name="from"/>'s file
+        /// does not bind its names within it (<see cref="BoundWithin"/>); else what it is past those scopes - an alias it is or
+        /// begins with, an import's, the repository's - as doubted as the imports it is found through leave it (<see cref="Beyond"/>).
         /// </summary>
-        private IReadOnlyList<Declaration> NamedContainers(Declaration from, string written)
+        private Finds NamedContainers(Declaration from, string written)
         {
             bool Seen(Declaration container) => IsContainer(container) && Sees(from, container);
 
-            // What a name is from one place it is the same from every declaration there: found once.
-            return Cached(_containersFound, (from.File.Path, from.ScopeKey, written), () =>
+            // What a name is from one place it is the same from every declaration there that is alike reached by a receiver alone or
+            // not - which the scopes looked in (Scoped) and what is seen (Sees) answer by: found once for each.
+            return Cached(_containersFound, (from.File.Path, from.ScopeKey, ByReceiver(from), written), () =>
             {
                 if (Scoped(from, written, Seen) is { Count: > 0 } scoped)
                 {
-                    return scoped;
+                    return new Finds(scoped, CodeConfidences.Exact);
                 }
 
-                return Distinct(ContainersOf(written).Where(Seen)) is { Count: > 0 } named
-                    ? named
-                    : Beyond(from, written, Seen, Seen).Found;
+                return !BoundWithin(from) && Distinct(ContainersOf(written).Where(Seen)) is { Count: > 0 } named
+                    ? new Finds(named, CodeConfidences.Exact)
+                    : Beyond(from, written, Seen, Seen);
             });
         }
+
+        /// <summary>
+        /// Whether <paramref name="from"/>'s file binds its names within it (<see cref="FileExtract.BoundWithin"/>): a name neither its
+        /// scopes nor its imports bind is bound by nothing - neither a declaration of the repository's by its name, nor the type or
+        /// scope whose whole qualified name a qualifier writes or whose name ends with it. The one place that rule is read, of the file
+        /// under its own key (<see cref="Said"/>).
+        /// </summary>
+        private bool BoundWithin(Declaration from) => Said(from) is { BoundWithin: true };
 
         /// <summary>Every type and scope <paramref name="from"/>'s file sees whose qualified name ends with <paramref name="written"/> at a name's boundary: found once for each.</summary>
         private IReadOnlyList<Declaration> Ending(Declaration from, string written)
@@ -1753,29 +2422,32 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The types and scopes the chain <paramref name="written"/> names from where <paramref name="from"/> stands, as
-        /// <see cref="Containers(Declaration, string)"/> finds those its names written out name: those
+        /// <see cref="Containers(Declaration, string)"/> finds those its names written out name: where <paramref name="from"/>'s file
+        /// writes its names whole (<see cref="WrittenWhole"/>), those of the whole name its names spell; else those
         /// <see cref="NamedContainers(Declaration, ChainName)"/> finds, else every one whose qualified name ends with it.
         /// </summary>
-        private IReadOnlyList<Declaration> Containers(Declaration from, ChainName written)
-            => NamedContainers(from, written) is { Count: > 0 } named ? named : Ending(from, written);
+        private Finds Containers(Declaration from, ChainName written)
+            => WrittenWhole(from) ? Containers(from, written.Text())
+                : NamedContainers(from, written) is { Found.Count: > 0 } named ? named : new Finds(BoundWithin(from) ? [] : Ending(from, written), CodeConfidences.Unique);
 
         /// <summary>
         /// What <see cref="NamedContainers(Declaration, string)"/> finds of the names the chain <paramref name="written"/>
         /// writes, each step from what the chain before its last name found, never from its names written out: where some
         /// declaration is named as the chain writes - a name of dots, which only such a name reaches in the scopes, the
         /// imports and the repository - by its names written out, as that one finds them; else the one whose qualified name
-        /// it is, else what an alias it begins with stands for, its names past the alias in that scope. Found once from one
-        /// file and scope.
+        /// it is, else what an alias it begins with stands for, its names past the alias in that scope, as doubted as the imports it
+        /// is found through leave it (<see cref="AliasedBy"/>). Found once from one file and scope for what is reached by a receiver
+        /// alone and once for what is not, as the scopes looked in answer.
         /// </summary>
-        private IReadOnlyList<Declaration> NamedContainers(Declaration from, ChainName written)
+        private Finds NamedContainers(Declaration from, ChainName written)
         {
             bool Seen(Declaration container) => IsContainer(container) && Sees(from, container);
 
-            return Cached(_chainContainersFound, (from.File.Path, from.ScopeKey, written), () =>
+            return Cached(_chainContainersFound, (from.File.Path, from.ScopeKey, ByReceiver(from), written), () =>
             {
                 _dottedTrie ??= DottedTrie();
 
-                if (At(_dottedTrie, written, pastFirst: false) is { Named: true })
+                if (At(_dottedTrie, written) is { Named: true })
                 {
                     return NamedContainers(from, written.Text());
                 }
@@ -1785,21 +2457,144 @@ public static class CodeGraphLinker
 
                 _qualifiedTrie ??= QualifiedTrie();
 
-                if (Distinct(Held(At(_qualifiedTrie, written, pastFirst: false), written).Where(Seen)) is { Count: > 0 } named)
+                if (!BoundWithin(from) && Distinct(Held(At(_qualifiedTrie, written), written).Where(Seen)) is { Count: > 0 } named)
                 {
-                    return named;
+                    return new Finds(named, CodeConfidences.Exact);
                 }
 
-                var first = written.First;
-                var last = written.Count == 2 ? written.Name : null;
-
-                return Distinct(ImportsOf(from.File)
-                    .Where(made => string.Equals(made.Import.Prefix, first.Name, StringComparison.Ordinal))
-                    .SelectMany(made => made.Import.Form == CodeImportForms.Scope ? Held(Aliased(made.Import.Target, written), written)
-                        : last is not null && made.Import.Lets(last) ? Imported(made.Import, made.File, last, IsContainer)
-                        : [])
-                    .Where(Seen));
+                return AliasedBy(from.File, written, Seen);
             });
+        }
+
+        /// <summary>
+        /// What the chain <paramref name="written"/> stands for past the prefix of each import <paramref name="file"/> makes that it
+        /// is or begins with - however many names the prefix writes - as <see cref="Aliased(CodeGraphFile, string, Func{Declaration, bool})"/> reads its names
+        /// written out: a scope import's, the types and scopes of its target's name and the chain's names past the prefix; a file
+        /// import's, the types and scopes it makes visible by the first name past the prefix - those of the one name it shows where
+        /// its prefix stands for that name - and each next name a member of the one before. Each chain is answered once for the
+        /// file, a step from the chain before its last name (<see cref="NewAliases"/>), so a chain of any length costs a step a
+        /// name, its names never written out; the finding under way reads what answering it read.
+        /// </summary>
+        private Finds AliasedBy(CodeGraphFile file, ChainName written, Func<Declaration, bool> accepts)
+        {
+            var answer = _aliases.Of((file.Path, written));
+            _reads?.Through.Add(answer.Reads);
+
+            // Each import's place as doubted as the import leaves what it reaches (<see cref="AliasState.Doubt"/>): a type an import of
+            // two places reached a candidate, as a name it reached is.
+            return Joined(answer.Reached.Select(reached => ((IReadOnlyList<Declaration>)[.. reached.Containers.Where(accepts)], reached.Doubt)));
+        }
+
+        /// <summary>
+        /// A memo of what each chain of names stands for past the prefixes of its file's imports (<see cref="AliasedBy"/>), emptied
+        /// whenever the bases its members were looked for through are not the ones known now: a chain's answer is the chain before
+        /// it stepped by its last name, with the imports whose prefix it writes begun.
+        /// </summary>
+        private Memo<(string Path, ChainName Chain), AliasAnswer> NewAliases() => new(
+            key => key.Chain.Before is { } before ? [(key.Path, before)] : [],
+            (key, before) =>
+            {
+                var outer = _reads;
+                var reads = _reads = new Reading();
+
+                try
+                {
+                    var states = new List<AliasState>();
+
+                    if (before.Count > 0)
+                    {
+                        reads.Through.Add(before[0].Reads);
+
+                        foreach (var state in before[0].States)
+                        {
+                            if (Stepped(state, key.Chain.Name) is { } next)
+                            {
+                                states.Add(next);
+                            }
+                        }
+                    }
+
+                    // An import whose prefix the chain writes is begun at it: a scope import's at its target's name, a file import's at
+                    // what it makes visible.
+                    foreach (var (import, owner) in PrefixedBy(_byPath[key.Path], key.Chain))
+                    {
+                        states.Add(new AliasState(import, owner, import.Form == CodeImportForms.Scope ? TrieAt(import.Target) : null, null, DoubtOf(import, owner)));
+                    }
+
+                    // A scope import's place is its containers - the target's own at its prefix; a file import's prefix alone names no
+                    // type or scope of it, only the names past it.
+                    IReadOnlyList<(IReadOnlyList<Declaration> Containers, ImportDoubt Doubt)> reached = [.. states.Select(state => (state.Import.Form == CodeImportForms.Scope ? Held(state.Scope, key.Chain) : state.Found ?? [], state.Doubt))];
+                    return new AliasAnswer(states, reached, reads.Kept());
+                }
+                finally
+                {
+                    _reads = outer;
+                }
+            },
+            _ => new AliasAnswer([], [], KeptReads.None),
+            makings: _makings,
+            cycled: (_, made, cycle) => new AliasAnswer([], [], ReadsOfCycle(cycle, made.Reads)));
+
+        /// <summary>
+        /// Where <paramref name="state"/> stands one name - <paramref name="name"/> - further: a scope import's, at that name under
+        /// its place in the qualified names, none where no container's name runs so; a file import's, at what it makes visible by the
+        /// name - by the one name it shows, where its prefix stands for that one, the name a member of what that one is - and past
+        /// that at the name's members of what it stood at; <see langword="null"/> where it holds nothing more.
+        /// </summary>
+        private AliasState? Stepped(AliasState state, string name)
+        {
+            if (state.Import.Form == CodeImportForms.Scope)
+            {
+                return state with { Scope = state.Scope?.Next.GetValueOrDefault(name) };
+            }
+
+            var found = state.Found is { } held ? Inside(held, name, IsContainer, withSelf: true)
+                : state.Import.Binds ? Inside(Stood(state.Import, state.File), name, IsContainer, withSelf: true)
+                : state.Import.Lets(name) ? Imported(state.Import, state.File, name, IsContainer)
+                : [];
+
+            return found.Count > 0 ? state with { Found = found } : null;
+        }
+
+        /// <summary>
+        /// The imports <paramref name="file"/> makes whose prefix is <paramref name="chain"/>'s names: each prefix parted at its dots
+        /// into the chain it writes, once for the file, the finding under way reading what finding its imports read.
+        /// </summary>
+        private IReadOnlyList<(ExtractImport Import, CodeGraphFile File)> PrefixedBy(CodeGraphFile file, ChainName chain)
+            => Cached(_prefixesFound, file.Path, () =>
+            {
+                var byChain = new Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>>(ReferenceEqualityComparer.Instance);
+
+                foreach (var made in ImportsOf(file))
+                {
+                    if (made.Import.Prefix is { Length: > 0 } prefix)
+                    {
+                        var written = Names(null, prefix);
+                        (byChain.TryGetValue(written, out var imports) ? imports : byChain[written] = []).Add(made);
+                    }
+                }
+
+                return byChain;
+            }).GetValueOrDefault(chain) ?? [];
+
+        /// <summary>Where the qualified name <paramref name="target"/> stands among every type's and scope's (<see cref="_qualifiedTrie"/>): none where no container's qualified name begins so.</summary>
+        private NameTrie? TrieAt(string target)
+        {
+            _qualifiedTrie ??= QualifiedTrie();
+
+            var at = _qualifiedTrie;
+
+            foreach (var part in target.Split('.'))
+            {
+                if (!at.Next.TryGetValue(part, out var next))
+                {
+                    return null;
+                }
+
+                at = next;
+            }
+
+            return at;
         }
 
         /// <summary>
@@ -1819,50 +2614,28 @@ public static class CodeGraphLinker
             return [];
         }
 
-        /// <summary>Where the names of <paramref name="written"/> past its first stand from the scope <paramref name="target"/>, an alias's: none where no container's qualified name begins so.</summary>
-        private NameTrie? Aliased(string target, ChainName written)
-        {
-            _qualifiedTrie ??= QualifiedTrie();
-
-            var at = _qualifiedTrie;
-
-            foreach (var part in target.Split('.'))
-            {
-                if (!at.Next.TryGetValue(part, out var next))
-                {
-                    return null;
-                }
-
-                at = next;
-            }
-
-            return At(at, written, pastFirst: true);
-        }
-
         /// <summary>
-        /// Where <paramref name="written"/>'s names - those past its first where <paramref name="pastFirst"/> - stand from
-        /// <paramref name="from"/>: from where the chain before its last name stands, each chain found once, walked down from
-        /// the first not found yet on a stack of its own; none where no name of the trie runs so.
+        /// Where <paramref name="written"/>'s names stand from <paramref name="from"/>: from where the chain before its last name
+        /// stands, each chain found once, walked down from the first not found yet on a stack of its own; none where no name of
+        /// the trie runs so.
         /// </summary>
-        private NameTrie? At(NameTrie from, ChainName written, bool pastFirst)
+        private NameTrie? At(NameTrie from, ChainName written)
         {
             var pending = new Stack<ChainName>();
 
-            for (var at = written; at is not null && !_chainsAt.ContainsKey((from, at, pastFirst)); at = at.Before)
+            for (var at = written; at is not null && !_chainsAt.ContainsKey((from, at)); at = at.Before)
             {
                 pending.Push(at);
             }
 
             while (pending.TryPop(out var chain))
             {
-                var before = chain.Before is { } prefix ? _chainsAt[(from, prefix, pastFirst)] : null;
-
-                _chainsAt[(from, chain, pastFirst)] = chain.Before is null
-                    ? pastFirst ? from : from.Next.GetValueOrDefault(chain.Name)
-                    : before?.Next.GetValueOrDefault(chain.Name);
+                _chainsAt[(from, chain)] = chain.Before is { } prefix
+                    ? _chainsAt[(from, prefix)]?.Next.GetValueOrDefault(chain.Name)
+                    : from.Next.GetValueOrDefault(chain.Name);
             }
 
-            return _chainsAt[(from, written, pastFirst)];
+            return _chainsAt[(from, written)];
         }
 
         /// <summary>The containers each chain of names ends, as <see cref="Ending(Declaration, string)"/> finds those its names written out end, each compared from its last name back: found once.</summary>
@@ -1876,9 +2649,19 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
+        /// The place among <paramref name="file"/>'s references of the first of the chain the reference at <paramref name="at"/>
+        /// ends: the one whose qualifier writes the chain's head, found with its names (<see cref="ChainNameOf"/>).
+        /// </summary>
+        private int HeadOf(CodeGraphFile file, int at)
+        {
+            ChainNameOf(file, at);
+            return _chainHeadOf[(file, at)];
+        }
+
+        /// <summary>
         /// The names the chain the reference at <paramref name="at"/> of <paramref name="file"/> ends writes - its qualifier's,
         /// by a name or a link in turn, then its own - each link's made once from the one it links to, the links not made yet
-        /// followed on a stack of their own.
+        /// followed on a stack of their own; and with them the place of the chain's first reference (<see cref="HeadOf"/>).
         /// </summary>
         private ChainName ChainNameOf(CodeGraphFile file, int at)
         {
@@ -1904,11 +2687,13 @@ public static class CodeGraphLinker
             while (pending.TryPop(out var place))
             {
                 var reference = references[place];
-                var before = Linked(reference, place) is { } link ? _chainOf[(file, link)]
+                var linked = Linked(reference, place);
+                var before = linked is { } link ? _chainOf[(file, link)]
                     : reference.Qualifier is { Link: null, Name: { } head } ? Names(null, head.Whole())
                     : null;
 
                 _chainOf[(file, place)] = Names(before, reference.Name);
+                _chainHeadOf[(file, place)] = linked is { } through ? _chainHeadOf[(file, through)] : place;
             }
 
             return _chainOf[(file, at)];
@@ -2073,22 +2858,47 @@ public static class CodeGraphLinker
         /// <summary>
         /// The types and scopes <paramref name="written"/> stands for in <paramref name="file"/> through an alias: the
         /// target of each scope import it sees - its own, and what every file of its language imports - whose prefix is
-        /// that name, or is its first part and the rest of it names what is inside the target. The prefix names the scope
+        /// that name, or begins it at a dot and the rest of it names what is inside the target. The prefix names the scope
         /// itself, so it is found wherever a type's or a scope's name is written. A file imported by a prefix names no
-        /// scope: its prefix and one name after it are what that import makes visible of that name, its filter applied.
+        /// scope, written alone: its prefix and a name after it are what that import makes visible of that name, its filter
+        /// applied - or, where the prefix stands for the one name the import shows (<see cref="ExtractImport.Binds"/>), that name
+        /// inside what it makes visible by that one - and each name past that one a type or scope inside the one before. A
+        /// prefix alone is the scope a scope import is, and nothing an import of a file is: what a name it shows is found as
+        /// every name an import shows is (<see cref="Beyond"/>). Those <paramref name="accepts"/> takes, exact, as doubted as the
+        /// imports they are found through leave them (<see cref="Joined"/>).
         /// </summary>
-        private IReadOnlyList<Declaration> Aliased(CodeGraphFile file, string written)
-        {
-            var dot = written.IndexOf('.', StringComparison.Ordinal);
-            var head = dot < 0 ? written : written[..dot];
-            var rest = dot < 0 ? string.Empty : written[dot..];
-            var named = rest.Length > 1 && rest.IndexOf('.', 1) < 0 ? rest[1..] : null;
+        private Finds Aliased(CodeGraphFile file, string written, Func<Declaration, bool> accepts)
+            => Joined(ImportsOf(file)
+                .Where(made => made.Import.Prefix is { } prefix && BeginsWith(written, prefix))
+                .Select(made => Doubting(made.Import, made.File, [.. AliasedThrough(made.Import, made.File, written[made.Import.Prefix!.Length..]).Where(accepts)])));
 
-            return Distinct(ImportsOf(file)
-                .Where(made => string.Equals(made.Import.Prefix, head, StringComparison.Ordinal))
-                .SelectMany(made => made.Import.Form == CodeImportForms.Scope ? ContainersOf(made.Import.Target + rest)
-                    : named is not null && made.Import.Lets(named) ? Imported(made.Import, made.File, named, IsContainer)
-                    : []));
+        /// <summary>
+        /// The types and scopes the names <paramref name="rest"/> - nothing, or a dot and names joined by dots - stand for past the
+        /// prefix of <paramref name="import"/>, made by <paramref name="file"/>, as <see cref="Aliased(CodeGraphFile, string, Func{Declaration, bool})"/> reads them: each name stepped
+        /// into what the one before came to, a name at a time.
+        /// </summary>
+        private IReadOnlyList<Declaration> AliasedThrough(ExtractImport import, CodeGraphFile file, string rest)
+        {
+            if (import.Form == CodeImportForms.Scope)
+            {
+                return ContainersOf(import.Target + rest);
+            }
+
+            var names = rest.Length == 0 ? [] : rest[1..].Split('.');
+
+            if (names.Length == 0 || (!import.Binds && !import.Lets(names[0])))
+            {
+                return [];
+            }
+
+            var at = import.Binds ? Stood(import, file) : Imported(import, file, names[0], IsContainer);
+
+            for (var next = import.Binds ? 0 : 1; next < names.Length && at.Count > 0; next++)
+            {
+                at = Inside(at, names[next], IsContainer, withSelf: true);
+            }
+
+            return at;
         }
 
         /// <summary>The scopes a reference made in <paramref name="from"/> is looked for in, from the inside out.</summary>
@@ -2114,8 +2924,9 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The closed scopes at the top of <paramref name="file"/>, by key: those no scope holds and that are no type's or
-        /// namespace's own - what the file keeps to itself throughout, as a C file's <c>static</c> names. Read from the
-        /// file's own extract alone, so a finding that reads them is found again whenever the file changes.
+        /// namespace's own, nor a member's body (<see cref="IsBody"/>) - what the file keeps to itself throughout, as a C file's
+        /// <c>static</c> names. Read from the file's own extract alone, so a finding that reads them is found again whenever the
+        /// file changes.
         /// </summary>
         private IReadOnlyList<ScopeKey> TopsOf(CodeGraphFile file)
         {
@@ -2124,12 +2935,15 @@ public static class CodeGraphLinker
                 return tops;
             }
 
-            var extract = file.Extract;
-            var own = extract?.Nodes.Where(IsContainer).Select(node => node.Qualified).ToHashSet() ?? [];
+            if (file.Extract is not { } extract)
+            {
+                return _tops[file] = [];
+            }
 
-            return _tops[file] = extract is null
-                ? []
-                : [.. extract.Scopes.Where(scope => !scope.Open && scope.Parent is null && !own.Contains(scope.Name)).Select(scope => ClosedKey(file.Path, scope.Name))];
+            var closed = _closed[file];
+            var own = extract.Nodes.Where(node => IsContainer(node) || IsBody(node, closed)).Select(node => node.Qualified).ToHashSet();
+
+            return _tops[file] = [.. extract.Scopes.Where(scope => !scope.Open && scope.Parent is null && !own.Contains(scope.Name)).Select(scope => ClosedKey(file.Path, scope.Name))];
         }
 
         /// <summary>What the scope <paramref name="key"/> declares named <paramref name="name"/>, and - where it is a type's, and <paramref name="withBases"/> - what its bases do.</summary>
@@ -2224,21 +3038,45 @@ public static class CodeGraphLinker
         }
 
         /// <summary>What a chain a link ends comes to, with everything reading it read.</summary>
-        private sealed record ChainAnswer(Chained State, KeptReads Reads);
+        private sealed record ChainAnswer(Chained State, KeptReads Reads)
+        {
+            /// <summary>
+            /// Nothing known: a chain no value is, which read nothing - what a link is while it is being stepped, and what one of a
+            /// cycle is read as while its cycle is made; kept for a link of a cycle with all the cycle read instead
+            /// (<see cref="NothingKnown"/>).
+            /// </summary>
+            public static ChainAnswer None { get; } = new(Chained.None, KeptReads.None);
+        }
+
+        /// <summary>
+        /// What a chain of names stands for past the prefixes of its file's imports (<see cref="AliasedBy"/>): where it stands past
+        /// each import whose prefix it is or begins with, the types and scopes it names past each with the doubt that import leaves on
+        /// them, and what answering it read.
+        /// </summary>
+        private sealed record AliasAnswer(IReadOnlyList<AliasState> States, IReadOnlyList<(IReadOnlyList<Declaration> Containers, ImportDoubt Doubt)> Reached, KeptReads Reads);
+
+        /// <summary>
+        /// Where a chain of names stands past the prefix of <paramref name="Import"/>, made by <paramref name="File"/>: a scope import's at
+        /// a place in the qualified names (<paramref name="Scope"/>), none where no container's name runs so; a file import's at the types
+        /// and scopes the names past its prefix came to (<paramref name="Found"/>), none at the prefix itself; and the doubt the import
+        /// leaves on what it reaches (<paramref name="Doubt"/>, <see cref="DoubtOf"/>), found once where it is begun.
+        /// </summary>
+        private sealed record AliasState(ExtractImport Import, CodeGraphFile File, NameTrie? Scope, IReadOnlyList<Declaration>? Found, ImportDoubt Doubt);
 
         /// <summary>
         /// One link of a chain as a declaration reads it: the declaration, what the chain before the link came to - none for
-        /// the first link - the names the first link's qualifier writes and whether they name a type, and the link's own name.
-        /// Two are one where they are of the very declaration and the very answer before, and of the same names.
+        /// the first link - the names the first link's qualifier writes and its kind, which says whether they name a type or
+        /// are read on this, and the link's own name. Two are one where they are of the very declaration and the very answer
+        /// before, and of the same names and kind.
         /// </summary>
-        private readonly record struct ChainLink(Declaration From, ChainAnswer? Prefix, string? Head, bool TypeHead, string Name)
+        private readonly record struct ChainLink(Declaration From, ChainAnswer? Prefix, string? Head, string? HeadKind, string Name)
         {
             public static IEqualityComparer<ChainLink> Comparer { get; } = new ByIdentity();
 
             private sealed class ByIdentity : IEqualityComparer<ChainLink>
             {
                 public bool Equals(ChainLink x, ChainLink y)
-                    => ReferenceEquals(x.From, y.From) && ReferenceEquals(x.Prefix, y.Prefix) && x.TypeHead == y.TypeHead
+                    => ReferenceEquals(x.From, y.From) && ReferenceEquals(x.Prefix, y.Prefix) && string.Equals(x.HeadKind, y.HeadKind, StringComparison.Ordinal)
                     && string.Equals(x.Head, y.Head, StringComparison.Ordinal) && string.Equals(x.Name, y.Name, StringComparison.Ordinal);
 
                 public int GetHashCode(ChainLink link)
@@ -2246,7 +3084,7 @@ public static class CodeGraphLinker
                         RuntimeHelpers.GetHashCode(link.From),
                         link.Prefix is null ? 0 : RuntimeHelpers.GetHashCode(link.Prefix),
                         link.Head is null ? 0 : StringComparer.Ordinal.GetHashCode(link.Head),
-                        link.TypeHead,
+                        link.HeadKind is null ? 0 : StringComparer.Ordinal.GetHashCode(link.HeadKind),
                         StringComparer.Ordinal.GetHashCode(link.Name));
             }
         }
@@ -2264,16 +3102,22 @@ public static class CodeGraphLinker
             public KeptReads Kept() => new([.. Keys], [.. Through]);
         }
 
-        /// <summary>What a chain of names has come to so far (<see cref="Values"/>).</summary>
+        /// <summary>What a chain of names has come to so far (<see cref="ValuesOf"/>).</summary>
         private enum ChainedKind
         {
-            /// <summary>No value: its first name is none, nor a type's value.</summary>
+            /// <summary>
+            /// No value the repository declares says what it is: its first name is none, nor a type's value; or it is read on
+            /// <c>this</c> and steps a name what it has come to declares no value of (<see cref="Linking.OfThis"/>).
+            /// </summary>
             None,
 
             /// <summary>Its one name is no value the scopes hold; a type of that name may hold the next.</summary>
             Head,
 
-            /// <summary>Its first link is qualified by a type - a variable's declared type - whose value the next name is a member of: the types of that name.</summary>
+            /// <summary>
+            /// Its first link is qualified by a type - a variable's declared type - whose value the next name is a member of: the types
+            /// of that name; or by this, whose value the next name is: what this is (<see cref="Linking.Selves"/>).
+            /// </summary>
             Types,
 
             /// <summary>The values its last name is, each of a type it says.</summary>
@@ -2286,12 +3130,46 @@ public static class CodeGraphLinker
             Empty,
         }
 
-        /// <summary>What a chain of names has come to so far: of which kind, the values found, and the first name where no value is it.</summary>
-        private sealed record Chained(ChainedKind Kind, IReadOnlyList<Declaration> Found, string? Head)
+        /// <summary>
+        /// What doubt an import a name was found through leaves on what it is found to be (<see cref="DoubtOf"/>), the more doubtful
+        /// later: none, where the linker takes the import as one place; several places - an ending several files of the tree end with, a
+        /// path under several roots of the layout - each a candidate as its imports edges are, so a reference left candidates there is
+        /// left them by the import (<see cref="CodeGraphLimit.CandidateImports"/>); one of two places a name may stand at, what it found
+        /// there a candidate of each whatever else it is (<see cref="Doubted"/>).
+        /// </summary>
+        private enum ImportDoubt
+        {
+            /// <summary>Found through no import the linker takes as more than one place.</summary>
+            None,
+
+            /// <summary>Found through an import the linker takes as several places: a reference left candidates there is left them by the import.</summary>
+            Places,
+
+            /// <summary>Found through one of two places a name may stand at: a candidate of each, however many it found.</summary>
+            Pair,
+        }
+
+        /// <summary>
+        /// What a written name, a qualifier or a chain was found to be from where a reference stands (<paramref name="Found"/>), how
+        /// sure the way it was found makes it (<paramref name="Confidence"/>), and the doubt the imports it was found through leave on it
+        /// (<paramref name="Doubt"/>) - carried from the place that finds it to the finding, which tells by it alone why a reference it
+        /// leaves candidates is left them (<see cref="SignOf"/>), never by the files what it found lies in.
+        /// </summary>
+        private readonly record struct Finds(IReadOnlyList<Declaration> Found, string Confidence, ImportDoubt Doubt = ImportDoubt.None)
+        {
+            /// <summary>Nothing found: what is known of a finding while it is being made, and of one of a cycle kept (<see cref="Cached"/>).</summary>
+            public static Finds None { get; } = new([], CodeConfidences.Exact);
+        }
+
+        /// <summary>
+        /// What a chain of names has come to so far: of which kind, the values found, the first name where no value is it, and the doubt
+        /// the imports its types were found through leave on what it reaches (<see cref="Doubted"/>).
+        /// </summary>
+        private sealed record Chained(ChainedKind Kind, IReadOnlyList<Declaration> Found, string? Head, ImportDoubt Doubt = ImportDoubt.None)
         {
             public static Chained None { get; } = new(ChainedKind.None, [], null);
 
-            /// <summary>The values the chain comes to, as <see cref="Linking.Values"/> answers them.</summary>
+            /// <summary>The values the chain comes to, as <see cref="Linking.ValuesOf"/> answers them.</summary>
             public IReadOnlyList<Declaration>? Values => Kind switch
             {
                 ChainedKind.Values or ChainedKind.Untyped => Found,
@@ -2340,6 +3218,41 @@ public static class CodeGraphLinker
             return ranks;
         }
 
+        /// <summary>
+        /// Whether a type that one of the types <paramref name="test"/> is written in is built on - any number of levels up, along the
+        /// bases found, each type once whatever cycle they hold - gives the test a value of <paramref name="name"/> in place of the
+        /// fixture of that name (<see cref="ExtractNode.Parametrizes"/>): what its own marks give, which apply to the types built on it.
+        /// The types the test is written in say their own in their file, which reads them for the test; their bases do not.
+        /// </summary>
+        private bool Parametrized(Declaration test, string name)
+        {
+            var seen = new HashSet<QualifiedName>();
+            var pending = new Stack<QualifiedName>();
+
+            for (var holder = test.Node.Parent; holder is not null && _owners[test.File].TryGetValue(holder, out var type) && type.Node.Kind == CodeNodeKinds.Type; holder = type.Node.Parent)
+            {
+                foreach (var basis in BasesOf(type.Id).Where(seen.Add))
+                {
+                    pending.Push(basis);
+                }
+            }
+
+            while (pending.TryPop(out var id))
+            {
+                if (PartsOf(id).Any(part => part.Node.Parametrizes?.Contains(name, StringComparer.Ordinal) == true))
+                {
+                    return true;
+                }
+
+                foreach (var basis in BasesOf(id).Where(seen.Add))
+                {
+                    pending.Push(basis);
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>The bases of the type <paramref name="id"/>, by id, nearest first (<see cref="BaseRanksOf"/>).</summary>
         private IEnumerable<QualifiedName> BasesOf(QualifiedName id) => BaseRanksOf(id).SelectMany(rank => rank.Select(QualifiedName.Of));
 
@@ -2360,7 +3273,10 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <paramref name="import"/>, made by <paramref name="file"/>, makes visible named <paramref name="name"/> - with
         /// the nodes standing for a suffix written onto others' that stand for it where <paramref name="suffixed"/> - the files
-        /// <paramref name="walked"/> holds, which a walk before reached, not walked again.
+        /// <paramref name="walked"/> holds, which a walk before reached, not walked again. An import that takes what the file it
+        /// names publishes (<see cref="ExtractImport.Published"/>) makes visible what the file makes visible by a name it publishes
+        /// (<see cref="Publishes"/>) alone - the name asked, which is the one the file binds and publishes, whatever the declaration
+        /// it reaches is named.
         /// </summary>
         private IReadOnlyList<Declaration> Imported(ExtractImport import, CodeGraphFile file, string name, Func<Declaration, bool> accepts, HashSet<string>? walked = null, bool suffixed = false)
         {
@@ -2369,8 +3285,69 @@ public static class CodeGraphLinker
                 return InScope(OpenKey(import.Target), name, accepts, withBases: true);
             }
 
-            return Distinct(FilesOf(import, file).SelectMany(target => Visible(target, name, walked, suffixed)).Where(accepts));
+            var found = new List<Declaration>();
+
+            foreach (var path in FilesOf(import, file))
+            {
+                if (!import.Published || Publishes(path, name))
+                {
+                    found.AddRange(Visible(path, name, walked, suffixed));
+                }
+            }
+
+            return Distinct(found.Where(accepts));
         }
+
+        /// <summary>
+        /// Whether the file at <paramref name="path"/> publishes <paramref name="name"/> to an import that takes its published names
+        /// (<see cref="ExtractImport.Published"/>): its own list holds it (<see cref="FileExtract.Published"/>), or - where what it
+        /// publishes holds what its own such imports take (<see cref="FileExtract.PublishesTaken"/>) - a file one of them names
+        /// publishes it, as that file says in turn. Each file walked once on a stack of its own, so imports that come round end;
+        /// found once for a file and a name, every later finding reading the first one's answer and what it read. What a file
+        /// publishes is read under the file's own key, as what an import of it by its path makes visible is.
+        /// </summary>
+        private bool Publishes(string path, string name)
+            => Cached(_publishes, (path, name), () =>
+            {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var pending = new Stack<string>([path]);
+
+                while (pending.TryPop(out var next))
+                {
+                    if (!seen.Add(next))
+                    {
+                        continue;
+                    }
+
+                    Touch(Read.Opens, next);
+
+                    if (_byPath.GetValueOrDefault(next) is not { Extract: { } extract } held)
+                    {
+                        continue;
+                    }
+
+                    if (PublishedOf(held).Contains(name))
+                    {
+                        return true;
+                    }
+
+                    if (extract.PublishesTaken)
+                    {
+                        Touch(Read.Imports, next);
+
+                        foreach (var target in Taken(held).Where(taken => taken.Published).SelectMany(taken => FilesOf(taken, held)))
+                        {
+                            pending.Push(target);
+                        }
+                    }
+                }
+
+                return false;
+            });
+
+        /// <summary>The names <paramref name="file"/>'s own list publishes (<see cref="FileExtract.Published"/>), as a set made once a file.</summary>
+        private HashSet<string> PublishedOf(CodeGraphFile file)
+            => _publishedSets.TryGetValue(file, out var set) ? set : _publishedSets[file] = new HashSet<string>(file.Extract?.Published ?? [], StringComparer.Ordinal);
 
         /// <summary>
         /// What a file imported by path makes visible named <paramref name="name"/>: its own top-level declarations, those of
@@ -2390,41 +3367,49 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <see cref="Visible"/> finds from the file at <paramref name="start"/>, the files <paramref name="seen"/> holds
         /// not visited and each it visits added to it: each file visited once, so exports that come round again end, followed
-        /// on a stack of its own rather than the call's.
+        /// on a stack of its own rather than the call's. Each file reached is asked for the name it is reached by: the one asked
+        /// of <paramref name="start"/>, or the one a renamed re-export shows a file's name by (<see cref="Reached"/>) - where a
+        /// re-export by a prefix stands for the file itself, the containers of the open scopes it declares, its module.
         /// </summary>
         private List<Declaration> VisibleFrom(string start, string name, HashSet<string> seen, bool suffixed)
         {
             var visible = new List<Declaration>();
-            var pending = new Stack<string>([start]);
+            var pending = new Stack<(string Path, string? Name)>([(start, name)]);
 
-            while (pending.TryPop(out var path))
+            while (pending.TryPop(out var next))
             {
-                if (!seen.Add(path))
+                if (!seen.Add(next.Path))
                 {
                     continue;
                 }
 
-                visible.AddRange(TopNamed(path, name).Concat(OpensOf(path).SelectMany(scope => ScopeNamed(OpenKey(scope), name))).Concat(ExportedNamed(path, name)));
-                var file = _byPath.GetValueOrDefault(path);
+                if (next.Name is null)
+                {
+                    visible.AddRange(ModuleOf(next.Path));
+                    continue;
+                }
+
+                visible.AddRange(TopNamed(next.Path, next.Name).Concat(OpensOf(next.Path).SelectMany(scope => ScopeNamed(OpenKey(scope), next.Name))).Concat(ExportedNamed(next.Path, next.Name)));
+                var file = _byPath.GetValueOrDefault(next.Path);
 
                 if (file is not null)
                 {
-                    visible.AddRange(Suffixed(file, name, exported: true));
+                    visible.AddRange(Suffixed(file, next.Name, exported: true));
 
                     if (suffixed)
                     {
-                        visible.AddRange(Suffixed(file, name, exported: false));
+                        visible.AddRange(Suffixed(file, next.Name, exported: false));
                     }
                 }
 
-                Touch(Read.Imports, path);
+                Touch(Read.Imports, next.Path);
 
                 if (file?.Extract is not null)
                 {
-                    // Each exported file in the order the file exports it, a file before what it exports in turn.
-                    foreach (var target in Taken(file).Where(import => import.Export && import.Lets(name)).SelectMany(export => FilesOf(export, file)).Reverse())
+                    // Each file whose names this one makes its importers's, the file before what it reaches in turn.
+                    foreach (var reached in Reached(file, next.Name).Reverse())
                     {
-                        pending.Push(target);
+                        pending.Push(reached);
                     }
                 }
             }
@@ -2432,15 +3417,62 @@ public static class CodeGraphLinker
             return visible;
         }
 
+        /// <summary>
+        /// Each file whose names <paramref name="file"/> makes its importers's, asked for the name <paramref name="name"/>: those of
+        /// its exports, and - where what an import binds is the importing file's importers's too (<see cref="ExtractImport.Reexports"/>) -
+        /// those of the imports that bind that name: a renamed one reached by the name it binds it under there, since that is the name
+        /// the file it names declares; one by a prefix that shows nothing reached by its prefix as the file itself, a
+        /// <see langword="null"/> name (<see cref="VisibleFrom"/>); and one that takes the names a file publishes where that file
+        /// publishes the name (<see cref="Publishes"/>). In the order the file writes them; none for a name none of them lets.
+        /// </summary>
+        private IEnumerable<(string Path, string? Name)> Reached(CodeGraphFile file, string name)
+        {
+            foreach (var import in Taken(file))
+            {
+                if (!(import.Export || import.Reexports))
+                {
+                    continue;
+                }
+
+                // One with no name of its own lets the name asked or nothing; a renamed one is reached by the name the file gives
+                // it, and shows the name the file it names declares it by - or, showing none, is the file it names.
+                var (lets, shown) = import.Prefix is null ? (import.Lets(name), name)
+                    : import.Prefix != name ? (false, null)
+                    : import.Show is [var one] ? (true, one)
+                    : import.Show is null && import.Hide is null && !import.Export ? (true, (string?)null)
+                    : (false, null);
+
+                if (!lets)
+                {
+                    continue;
+                }
+
+                foreach (var target in FilesOf(import, file))
+                {
+                    if (!import.Published || Publishes(target, name))
+                    {
+                        yield return (target, shown);
+                    }
+                }
+            }
+        }
+
         /// <summary>The files of the tree <paramref name="import"/> names, by its form: found once for each import of each file.</summary>
         private IReadOnlyList<string> FilesOf(ExtractImport import, CodeGraphFile file)
-            => Cached(_imported.TryGetValue(file, out var ofFile) ? ofFile : _imported[file] = new(ReferenceEqualityComparer.Instance), import, () => FindFiles(import, file));
+            => Cached(_imported.TryGetValue(file, out var ofFile) ? ofFile : _imported[file] = Store<ExtractImport, IReadOnlyList<string>>([], ReferenceEqualityComparer.Instance), import, () => FindFiles(import, file));
 
         private IReadOnlyList<string> FindFiles(ExtractImport import, CodeGraphFile file)
         {
             switch (import.Form)
             {
                 case CodeImportForms.Relative:
+                    // A place of a layout (<see cref="ExtractImport.Layout"/>) in a directory that is a unit of it around the file is
+                    // passed over: the name is looked for from the first directory above the units the file is in.
+                    if (import.Layout && IsUnit(ReadFrom(file.Path, import.Target)))
+                    {
+                        return [];
+                    }
+
                     var relative = CodeGraphIds.Beside(file.Path, import.Target);
 
                     if (relative is null)
@@ -2465,6 +3497,12 @@ public static class CodeGraphLinker
 
                     return [];
 
+                case CodeImportForms.Rooted:
+                    // Every root of the layout that holds the path, in the roots' order: one is the place, several each a candidate.
+                    var rooted = CodeGraphIds.Normalize(import.Target);
+
+                    return rooted is null ? [] : [.. LayoutRoots().Select(root => root.Length == 0 ? rooted : $"{root}/{rooted}").Where(IsFile)];
+
                 default:
                     var ending = CodeGraphIds.Normalize(import.Target);
 
@@ -2476,6 +3514,47 @@ public static class CodeGraphLinker
                     return [.. PathsNamed(CodeGraphIds.FileName(ending)).Where(path => path == ending || path.EndsWith("/" + ending, StringComparison.Ordinal)).Order(StringComparer.Ordinal)];
             }
         }
+
+        /// <summary>Whether <paramref name="directory"/> is a unit of its language's layout: a file in it says so (<see cref="FileExtract.FolderUnit"/>).</summary>
+        private bool IsUnit(string directory)
+        {
+            Touch(Read.Unit, directory);
+            return _units.Contains(directory);
+        }
+
+        /// <summary>
+        /// The roots of the layout, in ordinal order, each once: the directory each outermost unit stands in - a unit whose own
+        /// directory is no unit, the tree's root's own unit standing in none - and each directory a project file declares one
+        /// (<see cref="FileExtract.LayoutRoots"/>). Made once, from every unit the tree holds; a finding that reads them reads the
+        /// roots' one key, which every unit and every declared root is a part of.
+        /// </summary>
+        private IReadOnlyList<string> LayoutRoots()
+        {
+            Touch(Read.LayoutRoots, string.Empty);
+
+            return _layoutRoots ??= [.. _units.Where(unit => unit.Length > 0 && !_units.Contains(DirectoryOf(unit)))
+                .Select(DirectoryOf)
+                .Concat(_declaredRoots)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)];
+        }
+
+        /// <summary>The directory a relative <paramref name="target"/> is read from for the file at <paramref name="path"/>: the file's own, one level less for each <c>../</c> the target begins with.</summary>
+        private static string ReadFrom(string path, string target)
+        {
+            var directory = DirectoryOf(path);
+
+            for (var at = 0; target.AsSpan(at).StartsWith("../"); at += 3)
+            {
+                directory = DirectoryOf(directory);
+            }
+
+            return directory;
+        }
+
+        /// <summary>The directory of the file at <paramref name="path"/>: the tree's root as empty.</summary>
+        private static string DirectoryOf(string path)
+            => path.LastIndexOf('/') is var slash && slash >= 0 ? path[..slash] : string.Empty;
 
         /// <summary>
         /// What <paramref name="file"/> imports, in order; then what each file it shares the imports of imports; then what
@@ -2492,8 +3571,9 @@ public static class CodeGraphLinker
             }
 
             // An export makes names visible to the file's importers, not to the file; a directory import is applied to
-            // the declaring file too, below, as one of the subtree it declares for.
-            var own = Taken(file).Where(import => !import.Export && import.Form != CodeImportForms.Directory).ToList();
+            // the declaring file too, below, as one of the subtree it declares for; and one that serves one qualifier's references
+            // alone serves no other reference (<see cref="ServingImports"/>).
+            var own = Taken(file).Where(import => !import.Export && import.Form != CodeImportForms.Directory && import.Serves is null).ToList();
 
             return own.Select(import => (import, file))
                 .Concat(own.Where(import => import.Shares).SelectMany(import => FilesOf(import, file)).Distinct(StringComparer.Ordinal).SelectMany(SharedOf))
@@ -2504,8 +3584,30 @@ public static class CodeGraphLinker
                 // declares one come, gone or changed alters that key, so every finding that looked past its scopes is found
                 // again - whether or not a file declaring one stood under it before.
                 .Concat(file.Language is { } declared && _ofDirectory.TryGetValue(declared, out var ofDirectory)
-                    ? ofDirectory.Where(held => Under(file.Path, held.Directory)).Select(held => (held.Import with { Form = CodeImportForms.Scope }, file))
+                    ? ofDirectory.Where(held => held.Import.Serves is null && Under(file.Path, held.Directory)).Select(held => (held.Import with { Form = CodeImportForms.Scope }, file))
                     : []);
+        }
+
+        /// <summary>
+        /// The scope imports made for <paramref name="file"/> that serve the references of the qualifier <paramref name="kind"/>
+        /// alone (<see cref="ExtractImport.Serves"/>), the nearest directory's first: those of the directories it is under, each
+        /// of the subtree its declaring file's directory is - a <c>conftest.py</c>'s fixtures. Read under the language's key, as
+        /// every directory import is.
+        /// </summary>
+        private IEnumerable<ExtractImport> ServingImports(CodeGraphFile file, string kind)
+        {
+            if (file.Language is not { } language)
+            {
+                return [];
+            }
+
+            Touch(Read.Global, language);
+
+            return _ofDirectory.TryGetValue(language, out var ofDirectory)
+                ? ofDirectory.Where(held => held.Import.Serves == kind && Under(file.Path, held.Directory))
+                    .OrderByDescending(held => held.Directory.Length)
+                    .Select(held => held.Import)
+                : [];
         }
 
         /// <summary>What the file at <paramref name="path"/> imports of its own, as a file that shares its imports takes them: none it shares or exports.</summary>
@@ -2523,11 +3625,64 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// The imports <paramref name="file"/> makes, in order, each run of an import and those that stand in for it
-        /// (<see cref="ExtractImport.Fallback"/>) taken as the first of them that names a file of the tree - the run's first
-        /// where none does.
+        /// The two places a name may stand at that the run of <paramref name="import"/>, made by <paramref name="file"/>, is taken as
+        /// (<see cref="ExtractImport.Either"/>, <see cref="TakenRuns"/>): both of its imports; none where the run is taken as one.
+        /// Only an import of the two places, or one standing in for another, may be either of them.
         /// </summary>
-        private IEnumerable<ExtractImport> Taken(CodeGraphFile file)
+        private IReadOnlyList<ExtractImport>? PairOf(ExtractImport import, CodeGraphFile file)
+            => (import.Either || import.Fallback) && file.Extract is not null
+                ? TakenRuns(file).FirstOrDefault(run => run.Count > 1 && run.Any(place => ReferenceEquals(place, import)))
+                : null;
+
+        /// <summary>
+        /// What a name found through <paramref name="import"/>, made by <paramref name="file"/>, is - <paramref name="found"/>, what the
+        /// import makes visible by it - and how sure: unique, as doubted as the import leaves it (<see cref="DoubtOf"/>); and where the
+        /// import is one of two places a name may stand at that its run is taken as (<see cref="PairOf"/>), what each of the two makes
+        /// visible by it (<paramref name="find"/>, the other's), a candidate of each (<see cref="Doubted"/>).
+        /// </summary>
+        private Finds ThroughRun(ExtractImport import, CodeGraphFile file, IReadOnlyList<Declaration> found, Func<ExtractImport, IReadOnlyList<Declaration>> find)
+            => PairOf(import, file) is { } pair
+                ? Doubted(new Finds(Distinct(pair.SelectMany(place => ReferenceEquals(place, import) ? found : find(place))), CodeConfidences.Unique), ImportDoubt.Pair)
+                : Doubted(new Finds(found, CodeConfidences.Unique), DoubtOf(import, file));
+
+        /// <summary>
+        /// The doubt <paramref name="import"/>, made by <paramref name="file"/>, leaves on what a name is found to be through it, as the
+        /// linker takes the import: one of two places a name may stand at that its run is taken as (<see cref="PairOf"/>,
+        /// <see cref="ImportDoubt.Pair"/>); else several places, where its imports edges are candidates (<see cref="ImportConfidence"/>,
+        /// <see cref="ImportDoubt.Places"/>); else none.
+        /// </summary>
+        private ImportDoubt DoubtOf(ExtractImport import, CodeGraphFile file)
+            => PairOf(import, file) is not null ? ImportDoubt.Pair
+                : MayNameSeveral(import) && ImportConfidence([import], import, FilesOf(import, file)) == CodeConfidences.Candidates ? ImportDoubt.Places
+                : ImportDoubt.None;
+
+        /// <summary>
+        /// <paramref name="found"/>, reached through what leaves the doubt <paramref name="doubt"/> on it: as doubted as the more doubtful of
+        /// the two, and candidates where that is one of two places a name may stand at (<see cref="ImportDoubt.Pair"/>), since the file
+        /// cannot tell which of them it imports, as its imports edges say - a name, a type, a member of that type, a value of it alike. The
+        /// one place that rule is kept.
+        /// </summary>
+        private static Finds Doubted(Finds found, ImportDoubt doubt)
+            => Doubtier(found.Doubt, doubt) is var most && most == ImportDoubt.Pair
+                ? found with { Confidence = CodeConfidences.Candidates, Doubt = most }
+                : found with { Doubt = most };
+
+        /// <summary>The more doubtful of <paramref name="one"/> and <paramref name="other"/>.</summary>
+        private static ImportDoubt Doubtier(ImportDoubt one, ImportDoubt other) => one >= other ? one : other;
+
+        /// <summary>
+        /// The imports <paramref name="file"/> makes, in order, each run of an import and those that stand in for it
+        /// (<see cref="ExtractImport.Fallback"/>) taken as <see cref="TakenRuns"/> takes it.
+        /// </summary>
+        private IEnumerable<ExtractImport> Taken(CodeGraphFile file) => TakenRuns(file).SelectMany(run => run);
+
+        /// <summary>
+        /// What each run of an import and those that stand in for it (<see cref="ExtractImport.Fallback"/>) that
+        /// <paramref name="file"/> makes is taken as, in order: the first of them that names a file of the tree - the run's first
+        /// where none does - and, where that one is one of two places the name may stand at (<see cref="ExtractImport.Either"/>),
+        /// the next of the run that is none of those and names a file too, beside it.
+        /// </summary>
+        private IEnumerable<IReadOnlyList<ExtractImport>> TakenRuns(CodeGraphFile file)
         {
             var imports = file.Extract!.Imports;
 
@@ -2540,15 +3695,27 @@ public static class CodeGraphLinker
                     past++;
                 }
 
-                var taken = imports[at];
+                IReadOnlyList<ExtractImport> taken = [imports[at]];
 
                 for (var standing = at; past - at > 1 && standing < past; standing++)
                 {
-                    if (FilesOf(imports[standing], file).Count > 0)
+                    if (FilesOf(imports[standing], file).Count == 0)
                     {
-                        taken = imports[standing];
-                        break;
+                        continue;
                     }
+
+                    taken = [imports[standing]];
+
+                    for (var beside = standing + 1; imports[standing].Either && beside < past; beside++)
+                    {
+                        if (!imports[beside].Either && FilesOf(imports[beside], file).Count > 0)
+                        {
+                            taken = [imports[standing], imports[beside]];
+                            break;
+                        }
+                    }
+
+                    break;
                 }
 
                 yield return taken;
@@ -2556,33 +3723,58 @@ public static class CodeGraphLinker
             }
         }
 
-        /// <summary>Each file's <c>imports</c> edges: to a scope the repository declares, and to each file a path names.</summary>
+        /// <summary>
+        /// How sure the <c>imports</c> edges of <paramref name="import"/>, one of the <paramref name="run"/> a file's imports are taken
+        /// as (<see cref="TakenRuns"/>), to the files it names, <paramref name="targets"/>, are: <c>exact</c> where the path says the one
+        /// file, <c>unique</c> where an ending or a root of the layout finds one, and <c>candidates</c> where they find several or the run
+        /// takes two places a name may stand at. The one rule of an import of several places.
+        /// </summary>
+        private static string ImportConfidence(IReadOnlyList<ExtractImport> run, ExtractImport import, IReadOnlyList<string> targets)
+            => run.Count > 1 ? CodeConfidences.Candidates
+                : MayNameSeveral(import)
+                    ? targets.Count == 1 ? CodeConfidences.Unique : CodeConfidences.Candidates
+                    : CodeConfidences.Exact;
+
+        /// <summary>Whether <paramref name="import"/> is of a form that may name several files of the tree, each a candidate: an ending several end with, a path under several roots of the layout.</summary>
+        private static bool MayNameSeveral(ExtractImport import) => import.Form is CodeImportForms.Ending or CodeImportForms.Rooted;
+
+        /// <summary>
+        /// Each file's <c>imports</c> edges: to a scope the repository declares, and to each file a path names, as sure as
+        /// <see cref="ImportConfidence"/> says - a file an import of which names files as candidates giving the sign of it
+        /// (<see cref="CodeGraphLimit.CandidateImports"/>).
+        /// </summary>
         private void Imports()
         {
             foreach (var file in _files.Where(file => file.Extract is not null))
             {
                 var from = FileIdOf(file.Path);
 
-                foreach (var import in Taken(file).Where(import => import.Form != CodeImportForms.Directory))
+                foreach (var run in TakenRuns(file))
                 {
-                    if (import.Form == CodeImportForms.Scope)
+                    foreach (var import in run.Where(import => import.Form != CodeImportForms.Directory))
                     {
-                        foreach (var id in ContainersOf(import.Target).Where(container => Sees(file, container)).Select(container => container.Id).Distinct())
+                        if (import.Form == CodeImportForms.Scope)
                         {
-                            _edges.Add(new CodeEdge(from, id.Whole(), CodeEdgeKinds.Imports, import.Line, CodeConfidences.Exact));
+                            foreach (var id in ContainersOf(import.Target).Where(container => Sees(file, container)).Select(container => container.Id).Distinct())
+                            {
+                                _edges.Add(new CodeEdge(from, id.Whole(), CodeEdgeKinds.Imports, import.Line, CodeConfidences.Exact));
+                            }
+
+                            continue;
                         }
 
-                        continue;
-                    }
+                        var targets = FilesOf(import, file);
+                        var sure = ImportConfidence(run, import, targets);
 
-                    var targets = FilesOf(import, file);
-                    var sure = import.Form == CodeImportForms.Ending
-                        ? targets.Count == 1 ? CodeConfidences.Unique : CodeConfidences.Candidates
-                        : CodeConfidences.Exact;
+                        foreach (var target in targets)
+                        {
+                            _edges.Add(new CodeEdge(from, FileIdOf(target), CodeEdgeKinds.Imports, import.Line, sure));
+                        }
 
-                    foreach (var target in targets)
-                    {
-                        _edges.Add(new CodeEdge(from, FileIdOf(target), CodeEdgeKinds.Imports, import.Line, sure));
+                        if (sure == CodeConfidences.Candidates && targets.Count > 0)
+                        {
+                            Signed(from, CodeGraphLimit.CandidateImports);
+                        }
                     }
                 }
             }
@@ -2732,10 +3924,14 @@ public static class CodeGraphLinker
             }
         }
 
-        /// <summary>Each <c>tests</c> edge: from a test to each member it calls directly, as sure as the call.</summary>
+        /// <summary>
+        /// Each <c>tests</c> edge: from a test to each member it calls directly, as sure as the call - a test its own file
+        /// marks, and one that is a test by its type (<see cref="CodeGraphLinker.TestsByType"/>).
+        /// </summary>
         private void Tests()
         {
             var tests = _declarations.Where(declaration => declaration.Node.Test).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
+            tests.UnionWith(TestsByType(_declarations.Select(declaration => declaration.Node), _edges));
 
             foreach (var call in _edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls && tests.Contains(edge.From)).ToList())
             {
@@ -2829,12 +4025,16 @@ public static class CodeGraphLinker
         /// The keys' join: each <c>uses</c> edge a key of a configuration file gains - from the declaration that holds a
         /// string literal naming the key, and from each value (a field, a property) whose name is the key's last segment as
         /// a declared naming policy writes it - of <see cref="CodeConfidences.Candidates"/>, for nothing says the code reads
-        /// that key. A literal names the keys of its last segment, of its whole path, and of the path it spells as .NET's
-        /// configuration does (<see cref="CodeKeyPaths.Dotted"/>), and the keys a path reaches through what its file repeats
-        /// by reference (<see cref="KeyPaths"/>); every key it names is joined, however many they are - a word every file of
-        /// data holds, <c>name</c>, <c>version</c>, joined to each - and the confidence says how sure each is. A key its
-        /// file keeps to itself - an MSBuild project's own property - is no other file's to read, so it joins none. A use is
-        /// recall and never a doubt, so none of it is counted anywhere.
+        /// that key. A literal names the keys of its last segment, of its whole path - read as the writer writes one
+        /// (<see cref="CodeKeyPaths.Canonical"/>), so a path in brackets is read in either quote mark,
+        /// <c>Logging.LogLevel['Microsoft.AspNetCore']</c> - and of the path it spells as .NET's configuration does
+        /// (<see cref="CodeKeyPaths.Dotted"/>), where a name holding a dot is one place: <c>Logging:LogLevel:Microsoft.AspNetCore</c>
+        /// names <c>Logging.LogLevel["Microsoft.AspNetCore"]</c>, never the nested keys of the same dots, which a dotted
+        /// literal names; and the keys a path reaches through what its file repeats by reference (<see cref="KeyPaths"/>);
+        /// every key it names is joined, however many they are - a word every file of data holds, <c>name</c>,
+        /// <c>version</c>, joined to each - and the confidence says how sure each is. A key its file keeps to itself - an
+        /// MSBuild project's own property - is no other file's to read, so it joins none. A use is recall and never a doubt,
+        /// so none of it is counted anywhere.
         /// </summary>
         private void Keys()
         {
@@ -2869,12 +4069,17 @@ public static class CodeGraphLinker
 
                 foreach (var literal in literals)
                 {
+                    // The literal's path as the writer writes it (CodeKeyPaths.Canonical): a path in brackets is read in either
+                    // quote mark, and every other value is left as it is. By its raw value alone a name is looked up (bySegment);
+                    // the loose form of a key path - its names' own dots as they are - is never read here, for code splits a
+                    // dotted literal into its places, as .NET's configuration and lodash do.
                     var spelt = CodeKeyPaths.Dotted(literal.Value);
+                    var path = CodeKeyPaths.Canonical(literal.Value);
                     var joined = Distinct(
                         (bySegment.TryGetValue(literal.Value, out var byName) ? byName : [])
-                            .Concat(byPath.TryGetValue(literal.Value, out var named) ? named : [])
+                            .Concat(byPath.TryGetValue(path, out var named) ? named : [])
                             .Concat(spelt is not null && byPath.TryGetValue(spelt, out var dotted) ? dotted : [])
-                            .Concat(through.Reached(literal.Value))
+                            .Concat(through.Reached(path))
                             .Concat(spelt is null ? [] : through.Reached(spelt))
                             .Where(key => key.Node.SubKind == CodeSubKinds.Key && !key.FileOnly));
 
@@ -3182,11 +4387,14 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// The type <paramref name="from"/> is declared in, or is: the one what holds it reaches - else, where what holds it
-        /// reaches none, the type whose scope it is declared in, as a member defined outside its type's body is; none where
-        /// neither is.
+        /// The types <paramref name="from"/> is declared in, or is: the one what holds it reaches - else, where what holds it
+        /// reaches none, every type whose scope it is declared in, as a member defined outside its type's body is; else what a
+        /// member declared to extend one extends (<see cref="ExtractNode.Extends"/>, <see cref="Extended"/>), as a prototype
+        /// assignment's member does, as its own file names it - each type of that name, else the constructor function it finds;
+        /// else, where it is a constructor function another file writes the prototype of (<see cref="Constructs"/>), itself; none
+        /// where neither is. Several are every one of them, never the first of them.
         /// </summary>
-        private Declaration? EnclosingType(Declaration from)
+        private IReadOnlyList<Declaration> EnclosingTypes(Declaration from)
         {
             var at = from;
             var seen = new HashSet<QualifiedName>();
@@ -3195,15 +4403,66 @@ public static class CodeGraphLinker
             {
                 if (at.Node.Parent is not { } parent || !seen.Add(parent) || !_owners[from.File].TryGetValue(parent, out var holder))
                 {
-                    return from.ScopeKey is { } key
-                        ? ContainersOf(key.Name).FirstOrDefault(container => container.Node.Kind == CodeNodeKinds.Type && KeyOf(container.File, container.Node.Qualified) == key)
-                        : null;
+                    if (from.ScopeKey is { } key && Distinct(ContainersOf(key.Name).Where(container => container.Node.Kind == CodeNodeKinds.Type && KeyOf(container.File, container.Node.Qualified) == key)) is { Count: > 0 } scoped)
+                    {
+                        return scoped;
+                    }
+
+                    // A constructor function another file writes the prototype of is the type its own body's this is.
+                    return from.Node.Extends is not null ? Extended(from) : Constructs(from) ? [from] : [];
                 }
 
                 at = holder;
             }
 
-            return at;
+            return [at];
+        }
+
+        /// <summary>
+        /// What <c>this</c> is where <paramref name="from"/> is written: the types it is declared in or extends
+        /// (<see cref="EnclosingTypes"/>); else, where it declares none - a template's own code - the declarations that name its
+        /// file their template, whose members a template's own names are.
+        /// </summary>
+        private IReadOnlyList<Declaration> Selves(Declaration from)
+        {
+            if (EnclosingTypes(from) is { Count: > 0 } enclosing)
+            {
+                return enclosing;
+            }
+
+            Touch(Read.Templates, from.File.Path);
+            return _templates.TryGetValue(from.File.Path, out var templates) ? templates : [];
+        }
+
+        /// <summary>
+        /// What <c>this</c> - <paramref name="selves"/>, what it is where <paramref name="from"/> is written - and the names
+        /// <paramref name="written"/> after it come to: a value of the types and the constructor functions it is - with each
+        /// one's bases - by the first name, each next one a value of the type the one before is declared with, as a chain's
+        /// names are (<see cref="Step"/>); what this is where no name is written; none where this is nothing the repository
+        /// declares, or where what it has come to declares no value of a name it steps - a member the code adds at run time, or
+        /// one a base the repository does not hold gives, which nothing it holds declares - so what is reached through the chain
+        /// is bound by its name alone, as where no type is said, and never by nothing.
+        /// </summary>
+        private Chained OfThis(Declaration from, IReadOnlyList<Declaration> selves, string? written)
+        {
+            if (selves.Count == 0)
+            {
+                return Chained.None;
+            }
+
+            var state = new Chained(ChainedKind.Types, selves, null);
+
+            foreach (var name in written?.Split('.') ?? [])
+            {
+                state = Step(from, state, name);
+
+                if (state.Kind == ChainedKind.Empty)
+                {
+                    return Chained.None;
+                }
+            }
+
+            return state;
         }
 
         /// <summary>Says that the finding under way read the key <paramref name="text"/> of <paramref name="kind"/>.</summary>
@@ -3327,6 +4586,13 @@ public static class CodeGraphLinker
             return _byFileName.TryGetValue(fileName, out var named) ? named : [];
         }
 
+        /// <summary>
+        /// What the file at <paramref name="path"/> is as a name stands for it: the containers its own nodes declare of the open
+        /// scopes it declares - a Python module's namespace, which a name an import binds to the module stands for.
+        /// </summary>
+        private IReadOnlyList<Declaration> ModuleOf(string path)
+            => Distinct(OpensOf(path).SelectMany(ContainersOf).Where(container => container.File.Path == path));
+
         /// <summary>The open scopes the file at <paramref name="path"/> declares: what an import of it by its path makes visible, with its top.</summary>
         private IEnumerable<QualifiedName> OpensOf(string path)
         {
@@ -3338,34 +4604,65 @@ public static class CodeGraphLinker
         /// What <paramref name="cache"/> holds for <paramref name="key"/>, made once by <paramref name="make"/>: the finding
         /// under way reads what making it read, whether it made it or found it made - those reads kept once, with the answer,
         /// and read through whole (<see cref="KeptReads"/>), so a check every finding makes costs each of them a reference.
+        /// Every cache of the link shares its makings (<see cref="_makings"/>). A key asked again while it is being made - directly
+        /// or through any store that shares the makings - is a cycle. Every key of a strongly connected set of makings that holds a
+        /// cycle answers its placeholder - nothing known, what its cache was made with (<see cref="Store{TKey, T}"/>), which reads
+        /// nothing - with whatever its store keeps beside it of what the whole set read: each member's made reads, joined once into
+        /// the one <see cref="KeptReads"/> every member's kept answer carries (<see cref="CycleReads"/>); every read of such a key,
+        /// while the set is made and after, is given that answer. Every other key keeps the answer its making made. Each key is made once,
+        /// each set is closed once as its outermost making ends, and nothing kept is ever made again: the link's work is linear in
+        /// the makings and the reads, whatever key is asked first and however deep the cycles nest
+        /// (<see cref="MadeOnce{TKey, TAnswer}"/>). No making of the link reaches a cycle today: what comes round in the imports,
+        /// re-exports and bases of a language is walked inside one making, each file once, the union of what it reaches.
         /// </summary>
-        private T Cached<TKey, T>(Dictionary<TKey, (T Value, KeptReads Reads)> cache, TKey key, Func<T> make)
+        private T Cached<TKey, T>(MadeOnce<TKey, (T Value, KeptReads Reads)> cache, TKey key, Func<T> make)
             where TKey : notnull
         {
-            if (cache.TryGetValue(key, out var known))
+            if (!cache.TryKept(key, out var known))
             {
-                _reads?.Through.Add(known.Reads);
-                return known.Value;
+                known = cache.Of(_makings, key, () =>
+                {
+                    var outer = _reads;
+                    var reads = _reads = new Reading();
+
+                    try
+                    {
+                        var value = make();
+                        return (value, reads.Kept());
+                    }
+                    finally
+                    {
+                        _reads = outer;
+                    }
+                });
             }
 
-            var outer = _reads;
-            var reads = _reads = new Reading();
-            T value;
-
-            try
-            {
-                value = make();
-            }
-            finally
-            {
-                _reads = outer;
-            }
-
-            var kept = reads.Kept();
-            cache[key] = (value, kept);
-            outer?.Through.Add(kept);
-            return value;
+            _reads?.Through.Add(known.Reads);
+            return known.Value;
         }
+
+        /// <summary>
+        /// A cache of the link (<see cref="Cached"/>): a key's answer is made once, and what is known of it while it is made,
+        /// and kept for it on a cycle, is <paramref name="none"/> - then with all the cycle read (<see cref="ReadsOfCycle"/>).
+        /// </summary>
+        /// <param name="none">What is known of a key while it is being made: nothing.</param>
+        /// <param name="comparer">What makes two keys one; the key's own equality where none is given.</param>
+        private static MadeOnce<TKey, (T Value, KeptReads Reads)> Store<TKey, T>(T none, IEqualityComparer<TKey>? comparer = null)
+            where TKey : notnull
+            => new(_ => (none, KeptReads.None), (_, made, cycle) => (none, ReadsOfCycle(cycle, made.Reads)), comparer);
+
+        /// <summary>
+        /// What a cycle of the link read, kept for a key of it: every member's made reads joined once, into the one
+        /// <see cref="KeptReads"/> each of their kept answers carries.
+        /// </summary>
+        /// <param name="cycle">The cycle closing.</param>
+        /// <param name="made">The reads the member's making made.</param>
+        private static KeptReads ReadsOfCycle(Cycle cycle, KeptReads made) => cycle.Shared(() => new CycleReads([])).Joins(made);
+
+        /// <summary>What a chain's link, a key of a cycle, keeps: nothing known of it, with all the cycle read.</summary>
+        /// <param name="made">The answer its making made.</param>
+        /// <param name="cycle">The cycle closing.</param>
+        private static ChainAnswer NothingKnown(ChainAnswer made, Cycle cycle) => new(Chained.None, ReadsOfCycle(cycle, made.Reads));
 
         /// <summary>
         /// Every key a change altered since the link this is made from: of each file not given as the very object that link
@@ -3416,7 +4713,8 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <paramref name="file"/> holds of each key a finding may read, in order: each of its declarations under its
         /// name and its id - and, for a type or a scope, under its qualified name, its name's last run and its own scope's -
-        /// each scope's parent, its open scopes, its imports with its language, what every file of its language imports, and
+        /// each scope's parent, its open scopes, whether its names are bound within it and written whole, its imports with its
+        /// language, what every file of its language imports, and
         /// its address roots, each whole or not and local or not. A declaration's part is what a finding reads of it, by
         /// whichever key it was reached: its id, its file's language, its kind and its kind within it - what
         /// <see cref="Takes"/> decides by - the scope it is declared in and the scope it is, the declaration that holds it - which says whether it is its file's top - what it takes, its value's type, what
@@ -3439,12 +4737,38 @@ public static class CodeGraphLinker
             }
 
             var closed = Closed(extract);
+            var bodies = Bodies(extract, closed);
 
             Named(Read.Opens, file.Path, file.Path);
 
             foreach (var scope in extract.Scopes.Where(scope => scope.Open))
             {
                 Named(Read.Opens, file.Path, scope.Name);
+            }
+
+            // What a file publishes to an import that takes its published names (<see cref="ExtractImport.Published"/>), and whether what
+            // its own such imports take is published too: under the file's own key, so a name it gains or loses is found again.
+            Named(Read.Opens, file.Path, extract.Published is { } published ? string.Join(PartEnd, published) : None);
+            Named(Read.Opens, file.Path, extract.PublishesTaken ? "publishes-taken" : None);
+
+            // Whether a name the file's code reads that none of its scopes or imports binds is bound by nothing (<see cref="FileExtract.BoundWithin"/>),
+            // and whether every type name it writes is written whole (<see cref="FileExtract.WrittenWhole"/>): both read of another file through
+            // the value it declares (BoundWithin, WrittenWhole), so under the file's own key, as each is touched where it is read.
+            Named(Read.Opens, file.Path, extract.BoundWithin ? "bound-within" : None);
+            Named(Read.Opens, file.Path, extract.WrittenWhole ? "written-whole" : None);
+
+            // Whether the file says its directory is a unit of its language's layout: under the directory's key, so a unit come or gone
+            // is found again by every import of a layout's place passed over or taken in it - and under the roots' one key, since a
+            // unit come or gone may make another outermost or no longer, and so move a root.
+            if (extract.FolderUnit)
+            {
+                Named(Read.Unit, DirectoryOf(file.Path), file.Path);
+                Named(Read.LayoutRoots, string.Empty, $"unit{FieldEnd}{DirectoryOf(file.Path)}");
+            }
+
+            if (extract.LayoutRoots is { } layoutRoots)
+            {
+                Named(Read.LayoutRoots, string.Empty, $"declared{FieldEnd}{file.Path}{FieldEnd}{string.Join(PartEnd, layoutRoots)}");
             }
 
             Named(Read.Imports, file.Path, file.Language ?? None);
@@ -3484,7 +4808,7 @@ public static class CodeGraphLinker
             foreach (var node in extract.Nodes)
             {
                 // Whether it is its file's alone is no field of its own: a closed scope's key is its file's, so the two keys say it.
-                var scopeKey = Placed(file, node, closed).ScopeKey;
+                var (scopeKey, _, seenKey, _) = Placed(file, node, closed, bodies);
                 var own = IsContainer(node) ? KeyOf(file, node.Qualified, closed) : (ScopeKey?)null;
                 var shape = new NodePart(
                     node.Id,
@@ -3498,13 +4822,41 @@ public static class CodeGraphLinker
                     node.MaxArity,
                     node.ValueType,
                     node.Extends,
-                    node.SeenIn is { } seenIn ? KeyOf(file, seenIn, closed) : null,
+                    seenKey,
                     node.Qualified,
                     node.Prototype,
                     string.Join(PartEnd, node.Exports ?? []),
-                    string.Join(PartEnd, (node.SuffixOf ?? []).Select(id => id.Whole())));
+                    string.Join(PartEnd, (node.SuffixOf ?? []).Select(id => id.Whole())),
+                    string.Join(PartEnd, node.Selectors ?? []),
+                    string.Join(PartEnd, node.Templates ?? []),
+                    string.Join(PartEnd, node.Parametrizes ?? []),
+                    string.Join(PartEnd, WrittenBases(file)[node.Id]),
+                    node.Joined,
+                    node.MembersByReceiver);
 
                 Named(Read.Name, node.Name, shape);
+
+                // A member extending a type is read by the name it extends too, which tells a constructor function from another.
+                if (node.Extends is { } extends)
+                {
+                    Named(Read.Extending, SimpleName(extends), shape);
+                }
+
+                // A selector is a name the declaration is found by, as its own: one changed moves it from one name's key to another's.
+                foreach (var selector in node.Selectors ?? [])
+                {
+                    Named(Read.Name, selector, shape);
+                }
+
+                // What a template's code reads is found on the declarations naming it their template, each under the template's
+                // own path: a component that names a file its template, stops naming it or names another alters that file's key.
+                foreach (var template in node.Templates ?? [])
+                {
+                    if (CodeGraphIds.Beside(file.Path, template) is { } named)
+                    {
+                        Named(Read.Templates, named, $"{node.Id.Whole()}{FieldEnd}{template}");
+                    }
+                }
 
                 foreach (var exported in node.Exports ?? [])
                 {
@@ -3532,7 +4884,13 @@ public static class CodeGraphLinker
                 {
                     Add(_keys.Of((int)Read.Qualified, node.Qualified), shape);
                     Named(Read.Trailing, Trailing(node.Qualified.Whole()), node.Qualified);
-                    Add(_keys.Of(scope), (object?)scopeKey ?? None);
+                    Add(_keys.Of(scope), node.MembersByReceiver ? (scopeKey, node.MembersByReceiver) : (object?)scopeKey ?? None);
+                }
+                else if (node.MembersByReceiver && scopeKey is { } passed)
+                {
+                    // A member a name written alone passes over makes the scope it is declared in one that holds such members: it is
+                    // read under that scope's key, as a type whose own scope holds its members is.
+                    Add(_keys.Of(passed), (node.Id, node.MembersByReceiver));
                 }
             }
 
@@ -3544,7 +4902,9 @@ public static class CodeGraphLinker
         /// its kind within it, the scope it is declared in and the scope it is, the declaration that holds it, what it takes,
         /// its value's type, what it extends, the scope it is kept to, its qualified name, whether it is a prototype, and the
         /// names it is exported by and the nodes its names are written onto - each the extract's own text, held by reference,
-        /// never joined into a text of its own.
+        /// never joined into a text of its own - its selectors, its templates, the names it parametrizes tests by, the chains its
+        /// bases are written as, whether it is the own member of the type it extends, and whether its members are reached by a
+        /// receiver alone.
         /// </summary>
         private sealed record NodePart(
             QualifiedName Id,
@@ -3562,7 +4922,13 @@ public static class CodeGraphLinker
             QualifiedName Qualified,
             bool Prototype,
             string Exports,
-            string SuffixOf);
+            string SuffixOf,
+            string Selectors,
+            string Templates,
+            string Parametrizes,
+            string Bases,
+            bool Joined,
+            bool MembersByReceiver);
 
         /// <summary>The keys of the types whose bases are not what they were: what a finding that went through them read.</summary>
         private IEnumerable<int> Moved(Dictionary<QualifiedName, List<string[]>>? before, Dictionary<QualifiedName, List<string[]>> now)
@@ -3619,8 +4985,12 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// What an import is, as a finding reads it: its form, target, prefix, filters, whether it stands in for the one
-        /// before it, whether it is an export and whether it shares the imports of the file it names - never its line, and not whether it is global, which only what every file of its language imports
-        /// holds it under.
+        /// before it, whether it is an export, whether it shares the imports of the file it names, whether its importers reach
+        /// what it binds, whether it takes the names a file publishes, whether it is a place of a layout, whether its prefix
+        /// stands for the name it shows, whether it is one of two places a name may stand at, and the qualifier whose references
+        /// alone it serves - never its line, and not whether it is global, which only what every file of its language imports
+        /// holds it under, nor whether it names the scope a directory's files are declared in, which the files read in that
+        /// scope are read again by whenever it moves.
         /// </summary>
         private static string ImportPart(ExtractImport import)
             => string.Join(
@@ -3632,7 +5002,13 @@ public static class CodeGraphLinker
                 import.Hide is { } hide ? string.Join(',', hide) : None,
                 import.Fallback ? "fallback" : None,
                 import.Export ? "export" : None,
-                import.Shares ? "shares" : None);
+                import.Shares ? "shares" : None,
+                import.Reexports ? "reexports" : None,
+                import.Published ? "published" : None,
+                import.Layout ? "layout" : None,
+                import.Binds ? "binds" : None,
+                import.Either ? "either" : None,
+                import.Serves ?? None);
 
         /// <summary>The names of the closed scopes <paramref name="extract"/> declares.</summary>
         private static HashSet<QualifiedName> Closed(FileExtract extract) => extract.Scopes.Where(scope => !scope.Open).Select(scope => scope.Name).ToHashSet();
@@ -3645,12 +5021,33 @@ public static class CodeGraphLinker
             => [.. extract.Nodes.Where(node => node.SuffixOf is not null).SelectMany(node => (string[])[node.Name, .. node.Exports ?? []]).Select(suffix => suffix.Length - 1).Distinct().Order()];
 
         /// <summary>
-        /// The scope <paramref name="node"/> of <paramref name="file"/> is declared in, by key, and whether it is its file's
-        /// alone: a type or a scope whose own scope is closed is, as what it declares is.
+        /// The scope <paramref name="node"/> of <paramref name="file"/> is declared in, by key; whether it is its file's alone - a
+        /// type or a scope whose own scope is closed is, as what it declares is; the scope whose declarations alone see it, by key;
+        /// and whether it is a local of a member's body - declared in one of <paramref name="bodies"/>. What a member's body declares
+        /// is seen from that body and the scopes inside it alone, whatever its extract keeps it to - a narrower scope than the
+        /// one it is declared in there is none - and from the rest of its file no more than from any other.
         /// </summary>
-        private static (ScopeKey? ScopeKey, bool FileOnly) Placed(CodeGraphFile file, ExtractNode node, HashSet<QualifiedName> closed)
-            => (node.Scope is { } scope ? KeyOf(file, scope, closed) : null,
-                (node.Scope is { } declared && closed.Contains(declared)) || (IsContainer(node) && closed.Contains(node.Qualified)));
+        private static (ScopeKey? ScopeKey, bool FileOnly, ScopeKey? SeenKey, bool Local) Placed(CodeGraphFile file, ExtractNode node, HashSet<QualifiedName> closed, HashSet<QualifiedName> bodies)
+        {
+            var scopeKey = node.Scope is { } scope ? KeyOf(file, scope, closed) : (ScopeKey?)null;
+            var local = node.Scope is { } declared && bodies.Contains(declared);
+
+            return (
+                scopeKey,
+                (node.Scope is { } inClosed && closed.Contains(inClosed)) || (IsContainer(node) && closed.Contains(node.Qualified)),
+                local ? scopeKey : node.SeenIn is { } seenIn ? KeyOf(file, seenIn, closed) : null,
+                local);
+        }
+
+        /// <summary>
+        /// The members' bodies <paramref name="extract"/> declares, by name: each closed scope it declares under the qualified name
+        /// of one of its members (<see cref="ExtractScope"/>).
+        /// </summary>
+        private static HashSet<QualifiedName> Bodies(FileExtract extract, HashSet<QualifiedName> closed)
+            => [.. extract.Nodes.Where(node => IsBody(node, closed)).Select(node => node.Qualified)];
+
+        /// <summary>Whether the closed scope of <paramref name="node"/>'s qualified name is its body: it is a member, and the scope closed - one of <paramref name="closed"/>.</summary>
+        private static bool IsBody(ExtractNode node, HashSet<QualifiedName> closed) => node.Kind == CodeNodeKinds.Member && closed.Contains(node.Qualified);
 
         /// <summary>What stands for nothing in a part: no name has it.</summary>
         private const string None = "\u0004";
@@ -3673,10 +5070,15 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// Whether <paramref name="from"/> sees <paramref name="declaration"/>: from its file, and - where it is kept to a
-        /// scope - from that scope, or a scope inside it, as the scopes <paramref name="from"/> is written in climb.
+        /// scope - from that scope, or a scope inside it, as the scopes <paramref name="from"/> is written in climb. But a member
+        /// reached by a receiver alone (<see cref="ByReceiver"/>) sees, of what its own scope keeps to itself, its type's members
+        /// alone - never what a namespace TypeScript merges with its type into that scope keeps to the namespace - as a name it
+        /// writes alone finds nothing of that scope (<see cref="Scoped"/>).
         /// </summary>
         private bool Sees(Declaration from, Declaration declaration)
-            => Sees(from.File, declaration) && (declaration.SeenKey is not { } seen || Chain(from).Contains(seen));
+            => Sees(from.File, declaration)
+                && (declaration.SeenKey is not { } seen
+                    || (Chain(from).Contains(seen) && !(seen == from.ScopeKey && ByReceiver(from) && !ByReceiver(declaration))));
 
         /// <summary>Whether <paramref name="path"/> is under the directory <paramref name="directory"/>, the tree's root as empty: a scope import a file declares for its directory's subtree.</summary>
         private static bool Under(string path, string directory)
@@ -3832,8 +5234,8 @@ public static class CodeGraphLinker
     /// Whether <paramref name="target"/> is something <paramref name="reference"/> can name: of a kind its edge reaches, and
     /// taking its arity. A node of data - a configuration key, an element, a node a style sheet declares
     /// (<see cref="CodeSubKinds"/>) - is reached only by a reference that says it names one: a selector a rule, a key
-    /// qualifier a key, a style sheet's variable, mixin, function, keyframes or font face qualifier its kind
-    /// (<see cref="CodeSubKinds.ReachedBy"/>), each of the kind it names alone; a use through an import's prefix whatever
+    /// qualifier a key, a style sheet's variable, mixin, function, keyframes or font face qualifier its kind - and a fixture
+    /// qualifier a fixture - (<see cref="CodeSubKinds.ReachedBy"/>), each of the kind it names alone; a use through an import's prefix whatever
     /// the file it imports declares; and a use an import makes visible (<paramref name="imported"/>) by a name the file
     /// that declares the node exports it by - <c>import { btn } from './x.module.css'</c> as <c>styles.btn</c> is, and a
     /// node standing for a suffix written onto others' (<see cref="ExtractNode.SuffixOf"/>), which no name finds but one
@@ -3843,7 +5245,9 @@ public static class CodeGraphLinker
     /// keyframes (<see cref="Renamed"/>) - is reached by its name only from a node of a style sheet, its own sheet's
     /// <c>composes</c> or <c>@extend</c>: the module renames it, so a class markup writes - a component's
     /// <c>class="red"</c> beside its <c>&lt;style module&gt;</c> - reaches none of it; its exports do, through an import
-    /// and through a binding of its own file's module (<see cref="CodeQualifierKinds.Module"/>), which reaches nothing else.
+    /// and through a binding of its own file's module (<see cref="CodeQualifierKinds.Module"/>), which reaches nothing else; and from a
+    /// file that keeps its names' kinds apart (<see cref="FileExtract.KindsApart"/>) a call reaches what takes arguments alone, a use a
+    /// value alone and a new a type alone - none of them the other's kind, a call and a use never a type.
     /// </summary>
     /// <param name="from">The declaration the reference is made in.</param>
     /// <param name="reference">The reference.</param>
@@ -3877,6 +5281,13 @@ public static class CodeGraphLinker
             return false;
         }
 
+        // A file that keeps its names' kinds apart calls what takes arguments alone and reads a value alone: neither a type - which a new
+        // and a type's place name - nor a member of the other kind (FileExtract.KindsApart).
+        if (from.File.Extract is { KindsApart: true } && reference.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Uses)
+        {
+            return reference.Kind == CodeEdgeKinds.Calls ? IsFunction(target) && target.Node.TakesArity(reference.Arity) : IsValue(target);
+        }
+
         return reference.Kind switch
         {
             CodeEdgeKinds.Calls => (target.Node.Kind == CodeNodeKinds.Member && target.Node.TakesArity(reference.Arity)) || target.Node.Kind == CodeNodeKinds.Type,
@@ -3892,7 +5303,17 @@ public static class CodeGraphLinker
 
     private static bool IsContainer(ExtractNode node) => node.Kind is CodeNodeKinds.Type or CodeNodeKinds.Namespace;
 
-    /// <summary>Whether <paramref name="declaration"/> is a value: a member no call is made of by its arguments - a field, a property, an event.</summary>
+    /// <summary>
+    /// Whether <paramref name="declaration"/> is a function: a member a call is made of by its arguments, which a constructor function is.
+    /// What a call alone reaches from a file that keeps its names' kinds apart (<see cref="Takes"/>), as a value is what a use does.
+    /// </summary>
+    private static bool IsFunction(Declaration declaration) => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: not null };
+
+    /// <summary>
+    /// Whether <paramref name="declaration"/> is a value: a member no call is made of by its arguments - a field, a property, an event, a
+    /// constant, an enum's case. What a use alone reaches from a file that keeps its names' kinds apart (<see cref="Takes"/>), as a function
+    /// is what a call does.
+    /// </summary>
     private static bool IsValue(Declaration declaration)
         => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: null, MaxArity: null };
 
@@ -3997,6 +5418,13 @@ public sealed record CodeGraphLinked(
     IReadOnlyDictionary<string, int> External,
     int References)
 {
+    /// <summary>
+    /// For each node, the signs its references - and, of a file's node, its imports - gave of what the graph does not see where they
+    /// are made (<see cref="CodeGraphLimit.Signs"/>), each once, in order: why a reference counted external named nothing, why one was
+    /// left candidates, an import taken as several places. A node that gave none is not here.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Signs { get; init; } = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
     /// <summary>What the link keeps for one made again from it (<see cref="CodeGraphLinker.Relink"/>).</summary>
     internal CodeGraphLinker.LinkMemory? Memory { get; init; }
 

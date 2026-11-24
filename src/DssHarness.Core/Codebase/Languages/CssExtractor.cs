@@ -24,7 +24,7 @@ public sealed class CssExtractor : ICodeGraphExtractor
     public string Language => "css";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".css", ".scss", ".sass", ".less");
@@ -35,14 +35,22 @@ public sealed class CssExtractor : ICodeGraphExtractor
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
         "Style sheets (.css, .scss, .sass in its indented syntax, .less): each simple part of each selector - a nested rule's, one inside an @media, @supports, @layer or any at-rule's block, and one an & writes a suffix to among them - as a rule node named as CSS reads it, escapes read, over its own rule's lines, a suffix an & writes onto several selectors (.a, .b { &-x {} }) one node named &-x written onto each, which every name it writes links to, so lists nested in lists are as many nodes as the sheet writes; each custom property, @property and SCSS or Less variable as a style-variable, but a variable a block declares without !global, a mixin's or a function's parameter and a loop's variable, the block's own and no use; each @mixin, @function, @keyframes and @font-face as a member of its own kind, which no name code writes reaches; a var(--x), a $x and a Less @x as uses of the variable, an @include as a use of the mixin, a call of a function a sheet may declare (rem(2px), m.rem(2px)) as a use of it, a Less mixin call as one of the rule, a name an animation or an animation-name gives (not one of the shorthand's own words) as a use of the keyframes, a family a font-family or a font names as a use of the font face, matched without case, an @extend and a Less :extend as an inheritance of the rule it names, and a Tailwind @apply and a CSS module's composes as uses of the rules of its classes, each made from the rule, mixin, function or variable that holds it - what none holds from the sheet's own (sheet) node - each string and url(...) a literal of it, and each looked for nearest first: the sheet's own, what it imports, then the repository's; an @import, @use and @forward naming a file of the tree as an import of it, tried as the sheet's language tries it - Sass's partials, index files and import-only files among them, an @import Sass leaves to CSS (url(...), or one a media query follows) as written - a @use by its namespace, a @forward with its show and hide, and a composes ... from an import of its file; a sheet named x.module.css (or .scss, .sass, .less) as a CSS module, whose classes, ids and keyframes - but those under :global - are its own, which no other file's selector and no class markup writes reaches and a script's import binds to by their names, camel-cased too; and blocks, selectors and interpolations nested to any depth, read whole",
-        [
-            "a pseudo-class's, a pseudo-element's and an attribute's condition, and a :not() or a :has(): no parts of a rule of their own, but the selectors of an :is(), a :where(), a :global(), a :local(), a :deep() and a :slotted(), which are",
-            "a rule's declarations, the custom properties and variables among them excepted, and a keyframe's from, to and percentages: no nodes of their own",
-            "a selector, a name or a path an interpolation writes (#{...}, Less's @{...}): no node and no import, said as dynamic, what the interpolation uses read",
-            "an @import, @use or @forward that names a package, a URL, a host's path or one of Sass's own modules (sass:math): no import of it; a @forward's prefix (as name-*): its names read as they are declared",
-            "a & in what an @extend or a Less :extend() names, which Sass refuses, and in a Less mixin's call: it stands for nothing there",
-            "a call of one of CSS's own functions (calc(), var(), url()), a call in a Less value - Less declares no function - and a generic font family (serif, system-ui): no reference",
-        ]);
+        SheetUnseen);
+
+    /// <summary>
+    /// What the reading of a style sheet does not see, wherever the sheet stands: a style sheet file's, and each style block of every
+    /// markup implementation that reads its style blocks by this reader (<see cref="Read"/>) - an HTML page's, a Vue component's -
+    /// whose help says them too.
+    /// </summary>
+    internal static IReadOnlyList<CodeGraphLimit> SheetUnseen { get; } =
+    [
+        ("selector-conditions", "a pseudo-class's, a pseudo-element's and an attribute's condition, and a :not() or a :has(): no parts of a rule of their own, but the selectors of an :is(), a :where(), a :global(), a :local(), a :deep() and a :slotted(), which are"),
+        ("declarations", "a rule's declarations, the custom properties and variables among them excepted, and a keyframe's from, to and percentages: no nodes of their own"),
+        new CodeGraphLimit("interpolations", "a selector, a name or a path an interpolation writes (#{...}, Less's @{...}): no node and no import, said as dynamic, what the interpolation uses read") { Signs = [CssReading.Interpolation] },
+        ("package-imports", "an @import, @use or @forward that names a package, a URL, a host's path or one of Sass's own modules (sass:math): no import of it; a @forward's prefix (as name-*): its names read as they are declared"),
+        ("extend-ampersand", "a & in what an @extend or a Less :extend() names, which Sass refuses, and in a Less mixin's call: it stands for nothing there"),
+        ("builtin-functions", "a call of one of CSS's own functions (calc(), var(), url()), a call in a Less value - Less declares no function - and a generic font family (serif, system-ui): no reference"),
+    ];
 
     /// <inheritdoc/>
     public FileExtract Extract(CodeFileInput input)

@@ -350,19 +350,62 @@ public sealed class HostProbesTests
     }
 
     /// <summary>
-    /// A word a host prints is read in one pass however long it is: a line of a hundred thousand full stops, as a
-    /// test runner prints one for each test, or of a hundred thousand labels, is left as it is at once.
+    /// A word a host prints is read in one pass however long it is: a line of a hundred thousand full stops, as a test
+    /// runner prints one for each test, or of a hundred thousand labels, is left as it is; and reading a long line costs
+    /// about what reading a sixteenth of it as many times as makes as many characters costs, never sixteen times that, as
+    /// a reading that looked from every start of a word to its end would. The growth is measured, never the clock: both
+    /// readings read as many characters, so a busy machine slows them alike; each is repeated until it is long beside a
+    /// scheduler's slice; the words measured are kept below the size the runtime keeps apart on its large object heap, so
+    /// that no reading is slowed by the collection such a size brings about; and five pairs are read in turn in one
+    /// process and the middle one by its ratio is kept, so a pause the runtime takes beside a reading moves one pair and
+    /// never the middle. The bound on the whole is a hang's alone.
     /// </summary>
-    [Fact(Timeout = 10_000)]
-    public async Task ALongWord_IsReadInOnePass()
+    [Fact(Timeout = 60_000)]
+    public void ALongWord_IsReadInOnePass()
     {
-        var labels = string.Concat(Enumerable.Repeat("a:", 100_000));
-        var said = new string('.', 200_000) + " 192.0.2.10 " + new string(':', 200_000) + " " + new string('a', 200_000) + " " + labels;
+        static string Line(int part) => new string('.', 2_600 * part) + " 192.0.2.10 " + new string(':', 2_600 * part) + " " + new string('a', 2_600 * part) + " " + string.Concat(Enumerable.Repeat("a:", 1_300 * part));
+
+        static TimeSpan Reading(string line, HostConnection through, int times)
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+
+            for (var at = 0; at < times; at++)
+            {
+                _ = HostProbes.AsConfigured(line, through);
+            }
+
+            return watch.Elapsed;
+        }
+
+        // A reading of the whole line, and a reading of a sixteenth of it as many times as read as many characters.
+        const int Whole = 16;
+        const int Sixteenth = 16 * Whole;
         var resolved = new HostConnection { Host = HostId.Ssh("mac"), Address = "mac.invalid", Resolved = Learnt("192.0.2.10") };
+        var brief = Line(1);
+        var whole = Line(16);
 
-        var relayed = await Task.Run(() => HostProbes.AsConfigured(said, resolved), TestContext.Current.CancellationToken);
+        // Each read once before any is measured, as a reading is compiled to the machine's code but once.
+        _ = Reading(brief, resolved, Sixteenth);
+        _ = Reading(whole, resolved, Whole);
 
-        Assert.Equal(new string('.', 200_000) + " mac.invalid " + new string(':', 200_000) + " " + new string('a', 200_000) + " " + labels, relayed);
+        var growth = new double[5];
+
+        for (var pair = 0; pair < growth.Length; pair++)
+        {
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+            growth[pair] = Reading(whole, resolved, Whole).Ticks / (double)Reading(brief, resolved, Sixteenth).Ticks;
+        }
+
+        Array.Sort(growth);
+        var middle = growth[growth.Length / 2];
+
+        Assert.True(middle <= 3, $"a long line took {middle:n1} times what reading a sixteenth of it, as many times, took - the middle of five pairs, from {growth[0]:n1} to {growth[^1]:n1} - where one pass reads as much");
+
+        var labels = string.Concat(Enumerable.Repeat("a:", 100_000));
+
+        Assert.Equal(
+            new string('.', 200_000) + " mac.invalid " + new string(':', 200_000) + " " + new string('a', 200_000) + " " + labels,
+            HostProbes.AsConfigured(new string('.', 200_000) + " 192.0.2.10 " + new string(':', 200_000) + " " + new string('a', 200_000) + " " + labels, resolved));
     }
 
     /// <summary>

@@ -150,6 +150,103 @@ public sealed record GraphReached(GraphCard Card, int Distance)
     public bool Recall { get; init; }
 }
 
+/// <summary>
+/// One place a string literal that names the data of a <c>sites</c> ask is written: the node whose code holds it
+/// - the innermost declaration around it, or the file's own node for what its top holds outside its declarations - where
+/// the view holds one, and the file, the line and the value whatever holds it.
+/// </summary>
+/// <param name="Node">The node whose code holds the literal; null where the view holds no node of it.</param>
+/// <param name="Path">The file, relative to the tree with forward separators.</param>
+/// <param name="Line">The line the literal's value begins on.</param>
+/// <param name="Value">The literal's whole value, which names the data or holds it as a whole word.</param>
+public sealed record GraphLiteralPlace(GraphCard? Node, string Path, int Line, string Value);
+
+/// <summary>
+/// How a place decides the data of a <c>sites</c> ask, as its card says it: the one list of the words, in the order a card
+/// says them, each reached by its own edges (<see cref="CodebaseGraphQueries.SitesOf"/>) or by what the answer reads beside
+/// them - a definer, a key, a literal, a line of text.
+/// </summary>
+public static class GraphSiteHows
+{
+    /// <summary>A declaration of the data: a node the data names.</summary>
+    public const string Defines = "defines";
+
+    /// <summary>A configuration key the data names, which is held and never defined.</summary>
+    public const string HoldsTheKey = "holds the key";
+
+    /// <summary>A member that calls a definer.</summary>
+    public const string Calls = "calls";
+
+    /// <summary>A node that reads or writes a definer without calling it.</summary>
+    public const string Uses = "uses";
+
+    /// <summary>A node that makes a definer: a call of a type, an element of a component.</summary>
+    public const string Instantiates = "instantiates";
+
+    /// <summary>A type that implements a definer, or a member that answers it for a type.</summary>
+    public const string Implements = "implements";
+
+    /// <summary>A member that overrides a definer, or one a definer overrides.</summary>
+    public const string Overrides = "overrides";
+
+    /// <summary>
+    /// A node that names a definer by its kind without making it: a type mention - an annotation, a parameter's or a field's
+    /// type - and a test of a value's kind, as <c>isinstance</c>, <c>instanceof</c> and a <c>catch</c> or an <c>except</c> make one.
+    /// </summary>
+    public const string References = "references";
+
+    /// <summary>A type built on a definer: one inheriting it, or mixing it in.</summary>
+    public const string Inherits = "inherits";
+
+    /// <summary>A node whose code holds a string literal that is the data or holds it.</summary>
+    public const string HoldsTheLiteral = "holds the literal";
+
+    /// <summary>A node with a line of text that holds the data, found by the answer's text search.</summary>
+    public const string Text = "a line holds it";
+
+    /// <summary>Every way a place decides, in the order a card says them.</summary>
+    public static IReadOnlyList<string> All { get; } = [Defines, HoldsTheKey, Calls, Uses, Instantiates, References, Inherits, Implements, Overrides, HoldsTheLiteral, Text];
+}
+
+/// <summary>What one way of deciding reaches off a <c>sites</c> ask's definers: the nodes, each with the surest confidence of the edges that reach it.</summary>
+/// <param name="How">The way they decide: one of <see cref="GraphSiteHows"/>.</param>
+/// <param name="Edges">The nodes it reaches, each once.</param>
+public sealed record GraphSiteGroup(string How, IReadOnlyList<GraphEdge> Edges);
+
+/// <summary>Why a <c>sites</c> answer searches a file by text: what the graph does not answer of it (<see cref="CodebaseGraphQueries.TextScopeOf"/>).</summary>
+public enum GraphTextReason
+{
+    /// <summary>The view does not hold the file: it was written after the view's last sync, or the graph's settings keep it out.</summary>
+    Unheld,
+
+    /// <summary>The view holds the file in a state no implementation of a language read it in: listed alone, unreadable, ambiguous, and the rest.</summary>
+    Unread,
+
+    /// <summary>
+    /// The view holds the file as an implementation of a language read it, but no longer the extract it read: one that does
+    /// not read, or no longer declares what the link names (<see cref="CodebaseGraphQueries.Unheld"/>) - its declarations in
+    /// no answer.
+    /// </summary>
+    Unextracted,
+
+    /// <summary>The graph is not sure of the file (<see cref="CodebaseGraphQueries.UnsureOfFile"/>).</summary>
+    Unsure,
+
+    /// <summary>An implementation outlines the file: its values and its text are held by no literal of the graph.</summary>
+    Outlined,
+
+    /// <summary>A node of the file makes a reference named the data that the linker bound to nothing of that name (<see cref="CodebaseGraphQueries.UnboundNaming"/>).</summary>
+    Unbound,
+
+    /// <summary>The data is a quoted value, and the graph holds a value only where code writes it as a string literal: every other file is searched for it.</summary>
+    Value,
+}
+
+/// <summary>What a <c>sites</c> answer searches one file by text for (<see cref="CodebaseGraphQueries.TextScopeOf"/>).</summary>
+/// <param name="Reason">Why it is searched.</param>
+/// <param name="State">The state the view holds it in, where it is searched for that (<see cref="GraphTextReason.Unread"/>); null otherwise.</param>
+public sealed record GraphTextScope(GraphTextReason Reason, string? State = null);
+
 /// <summary>The repository at a glance: its projects, its top directories with their files, its namespaces with what they declare.</summary>
 /// <param name="Projects">Each project node.</param>
 /// <param name="Directories">Each top directory - '.' for the files at the root - with the files the view holds in it.</param>

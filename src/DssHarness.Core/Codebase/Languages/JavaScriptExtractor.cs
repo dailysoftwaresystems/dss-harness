@@ -13,7 +13,7 @@ public sealed class JavaScriptExtractor : ICodeGraphExtractor
     public string Language => "javascript";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 4;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".js", ".mjs", ".cjs", ".jsx");
@@ -23,7 +23,7 @@ public sealed class JavaScriptExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "JavaScript (.js, .mjs, .cjs, .jsx), through the structural scanner C, C++ and Dart are read by: every class, function, variable - a function, an arrow or a class bound to one read as one - method, accessor and field with its signature, summary and body; ECMAScript's and CommonJS's imports and exports, each tried as Node tries it, a module one scope whose own names no importer sees; extends; each call with what its receiver is where the file says, a JSX element's component among them; each member a member reads or writes without calling it, and each string literal the file holds - a template's constant parts each one of its own, a JSX attribute's text, a regular expression none - by its value as JavaScript reads its escapes, a String.raw template's as written, its line and the node it is written in; describe, it and test calls in test files",
+        "JavaScript (.js, .mjs, .cjs, .jsx), through the structural scanner C, C++ and Dart are read by: every class, function, variable - a function, an arrow or a class bound to one read as one - method, accessor and field with its signature, summary and body; ECMAScript's and CommonJS's imports and exports, each tried as Node tries it, a module one scope whose own names no importer sees; extends; each call with what its receiver is where the file says, a JSX element's component among them, and a JSX attribute's className, class and id a use of each rule it names, as markup's are; " + JsHelp.Frameworks + "; each member a member reads or writes without calling it, and each string literal the file holds - a template's constant parts each one of its own, a JSX attribute's text, a regular expression none - by its value as JavaScript reads its escapes, a String.raw template's as written, its line and the node it is written in; describe, it and test calls in test files",
         JsHelp.Unseen);
 
     /// <inheritdoc/>
@@ -34,20 +34,34 @@ public sealed class JavaScriptExtractor : ICodeGraphExtractor
     }
 }
 
-/// <summary>What the reader JavaScript and TypeScript share does not see, as help says it for each.</summary>
+/// <summary>What the reader JavaScript and TypeScript share sees and does not see, as help says it for each.</summary>
 internal static class JsHelp
 {
+    /// <summary>What both languages' reading sees of the frameworks and the module wrappers they are written in.</summary>
+    public const string Frameworks =
+        "each decorator a call of what it names, its arguments' code read, and one an import of a package binds asked of the repository; "
+        + "a type Backbone builds by a call of extend on a chain naming a type - var View = Backbone.View.extend({...}, {...}) - a type inheriting what it extends, the first object it is given its members and the second its static ones, its events hash's selectors uses of their rules and its handlers and routes calls of the methods they name, and a merge of objects - _.extend({}, a), $.extend({...}, b) - no type; "
+        + "a member a prototype assignment adds - X.prototype.y = function () {}, X.prototype = { y() {} } - a member of X, in X's own scope where the file declares X and else one extending it, a function whose prototype the file writes a type, a constructor function, whose constructor is its body - a chain the file assigns one, App.Cart = function () {}, among them - and a function another file declares, whose prototype's members extend it, found as a call of it is - its module's default where a require or a default import binds it - the type their this and its own are read on and its new makes, App.Cart's in a scope App nothing declares found by its whole chain; such a member the type's own wherever the type is, whatever loaded its file - an import for its side effect alone, require('./x') or import './x', among them - reached by a call on a value of the type or of one built on it, and one of a type the repository does not declare, a library's - Backbone.View.prototype.close = function () {} - by a call on a value of a type written alike and through this in a class built on one, by extends or by extend, as its base is written; a jQuery plugin - $.fn.y = function () {}, fn after $ or jQuery jQuery's name for its prototype - such a member of $, reached by its name from what a call of $ gives; "
+        + "an AMD module's define factory and a function called where it is written (an IIFE, at the file's top) read as the file's top is, each in a closed scope of its own whose declarations its own code alone sees and its other code the calls of a node of its own, (wrapper 3:2) by where its function begins, a factory's dependencies imports by its parameters - require, exports and module the loader's own, none - its return the module's export, read as module.exports = ...'s is, and what its code exports in any CommonJS form - module.exports = { helper }, exports.total = function () {}, module.exports = class {} - its importers' by the name it is exported by; "
+        + "an Angular @Component's, @Directive's or @Pipe's object, the decorator @angular/core's - its selector's elements, each with a dash, the names its component is reached by from markup, a pipe's name the pipe markup writes after a bar, its templateUrl the file that is its template and its styleUrl and styleUrls imports";
+
     /// <summary>What neither language's reading sees.</summary>
-    public static IReadOnlyList<string> Unseen { get; } =
+    public static IReadOnlyList<CodeGraphLimit> Unseen { get; } =
     [
-        "types inferred: a call on a value whose type the file does not write or make with new - a local given a call's result, a parameter with no type, a property another module declares - is bound by its name alone",
-        "members added at run time - X.prototype.y = ..., Object.assign, a constructor's this.x = ...: not nodes, so no call reaches them",
-        "a module a bundler's own configuration aliases (resolve.alias), and an export condition package.json chooses by: the first entry the repository holds",
-        "a re-export that renames - export { a as b } from './x', export * as ns from './x': its names are visible as the file it re-exports declares them, and a namespace's not at all, though the file is imported",
-        "a require or an import() a function calls, module.exports = { a: require('./a') } and exports.a = require('./a'): the file is imported, and no name of it bound; what a call's result exports - module.exports = factory(), a UMD wrapper's: nothing the reader names",
-        "local functions, closures and the functions an object literal holds: not nodes - what they call is the calls of the declaration they are written in - but module.exports = { f() {} }, whose functions are",
-        "a call through a function value - a parameter, a local, a variable no function is bound to, a field of a function type, a value's call or apply - and a component a value holds (<Icon /> of const Icon = ...): marked dynamic, and not linked",
-        "a test written through a helper of its own, and not a describe, context, suite, it, test or specify call (with .only, .skip, .each and the rest) of a test file - under test/, tests/ or __tests__/, or named *.test.* or *.spec.*: not seen as a test",
-        "a statement that relies on a line break ending it where JavaScript would not - a line beginning with ( or [ goes on with the line before, as JavaScript reads it",
+        new CodeGraphLimit("inferred-types", "types inferred: a call on a value whose type the file does not write or make with new - a local given a call's result, a parameter with no type, a property another module declares, a chain on this through a member its type declares nowhere - is bound by its name alone") { Signs = [CodeGraphLimit.Candidates] },
+        ("runtime-members", "members added at run time - Object.assign, this.x = ... in a function no type the file declares holds, a prototype member given a value and not a function (X.prototype.y = value): not nodes, so no call reaches them, but X.prototype.y = function () {} is a member of X, and this.x = ... in a constructor, a method or an accessor of a type the file declares a field of it where the type declares nothing of that name, of the type its new makes where it is one"),
+        ("backbone-values", "a type Backbone builds by a call of extend, given to an assignment, an export default or a return rather than a declaration - window.V = Backbone.View.extend({...}), return Backbone.View.extend({...}): the call it is, and its objects' functions no members; an events hash's handler a function writes is the type's code, and a selector its key writes past a class's and an id's names no rule"),
+        ("wrapper-scope", "a declaration in a function other than a wrapper - one a wrapper's code calls among them - is that function's code, and a wrapper's parameters and the imports its dependencies make are its file's; an AMD dependency is tried as an import's specifier is, by a path where it begins ./ or ../ and as a package's otherwise, the baseUrl and paths require.config sets not read"),
+        ("bundler-aliases", "a module a bundler's own configuration aliases (resolve.alias), and an export condition package.json chooses by: the first entry the repository holds"),
+        ("renaming-reexports", "a re-export that renames - export { a as b } from './x', export * as ns from './x': its names are visible as the file it re-exports declares them, and a namespace's not at all, though the file is imported"),
+        ("inner-requires", "a require or an import() a function calls, module.exports = { a: require('./a') } and exports.a = require('./a'): the file is imported, and no name of it bound; what a call's result exports - module.exports = factory(), a UMD wrapper's: nothing the reader names"),
+        ("local-functions", "local functions, closures and the functions an object literal holds: not nodes - what they call is the calls of the declaration they are written in - but module.exports = { f() {} }, whose functions are, and the object a call of extend is given, whose functions are members of the type it builds"),
+        ("jsx-expressions", "a JSX attribute's class or id written by an expression - className={classes} - a use of no rule: className=\"a b\" is a use of .a and of .b, id=\"main\" of #main"),
+        ("inline-angular", "an Angular component's inline template and styles (template: ..., styles: [...]): read as no markup and no style sheet; a selector naming a class, an attribute or a pseudo-class, or an element with no dash - .cart, div[appCart], app-cart:hover, cart: no element reaches the component by it; a decorator named Component, Directive or Pipe that no import of @angular/core binds is a call of what it names, and no metadata"),
+        new CodeGraphLimit("function-values", "a call through a function value - a parameter, a local, a variable no function is bound to, a field of a function type, what a computed member holds (handlers[name]()), a value's call or apply, Reflect.apply and Reflect.construct - and a component a value holds (<Icon /> of const Icon = ...): marked dynamic, and not linked") { Signs = [JsReading.FunctionValue] },
+        new CodeGraphLimit("computed-imports", "an import() or a require of a module the code computes - import(`./locale/${name}.js`), require(path): marked dynamic, and no file imported") { Signs = [JsReading.ComputedImport] },
+        new CodeGraphLimit("eval", "code a string holds - eval's, and a function new Function makes: marked dynamic, and not read") { Signs = [JsReading.ComputedCode] },
+        ("test-helpers", "a test written through a helper of its own, and not a describe, context, suite, it, test or specify call (with .only, .skip, .each and the rest) of a test file - under test/, tests/ or __tests__/, or named *.test.* or *.spec.*: not seen as a test"),
+        ("line-breaks", "a statement that relies on a line break ending it where JavaScript would not - a line beginning with ( or [ goes on with the line before, as JavaScript reads it"),
     ];
 }

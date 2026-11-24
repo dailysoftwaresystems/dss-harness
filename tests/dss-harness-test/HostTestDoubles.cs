@@ -449,6 +449,12 @@ internal sealed class RecordingLastResort : IHostAgentLastResort
     /// <summary>How many times the agent looked for what it started still running.</summary>
     public int Looks => Volatile.Read(ref _looks);
 
+    /// <summary>Called as the agent asks to end, before that is answered: a test records what stood at that moment.</summary>
+    public Action<int>? OnEnd { get; init; }
+
+    /// <summary>Called as the agent asks for what it started to be ended - its last resort taken: a test lets the run answer in that moment.</summary>
+    public Action? OnEndStarted { get; init; }
+
     private int _looks;
 
     public Task<bool> AnyStartedRunsAsync(CancellationToken cancellationToken)
@@ -457,10 +463,15 @@ internal sealed class RecordingLastResort : IHostAgentLastResort
     public Task<string> EndStartedAsync()
     {
         Asked = true;
+        OnEndStarted?.Invoke();
         return Fails is null ? Task.FromResult(Found) : Task.FromException<string>(Fails);
     }
 
-    public void End(int exitCode) => _ended.TrySetResult(exitCode);
+    public void End(int exitCode)
+    {
+        OnEnd?.Invoke(exitCode);
+        _ended.TrySetResult(exitCode);
+    }
 }
 
 /// <summary>

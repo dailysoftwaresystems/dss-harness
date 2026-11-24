@@ -90,6 +90,27 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
 
         public IReadOnlyList<StoredLiteral>? Literals { get; init; }
 
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public IReadOnlyList<string>? Published { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool BoundWithin { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool KindsApart { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool WrittenWhole { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool FolderUnit { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool PublishesTaken { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public IReadOnlyList<string>? LayoutRoots { get; init; }
+
         /// <summary><paramref name="extract"/> as its record holds it.</summary>
         /// <exception cref="JsonException">A field names a node, or a scope, the extract holds none of: no sound extract does, and none is kept otherwise.</exception>
         public static StoredExtract Of(FileExtract extract)
@@ -129,12 +150,19 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     MaxArity = node.MaxArity,
                     Prototype = node.Prototype,
                     Test = node.Test,
+                    TestByType = node.TestByType,
+                    TestBase = node.TestBase,
+                    Parametrizes = node.Parametrizes,
                     Part = node.Part,
+                    MembersByReceiver = node.MembersByReceiver,
                     ValueType = node.ValueType,
                     Extends = node.Extends,
+                    Joined = node.Joined,
                     SeenIn = node.SeenIn is { } seenIn ? Name("scope", seenIn) : null,
                     Exports = node.Exports,
                     SuffixOf = node.SuffixOf is { } onto ? [.. onto.Select(id => Place(id, $"its node '{node.Id}' stands for names written onto"))] : null,
+                    Selectors = node.Selectors,
+                    Templates = node.Templates,
                     Digest = node.Digest,
                 };
             }
@@ -159,6 +187,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 References = [.. (extract.References ?? []).Select(reference => new StoredReference(Place(reference.From, $"a reference to '{reference.Name}' is made from"), reference.Kind, reference.Name, reference.Line)
                 {
                     Arity = reference.Arity,
+                    Probe = reference.Probe,
+                    Around = reference.Around,
                     Qualifier = reference.Qualifier is not { } qualifier ? null
                         : qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } ? new StoredQualifier(qualifier.Kind) { Node = Place(own, $"a reference to '{reference.Name}' names the node") }
                         : new StoredQualifier(qualifier.Kind) { Name = qualifier.Name?.Whole(), Link = qualifier.Link },
@@ -169,6 +199,13 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 Literals = extract.Literals is { } literals
                     ? [.. literals.Select(literal => new StoredLiteral(literal.Value, [.. literal.Places.Select(place => new StoredPlace(place.Line) { Node = place.Node is { } node ? Place(node, $"its literal '{literal.Value}' is held by") : null })]))]
                     : null,
+                Published = extract.Published,
+                BoundWithin = extract.BoundWithin,
+                KindsApart = extract.KindsApart,
+                WrittenWhole = extract.WrittenWhole,
+                FolderUnit = extract.FolderUnit,
+                PublishesTaken = extract.PublishesTaken,
+                LayoutRoots = extract.LayoutRoots,
             };
         }
 
@@ -236,11 +273,18 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         MaxArity = stored.MaxArity,
                         Prototype = stored.Prototype,
                         Test = stored.Test,
+                        TestByType = stored.TestByType,
+                        TestBase = stored.TestBase,
+                        Parametrizes = stored.Parametrizes,
                         Part = stored.Part,
+                        MembersByReceiver = stored.MembersByReceiver,
                         ValueType = stored.ValueType,
                         Extends = stored.Extends,
+                        Joined = stored.Joined,
                         SeenIn = stored.SeenIn is { } seenIn ? Name(seenIn, "scope") : null,
                         Exports = stored.Exports,
+                        Selectors = stored.Selectors,
+                        Templates = stored.Templates,
                         Digest = stored.Digest,
                     };
                 },
@@ -301,6 +345,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 References = [.. References.Select((reference, at) => new ExtractReference(IdAt(reference.From, $"reference {at.ToString(CultureInfo.InvariantCulture)} is made from"), reference.Kind, reference.Name, reference.Line)
                 {
                     Arity = reference.Arity,
+                    Probe = reference.Probe,
+                    Around = reference.Around,
                     Qualifier = reference.Qualifier is not { } qualifier ? null
                         : qualifier.Node is { } own
                             ? qualifier.Kind == CodeQualifierKinds.Own && qualifier.Name is null && qualifier.Link is null
@@ -312,6 +358,13 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 Generated = Generated,
                 Dynamic = Dynamic,
                 Literals = Literals is null ? null : [.. Literals.Select(literal => new ExtractLiteral(literal.Value, [.. literal.Places.Select(place => new ExtractLiteralPlace(place.Line) { Node = place.Node is { } node ? IdAt(node, $"a place of the literal '{literal.Value}' is held by") : null })]))],
+                Published = Published,
+                BoundWithin = BoundWithin,
+                KindsApart = KindsApart,
+                WrittenWhole = WrittenWhole,
+                FolderUnit = FolderUnit,
+                PublishesTaken = PublishesTaken,
+                LayoutRoots = LayoutRoots,
             };
         }
     }
@@ -342,17 +395,35 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         public bool Test { get; init; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool TestByType { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool TestBase { get; init; }
+
+        public IReadOnlyList<string>? Parametrizes { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool Part { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool MembersByReceiver { get; init; }
 
         public string? ValueType { get; init; }
 
         public string? Extends { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Joined { get; init; }
 
         public StoredName? SeenIn { get; init; }
 
         public IReadOnlyList<string>? Exports { get; init; }
 
         public IReadOnlyList<int>? SuffixOf { get; init; }
+
+        public IReadOnlyList<string>? Selectors { get; init; }
+
+        public IReadOnlyList<string>? Templates { get; init; }
 
         public string? Digest { get; init; }
     }
@@ -371,6 +442,12 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         public int? Arity { get; init; }
 
         public StoredQualifier? Qualifier { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Probe { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Around { get; init; }
     }
 
     /// <summary>A reference's qualifier as its record holds it: a node of its own file by its place.</summary>

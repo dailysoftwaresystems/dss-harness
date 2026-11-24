@@ -1,0 +1,10 @@
+[
+  {
+    "task": "Print a cart's receipt with its total in money",
+    "needs": ["receipt", "money", "lineText", "Cart.total"]
+  },
+  {
+    "task": "Add lines to a cart and count them",
+    "needs": ["Cart.add", "Cart.count", "MAX_LINES"]
+  }
+]
