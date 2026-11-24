@@ -10028,8 +10028,10 @@ runner says the test crashed only where no report said it already. An error that
 `Unhandled exception.`, the JVM's `Exception in thread`, Node's printed under the header of where it
 was thrown, Python's whose traceback runs through a module's top level, Dart's `Unhandled exception:`,
 Go's panic, Rust's on `main` - and one a program caught and printed, the program going on, has
-`errored`, as a sanitizer's report has where the program ran on: crashed only where its
-`==pid==ABORTING` closed it, errored where it recovered from a runtime error and ran on. A frame whose runtime prints only its source file's name - the JVM's,
+`errored`, as a sanitizer's report has where the program ran on: crashed only where the line its
+sanitizer halts the program with closed it - AddressSanitizer's `==pid==ABORTING`, MemorySanitizer's
+`Exiting` under its `SUMMARY:` - errored where the program recovered and ran on, or where, as UBSan
+and ThreadSanitizer, the sanitizer prints no line to halt with. A frame whose runtime prints only its source file's name - the JVM's,
 lldb's - names no file, only its line: a base name is no path, and is never read as the tree's.
 
 The parsers a phase's log is read by are chosen by what the phase runs (`Results\PhaseParsers.cs`,

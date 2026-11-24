@@ -1677,21 +1677,23 @@ internal sealed class RustPanicParser : IBuiltInParser
 }
 
 /// <summary>
-/// The sanitizers' reports: AddressSanitizer's, LeakSanitizer's and MemorySanitizer's <c>==pid==ERROR: KindSanitizer:
-/// message</c> and ThreadSanitizer's <c>WARNING: ThreadSanitizer: message</c>, read to their <c>==pid==ABORTING</c> or
-/// through their <c>SUMMARY:</c> and the shadow bytes under it; and UndefinedBehaviorSanitizer's <c>path:line:col: runtime
-/// error: message</c>, with its stack where one was asked for and its <c>SUMMARY:</c>. The report's first stack is its
-/// stack - each frame <c>#N 0x... in symbol path:line[:col]</c>, <c>(module+0x...)</c> where only the binary is known -
-/// and the stacks after it (where the memory was allocated, freed, last written) are part of the record. A report the
-/// sanitizer aborted the program over - its <c>==pid==ABORTING</c> closed it - has <c>crashed</c> it; every other - a
-/// runtime error UBSan recovered from and ran on, a warning - has <c>errored</c> it. A report read inside a test a runner
-/// said began is that test's failure (<see cref="ResultSink.AddCrash"/>).
+/// The sanitizers' reports: AddressSanitizer's and LeakSanitizer's <c>==pid==ERROR: KindSanitizer: message</c>,
+/// MemorySanitizer's <c>==pid==WARNING: MemorySanitizer: message</c> and ThreadSanitizer's <c>WARNING: ThreadSanitizer:
+/// message</c>, read to the line the sanitizer halts the program with or through their <c>SUMMARY:</c> and the shadow
+/// bytes under it; and UndefinedBehaviorSanitizer's <c>path:line:col: runtime error: message</c>, with its stack where
+/// one was asked for and its <c>SUMMARY:</c>. The report's first stack is its stack - each frame <c>#N 0x... in symbol
+/// path:line[:col]</c>, <c>(module+0x...)</c> where only the binary is known - and the stacks after it (where the memory
+/// was allocated, freed, last written, where its value was made) are part of the record. A report the sanitizer ended
+/// the program over - closed by the line it halts with, AddressSanitizer's <c>==pid==ABORTING</c>, MemorySanitizer's
+/// <c>Exiting</c> under its <c>SUMMARY:</c> - has <c>crashed</c> it; every other - one the program recovered from and ran
+/// on, a warning, a runtime error UBSan printed no halt line for - has <c>errored</c> it. A report that ended the program
+/// inside a test a runner said began is that test's failure (<see cref="ResultSink.AddCrash"/>).
 /// </summary>
 internal sealed class SanitizerParser : IBuiltInParser
 {
     private static readonly Regex Error = LinearRegex.Compile(@"^==\d+==ERROR: (?<kind>\w+Sanitizer): (?<message>.+)$");
 
-    private static readonly Regex Warning = LinearRegex.Compile(@"^WARNING: (?<kind>ThreadSanitizer): (?<message>.+)$");
+    private static readonly Regex Warning = LinearRegex.Compile(@"^(?:==\d+==)?WARNING: (?<kind>ThreadSanitizer|MemorySanitizer): (?<message>.+)$");
 
     private static readonly Regex Runtime = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+): runtime error: (?<message>.+)$");
 
@@ -1706,6 +1708,9 @@ internal sealed class SanitizerParser : IBuiltInParser
     private static readonly Regex Summary = LinearRegex.Compile(@"^SUMMARY: \w+Sanitizer: .+$");
 
     private static readonly Regex Aborting = LinearRegex.Compile(@"^==\d+==ABORTING$");
+
+    /// <summary>The line MemorySanitizer halts the program with, under its report's <c>SUMMARY:</c>.</summary>
+    private const string MemoryHalt = "Exiting";
 
     private static readonly Regex Shadow = LinearRegex.Compile(@"^(?:Shadow byte.*|=>0x.*|\s+\S.*)$");
 
@@ -1758,7 +1763,7 @@ internal sealed class SanitizerParser : IBuiltInParser
 
             if (_kind is not null)
             {
-                if (Aborting.IsMatch(text))
+                if (Halted(text))
                 {
                     _aborted = true;
                     _to = line.Last;
@@ -1833,6 +1838,10 @@ internal sealed class SanitizerParser : IBuiltInParser
             _to = line.Last;
             return LineTaken.Took;
         }
+
+        /// <summary>Whether a line is the one the open report's sanitizer halts the program with.</summary>
+        private bool Halted(string text)
+            => Aborting.IsMatch(text) || (_summary && _kind == "MemorySanitizer" && string.Equals(text, MemoryHalt, StringComparison.Ordinal));
 
         private void Open(NumberedLine line, string kind, string message, bool runtime)
         {

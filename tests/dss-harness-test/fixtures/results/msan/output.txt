@@ -1,0 +1,19 @@
+==401==WARNING: MemorySanitizer: use-of-uninitialized-value
+    #0 0x5baf8dd78fe6 in pick /home/runner/work/app/app/umr.c:5:3
+    #1 0x5baf8dd78de9 in main /home/runner/work/app/app/umr.c:11:7
+    #2 0x77bfcfe2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #3 0x77bfcfe2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #4 0x5baf8dcdf2f4 in _start (/home/runner/work/app/app/umr+0x322f4) (BuildId: 8b79297ecb13ba3876f8c5850e6a6b9dfee7c518)
+
+SUMMARY: MemorySanitizer: use-of-uninitialized-value /home/runner/work/app/app/umr.c:5:3 in pick
+Exiting
+==403==WARNING: MemorySanitizer: use-of-uninitialized-value
+    #0 0x55555561ffe6 in pick /home/runner/work/app/app/umr.c:5:3
+    #1 0x55555561fde9 in main /home/runner/work/app/app/umr.c:11:7
+    #2 0x7ffff7c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #3 0x7ffff7c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #4 0x5555555862f4 in _start (/home/runner/work/app/app/umr-recover+0x322f4) (BuildId: 5d4a408b6bf0cfe0a2b82939494774a1d98e0ee5)
+
+SUMMARY: MemorySanitizer: use-of-uninitialized-value /home/runner/work/app/app/umr.c:5:3 in pick
+went on
+MemorySanitizer: 1 warnings reported.
