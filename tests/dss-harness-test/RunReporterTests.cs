@@ -211,6 +211,10 @@ public sealed class RunReporterTests
         Assert.Null(asked.Output);
         Assert.Equal("reporter", asked.Agent);
 
+        // Its block says no retries, so it is tried again as the workflow's reasoning steps are: the workflow says none
+        // either, and the shipped count holds.
+        Assert.Equal((WorkflowDefinition.DefaultMaxRetries, (int?)null), (asked.Retries, asked.BackoffSeconds));
+
         var policy = new AgentPolicy(harness.FileSystem, harness.Platform, asked.Ground!);
 
         Assert.Null(policy.Read(Path.Combine(runDirectory, "flow.json")).Refusal());

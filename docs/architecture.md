@@ -3893,6 +3893,24 @@ answers it any time - reads only, its `--json` the code, the line and the report
 the read stopped early), with `--steps` keeping the rows to named instances (one the run does not hold refused,
 named), `--by` regrouping the dollars in every form and `--top` bounding the signal lists.
 
+`analyze-orchestrator-report <run>` has one agent read that report and bring its pain points, only where a person
+calls for it. The analyst (`report-analyst`, its agent, prompt and schema the build's own) and the reporter are one
+runner (`RecordsAgentRunner`), given each its agent, its prompt, its schema, its record directory and what its answer
+is held to beyond the schema: a reason step that only reads, narrowed to the run's directory, tried again where its
+agent fails as the run's reasoning steps are (`WorkflowDefinition.RetriesOf`, the workflow's `backoffSeconds`), its
+cost the person's. The analyst's answer is held to the report by the structured-output gate itself
+(`AgentOutput.Holds`, `FlowAnalysisEvidence.Problems`), asked only of an answer the schema holds and sent back in the
+analyst's own conversation under the schema's one count of repairs - never a run asked anew: each citation names a
+section of the report (the schema's enum), the row by its `id`, the member by its path and the value the report holds
+there, read by its JSON kind - a number for its value, a text and a truth word for word - each step a point names is a
+row of the report's steps, and every number its impact says is one of its citations'. Every rule a text must keep is
+the schema's (a pattern for every text, an enum for every closed list), and a run with nothing to change is analysed
+as one, no pain point named. What a run of the analyst leaves is kept under `analysis/<stamp>/` whatever it answered -
+`report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis or why it was refused
+and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
+it cost; where no analyst ran, the command says nothing was written. It runs on the tier `reporting` names in
+`tierConfig`, which `init` seeds none of, refused (12) naming the key where none is defined.
+
 A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
@@ -4467,8 +4485,8 @@ repeat with no numeric bound, a step whose pre-existing issues each raise a tria
 sends the run back outside its own group, a plan update still to be planned - is named, the run's own
 bound of instances the only one that holds it; and a question open at a bound is named as what can
 grant more past it. Where the
-workflow's `reporter` names an agent, its words follow the facts, run by the reason step's own
-runner as the advisor is (`ReporterRunner`), its reads narrowed to the run's directory alone
+workflow's `reporter` names an agent, its words follow the facts, run by the one runner of the
+agents that read a run's records (`RecordsAgentRunner`, the analyst's too), its reads narrowed to the run's directory alone
 (`AgentPolicyGround.ReporterRoot`: no command, no write, no web - the three tools that read and no
 other), its answer masked, its cost the person's and never the run's. Both commands only read: no
 state file, no step, no agent, no budget, no lock an engine needs, not even the sweep every other

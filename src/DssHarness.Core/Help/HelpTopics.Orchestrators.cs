@@ -328,16 +328,24 @@ public static partial class HelpTopics
             $"Analysing that report. {FlowService.AnalyzeReportCommand} has one agent read it and bring the pain points - "
             + "where the run's time and money went, and each change to make, ordered by what it cost. It runs only where a "
             + "person calls it: never by a run, a session's end or a view. The analyst is the tool's own (report-analyst, "
-            + "shipped beside the reporter it takes after): it only reads, narrowed to the run's records, and its answer is "
-            + "held twice - to the schema the tool ships, and to the report it read, every number a pain point cites "
-            + "checked against the report's own (a citation the report does not hold is asked again for, twice at most, "
-            + "then refused): an analysis cannot invent a measurement. Each pain point names its steps, its evidence, its "
-            + "impact in time and dollars, its cause and the exact change it recommends - a configuration key, a workflow "
-            + "key, a prompt's line or a repository fix. The analysis is kept beside the report it read under the run's "
-            + "analysis/ (analysis.json and analysis.md, the report named by its hash), and what it costs is the person's, "
-            + "never the run's. It runs on the tier 'reporting' names in tierConfig, and is refused (12) where the "
+            + "run by the one runner of the agents that read a run's records, the reporter's): it only reads, narrowed to "
+            + "the run's records, it is tried again where it fails as the run's reasoning steps are (the workflow's "
+            + "maxRetries and backoffSeconds), and its answer is held twice, by the structured-output gate in its own "
+            + "conversation under one count of repairs (twice at most, then refused) - to the schema the tool ships, and "
+            + "to the report it read: each citation names a section, the row by its id (a step's instance, a failed "
+            + "attempt's <instance>@<attempt>, a signal's <kind>#<n>), the member by its path and the value the report "
+            + "holds there, a number read for its value; each step it names is a row of the report's steps; and every "
+            + "number its impact says is one of its citations'. An analysis cannot invent a measurement. Each pain point "
+            + "names its steps, its evidence, its impact in time and dollars, its cause and the exact change it recommends "
+            + "- a configuration key, a workflow key, a prompt's line or a repository fix - and an analysis of a run with "
+            + "nothing to change names none. What a run of the analyst leaves is kept under the run's analysis/<stamp>/ "
+            + "whatever it answered: report.json, the very bytes it read, whose hash it names; analysis.json, the "
+            + "analysis or why it was refused, with what it cost; analysis.md where an analysis was given; and the "
+            + "analyst's stream - every one named on every exit, and what it cost said, refused or not. What it costs is "
+            + "the person's, never the run's. It runs on the tier 'reporting' names in tierConfig - which init seeds "
+            + "none of, for which model a paid analysis runs on is a person's choice - and is refused (12) where the "
             + "configuration defines none, saying which key to set. --markdown answers as Markdown and --json as one "
-            + "JSON document, the analysis apart from its cost and its record.");
+            + "JSON document, the analysis apart from its cost and its record, the analysis null where none was given.");
         builder.AppendLine();
         AppendWrapped(
             builder,

@@ -1130,24 +1130,34 @@ public sealed class FlowService(
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
 
         var at = _clock.GetUtcNow();
-        var stamp = $"{at.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", System.Globalization.CultureInfo.InvariantCulture)}";
+        var stamp = StampOf(at);
         var directory = Path.Combine(layout.AnalysisDirectory, stamp);
-        var analysed = await new ReportAnalystRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates)
+        var analysed = await new RecordsAgentRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates)
             .AnalyzeAsync(new FlowAnalystCall(layout.Name, report, layout.Directory, stamp, new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, flow.StartCommit, definition, flow.Branch)), cancellationToken)
             .ConfigureAwait(false);
 
-        if (analysed.Analysis is not { } analysis)
+        // What a run of the analyst leaves is kept whatever it answered - the report it read, the very bytes its hash
+        // names, and the analysis or why it was refused, with what it cost - and every record is named on every exit.
+        if (analysed.Ran)
         {
-            return CommandOutcome.Failed(
-                analysed.ExitCode ?? HarnessExit.CommandFailed,
-                $"analyze-orchestrator-report was refused: no model analysed it: {analysed.WhyNot}",
-                [$"analysis: {Path.Combine(directory, OrchestratorLayout.AnalysisFileName)}"]);
+            WriteAnalysis(directory, layout.Name, said, hash, analysed, at);
         }
 
-        WriteAnalysis(layout, stamp, analysis, hash, analysed, at);
+        var cost = analysed.Ran
+            ? $"This analysis cost {analysed.Dollars.Said()}{(analysed.Tokens is { } used ? $", {used.ToString(System.Globalization.CultureInfo.InvariantCulture)} tokens" : string.Empty)}. It is not counted in the run's budget."
+            : null;
+        var records = AnalysisRecordsOf(directory, analysed);
 
-        var cost = $"This analysis cost {analysed.Dollars.Said()}{(analysed.Tokens is { } used ? $", {used.ToString(System.Globalization.CultureInfo.InvariantCulture)} tokens" : string.Empty)}. It is not counted in the run's budget.";
-        var records = $"analysis: {Path.Combine(directory, OrchestratorLayout.AnalysisFileName)}, {Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName)}";
+        if (analysed.Analysis is not { } analysis)
+        {
+            var refused = analysed.Ran
+                ? $"analyze-orchestrator-report was refused: the analyst's run gave no analysis that holds: {analysed.WhyNot}"
+                : $"analyze-orchestrator-report was refused: no model analysed it: {analysed.WhyNot}";
+            var exit = analysed.ExitCode ?? HarnessExit.CommandFailed;
+
+            return CommandOutcome.Failed(exit, refused, [.. cost is null ? [] : new[] { cost }, .. records])
+                with { Data = json ? [FlowReports.AnalysisRefused(exit, refused, hash, analysed, analysed.Ran ? directory : string.Empty)] : [] };
+        }
 
         if (json)
         {
@@ -1160,39 +1170,74 @@ public sealed class FlowService(
         }
 
         var body = markdown ? analysis.Markdown() : analysis.Text();
-        return CommandOutcome.Ok($"{body}\n\n{cost}\n\n{records}");
+        return CommandOutcome.Ok($"{body}\n\n{cost}\n\n{string.Join("\n", records)}");
     }
 
     /// <summary>
-    /// Writes one analysis where the run keeps them: the analysis with the hash of the report it read, in JSON, and
-    /// the same said as Markdown - the engine never reads either back.
+    /// A call's own stamp - the name of its directory under the run's <c>asks/</c> or <c>analysis/</c>: the moment it was
+    /// made, in UTC to the second, and five hex digits drawn at random, so two calls in one second are two directories.
     /// </summary>
-    /// <param name="layout">The run's layout.</param>
-    /// <param name="stamp">The analysis's own stamp.</param>
-    /// <param name="analysis">The analysis.</param>
-    /// <param name="hash">The hash of the report it read.</param>
+    /// <param name="at">When the call was made.</param>
+    private static string StampOf(DateTimeOffset at)
+        => $"{at.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}";
+
+    /// <summary>
+    /// The records an analysis left, one line each, as every exit names them: the report it read, the analysis or why it
+    /// was refused, the analysis in Markdown, and the analyst's stream - each where it was written; and that none was,
+    /// where no analyst ran.
+    /// </summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    /// <param name="analysed">What the analyst's run answered.</param>
+    private IReadOnlyList<string> AnalysisRecordsOf(string directory, FlowAnalysed analysed)
+    {
+        var records = new (string What, string Path)[]
+        {
+            ("analysis", Path.Combine(directory, OrchestratorLayout.AnalysisFileName)),
+            ("analysisMarkdown", Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName)),
+            ("report", Path.Combine(directory, OrchestratorLayout.AnalysisReportFileName)),
+            ("stream", Path.Combine(directory, Agents.StoredStream.FileName)),
+        }.Where(record => _fileSystem.FileExists(record.Path)).Select(record => $"{record.What}: {record.Path}").ToList();
+
+        return records.Count > 0 || analysed.Ran
+            ? [$"records: {directory}", .. records]
+            : ["records: none was written, for no analyst ran"];
+    }
+
+    /// <summary>
+    /// Writes what one run of the analyst leaves where the run keeps its analyses: the report it read - the very bytes
+    /// whose hash the analysis names - and, in JSON, the analysis or why none held, with what it cost; and the analysis
+    /// said as Markdown where one was given. The engine never reads any of them.
+    /// </summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="report">The report the analyst read, as the bytes it was given.</param>
+    /// <param name="hash">The hash of those bytes.</param>
     /// <param name="analysed">What the analyst's run answered and spent.</param>
     /// <param name="at">When the analysis was made.</param>
-    private void WriteAnalysis(OrchestratorLayout layout, string stamp, FlowAnalysis analysis, string hash, FlowAnalysed analysed, DateTimeOffset at)
+    private void WriteAnalysis(string directory, string run, string report, string hash, FlowAnalysed analysed, DateTimeOffset at)
     {
-        var directory = Path.Combine(layout.AnalysisDirectory, stamp);
-
+        _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.AnalysisReportFileName), report);
         JsonStateFile.Write(
             _fileSystem,
             Path.Combine(directory, OrchestratorLayout.AnalysisFileName),
             new JsonObject
             {
                 ["schema"] = 1,
-                ["run"] = layout.Name,
+                ["run"] = run,
                 ["at"] = FlowTimeConverter.Written(at),
                 ["reportHash"] = hash,
                 ["model"] = analysed.Model,
                 ["usd"] = analysed.Usd,
                 ["tokens"] = analysed.Tokens,
                 ["uncounted"] = analysed.Uncounted,
-                ["analysis"] = analysis.Document(),
+                ["analysis"] = analysed.Analysis?.Document(),
+                ["refused"] = analysed.Analysis is null ? analysed.WhyNot : null,
             });
-        _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName), $"{analysis.Markdown()}\n\nThe report it read holds hash `{hash}`.\n");
+
+        if (analysed.Analysis is { } analysis)
+        {
+            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName), $"{analysis.Markdown()}\n\nThe report it read is `{OrchestratorLayout.AnalysisReportFileName}` beside this file, its hash `{hash}`.\n");
+        }
     }
 
     /// <inheritdoc/>
@@ -1240,7 +1285,7 @@ public sealed class FlowService(
 
         // The call's own record, in a directory the engine never reads: the facts as given, and what asking cost. The
         // files of the reporter's own attempt, where one runs, are kept by its runner under the same directory.
-        var stamp = $"{asOf.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}";
+        var stamp = StampOf(asOf);
         var asks = Path.Combine(layout.AsksDirectory, stamp);
         _fileSystem.WriteAllTextAtomic(Path.Combine(asks, "facts.md"), text + "\n");
 
@@ -1258,7 +1303,7 @@ public sealed class FlowService(
                     [$"record: {Path.Combine(asks, AskFileName)}"]);
         }
 
-        var reported = await new ReporterRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates).ReportAsync(
+        var reported = await new RecordsAgentRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates).ReportAsync(
             new FlowReporterCall(
                 run,
                 definition.Name,
@@ -1407,7 +1452,7 @@ public sealed class FlowService(
 
         // The call's own record, as every call keeps one: the orchestrator's own facts, and why no model worded them.
         var now = _clock.GetUtcNow();
-        var asks = Path.Combine(layout.AsksDirectory, $"{now.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}");
+        var asks = Path.Combine(layout.AsksDirectory, StampOf(now));
         _fileSystem.WriteAllTextAtomic(Path.Combine(asks, "facts.md"), string.Join("\n", facts) + "\n");
         WriteAsk(layout, asks, question: null, model: null, spent: null, whyNot: "the orchestrator holds no run");
 

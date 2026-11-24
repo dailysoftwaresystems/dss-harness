@@ -9,11 +9,12 @@
   "properties": {
     "summary": {
       "type": "string",
+      "pattern": "\\S",
       "description": "Where the run's time and money went, in three sentences at most."
     },
     "painPoints": {
       "type": "array",
-      "description": "Each thing to change, ordered by what it cost - the most first.",
+      "description": "Each thing to change, ordered by what it cost - the most first; empty where the report shows nothing a change would have paid for.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -29,6 +30,7 @@
         "properties": {
           "title": {
             "type": "string",
+            "pattern": "\\S",
             "description": "One line a person who never saw the run understands: what to change, and where."
           },
           "severity": {
@@ -43,15 +45,16 @@
           },
           "where": {
             "type": "array",
-            "description": "The steps it names, by their instance ids as the report's rows hold them.",
+            "description": "The steps it names, each by the id of its row in the report's steps - its instance id; a step the report's steps do not hold is refused and you are asked again.",
             "items": {
-              "type": "string"
+              "type": "string",
+              "pattern": "\\S"
             },
             "minItems": 1
           },
           "evidence": {
             "type": "array",
-            "description": "The report's own numbers it rests on, each a citation: section (theRun, totals, steps, criticalPath, errors, people, convergence or signals), row (a step's instance, a signal's kind, a question's id - left out where the section is one object or the member sits at its top), of (the member the number is), and said (the value exactly as the report holds it - a number copied as the report writes it). A citation the report does not hold is refused and you are asked again.",
+            "description": "The report's own values it rests on, each a citation: the section, the row by its id, the member and the value exactly as the report holds it. A citation the report does not hold is refused and you are asked again.",
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -64,19 +67,31 @@
               "properties": {
                 "section": {
                   "type": "string",
+                  "enum": [
+                    "theRun",
+                    "totals",
+                    "steps",
+                    "criticalPath",
+                    "errors",
+                    "people",
+                    "convergence",
+                    "signals"
+                  ],
                   "description": "The report's section that holds it."
                 },
                 "row": {
                   "type": "string",
-                  "description": "The row of the section that holds it; empty where the member sits at the section's top."
+                  "description": "The id of the row that holds it, as the row's own id member says it - a step's and a critical path link's its instance, a failed attempt's <instance>@<attempt>, a signal's <kind>#<n>, a question's its id, a dollars group's its name, a convergence row's its id; empty where the member sits in the section itself (theRun, totals)."
                 },
                 "of": {
                   "type": "string",
-                  "description": "The member of the row that holds it."
+                  "pattern": "\\S",
+                  "description": "The member of the row that holds it, a path of members joined by '.' where it is inside one: seconds, usd, tokens.input, budget.usd."
                 },
                 "said": {
                   "type": "string",
-                  "description": "The value exactly as the report holds it: a number copied as the report writes it (the JSON's own form, as 30 or 0.03), a string word for word."
+                  "pattern": "\\S",
+                  "description": "The value as the report holds it: a number as the report writes it (30, 0.03) - read for its value - a text word for word."
                 }
               }
             },
@@ -84,14 +99,17 @@
           },
           "impact": {
             "type": "string",
-            "description": "The time and dollars it cost, from the report's numbers."
+            "pattern": "\\S",
+            "description": "The time and dollars it cost: every number written here is the value of one of this point's citations - a number none of them holds is refused and you are asked again."
           },
           "cause": {
             "type": "string",
+            "pattern": "\\S",
             "description": "What the records show of why: no guessing - where the cause is not in the report or the records, it goes under noted instead."
           },
           "recommendation": {
             "type": "string",
+            "pattern": "\\S",
             "description": "The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key, as the configuration or the yml spells it."
           }
         }
@@ -110,10 +128,12 @@
         "properties": {
           "what": {
             "type": "string",
+            "pattern": "\\S",
             "description": "What you saw."
           },
           "why": {
             "type": "string",
+            "pattern": "\\S",
             "description": "Why you could not confirm it from the report or the run's records."
           }
         }

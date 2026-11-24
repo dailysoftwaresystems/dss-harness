@@ -474,7 +474,7 @@ public sealed class FlowRunReportTests
     /// The records of a run that exercises every signal: three steps in a chain, one retried, one cold, one that asked a
     /// person, one whose leg printed lines no parser read; two item agents, each with a class reopened twice.
     /// </summary>
-    private static FlowRunReportSource Source()
+    internal static FlowRunReportSource Source()
     {
         using var temp = new TempDirectory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");

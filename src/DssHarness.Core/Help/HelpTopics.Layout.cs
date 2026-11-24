@@ -110,9 +110,10 @@ public static partial class HelpTopics
             + $"the files of its reporter's attempt, the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/) and ask.json; "
             + "the engine never reads it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AnalysisDirectoryName}/",
-            "ignored; one directory for each call of analyze-orchestrator-report: the files of its analyst's attempt, "
-            + $"the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/), and the analysis it answered with - "
-            + $"analysis.json with the hash of the report it read, and analysis.md - beside the report; the engine never reads it"),
+            "ignored; one directory for each call of analyze-orchestrator-report whose analyst ran: the report it read "
+            + $"({OrchestratorLayout.AnalysisReportFileName}, the bytes its hash names), the files of its analyst's attempt (its stream), "
+            + $"the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/), {OrchestratorLayout.AnalysisFileName} - the analysis, or why it was refused, "
+            + $"with the report's hash and what it cost - and {OrchestratorLayout.AnalysisMarkdownFileName} where an analysis was given; the engine never reads it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}",
             "ignored; a run's web search: what each source found once for the run, and each query it answered, which the "
             + "same query again is answered from; written by every client whose step searches"),

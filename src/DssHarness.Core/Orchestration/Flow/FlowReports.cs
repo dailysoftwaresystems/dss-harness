@@ -276,14 +276,25 @@ public static class FlowReports
     public static string AnalysisDocument(FlowAnalysis analysis, string reportHash, FlowAnalysed analysed, string directory)
         => ReportJson.Stopped(0, "the run's report was analysed", AnalysisObject(analysis, reportHash, analysed, directory));
 
-    /// <summary>The analysis document's own members, held apart from the stopped wrapper.</summary>
-    private static JsonObject AnalysisObject(FlowAnalysis analysis, string reportHash, FlowAnalysed analysed, string directory)
-    {
-        ArgumentNullException.ThrowIfNull(analysis);
+    /// <summary>
+    /// The <c>--json</c> document of an <c>analyze-orchestrator-report</c> that gave no analysis: its code and its line,
+    /// the analysis null, and - where an analyst's run was made - the hash of the report it read, what the run cost and
+    /// the directory its records are kept in, so a script reads what the refusal spent and where.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line the command ends on.</param>
+    /// <param name="reportHash">The hash of the report the analyst read.</param>
+    /// <param name="analysed">What the analyst's run answered and spent.</param>
+    /// <param name="directory">Where the analysis's records are kept; empty where none was written.</param>
+    public static string AnalysisRefused(int exitCode, string summary, string reportHash, FlowAnalysed analysed, string directory)
+        => ReportJson.Stopped(exitCode, summary, AnalysisObject(null, reportHash, analysed, directory));
 
+    /// <summary>The analysis document's own members, held apart from the stopped wrapper.</summary>
+    private static JsonObject AnalysisObject(FlowAnalysis? analysis, string reportHash, FlowAnalysed analysed, string directory)
+    {
         return new JsonObject
         {
-            ["analysis"] = analysis.Document(),
+            ["analysis"] = analysis?.Document(),
             ["reportHash"] = reportHash,
             ["cost"] = analysed.Model is null && analysed.Usd is null && analysed.Tokens is null
                 ? null
@@ -301,15 +312,12 @@ public static class FlowReports
 
     /// <summary>
     /// The analysis document a stopped-early analyse holds: the same members, holding nothing but the code it exits
-    /// with and the line it ends on - the shape every answer of the analyse keeps.
+    /// with and the line it ends on - the analysis null, as a refused one's is - the shape every answer of the analyse keeps.
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line the command ends on.</param>
     public static string AnalysisStopped(int exitCode, string summary)
-        => ReportJson.Stopped(exitCode, summary, AnalysisObject(EmptyAnalysis, string.Empty, new FlowAnalysed(null), string.Empty));
-
-    /// <summary>An analysis that holds nothing, the stopped form's own - empty, as the shape it keeps.</summary>
-    private static FlowAnalysis EmptyAnalysis { get; } = new(string.Empty, [], []);
+        => ReportJson.Stopped(exitCode, summary, AnalysisObject(null, string.Empty, new FlowAnalysed(null), string.Empty));
 
     /// <summary>Every handoff a run's steps hold, each by its step, who wrote it and its file in the step's own directory.</summary>
     /// <param name="layout">The run's layout.</param>

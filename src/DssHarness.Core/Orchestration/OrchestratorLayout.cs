@@ -180,6 +180,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file an analysis is said in as Markdown.</summary>
     public const string AnalysisMarkdownFileName = "analysis.md";
 
+    /// <summary>The name of the file an analysis keeps the report it read in: the very bytes whose hash it names.</summary>
+    public const string AnalysisReportFileName = "report.json";
+
     /// <summary>The name of the file a run's live owner is kept in, beside the run's directory.</summary>
     public const string OwnerFileName = ".owner.json";
 

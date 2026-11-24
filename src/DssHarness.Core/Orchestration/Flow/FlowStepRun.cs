@@ -875,6 +875,12 @@ public sealed record FlowAnalysed(
 {
     /// <summary>What the analysis spent in dollars, as the one fold holds them: nothing where no turn was reported.</summary>
     public FlowDollars Dollars => new(Usd ?? 0, Uncounted);
+
+    /// <summary>
+    /// Whether an analyst's run was made: a model was asked and paid, whatever it answered - false where the analysis was
+    /// refused before any was (no <c>reporting</c> tier, a key not there, a Claude Code not found).
+    /// </summary>
+    public bool Ran { get; init; }
 }
 
 /// <summary>

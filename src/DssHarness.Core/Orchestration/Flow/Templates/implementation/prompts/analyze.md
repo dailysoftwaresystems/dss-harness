@@ -19,10 +19,12 @@ correct it, and add no number it does not hold.
    answered. Confirm what you can; what you cannot, put under `noted` with why.
 3. Say where the run's time and money went, in three sentences at most, as the summary.
 4. Name each pain point, ordered by what it cost. Cite every number it rests on from the report: the section
-   (`theRun`, `totals`, `steps`, `criticalPath`, `errors`, `people`, `convergence`, `signals`), the row (a step's
-   instance, a signal's kind, a question's id - empty where the member sits at the section's top), the member, and
-   the value exactly as the report holds it, copied as the JSON writes it. A citation the report does not hold is
-   refused and you are asked again.
+   (`theRun`, `totals`, `steps`, `criticalPath`, `errors`, `people`, `convergence`, `signals`), the row by its `id`
+   (a step's instance, a failed attempt's `<instance>@<attempt>`, a signal's `<kind>#<n>`, a question's id - empty
+   where the member sits in the section itself), the member (a path joined by `.` where it is inside one, as
+   `tokens.input`), and the value exactly as the report holds it. Name its steps by their rows' ids, and write no
+   number in its impact that none of its citations holds. A citation the report does not hold is refused and you are
+   asked again. Where the report shows nothing a change would have paid for, name no pain point.
 5. Recommend the change, exactly: a configuration key as `config.json` spells it, a workflow key as the yml spells
    it, a prompt's line by its file, a repository fix by what it changes. Where the cause is not the repository's but
    the request's or the person's waiting, say that instead.

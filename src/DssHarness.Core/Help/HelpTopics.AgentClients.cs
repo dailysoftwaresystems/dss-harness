@@ -126,6 +126,12 @@ public static partial class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
+            $"One tier is read by name rather than by a step: 'reporting', the tier {Orchestration.Flow.FlowService.AnalyzeReportCommand} "
+            + "runs its analyst on ('help orchestrators'). init seeds no such tier - which model a paid analysis runs on is a "
+            + "person's choice - so the command is refused (12) until tierConfig names one, saying which key to set.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             "A step that goes on with earlier work is given the engine's record of it: the continuation record, text put "
             + "together from the step directories of the agent - what it is, the last iterations of the newest attempt word "
             + "for word from its stored stream, the newest first and every one of them, every run of the attempt numbered as "
