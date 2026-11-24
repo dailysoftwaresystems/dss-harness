@@ -10008,11 +10008,15 @@ console saying one by its `Test method X threw exception:` head, each inner exce
 error's line after ` ---> `, the stack in the runtime's order - the
 JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's, Dart's, Go's panic and
 `go test`'s console - its verbose stream read too, each test's logged lines kept from the `===` line
-that named it to its `--- FAIL` line, which says them again, held once - and a package that did not
-build said by its own block, the `# pkg` line ahead of its compiler's words holding for the line under
-it, a compiler's line under it a diagnostic of that package, its `[build failed]` result said only
-where nothing between its head and it said why, so a failing test in another package never silences
-it, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
+that named it to its result line, which says none of them again, and dropped there or at its
+package's result line, so nothing is held past the test it is of; a result line read at any indent,
+for plain `-v` nests a subtest's under its parent's, a nested `--- PASS` no line its parent logged,
+and a parent whose subtest failed said by it where it logged nothing of its own - and every package
+that did not build said by its own block, the `# pkg` line ahead of its compiler's words read
+whenever it comes and holding for the line under it, a compiler's line a diagnostic of the package
+whose head was the last, its `[build failed]` result, printed later in the packages' order, said
+only where that package's own block said nothing, so neither another package's block nor its
+failing tests silence it, Rust's panic and `cargo test`'s, the sanitizers' reports, a native crash as gdb
 or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
 failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
 test`'s, jest's, vitest's). A crash a report says inside a test a runner said began is that test's

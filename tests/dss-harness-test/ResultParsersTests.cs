@@ -1027,14 +1027,15 @@ public sealed class ResultParsersTests
     ];
 
     /// <summary>
-    /// <c>go test -v</c> streams each test's logged lines as it runs, under the <c>===</c> line that named it, and says
-    /// them again under its <c>--- FAIL</c> line: the failure's message is what the test logged, held once - read from
-    /// the stream where Go did not repeat it, the copy the stream already said not held twice where it did - its place
-    /// the first line that names one, and a subtest's failure its own, the parent's <c>=== NAME</c> line back and its
-    /// <c>--- FAIL</c> after it.
+    /// <c>go test -v</c> streams each test's logged lines as it runs, under the <c>===</c> line that named it, and says none
+    /// of them again under its result line: the failure's message is what the test logged, read from the stream, its
+    /// place the first line that names one. In the form the test binary prints for <c>test2json</c>, a subtest's result
+    /// comes first, unindented, and its parent's after it, the parent's <c>=== NAME</c> line back: the subtest's failure is
+    /// its own, and the parent that logged nothing of its own is said by it; a passing test's streamed lines are no
+    /// failure's.
     /// </summary>
     [Fact]
-    public void AVerboseGoRun_KeepsEachTestsLoggedLines_UnderItsFailLine_SaidOnce()
+    public void AVerboseGoRun_SaysEachFailingTestByWhatItsStreamLogged()
     {
         var digest = Digested(
             [
@@ -1050,7 +1051,6 @@ public sealed class ResultParsersTests
                 "=== NAME  TestGroup/sub",
                 "    sub_test.go:10: inner failure",
                 "--- FAIL: TestGroup/sub (0.00s)",
-                "    sub_test.go:10: inner failure",
                 "=== NAME  TestGroup",
                 "--- FAIL: TestGroup (0.00s)",
                 "=== RUN   TestPasses",
@@ -1064,11 +1064,177 @@ public sealed class ResultParsersTests
 
         Assert.Equal(
             [
-                ("TestStoreLoads", (string?)"example.com/app/store", "store_test.go", 14, "store_test.go:14: Load(\"first\") = 3, want 4"),
+                ("TestStoreLoads", (string?)"example.com/app/store", "store_test.go", (int?)14, "store_test.go:14: Load(\"first\") = 3, want 4"),
                 ("TestGroup/sub", "example.com/app/store", "sub_test.go", 10, "sub_test.go:10: inner failure"),
-                ("TestGroup", "example.com/app/store", null, null, null),
             ],
             digest.Failures.Select(failure => (failure.Id, failure.Class, failure.File, failure.Line, failure.Message)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// Plain <c>go test -v</c> prints a parent's result first and its subtests' nested under it, indented: a nested
+    /// <c>--- PASS</c> or <c>--- SKIP</c> ends that subtest and is no line its parent logged, and a nested
+    /// <c>--- FAIL</c> is the subtest's failure, its message what its stream logged - the parent said by it where the
+    /// parent logged nothing of its own, whatever passed before it, and said as well, with its own lines, where it did.
+    /// </summary>
+    [Fact]
+    public void PlainVerboseGo_NestsSubtestsResultsUnderTheirParents_NoneALoggedLine()
+    {
+        var digest = Digested(
+            [
+                "=== RUN   TestAdd",
+                "=== RUN   TestAdd/one",
+                "=== RUN   TestAdd/two",
+                "    add_test.go:12: got 3, want 4",
+                "--- FAIL: TestAdd (0.00s)",
+                "    --- PASS: TestAdd/one (0.00s)",
+                "    --- FAIL: TestAdd/two (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/add\t0.002s",
+                "=== RUN   TestSave",
+                "    save_test.go:5: the store is read only",
+                "=== RUN   TestSave/skipped",
+                "    save_test.go:9: not on this system",
+                "=== RUN   TestSave/first",
+                "    save_test.go:14: Save(\"first\") failed",
+                "--- FAIL: TestSave (0.00s)",
+                "    --- SKIP: TestSave/skipped (0.00s)",
+                "    --- FAIL: TestSave/first (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/save\t0.003s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestAdd/two", (string?)"example.com/add", "add_test.go:12: got 3, want 4", (4, 7)),
+                ("TestSave", "example.com/save", "save_test.go:5: the store is read only", (11, 17)),
+                ("TestSave/first", "example.com/save", "save_test.go:14: Save(\"first\") failed", (15, 18)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.Message, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// What a test streamed is held only while it runs, never past its end: a subtest's lines are dropped at its nested
+    /// result line - so a run of each test twice (<c>-count=2</c>) says the failing second run by its own lines alone, not
+    /// the first run's - and every test's at its package's result line, so a package whose binary was killed before its
+    /// test said its result leaves nothing to a test of the same name in the next package.
+    /// </summary>
+    [Fact]
+    public void AGoTestsStreamedLines_AreHeldOnlyWhileItRuns()
+    {
+        var counted = Digested(
+            [
+                "=== RUN   TestShared",
+                "=== RUN   TestShared/a",
+                "    shared_test.go:3: first run, attempt passed",
+                "--- PASS: TestShared (0.00s)",
+                "    --- PASS: TestShared/a (0.00s)",
+                "=== RUN   TestShared",
+                "=== RUN   TestShared/a",
+                "    shared_test.go:5: second run, attempt failed",
+                "--- FAIL: TestShared (0.00s)",
+                "    --- FAIL: TestShared/a (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/app/shared\t0.004s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [("TestShared/a", (string?)"shared_test.go:5: second run, attempt failed")],
+            counted.Failures.Select(failure => (failure.Id, failure.Message)));
+
+        var killed = Digested(
+            [
+                "=== RUN   TestLoad",
+                "    load_test.go:5: loading the first record",
+                "signal: killed",
+                "FAIL\texample.com/app/load\t0.512s",
+                "=== RUN   TestLoad",
+                "    save_test.go:9: the store was not saved",
+                "--- FAIL: TestLoad (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/app/save\t0.003s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [("TestLoad", (string?)"example.com/app/save", (string?)"save_test.go:9: the store was not saved")],
+            killed.Failures.Select(failure => (failure.Id, failure.Class, failure.Message)));
+    }
+
+    /// <summary>
+    /// A test that logged a line more than once, run without <c>-v</c> - a retry's same <c>t.Errorf</c> twice, two lines
+    /// in turn twice over - keeps every line it logged: Go says a test's lines once, so none of them is a copy of another.
+    /// </summary>
+    [Fact]
+    public void AGoTestsRepeatedLines_AreEachKept()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestRetries (0.02s)",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "--- FAIL: TestAlternates (0.00s)",
+                "    alt_test.go:4: A",
+                "    alt_test.go:5: B",
+                "    alt_test.go:4: A",
+                "    alt_test.go:5: B",
+                "FAIL",
+                "FAIL\texample.com/app/retry\t0.021s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestRetries", (string?)"retry_test.go:9: attempt failed: connection refused\nretry_test.go:9: attempt failed: connection refused"),
+                ("TestAlternates", "alt_test.go:4: A\nalt_test.go:5: B\nalt_test.go:4: A\nalt_test.go:5: B"),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message)));
+    }
+
+    /// <summary>
+    /// Every package that did not build is said by its own block, wherever Go prints it: <c>go test ./...</c> prints each
+    /// block as its compile fails, out of the packages' order, and their <c>FAIL pkg [build failed]</c> lines later, in it
+    /// - another package's results among them - so each head is read whenever it comes, each compiler's line is a
+    /// diagnostic of the package whose head was the last, and a package's <c>[build failed]</c> is said only where its own
+    /// block said nothing, never where its block said why however much was printed between.
+    /// </summary>
+    [Fact]
+    public void GoPackagesThatDidNotBuild_AreEachSaidByTheirOwnBlock_WhereverGoPrintsIt()
+    {
+        var digest = Digested(
+            [
+                "# example.com/app/sum",
+                "sum/sum.go:3:9: undefined: x",
+                "# example.com/app/tools",
+                "tools/tools.go:4:2: undefined: y",
+                "# example.com/app/vendored",
+                "no required module provides package example.com/other; to add it:",
+                "\tgo get example.com/other",
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "FAIL\texample.com/app/sum [build failed]",
+                "FAIL\texample.com/app/tools [build failed]",
+                "FAIL\texample.com/app/vendored [build failed]",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("undefined: x", "sum/sum.go", "example.com/app/sum", (1, 2)),
+                ("undefined: y", "tools/tools.go", "example.com/app/tools", (3, 4)),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Message, diagnostic.File!, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "failed"),
+                ("example.com/app/vendored", null, "errored"),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.Outcome)));
         Assert.Empty(digest.Unparsed ?? []);
     }
 
