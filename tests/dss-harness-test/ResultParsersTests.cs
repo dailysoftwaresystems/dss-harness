@@ -338,10 +338,12 @@ public sealed class ResultParsersTests
     public void ALine_LooksLikeAnError_ByAnErrorsMarkerAsAWord(string line, bool looks)
         => Assert.Equal(looks, PhaseParsers.LooksLikeError(line));
 
-    /// <summary>A build's parsers are chosen by the compiler its toolchain declares, whatever the toolchain is named, and by the project's type.</summary>
+    /// <summary>A build's parsers are chosen by the compiler its toolchain declares, whatever the toolchain is named, and by the project's type as its adapter reads it, ignoring case.</summary>
     [Theory]
     [InlineData("dotnet", null, "msbuild")]
+    [InlineData("DOTNET", null, "msbuild")]
     [InlineData("dart", null, "dart")]
+    [InlineData("Dart", null, "dart")]
     [InlineData("cmake", "MSVC", "msbuild cmake ninja")]
     [InlineData("cmake", "GNU", "gcc ld cmake ninja")]
     [InlineData("cmake", "Clang", "clang msbuild ld cmake ninja")]

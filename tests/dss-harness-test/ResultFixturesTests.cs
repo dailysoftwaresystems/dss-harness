@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
@@ -139,7 +140,7 @@ public sealed class ResultFixturesTests
         foreach (var fixture in Fixtures)
         {
             var expect = Expectation(fixture);
-            var lines = File.ReadAllLines(Output(fixture));
+            var lines = PhaseOutput.Of(File.ReadAllText(Output(fixture))).Lines();
             Func<string, string> asRead = expect["read"]!.AsObject().ContainsKey("ci") ? DssHarness.Core.Ci.CiLog.TextOf : PhaseParsers.AsRead;
             var handed = ResultDigest.Handed(Placed(fixture, expect, Read(fixture, expect)!), [.. lines.TakeLast(50)], asRead);
             var entry = new JsonObject
@@ -209,7 +210,9 @@ public sealed class ResultFixturesTests
             parsers = PhaseParsers.ForRun(config, new RunnerConfig());
         }
 
-        return PhaseParsers.DigestOf(File.ReadLines(output), parsers);
+        // Read as the phase that printed it reads its log (PhaseOutput.Of(...).NumberedLines()), never as File.ReadLines
+        // splits a file: a lone carriage return ends a line for the one and not the other.
+        return PhaseParsers.DigestOf(PhaseOutput.Of(File.ReadAllText(output)).NumberedLines(), parsers);
     }
 
     /// <summary>

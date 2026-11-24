@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Text;
 
@@ -29,7 +30,9 @@ public static class PhaseParsers
     ];
 
     /// <summary>
-    /// The parsers a build phase's log is read by: MSBuild's for a .NET build, the Dart tools' for a Dart one, and for a
+    /// The parsers a build phase's log is read by: MSBuild's for a .NET build, the Dart tools' for a Dart one - each its
+    /// build's own adapter that decides which project type it is (<see cref="BuildAdapters.Find"/>, read ignoring case)
+    /// - and for a
     /// CMake build the compiler's its toolchain declares - MSVC's canonical form with CMake and Ninja, gcc's with the
     /// linker, CMake and Ninja, clang's with them and the canonical form too, which link and MSBuild print where clang-cl
     /// is the compiler (CMake's <c>Clang</c>) - or, where it declares none or more than one, every C compiler's form, the
@@ -44,10 +47,10 @@ public static class PhaseParsers
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(projectType);
 
-        string[] plan = projectType switch
+        string[] plan = BuildAdapters.Find(projectType) switch
         {
-            "dotnet" => ["msbuild"],
-            "dart" => ["dart"],
+            DotnetAdapter => ["msbuild"],
+            DartAdapter => ["dart"],
             _ => CompilerPlan(toolchain is not null && config.Toolchains.TryGetValue(toolchain, out var declared) ? declared.CompilerId.Values : []),
         };
 

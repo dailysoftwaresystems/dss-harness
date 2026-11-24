@@ -9946,8 +9946,9 @@ Go's panic, Rust's on `main` - and one a program caught and printed, the program
 lldb's - names no file, only its line: a base name is no path, and is never read as the tree's.
 
 The parsers a phase's log is read by are chosen by what the phase runs (`Results\PhaseParsers.cs`,
-the one owner of the choice): a .NET build's by MSBuild's form, a Dart build's by the Dart tools', a
-CMake build's by the compiler its toolchain declares (`compilerId`: MSVC's canonical form, gcc's with
+the one owner of the choice): a .NET build's by MSBuild's form, a Dart build's by the Dart tools' -
+each its build's own adapter reading the project's type, ignoring case, as every asker of it does -
+a CMake build's by the compiler its toolchain declares (`compilerId`: MSVC's canonical form, gcc's with
 the linkers, clang's with them and the canonical form link and MSBuild print beside clang-cl, every C
 compiler's form ahead of the canonical one where it declares none or more than one) with
 CMake's and Ninja's; a test's by its runner - CTest's console with GoogleTest's, the sanitizers',
@@ -10106,7 +10107,9 @@ exception that reached the log wraps it, and excuses nothing else.
 Measured (`fixtures\results\`, `ResultFixturesTests`, `ResultParsersTests`): real output from every
 tool the parsers read - captured from the tool where it runs on a developer's machine, written from
 its documented form where it does not (tsc, GoogleTest, jest, vitest, Go, Rust, lldb, the CI log) -
-each read through the parsers the phase that printed it chooses, and held two ways. Its
+each read as the phase that printed it reads its log (`PhaseOutput.Of(...).NumberedLines()`, never a
+file reading that ends a line at a lone carriage return where a phase's log does not), through the
+parsers the phase chooses, and held two ways. Its
 `expect.json`, written by hand from the tool's own words and never by the code, says what a person
 reads off the output - the counts, the first error and its place, each diagnostic and failure, the
 first stack's frames and which of them are the project's, the causes - and is asserted first, and
