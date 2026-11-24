@@ -1464,7 +1464,8 @@ internal sealed class RustPanicParser : IBuiltInParser
 /// error: message</c>, with its stack where one was asked for and its <c>SUMMARY:</c>. The report's first stack is its
 /// stack - each frame <c>#N 0x... in symbol path:line[:col]</c>, <c>(module+0x...)</c> where only the binary is known -
 /// and the stacks after it (where the memory was allocated, freed, last written) are part of the record. A sanitizer's
-/// report has crashed the program that printed it.
+/// report has crashed the program that printed it. A report read inside a test a runner said began is that test's
+/// failure (<see cref="ResultSink.AddCrash"/>).
 /// </summary>
 internal sealed class SanitizerParser : IBuiltInParser
 {
@@ -1628,7 +1629,7 @@ internal sealed class SanitizerParser : IBuiltInParser
         {
             if (_kind is { } kind)
             {
-                sink.Add(new TestFailure(
+                sink.AddCrash(new TestFailure(
                     "sanitizer",
                     $"{kind}: {_message}",
                     Message: _message,
@@ -1653,7 +1654,8 @@ internal sealed class SanitizerParser : IBuiltInParser
 /// frames, the stop's own frame and its source listing taken as the record's and its <c>bt</c> the stack. The C runtime's
 /// failed assertion - glibc's <c>program: file:line: function: Assertion `expr' failed.</c>, the Microsoft runtime's
 /// <c>Assertion failed: expr, file path, line N</c> - is the crash's reason, and its place the failure's: said with the
-/// debugger's report that follows it, or alone where none does. Every such crash has <c>crashed</c> the program.
+/// debugger's report that follows it, or alone where none does. Every such crash has <c>crashed</c> the program, and one
+/// read inside a test a runner said began is that test's failure (<see cref="ResultSink.AddCrash"/>).
 /// </summary>
 /// <remarks>
 /// lldb names a frame's source file by its name alone, as the JVM does (<see cref="JvmStackParser"/>): such a frame names
@@ -1822,7 +1824,7 @@ internal sealed class BacktraceParser : IBuiltInParser
             {
                 var message = _assertion is { } assertion ? $"{_message}\n{assertion}".Trim() : _message!;
 
-                sink.Add(new TestFailure(
+                sink.AddCrash(new TestFailure(
                     framework,
                     ParsedText.Headed(_type!, _message!),
                     Message: message.Length > 0 ? message : null,
@@ -1834,7 +1836,7 @@ internal sealed class BacktraceParser : IBuiltInParser
             }
             else if (_assertion is { } assertion)
             {
-                sink.Add(new TestFailure("assert", assertion, Message: assertion, File: _file, Line: _line, Outcome: "crashed", Log: (_from, _to)));
+                sink.AddCrash(new TestFailure("assert", assertion, Message: assertion, File: _file, Line: _line, Outcome: "crashed", Log: (_from, _to)));
             }
 
             _framework = null;

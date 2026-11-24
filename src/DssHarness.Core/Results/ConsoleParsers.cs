@@ -319,8 +319,10 @@ internal sealed class DotNetTestParser : IBuiltInParser
 /// GoogleTest's console: each <c>[ RUN      ] Suite.Name</c> to its <c>[  FAILED  ] Suite.Name (N ms)</c>, the place of
 /// each failure inside it - <c>path:line: Failure</c>, or <c>path(line): error: message</c> where MSVC built it - with the
 /// lines of its message under it; a parameterized test's <c>Instance/Suite.Name/0</c> and its <c>, where GetParam() =
-/// ...</c>. A test that a <c>[ RUN ]</c> opened and nothing closed has crashed. The summary repeats the failed tests, and
-/// says one only where its own block did not.
+/// ...</c>. The log is in the test from its <c>[ RUN ]</c> to its end (<see cref="ResultSink.Test"/>), so a crash a report
+/// says inside it - a sanitizer's, the C runtime's failed assertion - is its failure; a test that a <c>[ RUN ]</c> opened
+/// and nothing closed has crashed, and is said so where no such report said it already. The summary repeats the failed
+/// tests, and says one only where its own block did not.
 /// </summary>
 internal sealed class GTestParser : IBuiltInParser
 {
@@ -341,6 +343,7 @@ internal sealed class GTestParser : IBuiltInParser
     private sealed class Reading : IResultReading
     {
         private string? _id;
+        private OpenTest? _test;
         private string? _file;
         private int? _line;
         private bool _placed;
@@ -365,6 +368,8 @@ internal sealed class GTestParser : IBuiltInParser
             {
                 Close(sink, "crashed", null);
                 _id = run.Groups["id"].Value;
+                _test = new OpenTest("gtest", _id, ConsoleText.PartsOf(_id).Class, ConsoleText.PartsOf(_id).Method);
+                sink.Test = _test;
                 _from = line.Number;
                 _to = line.Last;
                 return LineTaken.Took;
@@ -395,6 +400,7 @@ internal sealed class GTestParser : IBuiltInParser
                     _id = null;
                     _placed = false;
                     _message.Clear();
+                    Ended(sink);
                 }
 
                 return LineTaken.Took;
@@ -439,9 +445,13 @@ internal sealed class GTestParser : IBuiltInParser
             return LineTaken.Took;
         }
 
+        /// <summary>
+        /// Says the open test, ended as <paramref name="outcome"/> - one that crashed, no end of it said, only where no crash
+        /// a report said inside it was said as its failure already.
+        /// </summary>
         private void Close(ResultSink sink, string outcome, double? seconds)
         {
-            if (_id is { } id)
+            if (_id is { } id && !(outcome == "crashed" && _test?.Said == true))
             {
                 var (type, method, _) = ConsoleText.PartsOf(id);
                 var (expected, actual) = ConsoleText.ValuesOf(_message);
@@ -459,7 +469,11 @@ internal sealed class GTestParser : IBuiltInParser
                     Duration: seconds,
                     Outcome: outcome,
                     Log: (_from, _to)));
-                _said.Add(id);
+            }
+
+            if (_id is not null)
+            {
+                _said.Add(_id);
             }
 
             _id = null;
@@ -467,6 +481,18 @@ internal sealed class GTestParser : IBuiltInParser
             _line = null;
             _placed = false;
             _message.Clear();
+            Ended(sink);
+        }
+
+        /// <summary>The open test has ended: the log is no longer in it, where nothing ended it before.</summary>
+        private void Ended(ResultSink sink)
+        {
+            if (_test is not null && ReferenceEquals(sink.Test, _test))
+            {
+                sink.Test = null;
+            }
+
+            _test = null;
         }
     }
 }
@@ -525,6 +551,13 @@ internal sealed class CTestParser : IBuiltInParser
         public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
             var text = line.Text;
+
+            if (Says(text))
+            {
+                // A line of CTest's own: the output of the test binary before it ended there, and with it any test that
+                // binary said began.
+                sink.Test = null;
+            }
 
             if (Status.Match(text) is { Success: true } status)
             {

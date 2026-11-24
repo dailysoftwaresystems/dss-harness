@@ -59,8 +59,9 @@ public interface IBuiltInParser : IResultParser;
 
 /// <summary>
 /// Where one reading says what it read, in the order it finished each - and what every reading of one log shares: the
-/// build edge a log is in where a build tool said one, so a diagnostic printed inside it names it, and how many errors
-/// and failures the log has said so far, so a line that only says a build failed is said only where nothing said why.
+/// build edge a log is in where a build tool said one, so a diagnostic printed inside it names it, the test it is in where
+/// a runner said one began, so a crash a report says inside it is its, and how many errors and failures the log has said
+/// so far, so a line that only says a build failed is said only where nothing said why.
 /// </summary>
 public sealed class ResultSink
 {
@@ -83,6 +84,17 @@ public sealed class ResultSink
     {
         get => _shared.Target;
         set => _shared.Target = value;
+    }
+
+    /// <summary>
+    /// The test the log is in - one a runner said began and has not said ended - or null where it is in none: a crash a
+    /// report says while it is set is that test's (<see cref="AddCrash"/>). A runner's reading sets it as it reads a test
+    /// begin and clears it as the test ends; a line a runner of tests prints of its own - CTest's next test - ends it too.
+    /// </summary>
+    public OpenTest? Test
+    {
+        get => _shared.Test;
+        set => _shared.Test = value;
     }
 
     /// <summary>How many errors and failures every reading of the log has said so far.</summary>
@@ -124,6 +136,41 @@ public sealed class ResultSink
     }
 
     /// <summary>
+    /// Says a crash a report read - a sanitizer's, a debugger's, the C runtime's failed assertion. Where the log is in a test
+    /// (<see cref="Test"/>), the crash is that test's failure: named for the test, its message the report's own words -
+    /// its error's type ahead of what it said - its place, stack and log range the report's, and the test marked as said by
+    /// it, so the runner that began it says it no second time; a crash that ended its program ends the test too. Where the
+    /// log is in none, the crash is said as the report's own.
+    /// </summary>
+    /// <param name="crash">The crash, as its report's reader read it.</param>
+    public void AddCrash(TestFailure crash)
+    {
+        ArgumentNullException.ThrowIfNull(crash);
+
+        if (_shared.Test is not { } test)
+        {
+            Add(crash);
+            return;
+        }
+
+        test.Said = true;
+
+        if (crash.Outcome == "crashed")
+        {
+            _shared.Test = null;
+        }
+
+        Add(crash with
+        {
+            Framework = test.Framework,
+            Id = test.Id,
+            Class = test.Class,
+            Method = test.Method,
+            Message = crash.Message is not { } said ? crash.Id : crash.Exception is { } thrown ? $"{thrown.Type}: {said}" : said,
+        });
+    }
+
+    /// <summary>
     /// Whether any reading of the log said an error or a failure that begins at a line from <paramref name="from"/> to
     /// <paramref name="to"/>: what a summary of those lines - a runner's line for a test whose own output said why it
     /// failed - asks before it says anything.
@@ -142,11 +189,40 @@ public sealed class ResultSink
     }
 }
 
+/// <summary>
+/// A test a runner said began and has not said ended (<see cref="ResultSink.Test"/>): its identity, which a crash read
+/// while it runs is said under, and whether one was.
+/// </summary>
+/// <param name="framework">The framework that runs it.</param>
+/// <param name="id">Its id as the runner gives it.</param>
+/// <param name="class">Its class or suite; null where the runner gives none.</param>
+/// <param name="method">Its method; null where the runner gives none.</param>
+public sealed class OpenTest(string framework, string id, string? @class, string? method)
+{
+    /// <summary>The framework that runs it.</summary>
+    public string Framework { get; } = framework;
+
+    /// <summary>Its id as the runner gives it.</summary>
+    public string Id { get; } = id;
+
+    /// <summary>Its class or suite; null where the runner gives none.</summary>
+    public string? Class { get; } = @class;
+
+    /// <summary>Its method; null where the runner gives none.</summary>
+    public string? Method { get; } = method;
+
+    /// <summary>Whether a crash read while it ran was said as its failure.</summary>
+    public bool Said { get; internal set; }
+}
+
 /// <summary>What every reading of one log shares.</summary>
 internal sealed class SharedReading
 {
     /// <summary>The build edge the log is in, or null.</summary>
     public string? Target { get; set; }
+
+    /// <summary>The test the log is in, or null.</summary>
+    public OpenTest? Test { get; set; }
 
     /// <summary>How many errors and failures have been said.</summary>
     public int Said { get; set; }
