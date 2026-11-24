@@ -54,7 +54,7 @@ public sealed class ResultFixturesTests
     public void EachToolsOutput_GivesWhatAPersonReadsOffIt(string fixture)
     {
         var expect = Expectation(fixture);
-        var digest = Read(fixture, expect);
+        var digest = Printed(fixture, expect);
 
         Assert.NotNull(digest);
         Assert.Null(digest!.Problem());
@@ -88,7 +88,7 @@ public sealed class ResultFixturesTests
         {
             // The frames the tool printed, said as it printed them, and which of them the digest placed in the tree.
             var frames = StackOf(digest, stack["of"]?.GetValue<string>());
-            var placed = StackOf(Placed(fixture, expect, digest), stack["of"]?.GetValue<string>());
+            var placed = StackOf(Placed(fixture, expect)!, stack["of"]?.GetValue<string>());
 
             Assert.Equal(
                 $"{stack["frames"]!.GetValue<int>()} frames; in the tree: {string.Join(" | ", stack["inTree"]!.AsArray().Select(frame => frame!.GetValue<string>()))}",
@@ -111,7 +111,7 @@ public sealed class ResultFixturesTests
     public void EachToolsOutput_GivesItsStoredDigest(string fixture)
     {
         var expect = Expectation(fixture);
-        var document = Placed(fixture, expect, Read(fixture, expect)!).Document().ToJsonString();
+        var document = Placed(fixture, expect)!.Document().ToJsonString();
         var stored = Path.Combine(Root, fixture, "digest.json");
 
         if (Environment.GetEnvironmentVariable("DSSHARNESS_REGENERATE_RESULTS") is not null)
@@ -126,11 +126,11 @@ public sealed class ResultFixturesTests
 
     /// <summary>
     /// The bytes a model is handed, held: for every fixture, a short log's among them, the whole of what a red entry hands
-    /// a model of it - the digest said for a model and the raw lines beside it, the fifty last lines as the entry's tail
-    /// (ResultDigest.Handed), written as every JSON a model reads is (AgentEnvelope.Written) - costs no more than what the
-    /// model was handed before digests existed - the fifty last lines, and the whole log the old instruction sent it to
-    /// read beside them - so a line handed twice grows it. The total over every fixture is pinned exactly, so a change that
-    /// grows or shrinks what a model reads is a change someone made on purpose.
+    /// a model of it - the digest a phase's log digests to (PhaseDigest.Of) said for a model and the raw lines beside it,
+    /// the fifty last lines as the entry's tail (ResultDigest.Handed), written as every JSON a model reads is
+    /// (AgentEnvelope.Written) - costs no more than the last fifty lines of its log and the whole log beside them, so a line
+    /// handed twice grows it. The total over every fixture is pinned exactly, so a change that grows or shrinks what a
+    /// model reads is a change someone made on purpose.
     /// </summary>
     [Fact]
     public void TheBytesAModelIsHanded_AreHeld_AndTheirTotalIsPinned()
@@ -142,7 +142,7 @@ public sealed class ResultFixturesTests
             var expect = Expectation(fixture);
             var lines = PhaseOutput.Of(File.ReadAllText(Output(fixture))).Lines();
             Func<string, string> asRead = expect["read"]!.AsObject().ContainsKey("ci") ? DssHarness.Core.Ci.CiLog.TextOf : PhaseParsers.AsRead;
-            var handed = ResultDigest.Handed(Placed(fixture, expect, Read(fixture, expect)!), [.. lines.TakeLast(50)], asRead, logHere: true);
+            var handed = ResultDigest.Handed(Placed(fixture, expect), [.. lines.TakeLast(50)], asRead, logHere: true);
             var entry = new JsonObject
             {
                 ["tail"] = new JsonArray([.. handed.Lines.Select(line => (JsonNode?)line)]),
@@ -169,25 +169,35 @@ public sealed class ResultFixturesTests
         => JsonNode.Parse(File.ReadAllText(Path.Combine(Root, fixture, "expect.json")))!.AsObject();
 
     /// <summary>
-    /// Reads one fixture's output as the phase that printed it reads it (<c>read</c>): a build's by its project type and the
-    /// compiler its toolchain declares, a test run's by its runner, a runner step's, a CI job's log as a red check's is read
-    /// for the repository its job ran (<c>ci</c>), or a results file by its own shape - what a case's own test printed read
-    /// by the parsers of the runner that wrote it, where the expectation names one (<c>tests</c>).
+    /// One fixture's output digested as the phase that printed it digests it (<c>read</c>), against <paramref name="tree"/>:
+    /// a build's log by its project type and the compiler its toolchain declares, a test run's by its runner and a runner
+    /// step's - each by the one rule that turns a log into a digest (<see cref="PhaseDigest.Of"/>), the lines read as a
+    /// phase's log hands them on (<see cref="PhaseOutput.Of"/>), never as <c>File.ReadLines</c> splits a file, for a lone
+    /// carriage return ends a line for the one and not the other; a results file by the same rule, read by its own shape
+    /// as the phase's files are and read whole, what a case's own test printed read by the parsers of the runner that wrote
+    /// it where the expectation names one (<c>tests</c>); and a CI job's log as a red check's is digested, for the
+    /// repository its job ran (<c>ci</c>), placed against the job's workspace on its runner whatever the tree.
     /// </summary>
-    private static ResultDigest? Read(string fixture, JsonObject expect)
+    private static ResultDigest? Read(string fixture, JsonObject expect, DigestTree tree)
     {
         var output = Output(fixture);
         var read = expect["read"]!.AsObject();
         var config = new HarnessConfig();
 
-        if (read.ContainsKey("file"))
-        {
-            return ResultFiles.Digest(File.ReadAllText(output), out _, read["tests"] is { } wrote ? PhaseParsers.ForTests(config, wrote.GetValue<string>(), null) : null);
-        }
-
         if (read["ci"] is { } repository)
         {
             return DssHarness.Core.Ci.CiDigest.Of(File.ReadAllText(output), [], repository.GetValue<string>(), said => said, []);
+        }
+
+        if (read.ContainsKey("file"))
+        {
+            IReadOnlyList<IResultParser> wrote = read["tests"] is { } runs ? PhaseParsers.ForTests(config, runs.GetValue<string>(), null) : [];
+
+            return PhaseDigest.Of(PhaseOutput.Empty, wrote, tree, gathering =>
+            {
+                Assert.Null(ResultFiles.Read(() => File.OpenRead(output), gathering, wrote));
+                return true;
+            });
         }
 
         IReadOnlyList<IResultParser> parsers;
@@ -210,36 +220,33 @@ public sealed class ResultFixturesTests
             parsers = PhaseParsers.ForRun(config, new RunnerConfig());
         }
 
-        // Read as the phase that printed it reads its log (PhaseOutput.Of(...).NumberedLines()), never as File.ReadLines
-        // splits a file: a lone carriage return ends a line for the one and not the other.
-        return PhaseParsers.DigestOf(PhaseOutput.Of(File.ReadAllText(output)).NumberedLines(), parsers);
+        return PhaseDigest.Of(PhaseOutput.Of(File.ReadAllText(output)), parsers, tree);
     }
 
     /// <summary>
-    /// <paramref name="digest"/> with every place read against the tree its tool ran in, as a run reads it: the
-    /// expectation's root, holding exactly the files its <c>tree</c> names - every project file the output names, each
+    /// The fixture's digest with every place as its tool printed it (<see cref="Read"/>): read against its root and where
+    /// its tool ran, in a tree holding none of the files its output names, so no place is the tree's and none is renamed.
+    /// </summary>
+    private static ResultDigest? Printed(string fixture, JsonObject expect)
+    {
+        var (root, ranIn, _) = TreeOf(fixture, expect);
+
+        return Read(fixture, expect, new DigestTree(root, ranIn, new FixtureTree(root, new Dictionary<string, string>(StringComparer.Ordinal))));
+    }
+
+    /// <summary>
+    /// The fixture's digest with every place read against the tree its tool ran in, as a run reads it (<see cref="Read"/>):
+    /// the expectation's root, holding exactly the files its <c>tree</c> names - every project file the output names, each
     /// below the root with forward slashes, as a real tree holds them, and with its text where a file's text is read in
     /// placing (<c>{"path": ..., "text": ...}</c>: a <c>go.mod</c>, a <c>pubspec.yaml</c>) - a relative path read from
     /// where the tool ran (<c>workingDirectory</c>, the root where it names none), so the in-tree marks are what a real run
     /// gives, and the same on every machine. The frames the expectation calls the tree's that name a path are among those
     /// files; one a runtime names by its own name for a project's file (<c>package:demo/store.dart</c>) is the tree's
-    /// through the declaration the tree holds, which the expectation's marks hold. A CI job's digest is placed already,
-    /// against the job's workspace on its runner.
+    /// through the declaration the tree holds, which the expectation's marks hold.
     /// </summary>
-    private static ResultDigest Placed(string fixture, JsonObject expect, ResultDigest digest)
+    private static ResultDigest? Placed(string fixture, JsonObject expect)
     {
-        if (expect["read"]!.AsObject().ContainsKey("ci"))
-        {
-            return digest;
-        }
-
-        var root = expect["root"]?.GetValue<string>() ?? throw new InvalidOperationException($"'{fixture}': its expectation names no root to read its places against");
-        var ranIn = expect["workingDirectory"]?.GetValue<string>();
-        var held = (expect["tree"] as JsonArray ?? throw new InvalidOperationException($"'{fixture}': its expectation names no tree - every project file its output names, below its root"))
-            .Select(file => file is JsonObject withText
-                ? (Path: withText["path"]!.GetValue<string>(), Text: withText["text"]!.GetValue<string>())
-                : (Path: file!.GetValue<string>(), Text: string.Empty))
-            .ToDictionary(file => file.Path, file => file.Text, StringComparer.Ordinal);
+        var (root, ranIn, held) = TreeOf(fixture, expect);
 
         foreach (var frame in (expect["stack"]?["inTree"]?.AsArray() ?? []).Select(frame => frame!.GetValue<string>()))
         {
@@ -256,7 +263,30 @@ public sealed class ResultFixturesTests
             }
         }
 
-        return digest.WithInTree(new DigestTree(root, ranIn, new FixtureTree(root, held)));
+        return Read(fixture, expect, new DigestTree(root, ranIn, new FixtureTree(root, held)));
+    }
+
+    /// <summary>
+    /// The tree the fixture's tool ran in, as its expectation names it: its root, where the tool ran (null for the root),
+    /// and each file it holds with its text. A CI job's log names none - its places are its runner's workspace's - and is
+    /// read against a root of its own that holds nothing.
+    /// </summary>
+    private static (string Root, string? RanIn, Dictionary<string, string> Held) TreeOf(string fixture, JsonObject expect)
+    {
+        if (expect["read"]!.AsObject().ContainsKey("ci"))
+        {
+            return ("/ci", null, new Dictionary<string, string>(StringComparer.Ordinal));
+        }
+
+        var root = expect["root"]?.GetValue<string>() ?? throw new InvalidOperationException($"'{fixture}': its expectation names no root to read its places against");
+        var ranIn = expect["workingDirectory"]?.GetValue<string>();
+        var held = (expect["tree"] as JsonArray ?? throw new InvalidOperationException($"'{fixture}': its expectation names no tree - every project file its output names, below its root"))
+            .Select(file => file is JsonObject withText
+                ? (Path: withText["path"]!.GetValue<string>(), Text: withText["text"]!.GetValue<string>())
+                : (Path: file!.GetValue<string>(), Text: string.Empty))
+            .ToDictionary(file => file.Path, file => file.Text, StringComparer.Ordinal);
+
+        return (root, ranIn, held);
     }
 
     /// <summary>

@@ -80,7 +80,7 @@ public sealed class ResultDigestRecordTests
         Assert.Equal((70, 20), (digest.FailuresLeftOut, digest.UnparsedLeftOut));
         Assert.Equal("T1", digest.Failures[0].Id);
         Assert.Equal(("error line 21", "error line 70"), (digest.Unparsed[0], digest.Unparsed[^1]));
-        Assert.Equal(20, digest.ForAModel()["unparsedLeftOut"]!.GetValue<int>());
+        Assert.Equal(20, ResultDigest.Handed(digest, [], PhaseParsers.AsRead, logHere: true).Digest!["unparsedLeftOut"]!.GetValue<int>());
         Assert.Equal(20, digest.Document()["leftOut"]!["unparsed"]!.GetValue<int>());
     }
 
@@ -101,7 +101,7 @@ public sealed class ResultDigestRecordTests
 
         Assert.Equal("ctest store_times_out timedOut: Test timeout", digest.FirstSaid());
 
-        var model = digest.ForAModel();
+        var model = ResultDigest.Handed(digest, [], PhaseParsers.AsRead, logHere: true).Digest!;
 
         Assert.Equal(("store_times_out", "timedOut", "ctest store_times_out timedOut: Test timeout"), (model["first"]!["id"]!.GetValue<string>(), model["first"]!["outcome"]!.GetValue<string>(), model["first"]!["said"]!.GetValue<string>()));
         Assert.Equal(["demo_test"], model["failures"]!.AsArray().Select(failure => failure!["id"]!.GetValue<string>()));
@@ -140,7 +140,7 @@ public sealed class ResultDigestRecordTests
         Assert.Equal((StackTrace.FrameBound, 36), (digest.Failures[0].Exception!.Stack.Count, digest.Failures[0].Exception!.StackCut));
         Assert.Equal(36, digest.Document()["diagnostics"]![0]!["stackCut"]!.GetValue<int>());
 
-        var rendered = digest.ForAModel()["first"]!["stack"]!.AsArray().Select(line => line!.GetValue<string>()).ToList();
+        var rendered = ResultDigest.Handed(digest, [], PhaseParsers.AsRead, logHere: true).Digest!["first"]!["stack"]!.AsArray().Select(line => line!.GetValue<string>()).ToList();
 
         Assert.Equal(
             ["at Frame0()", "... 46 frames outside the tree", "at Frame47()", "... 36 frames left out of the record; the log holds them", "at Frame84()", "... 14 frames outside the tree", "at Frame99()"],
@@ -180,7 +180,7 @@ public sealed class ResultDigestRecordTests
         Assert.Equal("Cause2", document["causedBy"]![0]!["type"]!.GetValue<string>());
         Assert.Equal("Cause3", document["causedBy"]![0]!["causedBy"]![0]!["type"]!.GetValue<string>());
 
-        var rendered = digest.ForAModel()["first"]!["stack"]!.AsArray().Select(line => line!.GetValue<string>()).ToList();
+        var rendered = ResultDigest.Handed(digest, [], PhaseParsers.AsRead, logHere: true).Digest!["first"]!["stack"]!.AsArray().Select(line => line!.GetValue<string>()).ToList();
 
         Assert.Equal(
             ["at C1()", "caused by Cause2: cause 2", "at C2()", "caused by Cause3: cause 3", "at C3()", "caused by Cause4: cause 4", "at C4()",
@@ -539,7 +539,7 @@ public sealed class ResultDigestRecordTests
             [],
             []);
 
-        var model = digest.ForAModel();
+        var model = ResultDigest.Handed(digest, [], PhaseParsers.AsRead, logHere: true).Digest!;
 
         Assert.Equal(["errors", "warnings", "first", "diagnostics", "byCode", "byFile"], model.Select(member => member.Key));
         Assert.Equal(["kind", "tool", "code", "severity", "file", "line", "count", "said"], model["first"]!.AsObject().Select(member => member.Key));

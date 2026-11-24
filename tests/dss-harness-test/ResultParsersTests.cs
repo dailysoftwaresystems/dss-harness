@@ -31,7 +31,7 @@ public sealed class ResultParsersTests
     {
         var offered = new List<string>();
 
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             ["a1", "a2 error: lost", "x", "b1", "a3"],
             [new Holding(offered), new Taking(offered)]);
 
@@ -93,7 +93,7 @@ public sealed class ResultParsersTests
     [MemberData(nameof(HeadsInARow))]
     public void AHeadThatEndsAHold_IsReadAsTheHeadOfTheErrorItBegins(string[] lines, string read)
     {
-        var digest = PhaseParsers.DigestOf(lines, PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+        var digest = Digested(lines, PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
 
         Assert.Equal(
             read,
@@ -110,7 +110,7 @@ public sealed class ResultParsersTests
     public void ALoggedHead_IsDecidedByTheLineAfterIt_SoNoReaderHoldsTheLogBelowIt()
     {
         var dotnet = new List<string>();
-        var crash = PhaseParsers.DigestOf(
+        var crash = Digested(
             [
                 "MyApp.Config.SettingException: 'x' missing, using default",
                 "loading the store",
@@ -129,7 +129,7 @@ public sealed class ResultParsersTests
         Assert.Equal(["MyApp.Config.SettingException: 'x' missing, using default"], crash.Unparsed);
 
         var v8 = new List<string>();
-        var jest = PhaseParsers.DigestOf(
+        var jest = Digested(
             [
                 "Error: connect ECONNREFUSED 127.0.0.1:5432",
                 " FAIL  src/store.test.js",
@@ -162,7 +162,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void AnErrorThatEndedItsProgram_HasCrashedIt_AndOneItCaughtAndPrintedHasErrored()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "TypeError: a store needs a path",
                 "    at load (/home/runner/work/app/app/logged.js:1:25)",
@@ -257,7 +257,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void TheFindings_AreMergedInTheOrderOfTheirLines()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "src/store.c:3:5: error: 'count' undeclared (first use in this function)",
                 @"D:\a\app\app\src\Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [D:\a\app\app\src\App.csproj]",
@@ -278,12 +278,15 @@ public sealed class ResultParsersTests
     [Fact]
     public void ACiJobsLog_IsReadOnce_EachLineByOneForm()
     {
-        var digest = PhaseParsers.DigestOf(
-            DssHarness.Core.Ci.CiLog.Of(string.Join(
+        var digest = DssHarness.Core.Ci.CiDigest.Of(
+            string.Join(
                 "\n",
                 "2026-11-23T00:40:01.0000000Z src/store.c:3:5: error: 'count' undeclared (first use in this function)",
-                @"2026-11-23T00:40:02.0000000Z D:\a\app\app\native\store.cpp(7): error C2065: 'y': undeclared identifier")).Select(line => line.Line),
-            PhaseParsers.ForCi([]))!;
+                @"2026-11-23T00:40:02.0000000Z D:\a\app\app\native\store.cpp(7): error C2065: 'y': undeclared identifier"),
+            [],
+            null,
+            said => said,
+            [])!;
 
         Assert.Equal(
             [("cc", "error", (string?)null, "src/store.c", 3, (1, 1)), ("msvc", "error", "C2065", @"D:\a\app\app\native\store.cpp", 7, (2, 2))],
@@ -445,7 +448,7 @@ public sealed class ResultParsersTests
         var matcher = new ProblemMatcher("mytool", @"^(?<sev>\w+) (?<file>[^:]+):(?<line>\d+): (?<message>.+)$", Severity: "sev", File: "file", Line: "line", Message: "message");
         matcher.Compile();
 
-        var digest = PhaseParsers.DigestOf([$"{said} src/a.c:3: it jammed"], [new MatcherParser(matcher)])!;
+        var digest = Digested([$"{said} src/a.c:3: it jammed"], [new MatcherParser(matcher)])!;
 
         Assert.Equal(severity, Assert.Single(digest.Diagnostics).Severity);
         Assert.Equal(severity == "error" ? 1 : 0, digest.Errors);
@@ -464,7 +467,7 @@ public sealed class ResultParsersTests
         stacked.Compile();
         ended.Compile();
 
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "ERROR it jammed: error: the queue",
                 "  at Queue.take (src/queue.c:12)",
@@ -557,7 +560,7 @@ public sealed class ResultParsersTests
         var matcher = new ProblemMatcher("mytool", @"^ERROR (?<message>.+)$", Message: "message", Stack: new MatcherStack(@"^  at (?<file>\S+):(?<line>\w+)$"));
         matcher.Compile();
 
-        var digest = PhaseParsers.DigestOf(["ERROR it broke", "  at src/a.c:twelve", "  at src/b.c:7", "  at src/c.c:99999999999"], PhaseParsers.ForCi([matcher]))!;
+        var digest = Digested(["ERROR it broke", "  at src/a.c:twelve", "  at src/b.c:7", "  at src/c.c:99999999999"], PhaseParsers.ForCi([matcher]))!;
 
         Assert.Equal(
             [("src/a.c", (int?)null), ("src/b.c", 7), ("src/c.c", null)],
@@ -571,7 +574,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ALineNumberPastWhatANumberHolds_NamesNoLine_AndTheLogIsReadOn()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             ["src/a.c:99999999999:5: error: far", @"D:\a\src\b.cpp(99999999999,3): error C2065: 'y': undeclared identifier", "src/c.c:3:5: error: near"],
             PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
 
@@ -588,7 +591,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void TheCanonicalForm_ReadsADrivesPath_AParenthesisedOne_AndAFatalError()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 @"D:\a\app\app\src\Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [D:\a\app\app\src\App.csproj]",
                 @"C:\Program Files (x86)\Windows Kits\10\Include\um\winbase.h(4,1): fatal error C1083: Cannot open include file: 'b.h': No such file or directory",
@@ -641,7 +644,7 @@ public sealed class ResultParsersTests
                 @"clang warning -Wunused-variable D:\a\app\src\warn.cpp:3:9 - 0",
                 "link error LNK2019 -:: main.cpp.obj 0",
             ],
-            Said(PhaseParsers.DigestOf(lines, PhaseParsers.ForBuild(config, "cmake", "clang-cl"))!));
+            Said(Digested(lines, PhaseParsers.ForBuild(config, "cmake", "clang-cl"))!));
         Assert.Equal(
             [
                 @"cc error - D:\a\app\src\main.cpp:7:5 - 0",
@@ -649,7 +652,7 @@ public sealed class ResultParsersTests
                 @"cc warning -Wunused-variable D:\a\app\src\warn.cpp:3:9 - 0",
                 "link error LNK2019 -:: main.cpp.obj 0",
             ],
-            Said(PhaseParsers.DigestOf(lines, PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!));
+            Said(Digested(lines, PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!));
     }
 
     /// <summary>
@@ -661,7 +664,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ALinkersReference_IsReadByItsLine_BehindItsObject_AndBehindADrivesLinker()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "/usr/bin/ld: /tmp/cc.o: in function `main':",
                 "/home/u/app/link.c:4: undefined reference to `parse_record'",
@@ -693,7 +696,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ACMakeError_SaysItsCommandAheadOfItsMessage_AndNamesNoProject()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
                 "  add_subdirectory given source \"lib/missing\" which is not an existing",
@@ -745,7 +748,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void AGoogleTestFailure_IsReadInMsvcsForm_AndItsSummarySaysItOnce()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "[ RUN      ] StoreTest.LoadsItsRecords",
                 @"D:\a\app\app\tests\store_test.cpp(42): error: Expected equality of these values:",
@@ -777,7 +780,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void CTestSaysAFailedTest_OnlyWhereItsOwnOutputSaidNothing()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "    Start 1: store_tests",
                 "1/2 Test #1: store_tests ......................***Failed    0.01 sec",
@@ -817,7 +820,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ATestBinaryThatCrashedUnderCTest_IsSaidOnce_ByTheTestThatCrashed()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "    Start 1: store_tests",
                 "1/2 Test #1: store_tests ......................***Exception: SegFault  0.01 sec",
@@ -857,7 +860,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ATestBinaryThatCrashedUnplaced_IsSaidOnce_WhicheverReadingReadTheLastLine()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "    Start 1: store_tests",
                 "1/1 Test #1: store_tests ......................***Exception: SegFault  0.01 sec",
@@ -888,7 +891,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void AJvmFrame_NamesNoFile_ItsLineAndSymbolKept()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "Exception in thread \"main\" java.lang.IllegalStateException: no runner",
                 "\tat com.example.Runner.start(Runner.java:42)",
@@ -909,7 +912,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void AGoTestsFailure_NamesThePackageItsResultLineNames_AsItsClass()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "--- FAIL: TestStoreLoads (0.00s)",
                 "    store_test.go:14: Load(\"first\") = 3, want 4",
@@ -944,7 +947,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ACrashAReportSaysInsideATestABegan_IsThatTestsFailure_SaidOnce()
     {
-        var asan = PhaseParsers.DigestOf(AsanDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+        var asan = Digested(AsanDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
 
         var crashed = Assert.Single(asan.Failures);
 
@@ -955,7 +958,7 @@ public sealed class ResultParsersTests
         Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 22), (crashed.Exception.Stack[1].File, crashed.Exception.Stack[1].Line));
         Assert.Empty(asan.Unparsed ?? []);
 
-        var assertion = PhaseParsers.DigestOf(AssertDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+        var assertion = Digested(AssertDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
 
         var killed = Assert.Single(assertion.Failures);
 
@@ -1033,7 +1036,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void AVerboseGoRun_KeepsEachTestsLoggedLines_UnderItsFailLine_SaidOnce()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "=== RUN   TestStoreLoads",
                 "    store_test.go:14: Load(\"first\") = 3, want 4",
@@ -1079,7 +1082,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void AGoPackageThatDidNotBuild_IsSaidByItsOwnBlock_NeverSilencedByAnotherPackagesTest()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "--- FAIL: TestStoreLoads (0.00s)",
                 "    store_test.go:14: Load(\"first\") = 3, want 4",
@@ -1117,7 +1120,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ASanitizersReport_HasCrashedTheProgramOnlyWhereItAbortedIt()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "ubsan.c:5:18: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'",
                 "next is -2147483648",
@@ -1141,7 +1144,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void NinjasFailedLine_IsReadByItsOneOwner_ItsExitCodeTakenOffTheEdge()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             ["FAILED: [code=-1073741819] CMakeFiles/app.dir/src/main.cpp.obj"],
             PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
 
@@ -1160,7 +1163,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void AnMstestThrownError_IsReadAsOne_UnderDotnetTest()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "  Failed Demo.Tests.StoreTests.Loads [31 ms]",
                 "  Error Message:",
@@ -1208,7 +1211,7 @@ public sealed class ResultParsersTests
     [Fact]
     public void ACMakeBlocksBlankLine_IsDecidedByTheLineAfterIt()
     {
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
                 "  add_subdirectory given source \"lib/missing\" which is not an existing",
@@ -1225,7 +1228,7 @@ public sealed class ResultParsersTests
 
         var answers = new List<string>();
 
-        var ended = PhaseParsers.DigestOf(
+        var ended = Digested(
             [
                 "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
                 "  a message",
@@ -1236,7 +1239,7 @@ public sealed class ResultParsersTests
 
         Assert.Equal(["1 Took", "2 Took", "3 Held", "4 Left", "4 Left"], answers);
         var said = Assert.Single(ended.Diagnostics);
-        Assert.Equal(("a message", (1, 2)), (said.Message, said.Log!.Value));
+        Assert.Equal(("add_subdirectory: a message", (1, 2)), (said.Message, said.Log!.Value));
         Assert.Empty(ended.Unparsed ?? []);
     }
 
@@ -1249,7 +1252,7 @@ public sealed class ResultParsersTests
     {
         var answers = new List<string>();
 
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "/home/runner/work/app/app/src/store.js",
                 "  4:9  error  'add' is not defined  no-undef",
@@ -1263,7 +1266,7 @@ public sealed class ResultParsersTests
 
         var noneAnswers = new List<string>();
 
-        var none = PhaseParsers.DigestOf(
+        var none = Digested(
             ["/tmp/notes.txt", "something else"],
             [.. PhaseParsers.ForTests(new HarnessConfig(), "npx", null).Select(parser => parser.Name == "eslint" ? new Recording(parser, noneAnswers) : parser)]);
 
@@ -1280,7 +1283,7 @@ public sealed class ResultParsersTests
     {
         var answers = new List<string>();
 
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "/usr/bin/ld: /tmp/cc.o: in function `main':",
                 "/home/u/app/link.c:4: undefined reference to `parse_record'",
@@ -1294,7 +1297,7 @@ public sealed class ResultParsersTests
 
         var noneAnswers = new List<string>();
 
-        var none = PhaseParsers.DigestOf(
+        var none = Digested(
             ["/usr/bin/ld: /tmp/cc.o: in function `main':", "something"],
             [.. PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null).Select(parser => parser.Name == "ld" ? new Recording(parser, noneAnswers) : parser)]);
 
@@ -1312,7 +1315,7 @@ public sealed class ResultParsersTests
     {
         var answers = new List<string>();
 
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "Traceback (most recent call last):",
                 "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
@@ -1336,7 +1339,7 @@ public sealed class ResultParsersTests
 
         var endedAnswers = new List<string>();
 
-        var ended = PhaseParsers.DigestOf(
+        var ended = Digested(
             [
                 "Traceback (most recent call last):",
                 "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
@@ -1363,7 +1366,7 @@ public sealed class ResultParsersTests
     {
         var answers = new List<string>();
 
-        var digest = PhaseParsers.DigestOf(
+        var digest = Digested(
             [
                 "panic: runtime error: index out of range [3] with length 3",
                 string.Empty,
@@ -1379,13 +1382,44 @@ public sealed class ResultParsersTests
 
         var givenAnswers = new List<string>();
 
-        var given = PhaseParsers.DigestOf(
+        var given = Digested(
             ["panic: something", "next line"],
             [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "go-panic" ? new Recording(parser, givenAnswers) : parser)])!;
 
         Assert.Equal(["1 Held", "2 Left", "2 Left"], givenAnswers);
         Assert.Empty(given.Failures);
         Assert.Equal(["panic: something"], given.Unparsed);
+    }
+
+    /// <summary>
+    /// The digest of <paramref name="lines"/>, a phase's output as its child printed it, by the one rule that turns a log
+    /// into a digest (<see cref="PhaseDigest.Of"/>) - read against a tree that holds none of the files they name, so every
+    /// place stays as the tool wrote it and no frame is the tree's.
+    /// </summary>
+    /// <param name="lines">The lines, each as printed.</param>
+    /// <param name="parsers">The parsers chosen for them.</param>
+    internal static ResultDigest? Digested(IReadOnlyList<string> lines, IReadOnlyList<IResultParser> parsers)
+        => PhaseDigest.Of(new Printed(lines), parsers, new DigestTree(NoTree.Root, null, new NoTree()));
+
+    /// <summary>A phase's output: the lines given, each one line as its child printed it.</summary>
+    private sealed class Printed(IReadOnlyList<string> lines) : PhaseOutput
+    {
+        public override IEnumerable<string> Lines() => lines;
+    }
+
+    /// <summary>A tree that holds no file and no directory, and reads nothing from the disk.</summary>
+    private sealed class NoTree() : PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create()))
+    {
+        /// <summary>Where the tree is: a root no place a test's lines name is below.</summary>
+        public const string Root = "/no-tree";
+
+        public override bool FileExists(string path) => false;
+
+        public override bool IsLink(string path) => false;
+
+        public override IEnumerable<string> EnumerateDirectories(string path) => [];
+
+        public override Stream OpenRead(string path) => throw new FileNotFoundException($"'{path}' is no file of a tree that holds none.", path);
     }
 
     /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>

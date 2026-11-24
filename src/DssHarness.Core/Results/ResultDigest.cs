@@ -645,18 +645,12 @@ public sealed record ResultDigest
     /// The digest as a model reads it: the counts, the first problem said whole with its stack rendered to its frames in
     /// the tree and its causes under it, the next distinct problems to four in all - an error one line each, a test
     /// failure with its rendered stack - the rest counted by code and by file (every printing the four do not say, over
-    /// the whole output), and the lines no parser held, with how many the bound left out; each thing said once, and a
-    /// member that says nothing - a count of none, an empty list, a null - left out at every depth, for a model pays for
-    /// every byte it is handed. A rule of rendering, never of the record: the whole digest stays in the ledger's own
-    /// <c>--json</c> (<see cref="Document"/>), its counts by code and by file over everything. What a red entry hands a
-    /// model beside it is <see cref="Handed"/>'s to say.
-    /// </summary>
-    public JsonObject ForAModel() => ForAModel(Unparsed);
-
-    /// <summary>
-    /// The digest as a model reads it (<see cref="ForAModel()"/>), saying of the lines no parser held
-    /// <paramref name="unparsed"/> - those the raw lines beside it do not (<see cref="Handed"/>) - and how many the bound
-    /// left out.
+    /// the whole output), and of the lines no parser held <paramref name="unparsed"/> - those the raw lines beside it do
+    /// not say - with how many the bound left out; each thing said once, and a member that says nothing - a count of none,
+    /// an empty list, a null - left out at every depth, for a model pays for every byte it is handed. A rule of rendering,
+    /// never of the record: the whole digest stays in the ledger's own <c>--json</c> (<see cref="Document"/>), its counts
+    /// by code and by file over everything. A digest reaches a model only through <see cref="Handed"/>, which says what
+    /// goes beside it.
     /// </summary>
     private JsonObject ForAModel(IReadOnlyList<string> unparsed)
     {

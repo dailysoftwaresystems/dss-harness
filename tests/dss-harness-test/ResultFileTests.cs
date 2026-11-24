@@ -104,7 +104,7 @@ public sealed class ResultFileTests
     [Fact]
     public void ATrx_IsReadByItsRoot_ItsFailuresTheirMessagesAndStacks_ASkipNoFailure()
     {
-        var digest = ResultFiles.Digest(Trx, out var problem);
+        var digest = Digest(Trx, out var problem);
 
         Assert.Null(problem);
         Assert.Empty(digest.Diagnostics);
@@ -144,7 +144,7 @@ public sealed class ResultFileTests
             </Results></TestRun>
             """;
 
-        var digest = ResultFiles.Digest(Outcomes, out var problem);
+        var digest = Digest(Outcomes, out var problem);
 
         Assert.Null(problem);
         Assert.Equal(
@@ -157,7 +157,7 @@ public sealed class ResultFileTests
     [Fact]
     public void AJUnitReport_IsReadThroughTheMutatorArmsReader_ItsFailuresSaid()
     {
-        var digest = ResultFiles.Digest(JUnit, out var problem);
+        var digest = Digest(JUnit, out var problem);
 
         Assert.Null(problem);
 
@@ -173,7 +173,7 @@ public sealed class ResultFileTests
     [Fact]
     public void AFilesLines_EndWhereTheOneRuleEndsThem_ACarriageReturnAloneAmongThem()
     {
-        var digest = ResultFiles.Digest(
+        var digest = Digest(
             "<testsuites><testsuite name=\"demo\"><testcase classname=\"demo\" name=\"one\"><failure>expected 2 records&#xD;found 3&#xD;</failure></testcase></testsuite></testsuites>",
             out var problem);
 
@@ -207,7 +207,7 @@ public sealed class ResultFileTests
             "[  FAILED  ] Sizes/ParserTest.ReadsItsForm/1, where GetParam() = 3 (1 ms)",
             string.Empty);
 
-        var digest = ResultFiles.Digest(
+        var digest = Digest(
             $"""
             <testsuite name="(empty)" tests="3" failures="3">
               <testcase name="folds_duplicates" classname="folds_duplicates" status="fail"><failure message="Failed"/><system-out>check.c:9: expected 2 records, found 3&#10;</system-out></testcase>
@@ -236,7 +236,7 @@ public sealed class ResultFileTests
     [Fact]
     public void AJUnitFailuresBody_HoldingAStack_IsReadAsThatFailuresThrownError()
     {
-        var digest = ResultFiles.Digest(
+        var digest = Digest(
             """
             <testsuites><testsuite name="store"><testcase classname="store adds" name="store adds" time="0.002"><failure message="expected 2 to be 3" type="AssertionError">AssertionError: expected 2 to be 3
                 at Object.&lt;anonymous&gt; (/home/u/app/test/store.test.js:5:13)
@@ -303,7 +303,7 @@ public sealed class ResultFileTests
             into => ResultFiles.Read(() => new MemoryStream(report, writable: false), into, parsers) is null)!;
 
         Assert.Equal(
-            [("folds_duplicates", "failed", "check.c:9: expected 2 records, found 3", ((int, int)?)(5, 5)), ("parses_input", "crashed", "SEGFAULT", (8, 8)), ("waits_for_lock", "timedOut", "Timeout", (10, 10))],
+            [("folds_duplicates", "failed", "check.c:9: expected 2 records, found 3", ((int, int)?)(5, 6)), ("parses_input", "crashed", "SEGFAULT", (8, 8)), ("waits_for_lock", "timedOut", "Timeout", (10, 11))],
             digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Message!, failure.Log)));
         Assert.Equal((1, 1, 1), (digest.Failed, digest.Crashed, digest.TimedOut));
         Assert.Equal((0, 0), (digest.Errors, digest.UnparsedCount));
@@ -318,7 +318,7 @@ public sealed class ResultFileTests
     [Fact]
     public void ACaseCTestWrote_EndedAsCTestSaysIt_AndAnotherRunnersFailed()
     {
-        var digest = ResultFiles.Digest(
+        var digest = Digest(
             """
             <?xml version="1.0" encoding="UTF-8"?>
             <testsuite name="(empty)" tests="6" failures="5">
@@ -351,7 +351,7 @@ public sealed class ResultFileTests
     [Fact]
     public void ADartStream_IsReadByItsLines_ItsFailuresAndItsUnownedErrors()
     {
-        var digest = ResultFiles.Digest(Dart, out var problem);
+        var digest = Digest(Dart, out var problem);
 
         Assert.Null(problem);
 
@@ -382,7 +382,7 @@ public sealed class ResultFileTests
             {"type":"error","testID":1,"error":"This test failed after it had already completed.","stackTrace":"","isFailure":false,"time":"t"}
             """;
 
-        var digest = ResultFiles.Digest(Late, out var problem);
+        var digest = Digest(Late, out var problem);
 
         Assert.Null(problem);
         Assert.Equal([("charges", "failed", (string?)null), ("keeps records", "errored", "This test failed after it had already completed.")], digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Message)));
@@ -398,7 +398,7 @@ public sealed class ResultFileTests
     {
         var torn = string.Join("\n", Dart.Split('\n').Take(3)) + "\n{\"type\":\"testStart\",\"test\":{\"id\":\"two\"}}\n{\"type\":\"testDone\",\"testID\":2,\"res";
 
-        var digest = ResultFiles.Digest(torn, out var problem);
+        var digest = Digest(torn, out var problem);
 
         Assert.Equal("2 of its lines are no event of the stream, the first line 4", problem);
         Assert.Equal(["charge test"], digest.Failures.Select(failure => failure.Id));
@@ -411,7 +411,7 @@ public sealed class ResultFileTests
     [Fact]
     public void ASarifLog_IsReadByItsRuns_ItsDiagnosticsTyped_ALevelLeftOutAWarning()
     {
-        var digest = ResultFiles.Digest(Sarif, out var problem);
+        var digest = Digest(Sarif, out var problem);
 
         Assert.Null(problem);
         Assert.Empty(digest.Failures);
@@ -432,7 +432,7 @@ public sealed class ResultFileTests
     [Fact]
     public void ASarif1Log_IsReadAsThe21OneIs()
     {
-        var digest = ResultFiles.Digest(Sarif1, out var problem);
+        var digest = Digest(Sarif1, out var problem);
 
         Assert.Null(problem);
 
@@ -456,7 +456,7 @@ public sealed class ResultFileTests
             ]}]}
             """;
 
-        var digest = ResultFiles.Digest(Shapeless, out var problem);
+        var digest = Digest(Shapeless, out var problem);
 
         Assert.Null(problem);
 
@@ -473,12 +473,12 @@ public sealed class ResultFileTests
     [Fact]
     public void AResultsFileCutShort_GivesWhatItHeld_AndSaysTheBreak()
     {
-        var xml = ResultFiles.Digest(JUnit[..JUnit.IndexOf("<testcase classname=\"demo\" name=\"two\"", StringComparison.Ordinal)], out var xmlProblem);
+        var xml = Digest(JUnit[..JUnit.IndexOf("<testcase classname=\"demo\" name=\"two\"", StringComparison.Ordinal)], out var xmlProblem);
 
         Assert.Equal(["demo.one"], xml.Failures.Select(failure => failure.Id));
         Assert.StartsWith("it is no XML: ", xmlProblem, StringComparison.Ordinal);
 
-        var json = ResultFiles.Digest(Sarif[..Sarif.IndexOf("\"ruleId\": \"CS0219\"", StringComparison.Ordinal)], out var jsonProblem);
+        var json = Digest(Sarif[..Sarif.IndexOf("\"ruleId\": \"CS0219\"", StringComparison.Ordinal)], out var jsonProblem);
 
         Assert.Equal(["CS0103"], json.Diagnostics.Select(diagnostic => diagnostic.Code));
         Assert.StartsWith("it is no whole JSON document: ", jsonProblem, StringComparison.Ordinal);
@@ -502,7 +502,7 @@ public sealed class ResultFileTests
             ]}
             """.Replace("WIDE", wide, StringComparison.Ordinal);
 
-        var digest = ResultFiles.Digest(log, out var problem);
+        var digest = Digest(log, out var problem);
 
         Assert.Null(problem);
         Assert.Equal(
@@ -518,7 +518,7 @@ public sealed class ResultFileTests
     [InlineData("{\"answer\": 42}", "it is JSON, and none of the results forms owns it")]
     public void AFileNoFormOwns_IsSaidWithItsReason(string text, string because)
     {
-        var digest = ResultFiles.Digest(text, out var problem);
+        var digest = Digest(text, out var problem);
 
         Assert.False(digest.HoldsAFinding);
         Assert.Equal(because, problem);
@@ -528,7 +528,7 @@ public sealed class ResultFileTests
     [Fact]
     public void AResultsFileDeclaringADocumentType_IsRefused()
     {
-        var digest = ResultFiles.Digest("<!DOCTYPE testsuites [<!ENTITY xxe \"file\">]><testsuites/>", out var problem);
+        var digest = Digest("<!DOCTYPE testsuites [<!ENTITY xxe \"file\">]><testsuites/>", out var problem);
 
         Assert.False(digest.HoldsAFinding);
         Assert.Equal("it declares a document type, which no report needs and this never reads", problem);
@@ -571,5 +571,18 @@ public sealed class ResultFileTests
         static string Report(string name, string message) => $"""
             <testsuites><testsuite name="demo"><testcase classname="demo" name="{name}"><failure message="{message}"/></testcase></testsuite></testsuites>
             """;
+    }
+
+    /// <summary>
+    /// What the results file <paramref name="text"/> holds, read by the one reader of a results file
+    /// (<see cref="ResultFiles.Read"/>) into a gathering of its own, and what could not be read of it.
+    /// </summary>
+    private static ResultDigest Digest(string text, out string? problem, IReadOnlyList<IResultParser>? parsers = null)
+    {
+        var gathering = new ResultDigest.Gathering();
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+
+        problem = ResultFiles.Read(() => new MemoryStream(bytes, writable: false), gathering, parsers ?? []);
+        return gathering.Digest();
     }
 }

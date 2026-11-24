@@ -63,24 +63,6 @@ public static class ResultFiles
         };
     }
 
-    /// <summary>
-    /// The digest of the results file <paramref name="text"/> is, and what could not be read of it: a file's reading, as
-    /// <see cref="Read"/> reads one, of text already in hand.
-    /// </summary>
-    /// <param name="text">The file's text.</param>
-    /// <param name="problem">What could not be read of it; null where it was read whole.</param>
-    /// <param name="parsers">The parsers chosen for the phase that wrote it; none where it is not known.</param>
-    public static ResultDigest Digest(string text, out string? problem, IReadOnlyList<IResultParser>? parsers = null)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        var gathering = new ResultDigest.Gathering();
-        var bytes = Encoding.UTF8.GetBytes(text);
-
-        problem = Read(() => new MemoryStream(bytes, writable: false), gathering, parsers ?? []);
-        return gathering.Digest();
-    }
-
     /// <summary>The XML forms: a TRX by its root, a JUnit report by the mutation arm's reader, which owns that form - each through the one guarded reader.</summary>
     private static string? Xml(TextReader text, Func<TextReader> open, ResultDigest.Gathering into, IReadOnlyList<IResultParser> parsers)
     {

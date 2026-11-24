@@ -118,52 +118,6 @@ public static class PhaseParsers
     }
 
     /// <summary>
-    /// The digest of a log's lines, numbered from 1 as they stream, by the parsers chosen for it
-    /// (<see cref="DigestOf(IEnumerable{NumberedLine}, IReadOnlyList{IResultParser})"/>).
-    /// </summary>
-    /// <param name="lines">The log's lines, in the order printed.</param>
-    /// <param name="parsers">The parsers chosen for it.</param>
-    public static ResultDigest? DigestOf(IEnumerable<string> lines, IReadOnlyList<IResultParser> parsers)
-    {
-        ArgumentNullException.ThrowIfNull(lines);
-
-        return DigestOf(Numbered(lines), parsers);
-    }
-
-    /// <summary>
-    /// The digest of a log by the parsers chosen for it (<see cref="FindingsOf"/>), made as it streams by the one owner of
-    /// a digest's bounds (<see cref="ResultDigest.Gathering"/>): each line no parser took that looks like an error is
-    /// gathered as the pass meets it - every one counted, the first <see cref="ResultDigest.Bound"/> held - and the
-    /// findings, merged in the order of their lines, after it. Null where no parser was chosen, or where the log held
-    /// nothing any of them said and nothing that looks like an error.
-    /// </summary>
-    /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it.</param>
-    /// <param name="parsers">The parsers chosen for it.</param>
-    public static ResultDigest? DigestOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
-    {
-        var gathering = new ResultDigest.Gathering();
-
-        if (FindingsOf(lines, parsers, line => gathering.Unparsed(line.Text)) is not { } found)
-        {
-            return null;
-        }
-
-        foreach (var diagnostic in found.Diagnostics)
-        {
-            gathering.Add(diagnostic);
-        }
-
-        foreach (var failure in found.Failures)
-        {
-            gathering.Add(failure);
-        }
-
-        var digest = gathering.Digest();
-
-        return digest.HoldsAFinding || digest.UnparsedCount > 0 ? digest : null;
-    }
-
-    /// <summary>
     /// What the parsers chosen for a log found in it, read in one pass as it streams - never held whole. Each line, its
     /// terminal escapes taken off, is offered first to the reading that has a record open, then to each chosen parser's
     /// reading in the order chosen, until one takes it or holds it undecided; a reading that gives held lines back has

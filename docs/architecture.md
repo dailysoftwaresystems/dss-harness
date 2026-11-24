@@ -10209,7 +10209,8 @@ exception that reached the log wraps it, and excuses nothing else.
 Measured (`fixtures\results\`, `ResultFixturesTests`, `ResultParsersTests`): real output from every
 tool the parsers read - captured from the tool where it runs on a developer's machine, written from
 its documented form where it does not (tsc, GoogleTest, jest, vitest, Go, Rust, lldb, the CI log) -
-each read as the phase that printed it reads its log (`PhaseOutput.Of(...).NumberedLines()`, never a
+each digested by the one rule that digests a phase (`PhaseDigest.Of`, a results file through its
+files as a test phase's are), its lines read as a phase's log hands them on (`PhaseOutput.Of`, never a
 file reading that ends a line at a lone carriage return where a phase's log does not), through the
 parsers the phase chooses, and held two ways. Its
 `expect.json`, written by hand from the tool's own words and never by the code, says what a person
