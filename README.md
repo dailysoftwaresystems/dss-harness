@@ -328,18 +328,24 @@ carries. A file is known by its shape, never its name: a TRX, the JUnit XML fami
 `--reporter json` stream and a SARIF log (2.1 or 1.0) are read with their messages, places and
 durations, masked as the phase's log is — a TRX's and Dart's failures with their stacks, and what
 a JUnit case's own test printed (its failure's body, `system-out`, `system-err`) read by the
-runner's parsers, a stack there by its runtime's own form; a case that says only how its test
-ended (CTest's `Failed`) takes its message and place from the first failure its test printed, or
-says all it printed where nothing is typed. A skipped test is no failure. A path naming nothing,
-a file no form owns or one a crash cut short is said in the digest, not refused. The phase's log
-is read by its runner's parsers all the same, beside the files, each finding said once: what the
-files lack — a diagnostic, a crash, a host that died, a test that hung — is added, and a test
-both name — the console's printing of the first failure a case's test printed among them — is the
-file's, given its range in the log; a process that died of the error a case's test threw is a crash
-the files lack, said beside it. `init` seeds the arguments the shipped
-runners take for these files (`ctest --output-junit`, `dotnet test --logger trx` with
-`--results-directory`, `dart test --file-reporter`), each writing into `{resultsDir}`, and names
-the files under `results` to match.
+runner's parsers, a stack there by its runtime's own form; a case is said through one failure
+its test printed — the crash its program died of where the case crashed or timed out, so that
+test and the case are one failure, crashed where the case says only that its test failed, else
+the first — and a case that says only how its test ended (CTest's `Failed`) takes its message
+and place from it, or says all it printed where nothing is typed. A skipped test is no failure.
+A path naming nothing, a file no form owns or one a crash cut short is said in the digest, not
+refused. The phase's log is read by its runner's parsers all the same, beside the files, each
+finding said once: what the files lack — a diagnostic, a crash, a host that died, a test that
+hung — is added, and a test both name — the console's printing of the failure a case was said
+through among them — is the file's, given its range in the log. Where the file kept none of a
+case's output, or nothing typed in it, the console's lines under that test's CTest status line
+are read as that output: the case is said through a failure printed there by the same rule,
+its message, place and range that failure's, and every other failure there is said as its own,
+so nothing the run printed of a failure is out of the digest's reach. A process that died of
+the error a case's test threw is a crash the files lack, said beside it. `init` seeds the
+arguments the shipped runners take for these files (`ctest --output-junit`,
+`dotnet test --logger trx` with `--results-directory`, `dart test --file-reporter`), each
+writing into `{resultsDir}`, and names the files under `results` to match.
 
 **Refuse early, with the arithmetic.** `create-worktree` will not create a worktree
 whose files or build paths cannot fit inside Windows' path limit, because that failure

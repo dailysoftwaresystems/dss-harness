@@ -318,7 +318,9 @@ public sealed class ResultFileTests
     /// the run that ended first first, in the other order than the JUnit file lists them: each failure the file's cases
     /// read from their own output - the one each case was said through and every other - is given the range of its own
     /// printing, the one the console printed under that test's status line, never the other backend's. Where the file kept
-    /// no output of the backend that ended first, the console's printings under that test are no other test's: the other
+    /// no output of the backend that ended first, the console's printings under that test's status line are that test's
+    /// output, read as the file's would have been: its case is said through the first, its message, place and range that
+    /// printing's, and the other is its own failure with its own range - the digest the same either way - while the other
     /// backend's failures keep their own ranges, and none of them takes one of a test whose output it was not read from.
     /// </summary>
     [Theory]
@@ -390,22 +392,129 @@ public sealed class ResultFileTests
             into => ResultFiles.Read(() => new MemoryStream(report, writable: false), into, parsers) is null)!;
 
         Assert.Equal(
-            pgOutputKept
-                ?
-                [
-                    ("store_sqlite", "Expected 2 records, found 3", ((int, int)?)(29, 32)),
-                    ("StoreTest.Saves", "Expected the record saved", (33, 36)),
-                    ("store_pg", "connection refused", (8, 11)),
-                    ("StoreTest.Saves", "connection reset", (12, 15)),
-                ]
-                :
-                [
-                    ("store_sqlite", "Expected 2 records, found 3", ((int, int)?)(29, 32)),
-                    ("StoreTest.Saves", "Expected the record saved", (33, 36)),
-                    ("store_pg", "Failed", null),
-                ],
-            digest.Failures.Select(failure => (failure.Id, failure.Message!, failure.Log)));
-        Assert.Equal(pgOutputKept ? 4 : 3, digest.Failed);
+            [
+                ("store_sqlite", "Expected 2 records, found 3", "test/store_test.cc", (int?)12, ((int, int)?)(29, 32)),
+                ("StoreTest.Saves", "Expected the record saved", "test/store_test.cc", 20, (33, 36)),
+                ("store_pg", "connection refused", "test/store_test.cc", 12, (8, 11)),
+                ("StoreTest.Saves", "connection reset", "test/store_test.cc", 20, (12, 15)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message!, failure.File, failure.Line, failure.Log)));
+        Assert.Equal((4, 0), (digest.Failed, digest.Crashed));
+    }
+
+    /// <summary>
+    /// A CTest test whose GoogleTest test AddressSanitizer halted - CTest's own console of it, which says the test
+    /// <c>Failed</c>, as its JUnit file does - is one failure, the test its program died in: the case is said through the
+    /// sanitizer's report - its message, its thrown error with the report's frames and its range the report's - and is
+    /// crashed, whether the file kept the test's output or kept none of it and the console's lines under the test's status
+    /// line are read in its place - never the case beside the report's own crash.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ACTestTestASanitizerHalted_IsOneCrashedFailure_WhetherOrNotTheFileKeptItsOutput(bool outputKept)
+    {
+        // CTest's console of the run, lines 4 to 70 the test's own output, the report 12 to 70.
+        var console = File.ReadAllText(Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "results", "gtest-asan", "output.txt"));
+        var lines = Core.Text.LineEnds.Lines(console);
+
+        var digest = CTestDigest(console, "store_tests", "Failed", outputKept ? lines[3..70] : []);
+
+        var one = Assert.Single(digest.Failures);
+
+        Assert.Equal(
+            ("junit", "store_tests", "crashed", "AddressSanitizer: heap-buffer-overflow on address 0x502000000258 at pc 0x59c496fa501e bp 0x7ffc4853a300 sp 0x7ffc4853a2f0", ((int, int)?)(12, 70)),
+            (one.Framework, one.Id, one.Outcome, one.Message, one.Log));
+        Assert.Equal(
+            ("AddressSanitizer", 12, "/home/runner/work/app/app/tests/store_test.cc", (int?)7),
+            (one.Exception?.Type, one.Exception?.Stack.Count, one.Exception?.Stack[0].File, one.Exception?.Stack[0].Line));
+        Assert.Equal((0, 1), (digest.Failed, digest.Crashed));
+    }
+
+    /// <summary>
+    /// A CTest test that segfaulted in its second GoogleTest test, after its first failed, is said through the test its
+    /// program died in - that test and the case one crashed failure, its range the dying test's - and the test that failed
+    /// before it is its own failure, its message, place and range its own: whether the file kept the test's output or kept
+    /// none of it and the console's lines under the test's status line are read in its place, the digest is the same.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ACTestTestThatDiedAfterAFailure_IsSaidThroughTheTestItDiedIn_WhetherOrNotTheFileKeptItsOutput(bool outputKept)
+    {
+        string[] output =
+        [
+            "Running main() from ./googletest/src/gtest_main.cc",
+            "[==========] Running 2 tests from 1 test suite.",
+            "[----------] Global test environment set-up.",
+            "[----------] 2 tests from StoreTest",
+            "[ RUN      ] StoreTest.LoadsItsRecords",
+            "/home/runner/work/app/app/tests/store_test.cc:14: Failure",
+            "Expected equality of these values:",
+            "  store.size()",
+            "    Which is: 3",
+            "  2",
+            "[  FAILED  ] StoreTest.LoadsItsRecords (0 ms)",
+            "[ RUN      ] StoreTest.FreesItsRecords",
+        ];
+
+        // Lines 1-3 CTest's, the test's output 4-15, the summary from 17.
+        var console = string.Join(
+            "\n",
+            [
+                "Test project /home/runner/work/app/app/build",
+                "    Start 1: store_tests",
+                "1/1 Test #1: store_tests ......................***Exception: SegFault  0.01 sec",
+                .. output,
+                string.Empty,
+                "0% tests passed, 1 tests failed out of 1",
+                string.Empty,
+                "Total Test time (real) =   0.02 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - store_tests (SEGFAULT)",
+                "Errors while running CTest",
+                string.Empty,
+            ]);
+
+        var digest = CTestDigest(console, "store_tests", "SEGFAULT", outputKept ? output : []);
+
+        Assert.Equal(
+            [
+                ("junit", "store_tests", "crashed", "SEGFAULT", (string?)null, (int?)null, ((int, int)?)(15, 15)),
+                ("gtest", "StoreTest.LoadsItsRecords", "failed", "Expected equality of these values:\n  store.size()\n    Which is: 3\n  2", "/home/runner/work/app/app/tests/store_test.cc", 14, (8, 14)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message!, failure.File, failure.Line, failure.Log)));
+        Assert.Equal((1, 1), (digest.Failed, digest.Crashed));
+    }
+
+    /// <summary>
+    /// The digest of a CTest run whose console is <paramref name="console"/>, read with the JUnit file CTest writes for it,
+    /// one failed case <paramref name="test"/> saying <paramref name="message"/> and holding <paramref name="output"/> as
+    /// its test's output - none where the file kept none - each read by the parsers ctest's runner chooses.
+    /// </summary>
+    private static ResultDigest CTestDigest(string console, string test, string message, IReadOnlyList<string> output)
+    {
+        using var temp = new TempDirectory();
+        var parsers = PhaseParsers.ForTests(new Core.Configuration.HarnessConfig(), "ctest", null);
+        var report = System.Text.Encoding.UTF8.GetBytes(
+            new System.Xml.Linq.XElement(
+                "testsuite",
+                new System.Xml.Linq.XAttribute("name", "(empty)"),
+                new System.Xml.Linq.XElement(
+                    "testcase",
+                    new System.Xml.Linq.XAttribute("name", test),
+                    new System.Xml.Linq.XAttribute("classname", test),
+                    new System.Xml.Linq.XAttribute("status", "fail"),
+                    new System.Xml.Linq.XElement("failure", new System.Xml.Linq.XAttribute("message", message)),
+                    new System.Xml.Linq.XElement("system-out", string.Join("\n", output)))).ToString());
+
+        return PhaseDigest.Of(
+            Core.Execution.PhaseOutput.Of(console),
+            8,
+            parsers,
+            new DigestTree(temp.Path, null, new HarnessFactory().FileSystem),
+            into => ResultFiles.Read(() => new MemoryStream(report, writable: false), into, parsers) is null)!;
     }
 
     /// <summary>

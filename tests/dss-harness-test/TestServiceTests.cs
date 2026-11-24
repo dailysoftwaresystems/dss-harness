@@ -5,6 +5,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Projects;
 using DssHarness.Core.Results;
 using DssHarness.Core.Testing;
 using DssHarness.Core.Worktrees;
@@ -452,6 +453,99 @@ public sealed class TestServiceTests
             [("junit", "folds", "failed", "check.c:9: expected 2 records, found 3"), ("ctest", "waits", "timedOut", "Timeout")],
             result.Entry.Digest!.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message!)));
         Assert.NotNull(result.Entry.Digest.Failures[0].Log);
+    }
+
+    /// <summary>
+    /// The ctest invocation init seeds prints each failed test's output under its status line and writes the JUnit file
+    /// its results name; where that file kept none of a failed test's output - its case says only <c>Failed</c> - what the
+    /// console printed under the test's status line is that output: the case takes the message and the place of the
+    /// GoogleTest failure printed there, and its range in the log, so nothing the run printed of the failure is out of the
+    /// digest's reach, and it is one failure, never the case beside the GoogleTest test it ran.
+    /// </summary>
+    [Fact]
+    public async Task ASeededCTestRunsCaseTheFileKeptNoOutputOf_TakesTheFailureTheConsolePrintedUnderIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        var seeded = DefaultConfigFactory.Create([new DetectedProject("cmake", ".", "CMakeLists.txt")], PlatformNames.Windows, PlatformNames.X64).Projects[0].Test!.All!;
+
+        // The shape this holds: the console prints a failed test's output, and the file the results name is the JUnit one.
+        Assert.Equal(["--output-on-failure", "--no-tests=error", "--output-junit", "{resultsDir}/junit.xml"], seeded.Args);
+        Assert.Equal(["{resultsDir}/junit.xml"], seeded.Results);
+
+        const string Report = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="(empty)" tests="2" failures="1" disabled="0" skipped="0" hostname="" time="0" timestamp="2026-11-24T10:00:00">
+              <testcase name="reads_records" classname="reads_records" time="0.000856772" status="run">
+                <properties/>
+                <system-out></system-out>
+              </testcase>
+              <testcase name="store_tests" classname="store_tests" time="0.0114" status="fail">
+                <failure message="Failed"/>
+                <properties/>
+                <system-out></system-out>
+              </testcase>
+            </testsuite>
+            """;
+
+        var runner = new ScriptedRunner(
+            () => File.WriteAllTextAsync(Path.Combine(ResultsDirectory(temp), "junit.xml"), Report, TestContext.Current.CancellationToken),
+            8,
+            "Test project /home/runner/work/app/app/build",
+            "    Start 1: reads_records",
+            "1/2 Test #1: reads_records ....................   Passed    0.00 sec",
+            "    Start 2: store_tests",
+            "2/2 Test #2: store_tests ......................***Failed    0.01 sec",
+            "Running main() from ./googletest/src/gtest_main.cc",
+            "[==========] Running 2 tests from 1 test suite.",
+            "[----------] Global test environment set-up.",
+            "[----------] 2 tests from StoreTest",
+            "[ RUN      ] StoreTest.LoadsItsRecords",
+            "/home/runner/work/app/app/tests/store_test.cc:14: Failure",
+            "Expected equality of these values:",
+            "  store.size()",
+            "    Which is: 3",
+            "  2",
+            "[  FAILED  ] StoreTest.LoadsItsRecords (0 ms)",
+            "[ RUN      ] StoreTest.KeepsItsBounds",
+            "[       OK ] StoreTest.KeepsItsBounds (0 ms)",
+            "[----------] 2 tests from StoreTest (0 ms total)",
+            string.Empty,
+            "[----------] Global test environment tear-down",
+            "[==========] 2 tests from 1 test suite ran. (0 ms total)",
+            "[  PASSED  ] 1 test.",
+            "[  FAILED  ] 1 test, listed below:",
+            "[  FAILED  ] StoreTest.LoadsItsRecords",
+            string.Empty,
+            " 1 FAILED TEST",
+            string.Empty,
+            "50% tests passed, 1 tests failed out of 2",
+            string.Empty,
+            "Total Test time (real) =   0.02 sec",
+            string.Empty,
+            "The following tests FAILED:",
+            "\t  2 - store_tests (Failed)",
+            "Errors while running CTest",
+            "Output from these tests are in: /home/runner/work/app/app/build/Testing/Temporary/LastTest.log",
+            "Use \"--rerun-failed --output-on-failure\" to re-run the failed cases verbosely.");
+        var result = await Service(factory, runner).RunAsync(
+            Config(),
+            Request(temp, seeded, countPattern: seeded.CountPattern, results: seeded.Results),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+
+        // The range is the GoogleTest failure's, from its RUN line through its FAILED line, as the phase's log numbers them.
+        var log = await File.ReadAllLinesAsync(result.LogFile, TestContext.Current.CancellationToken);
+        var printed = (Array.IndexOf(log, "[ RUN      ] StoreTest.LoadsItsRecords") + 1, Array.IndexOf(log, "[  FAILED  ] StoreTest.LoadsItsRecords (0 ms)") + 1);
+        var one = Assert.Single(result.Entry.Digest!.Failures);
+
+        Assert.Equal(6, printed.Item2 - printed.Item1);
+        Assert.Equal(
+            ("junit", "store_tests", "failed", "Expected equality of these values:\n  store.size()\n    Which is: 3\n  2", "/home/runner/work/app/app/tests/store_test.cc", (int?)14, ((int, int)?)printed),
+            (one.Framework, one.Id, one.Outcome, one.Message, one.File, one.Line, one.Log));
+        Assert.Equal((1, 0, 0), (result.Entry.Digest.Failed, result.Entry.Digest.Crashed, result.Entry.Digest.Errors));
     }
 
     /// <summary>

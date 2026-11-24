@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Configuration;
@@ -1602,6 +1603,7 @@ public sealed record ResultDigest
         private readonly HashSet<string> _named = new(StringComparer.Ordinal);
         private readonly Dictionary<(string Framework, string Id, string Outcome), Dictionary<string, Queue<int?>>> _printed = [];
         private readonly HashSet<int> _printedBy = [];
+        private readonly Dictionary<string, Unsaid> _unsaid = new(StringComparer.Ordinal);
         private readonly Queue<string> _unparsed = new();
         private readonly Gathering? _into;
         private readonly ILineMask? _mask;
@@ -1676,38 +1678,139 @@ public sealed record ResultDigest
 
         /// <summary>Gathers <paramref name="failure"/>, the next the runner met.</summary>
         /// <param name="failure">The failure, as its reader read it.</param>
-        public void Add(TestFailure failure) => Add(failure, saidThrough: null);
-
-        /// <summary>
-        /// Gathers <paramref name="failure"/>, the next the runner met - a results file's case - said through
-        /// <paramref name="saidThrough"/>: the failure its test's own output printed first, whose message and place it took
-        /// - so a log's printing of that same failure (<see cref="Printing"/>) under that test's output is this one's, no
-        /// second failure, and gives it what the log holds of it and it lacks (<see cref="Beside"/>). The test a failure
-        /// names is its own id alone; the failure it was said through names a test only by being that printing, for its id
-        /// may be no test's - a thrown error's heading, where a stack form read it - and a process another printing of that
-        /// error says died is another failure.
-        /// </summary>
-        /// <param name="failure">The failure, as its reader read it.</param>
-        /// <param name="saidThrough">The failure it was said through; null where it was said through none.</param>
-        public void Add(TestFailure failure, TestFailure? saidThrough)
+        public void Add(TestFailure failure)
         {
             ArgumentNullException.ThrowIfNull(failure);
 
             if (_into is { } into)
             {
-                into.Add(Masked(failure, _mask!), saidThrough is null ? null : Masked(saidThrough, _mask!));
+                into.Add(Masked(failure, _mask!));
                 return;
             }
 
-            if (Kept(failure, out var at) && saidThrough is not null)
+            Kept(failure, out _);
+        }
+
+        /// <summary>
+        /// Gathers <paramref name="failure"/>, the next the runner met - a results file's case of the test its id names -
+        /// said through <paramref name="saidThrough"/>: the failure its test's own output printed that it took what it lacks
+        /// from (<see cref="SaidThroughOf"/>, <see cref="SaidThrough"/>) - so a log's printing of that same failure
+        /// (<see cref="Printing"/>) under that test's output is this one's, no second failure, and gives it what the log
+        /// holds of it and it lacks (<see cref="Beside"/>). The test a failure names is its own id alone; the failure it was
+        /// said through names a test only by being that printing, for its id may be no test's - a thrown error's heading,
+        /// where a stack form read it - and a process another printing of that error says died is another failure. A case
+        /// said through none - the file kept none of its test's output, or nothing typed in it - is said through what the log
+        /// printed under that test's own output, where the log says one (<see cref="Beside"/>).
+        /// </summary>
+        /// <param name="failure">The failure, as its reader read it.</param>
+        /// <param name="saidThrough">The failure it was said through; null where it was said through none.</param>
+        /// <param name="saysOnlyHowItEnded">
+        /// Whether its message says no more than how its test ended (CTest's <c>Failed</c>), so a printing it is said through
+        /// in the log gives it the printing's message; asked only where it was said through none.
+        /// </param>
+        public void Add(TestFailure failure, TestFailure? saidThrough, bool saysOnlyHowItEnded = false)
+        {
+            ArgumentNullException.ThrowIfNull(failure);
+
+            if (_into is { } into)
+            {
+                into.Add(Masked(failure, _mask!), saidThrough is null ? null : Masked(saidThrough, _mask!), saysOnlyHowItEnded);
+                return;
+            }
+
+            if (!Kept(failure, out var at))
+            {
+                return;
+            }
+
+            if (saidThrough is not null)
             {
                 Printed(saidThrough, failure.Id, at);
+            }
+            else
+            {
+                // Where two cases said through none name one test - two files naming it - nothing says which of them the
+                // output the log printed under its name is, and neither is said through it.
+                _unsaid[failure.Id] = _unsaid.TryGetValue(failure.Id, out var earlier)
+                    ? earlier with { Several = true }
+                    : new Unsaid(at, failure.Outcome, saysOnlyHowItEnded);
             }
         }
 
         /// <summary>
+        /// The failure a results file's case of a test that ended as <paramref name="outcome"/> is said through, of the
+        /// failures its test's own output printed, in the order printed: where its program died in it - it crashed or timed
+        /// out - the last crash printed, the test its program died in, so that test and the case are one failure; else, and
+        /// where none crashed, the first. Null where it printed none.
+        /// </summary>
+        /// <param name="printed">The failures its test's own output printed, in the order printed.</param>
+        /// <param name="outcome">How the case says its test ended.</param>
+        internal static TestFailure? SaidThroughOf(IReadOnlyList<TestFailure> printed, string outcome)
+            => (outcome is "crashed" or "timedOut" ? printed.LastOrDefault(failure => failure.Outcome == "crashed") : null) ?? printed.FirstOrDefault();
+
+        /// <summary>
+        /// <paramref name="case"/> - a results file's case - said through <paramref name="through"/>, the failure its test's
+        /// own output printed that it is said through (<see cref="SaidThroughOf"/>): given what that failure holds and the
+        /// case lacks (<see cref="Given"/>), its message too where the case's says no more than how its test ended
+        /// (<paramref name="saysOnlyHowItEnded"/>) and the failure says more, and crashed where the case says its test merely
+        /// failed and <paramref name="through"/> is the crash its program died of, for that test and the case are one
+        /// failure, the crash's.
+        /// </summary>
+        /// <param name="case">The case, as its results file gave it.</param>
+        /// <param name="through">The failure its test printed that it is said through.</param>
+        /// <param name="saysOnlyHowItEnded">Whether the case's message says no more than how its test ended.</param>
+        internal static TestFailure SaidThrough(TestFailure @case, TestFailure through, bool saysOnlyHowItEnded)
+        {
+            var given = Given(@case, through);
+            var told = saysOnlyHowItEnded && (through.Message is not null || through.Exception is not null);
+
+            return given with { Message = told ? through.Message : given.Message, Outcome = EndedThrough(@case.Outcome, through) };
+        }
+
+        /// <summary>
+        /// How a case that says its test ended as <paramref name="outcome"/> ended, said through <paramref name="through"/>:
+        /// crashed where it says its test merely failed and <paramref name="through"/> crashed, as it says where not.
+        /// </summary>
+        private static string EndedThrough(string outcome, TestFailure through) => outcome == "failed" && through.Outcome == "crashed" ? "crashed" : outcome;
+
+        /// <summary>
+        /// <paramref name="filed"/> given what <paramref name="printing"/> - the failure its case was said through, or the
+        /// log's printing of the same failure - holds and it lacks: a message where it says none; what was expected and what
+        /// there was where it says neither; a place where it names none; its stack and its thrown error, as one, where it
+        /// holds neither; and its range in the log where it has none, so the lines the log printed of it are one read away.
+        /// </summary>
+        /// <param name="filed">The failure a results file gave.</param>
+        /// <param name="printing">The printing that gives it what it lacks.</param>
+        internal static TestFailure Given(TestFailure filed, TestFailure printing)
+        {
+            var bare = filed.Stack.Count == 0 && filed.Exception is null;
+
+            return filed with
+            {
+                Message = filed.Message ?? printing.Message,
+                Expected = filed.Expected ?? printing.Expected,
+                Actual = filed.Actual ?? printing.Actual,
+                File = filed.File ?? printing.File,
+                Line = filed.File is null ? printing.Line : filed.Line,
+                Stack = bare ? printing.Stack : filed.Stack,
+                StackCut = bare ? printing.StackCut : filed.StackCut,
+                Exception = bare ? printing.Exception : filed.Exception,
+                Log = filed.Log ?? printing.Log,
+            };
+        }
+
+        /// <summary>
+        /// <paramref name="filed"/> placed where <paramref name="error"/> - the first error its test's own output printed,
+        /// where it printed no failure - is, where it names no place of its own.
+        /// </summary>
+        /// <param name="filed">The failure a results file gave.</param>
+        /// <param name="error">The error its test printed.</param>
+        internal static TestFailure PlacedBy(TestFailure filed, Diagnostic error)
+            => filed with { File = filed.File ?? error.File, Line = filed.File is null ? error.Line : filed.Line };
+
+        /// <summary>
         /// Gathers <paramref name="failure"/>, one more the own output of the test <paramref name="test"/> printed - a
-        /// results file's case's, beside the failure the case was said through (<see cref="Add(TestFailure, TestFailure?)"/>):
+        /// results file's case's, beside the failure the case was said through (<see cref="Add(TestFailure, TestFailure?, bool)"/>):
         /// a failure of its own, named by its own id, whose printing in a log (<see cref="Printing"/>) under that test's
         /// output is this one's, so two tests whose output printed one failure alike each keep their own
         /// (<see cref="Beside"/>).
@@ -1793,6 +1896,17 @@ public sealed record ResultDigest
         private static (string Framework, string Id, string Outcome) Printing(TestFailure failure) => (failure.Framework, failure.Id, failure.Outcome);
 
         /// <summary>
+        /// A results file's case said through none of its test's own output's printings (<see cref="Add(TestFailure, TestFailure?, bool)"/>),
+        /// by the test its id names: where it is held, how it says its test ended, whether its message says no more than
+        /// that, and whether more than one such case names the test.
+        /// </summary>
+        /// <param name="At">Its place in what this holds; null past the bound, where it is counted all the same.</param>
+        /// <param name="Outcome">How it says its test ended.</param>
+        /// <param name="SaysOnlyHowItEnded">Whether its message says no more than how its test ended.</param>
+        /// <param name="Several">Whether another case said through none names the same test.</param>
+        private readonly record struct Unsaid(int? At, string Outcome, bool SaysOnlyHowItEnded, bool Several = false);
+
+        /// <summary>
         /// Gathers <paramref name="line"/>, the next line no parser held: every one counted, the last <see cref="Bound"/>
         /// held - the nearest the failure, as a log's tail is.
         /// </summary>
@@ -1827,20 +1941,28 @@ public sealed record ResultDigest
         /// for - or, where the files name no failure at all, every one. A test that merely failed is one the files hold
         /// where they hold any: its console names it in its own words (jest's <c>›</c> path against jest-junit's joined
         /// title), and it is never said twice. A failure of a test a file names, and a printing of a failure a file's case's
-        /// own test printed - the one the case was said through (<see cref="Add(TestFailure, TestFailure?)"/>), the gtest test
-        /// a CTest case's own output named, printed again on the console, and every other its output printed
-        /// (<see cref="AddPrintedBy"/>) - is no second failure: it gives the file's failure what the file's lacks - a message
-        /// where it says none, a place where it names none, its stack and its thrown error where it holds neither, and its
-        /// range in the log, so the lines the log printed of it are one read away. Such a printing is the failure of the test
-        /// whose own output the log printed it under (<see cref="PhaseFindings.Tests"/>: CTest's under that test's status
-        /// line), never the next by the order the files met them - one gtest test two CTest tests ran keeps each its own
-        /// range, whichever ended first; where the log says no test's output it lies in, it is the one test's that printed
-        /// it, and where more than one did, no case is given its range, for nothing says whose it is. One the log printed
-        /// under a test whose output printed none of them is no printing of theirs, and is read as any other failure of the
-        /// log; and a failure a test's output printed beside the one its case was said through is matched by its printing
-        /// alone, never by its id, which another test's output may have printed too. A thrown error a case
-        /// was said through is matched by its printing alone, never by its heading: the same error a process died of, which
-        /// no results file is written for, is the log's own crash, said.
+        /// own test printed - the one the case was said through (<see cref="Add(TestFailure, TestFailure?, bool)"/>), the
+        /// gtest test a CTest case's own output named, printed again on the console, and every other its output printed
+        /// (<see cref="AddPrintedBy"/>) - is no second failure: it gives the file's failure what the file's lacks
+        /// (<see cref="Given"/>), its range in the log among it, so the lines the log printed of it are one read away. Such a
+        /// printing is the failure of the test whose own output the log printed it under (<see cref="PhaseFindings.Tests"/>:
+        /// CTest's under that test's status line), never the next by the order the files met them - one gtest test two CTest
+        /// tests ran keeps each its own range, whichever ended first; where the log says no test's output it lies in, it is
+        /// the one test's that printed it, and where more than one did, no case is given its range, for nothing says whose it
+        /// is. A failure a test's output printed beside the one its case was said through is matched by its printing alone,
+        /// never by its id, which another test's output may have printed too. A case said through none of its test's own
+        /// output - the file kept none of it, or nothing typed in it - is said through what the log printed under that test's
+        /// own output, read as the output the file kept is: the failure the case is said through among the failures there
+        /// (<see cref="SaidThroughOf"/> - the crash its program died of where it crashed or timed out, else the first) gives
+        /// it what it lacks (<see cref="SaidThrough"/>) - its message where it says only how its test ended, its crash where it
+        /// says its test merely failed, for that test and the case are one failure - and its range; where there is no failure
+        /// there, the first error there gives it its place; and every other failure there is said as its own - matched to a
+        /// file's failure of its id where a file names one plainly - for what the test printed is never set aside. Where two
+        /// such cases name one test, nothing says which the output is, and every failure there is said as its own. One the log
+        /// printed under the output of a test whose case was said through its output's printings, and that output printed
+        /// none of, is no printing of theirs, and is read as any other failure of the log. A thrown error a case was said
+        /// through is matched by its printing alone, never by its heading: the same error a process died of, which no results
+        /// file is written for, is the log's own crash, said.
         /// </summary>
         /// <param name="log">What the log's parsers found in it, in the order of its lines.</param>
         /// <param name="place">
@@ -1874,19 +1996,73 @@ public sealed record ResultDigest
                 }
             }
 
-            // A printing of a failure a file's case's own test printed gives the one its test's output printed - the test
-            // whose output the log printed it under, else the one test that printed it - and one under a test whose output
-            // printed none of them is no printing of theirs; a failure of a test a file names gives the file's failure of
-            // that test what it lacks; any other is the log's own.
+            // What the log printed under the own output of each test a case was said through none of: the failures there, in
+            // the order printed, and the first error there.
+            var printedUnder = new Dictionary<string, List<TestFailure>>(StringComparer.Ordinal);
+            var errorUnder = new Dictionary<string, Diagnostic>(StringComparer.Ordinal);
+
             foreach (var failure in log.Failures)
             {
-                var under = Under(failure);
+                if (Under(failure.Log) is { } test && _unsaid.ContainsKey(test) && !OwnPrinting(failure, test, out _))
+                {
+                    if (!printedUnder.TryGetValue(test, out var printed))
+                    {
+                        printedUnder[test] = printed = [];
+                    }
 
-                if (_printed.TryGetValue(Printing(failure), out var byTest) && (under is null || byTest.ContainsKey(under)))
+                    printed.Add(failure);
+                }
+            }
+
+            foreach (var diagnostic in log.Diagnostics)
+            {
+                if (diagnostic.Severity == "error" && Under(diagnostic.Log) is { } test && _unsaid.ContainsKey(test))
+                {
+                    errorUnder.TryAdd(test, diagnostic);
+                }
+            }
+
+            var through = printedUnder
+                .Where(printed => !_unsaid[printed.Key].Several)
+                .ToDictionary(printed => printed.Key, printed => SaidThroughOf(printed.Value, _unsaid[printed.Key].Outcome)!, StringComparer.Ordinal);
+
+            foreach (var (test, error) in errorUnder)
+            {
+                if (_unsaid[test] is { Several: false, At: { } at } && !printedUnder.ContainsKey(test))
+                {
+                    _failures[at] = PlacedBy(_failures[at], error);
+                }
+            }
+
+            // A printing of a failure a file's case's own test printed gives the one its test's output printed - the test
+            // whose output the log printed it under, else the one test that printed it; one under the output of a test whose
+            // case was said through none of it is that case's output's; one under a test whose output printed none of them is
+            // no printing of theirs; a failure of a test a file names gives the file's failure of that test what it lacks; any
+            // other is the log's own.
+            foreach (var failure in log.Failures)
+            {
+                var under = Under(failure.Log);
+
+                if (OwnPrinting(failure, under, out var byTest))
                 {
                     var test = under ?? (byTest.Count == 1 ? byTest.Keys.Single() : null);
 
                     Give(test is not null && byTest[test].TryDequeue(out var said) ? said : null, failure);
+                }
+                else if (under is not null && _unsaid.TryGetValue(under, out var unsaid))
+                {
+                    if (through.TryGetValue(under, out var said) && ReferenceEquals(failure, said))
+                    {
+                        SayThrough(unsaid, failure);
+                    }
+                    else if (heldAt.TryGetValue(failure.Id, out var test))
+                    {
+                        Give(test, failure);
+                    }
+                    else
+                    {
+                        unnamed.Add(failure);
+                    }
                 }
                 else if (_named.Contains(failure.Id))
                 {
@@ -1915,10 +2091,15 @@ public sealed record ResultDigest
             (string? Code, string? File, int? Line, int? Column, string? Message) Same(string? code, string? file, int? line, int? column, string message)
                 => (code, file is null ? null : place(file), line, column, code is null ? message : null);
 
-            // The test whose own output the log printed the failure's first line under, where the log says one.
-            string? Under(TestFailure printed)
+            // Whether the failure is a printing of one a file's case's own test printed, under that test's output where the log
+            // says one - a failure its test's output printed alike, by the test whose output printed it.
+            bool OwnPrinting(TestFailure failure, string? under, [NotNullWhen(true)] out Dictionary<string, Queue<int?>>? byTest)
+                => _printed.TryGetValue(Printing(failure), out byTest) && (under is null || byTest.ContainsKey(under));
+
+            // The test whose own output the log printed a finding's first line under, where the log says one.
+            string? Under((int From, int To)? printed)
             {
-                if (printed.Log is not { } range)
+                if (printed is not { } range)
                 {
                     return null;
                 }
@@ -1954,21 +2135,25 @@ public sealed record ResultDigest
                 }
             }
 
-            // A file's failure given what the log's of the same test holds and it lacks: its stack and thrown error as one.
-            static TestFailure Given(TestFailure filed, TestFailure logged)
+            // A case said through what the log printed under its test's own output: counted as it then ended, and, where it is
+            // held, said through it.
+            void SayThrough(Unsaid unsaid, TestFailure logged)
             {
-                var bare = filed.Stack.Count == 0 && filed.Exception is null;
-
-                return filed with
+                if (Held(logged, say: false) is not { } said)
                 {
-                    Message = filed.Message ?? logged.Message,
-                    File = filed.File ?? logged.File,
-                    Line = filed.File is null ? logged.Line : filed.Line,
-                    Stack = bare ? logged.Stack : filed.Stack,
-                    StackCut = bare ? logged.StackCut : filed.StackCut,
-                    Exception = bare ? logged.Exception : filed.Exception,
-                    Log = filed.Log ?? logged.Log,
-                };
+                    return;
+                }
+
+                if (EndedThrough(unsaid.Outcome, said) is var ended && ended != unsaid.Outcome)
+                {
+                    _byOutcome[unsaid.Outcome]--;
+                    _byOutcome[ended] = _byOutcome.GetValueOrDefault(ended) + 1;
+                }
+
+                if (unsaid.At is { } held)
+                {
+                    _failures[held] = SaidThrough(_failures[held], said, unsaid.SaysOnlyHowItEnded);
+                }
             }
         }
 

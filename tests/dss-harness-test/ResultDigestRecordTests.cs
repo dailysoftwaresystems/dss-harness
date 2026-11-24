@@ -520,6 +520,94 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
+    /// A case said through none of its test's own output reads what the log printed under that test's output as that
+    /// output: where it printed no failure, the first error there gives the case its place, never its message or a range;
+    /// a failure there it is not said through is matched to a file's failure of its own id where a file names one plainly,
+    /// and is never a second failure of that test; and where two such cases name one test, nothing says which of them the
+    /// output is - neither is said through it, and every failure printed there is its own.
+    /// </summary>
+    [Fact]
+    public void ACaseSaidThroughNone_ReadsWhatTheLogPrintedUnderItsTest_AsItsOutput()
+    {
+        var placed = new ResultDigest.Gathering();
+
+        placed.Add(new TestFailure("junit", "builds_fixture", Message: "Failed"), null, saysOnlyHowItEnded: true);
+        placed.Beside(
+            new PhaseFindings([new Diagnostic("gcc", "error", null, "expected ';' before '}' token", "src/fixture.c", 3, 5, Log: (6, 6))], []) { Tests = [new PrintedTest("builds_fixture", 5, 9)] },
+            file => file);
+
+        var digest = placed.Digest();
+        var one = Assert.Single(digest.Failures);
+        var error = Assert.Single(digest.Diagnostics);
+
+        Assert.Equal(("builds_fixture", "Failed", "src/fixture.c", (int?)3, ((int, int)?)null), (one.Id, one.Message, one.File, one.Line, one.Log));
+        Assert.Equal(("src/fixture.c", (int?)3, ((int, int)?)(6, 6)), (error.File, error.Line, error.Log));
+
+        var loads = new TestFailure("gtest", "StoreTest.Loads", Message: "connection refused", File: "test/store_test.cc", Line: 12, Log: (8, 11));
+        var saves = new TestFailure("gtest", "StoreTest.Saves", Message: "connection reset", File: "test/store_test.cc", Line: 20, Log: (12, 15));
+        var named = new ResultDigest.Gathering();
+
+        named.Add(new TestFailure("junit", "store_pg", Message: "Failed"), null, saysOnlyHowItEnded: true);
+        named.Add(new TestFailure("gtest-xml", "StoreTest.Saves", Message: "connection reset"));
+        named.Beside(new PhaseFindings([], [loads, saves]) { Tests = [new PrintedTest("store_pg", 5, 24)] }, file => file);
+
+        Assert.Equal(
+            [("store_pg", "connection refused", ((int, int)?)(8, 11)), ("StoreTest.Saves", "connection reset", (12, 15))],
+            named.Digest().Failures.Select(failure => (failure.Id, failure.Message!, failure.Log)));
+
+        var twice = new ResultDigest.Gathering();
+
+        twice.Add(new TestFailure("junit", "store_pg", Message: "Failed"), null, saysOnlyHowItEnded: true);
+        twice.Add(new TestFailure("junit", "store_pg", Message: "Failed"), null, saysOnlyHowItEnded: true);
+        twice.Beside(new PhaseFindings([], [loads]) { Tests = [new PrintedTest("store_pg", 5, 24)] }, file => file);
+
+        Assert.Equal(
+            [("store_pg", "Failed", null), ("store_pg", "Failed", null), ("StoreTest.Loads", "connection refused", ((int, int)?)(8, 11))],
+            twice.Digest().Failures.Select(failure => (failure.Id, failure.Message!, failure.Log)));
+    }
+
+    /// <summary>
+    /// The failure a results file's case is said through, of the failures its test printed: where the case says its
+    /// program died in the test - it crashed or timed out - the last crash printed, the test its program died in; else, and
+    /// where nothing printed crashed, the first; none where nothing was printed.
+    /// </summary>
+    [Fact]
+    public void TheFailureACaseIsSaidThrough_IsTheCrashItsProgramDiedOf_WhereItCrashedOrTimedOut_ElseTheFirst()
+    {
+        var first = new TestFailure("gtest", "StoreTest.Loads", Outcome: "crashed");
+        var failed = new TestFailure("gtest", "StoreTest.Saves");
+        var last = new TestFailure("gtest", "StoreTest.Frees", Outcome: "crashed");
+        IReadOnlyList<TestFailure> printed = [first, failed, last];
+
+        Assert.Same(last, ResultDigest.Gathering.SaidThroughOf(printed, "crashed"));
+        Assert.Same(last, ResultDigest.Gathering.SaidThroughOf(printed, "timedOut"));
+        Assert.Same(first, ResultDigest.Gathering.SaidThroughOf(printed, "failed"));
+        Assert.Same(failed, ResultDigest.Gathering.SaidThroughOf([failed], "crashed"));
+        Assert.Null(ResultDigest.Gathering.SaidThroughOf([], "crashed"));
+    }
+
+    /// <summary>
+    /// A file's failure the log printed again is given what the log's printing of it holds and the file's lacks - what was
+    /// expected and what there was among it, as its place and its range - and keeps what the file said of it.
+    /// </summary>
+    [Fact]
+    public void AFilesFailure_IsGivenWhatItExpectedAndHad_FromTheLogsPrintingOfIt()
+    {
+        var gathering = new ResultDigest.Gathering();
+
+        gathering.Add(new TestFailure("trx", "Demo.Tests.One", Message: "Assert.Equal() Failure: Values differ"));
+        gathering.Beside(
+            new PhaseFindings([], [new TestFailure("dotnet", "Demo.Tests.One", Message: "Values differ", Expected: "3", Actual: "4", File: "tests/Demo.cs", Line: 12, Log: (5, 9))]),
+            file => file);
+
+        var one = Assert.Single(gathering.Digest().Failures);
+
+        Assert.Equal(
+            ("trx", "Assert.Equal() Failure: Values differ", "3", "4", "tests/Demo.cs", (int?)12, ((int, int)?)(5, 9)),
+            (one.Framework, one.Message, one.Expected, one.Actual, one.File, one.Line, one.Log));
+    }
+
+    /// <summary>
     /// A thrown error a results file's case was said through names no test: the log's printing of that same error is the
     /// case's, given to it and never a second failure, but a process that died of an error with the same type and message -
     /// the JVM's own "Exception in thread" - is a crash no results file is written for, and is said beside the case.

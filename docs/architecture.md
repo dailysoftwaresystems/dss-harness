@@ -10179,19 +10179,28 @@ build's failing phase by the parsers its project and its toolchain's compiler ch
 runner's failing step by every runtime's stack form, each
 with the matchers that read it (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first
 - what a JUnit case's own test printed (its failure's body, `system-out`, `system-err`) read by the runner's parsers, a
-stack there by its runtime's own form, so a case that says only how its test ended (CTest's `Failed`) takes its message
-and place from the first failure its test printed, or says all it printed where nothing is typed - and its log read
-beside them in the same digest all the same, each finding said once (`ResultDigest.Gathering.Beside`): a diagnostic the
-files lack, a crash, a host that died, a test that hung, every failure where the files name none, is added; a test both
-name is the file's, given what the log holds of it and the file lacks, its range in the log among it - and so is the
-console's printing of a failure a case's test printed, the first, which the case was said through, and every other,
-matched as the same reader's failure of the same id that ended the same way and given to the failure the test read whose
-own output the console printed it under (`PhaseFindings.Tests`, which CTest's reader says of the lines under each failed
-test's status line, `ResultSink.Printed`), never by the order the files met them: one gtest test two CTest tests ran -
-one binary for each of two backends - keeps each its own range whichever ended first, and where the console says no
-test's output a printing lies in it is the one test's that printed it, none where several did; one under a test whose
-output printed none of them is no printing of theirs, and is read as any other failure of the log, and a failure a
-test's output printed is never matched by its id alone, which another test's output may have printed too. Never by an error's
+stack there by its runtime's own form, the case said through one failure there (`ResultDigest.Gathering.SaidThroughOf`:
+the crash its program died of where the case crashed or timed out, so that test and the case are one failure, else the
+first) and taking from it what it lacks (`ResultDigest.Gathering.SaidThrough`) - a case that says only how its test ended
+(CTest's `Failed`) its message and place, one that says only that its test failed its crash - or saying all it printed
+where nothing is typed - and its log read beside them in the same digest all the same, each finding said once
+(`ResultDigest.Gathering.Beside`): a diagnostic the files lack, a crash, a host that died, a test that hung, every failure
+where the files name none, is added; a test both name is the file's, given what the log holds of it and the file lacks
+(`ResultDigest.Gathering.Given`), its range in the log among it - and so is the console's printing of a failure a case's
+test printed, the one the case was said through and every other, matched as the same reader's failure of the same id that
+ended the same way and given to the failure the test read whose own output the console printed it under
+(`PhaseFindings.Tests`, which CTest's reader says of the lines under each failed test's status line,
+`ResultSink.Printed`), never by the order the files met them: one gtest test two CTest tests ran - one binary for each of
+two backends - keeps each its own range whichever ended first, and where the console says no test's output a printing
+lies in it is the one test's that printed it, none where several did. A case said through none - the file kept none of
+its test's output, or nothing typed in it - reads the console's lines under that test's status line as that output: it
+is said through a failure printed there by the same rule, its message, place and range that failure's, the first error
+there giving its place where no failure was printed, and every other failure there is said as its own, matched to a
+file's failure of its id where a file names one plainly, so nothing the run printed of a failure is out of the digest's
+reach; where two such cases name one test, nothing says which the output is, and every failure there is its own. One
+under the output of a test whose case was said through its own output's printings, and that output printed none of, is
+no printing of theirs, and is read as any other failure of the log, and a failure a test's output printed is never
+matched by its id alone, which another test's output may have printed too. Never by an error's
 heading alone, so a process that died of the error a case's test threw is a crash the files lack, said beside it; and
 what the files could not give is said beside them. Every place is then read against the
 tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed - a diagnostic's file and its

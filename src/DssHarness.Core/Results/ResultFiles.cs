@@ -101,14 +101,20 @@ public static class ResultFiles
     /// A JUnit case that failed, gathered (<see cref="JUnitFailure"/>) with what its own test printed
     /// (<see cref="JUnitCase.Output"/>: its failure's body, its <c>system-out</c>, its <c>system-err</c>) read by the
     /// phase's parsers, as the lines its test printed - none of them a log's, so nothing read there has a log range. The
-    /// case takes from the first failure they find what it lacks: that failure's stack and its thrown error - a body's
-    /// stack read by its runtime's own stack form - its place where the case names none, what was expected and what there
-    /// was, and its message where the case says only how its test ended; the case is gathered said through it, so the
-    /// log's printing of it is no second failure. Where they find no failure, the case takes its place from the first
-    /// error they find; where they find neither and the case says only how its test ended, its message is what its test
-    /// printed, whole. Every other failure and every diagnostic they find is gathered as its own: what the test printed
-    /// is never set aside. Each failure read there is the case's test's printing, so the log's printing of it under that
-    /// test's output is its own, whatever order the console printed the tests in.
+    /// case is said through one failure they find (<see cref="ResultDigest.Gathering.SaidThroughOf"/>: the crash its
+    /// program died of where it crashed or timed out, else the first) and takes from it what it lacks
+    /// (<see cref="ResultDigest.Gathering.SaidThrough"/>): that failure's stack and its thrown error - a body's stack read by
+    /// its runtime's own stack form - its place where the case names none, what was expected and what there was, its
+    /// message where the case says only how its test ended, and its crash where the case says its test merely failed and
+    /// the failure is the crash its program died of, for that test and the case are one failure; the case is gathered said
+    /// through it, so the log's printing of it is no second failure. Where they find no failure, the case takes its place
+    /// from the first error they find (<see cref="ResultDigest.Gathering.PlacedBy"/>); where they find neither and the case
+    /// says only how its test ended, its message is what its test printed, whole. Every other failure and every diagnostic
+    /// they find is gathered as its own: what the test printed is never set aside. Each failure read there is the case's
+    /// test's printing, so the log's printing of it under that test's output is its own, whatever order the console printed
+    /// the tests in. A case said through none - the file kept none of its test's output, or nothing typed in it - is said
+    /// through what the console printed under that test's own output, by the same rule
+    /// (<see cref="ResultDigest.Gathering.Beside"/>).
     /// </summary>
     private static void JUnitFailures(JUnitCase @case, IReadOnlyList<IResultParser> parsers, ResultDigest.Gathering into)
     {
@@ -117,43 +123,36 @@ public static class ResultFiles
         var found = @case.Output.Count == 0 ? null : PhaseParsers.FindingsOf(PhaseParsers.Numbered(@case.Output), parsers, _ => { }, () => null);
         List<TestFailure> failures = [.. (found?.Failures ?? []).Select(printed => printed with { Log = null })];
         List<Diagnostic> diagnostics = [.. (found?.Diagnostics ?? []).Select(printed => printed with { Log = null })];
-        var through = failures.FirstOrDefault();
+        var through = ResultDigest.Gathering.SaidThroughOf(failures, failure.Outcome);
+        var untold = @case.SaysOnlyHowItEnded;
 
         if (through is not null)
         {
-            var told = @case.SaysOnlyHowItEnded && (through.Message is not null || through.Exception is not null);
-
-            failure = failure with
-            {
-                Message = told ? through.Message : failure.Message,
-                Expected = failure.Expected ?? through.Expected,
-                Actual = failure.Actual ?? through.Actual,
-                File = failure.File ?? through.File,
-                Line = failure.File is null ? through.Line : failure.Line,
-                Stack = through.Stack,
-                StackCut = through.StackCut,
-                Exception = through.Exception,
-            };
+            failure = ResultDigest.Gathering.SaidThrough(failure, through, untold);
         }
         else if (diagnostics.FirstOrDefault(diagnostic => diagnostic.Severity == "error") is { } error)
         {
-            failure = failure with { File = failure.File ?? error.File, Line = failure.File is null ? error.Line : failure.Line };
+            failure = ResultDigest.Gathering.PlacedBy(failure, error);
         }
-        else if (@case.SaysOnlyHowItEnded && string.Join("\n", @case.Output).Trim() is { Length: > 0 } printed)
+        else if (untold && string.Join("\n", @case.Output).Trim() is { Length: > 0 } printed)
         {
             failure = failure with { Message = printed };
+            untold = false;
         }
 
-        into.Add(failure, through);
+        into.Add(failure, through, untold);
 
         foreach (var diagnostic in diagnostics)
         {
             into.Add(diagnostic);
         }
 
-        foreach (var other in failures.Skip(1))
+        foreach (var other in failures)
         {
-            into.AddPrintedBy(other, failure.Id);
+            if (!ReferenceEquals(other, through))
+            {
+                into.AddPrintedBy(other, failure.Id);
+            }
         }
     }
 
