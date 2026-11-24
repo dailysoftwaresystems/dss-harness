@@ -9870,7 +9870,9 @@ CI is digested the same way (`Ci\CiDigest.cs`, the one owner of a CI digest), of
 red check: its annotations, read from the check-runs API through `gh api` (`GhCiJobSource.ReadAnnotationsAsync`, page
 by page and held to the count the check run gives), and its job's kept log, every line numbered as the kept file
 numbers it, the forge's own decoration taken off each (`CiLog`: the byte order mark, the timestamp, a group marker's
-line left blank so no line after it moves, the marker the forge writes ahead of an annotation's line) and read by every
+line and each line of a step's script the runner echoes in its cyan left blank so no line after it moves - the script
+is the workflow's text, and an `::error::` it echoes no error the job met - the marker the forge writes ahead of an
+annotation's line) and read by every
 form a CI log holds, its phases being unknown from the outside (`PhaseParsers.ForCi`). An annotation that names a file
 comes first, one finding with the log's line it was made of - a problem matcher's line the tool's form reads too, a
 workflow command's message the line under its marker. An annotation that names no file (the runner's `Process

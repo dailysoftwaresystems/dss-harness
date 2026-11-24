@@ -16,9 +16,12 @@ public readonly record struct CiLine(NumberedLine Line, bool Marked);
 /// <summary>
 /// A CI job's log as a digest reads it: every line of the kept log, in order and numbered as the kept file numbers it by
 /// the one rule of where lines end, with the forge's own decoration taken off each - the timestamp every line is
-/// prefixed with, a group marker a workflow folded its log with (its line left blank, never dropped, so no line after it
-/// moves), and the marker the forge writes ahead of an annotation's line (<c>##[error]</c>, <c>##[warning]</c>,
-/// <c>##[notice]</c>), so what a tool printed under it - a problem matcher's line - is read as the tool printed it.
+/// prefixed with, a group marker a workflow folded its log with and each line of a step's script the runner echoes
+/// under its <c>Run</c> group, every line of it in the runner's cyan (each line left blank, never dropped, so no line
+/// after it moves: the script is the workflow's text, never what a tool printed, and an <c>::error::</c> it echoes is no
+/// error the job met), and the marker the forge writes ahead of an annotation's line (<c>##[error]</c>,
+/// <c>##[warning]</c>, <c>##[notice]</c>), so what a tool printed under it - a problem matcher's line - is read as the
+/// tool printed it.
 /// </summary>
 public static class CiLog
 {
@@ -30,6 +33,12 @@ public static class CiLog
 
     /// <summary>The marker the forge writes ahead of the line of an annotation it made, and the line under it.</summary>
     private static readonly Regex Annotation = LinearRegex.Compile(@"^##\[(?:error|warning|notice)\](?<text>.*)$");
+
+    /// <summary>The escape the runner opens each line of a step's script it echoes with: bold cyan.</summary>
+    private const string EchoOpens = "\u001b[36;1m";
+
+    /// <summary>The escape the runner closes each line of a step's script it echoes with.</summary>
+    private const string EchoCloses = "\u001b[0m";
 
     /// <summary>
     /// The job's log read as a digest reads it, a line at a time as it is read, each with whether the forge marked it -
@@ -48,7 +57,7 @@ public static class CiLog
         // The log's first line carries the byte order mark the forge writes, which no reader of the file sees.
         var line = Timestamp.Replace(number == 1 ? log[start..end].TrimStart('\uFEFF') : log[start..end], string.Empty);
 
-        if (Group.IsMatch(line))
+        if (Group.IsMatch(line) || line.StartsWith(EchoOpens, StringComparison.Ordinal) && line.EndsWith(EchoCloses, StringComparison.Ordinal))
         {
             return new CiLine(new NumberedLine(number, number, string.Empty), false);
         }

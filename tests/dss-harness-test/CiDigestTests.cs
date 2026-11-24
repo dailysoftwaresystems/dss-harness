@@ -62,8 +62,9 @@ public sealed class CiDigestTests
 
     /// <summary>
     /// A job's log is read as GitHub writes it, every line numbered as the kept file numbers it: the byte order mark of
-    /// its first line, each line's timestamp, a group marker's line - its title with it - and an annotation's marker taken
-    /// off, a group's line left blank rather than dropped, so a line after it keeps its number.
+    /// its first line, each line's timestamp, a group marker's line - its title with it - the runner's echo of a step's
+    /// script, an <c>::error::</c> it echoes among it, and an annotation's marker taken off, a group's line and an echoed
+    /// one left blank rather than dropped, so a line after it keeps its number.
     /// </summary>
     [Fact]
     public void AJobsLog_IsReadAsGitHubWritesIt_EveryLineKeepingItsNumber()
@@ -72,6 +73,7 @@ public sealed class CiDigestTests
             "\n",
             "2026-11-23T16:48:03.9764568Z Current runner version: '2.338.2'",
             "2026-11-23T16:48:04.1883660Z ##[group]Run set -euo pipefail",
+            "2026-11-23T16:48:04.1909614Z \u001b[36;1m  echo \"::error::A fork cannot post the status.\"\u001b[0m",
             "2026-11-23T16:48:04.2255994Z ##[endgroup]",
             "2026-11-23T16:48:05.1483402Z ##[error]ci-check is failing: test failure.",
             "2026-11-23T16:48:05.1504036Z ##[warning]Process completed with exit code 1.") + "\n";
@@ -81,8 +83,9 @@ public sealed class CiDigestTests
                 (1, "Current runner version: '2.338.2'", false),
                 (2, string.Empty, false),
                 (3, string.Empty, false),
-                (4, "ci-check is failing: test failure.", true),
-                (5, "Process completed with exit code 1.", true),
+                (4, string.Empty, false),
+                (5, "ci-check is failing: test failure.", true),
+                (6, "Process completed with exit code 1.", true),
             ],
             CiLog.Of(log).Select(line => (line.Line.Number, line.Line.Text, line.Marked)));
     }

@@ -164,8 +164,8 @@ public sealed class ResultFixturesTests
 
     /// <summary>
     /// Reads one fixture's output as the phase that printed it reads it (<c>read</c>): a build's by its project type and the
-    /// compiler its toolchain declares, a test run's by its runner, a runner step's, a CI job's log stripped of the forge's
-    /// marks, or a results file by its own shape.
+    /// compiler its toolchain declares, a test run's by its runner, a runner step's, a CI job's log as a red check's is read
+    /// for the repository its job ran (<c>ci</c>), or a results file by its own shape.
     /// </summary>
     private static ResultDigest? Read(string fixture, JsonObject expect)
     {
@@ -177,9 +177,9 @@ public sealed class ResultFixturesTests
             return ResultFiles.Digest(File.ReadAllText(output), out _);
         }
 
-        if (read.ContainsKey("ci"))
+        if (read["ci"] is { } repository)
         {
-            return DssHarness.Core.Ci.CiDigest.Of(File.ReadAllText(output), [], "app", said => said, []);
+            return DssHarness.Core.Ci.CiDigest.Of(File.ReadAllText(output), [], repository.GetValue<string>(), said => said, []);
         }
 
         var config = new HarnessConfig();

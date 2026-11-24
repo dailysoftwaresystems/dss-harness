@@ -1,21 +1,21 @@
 {
   "read": {
-    "ci": true
+    "ci": "dss-harness"
   },
-  "root": "D:\\a\\app\\app",
   "errors": 3,
   "warnings": 1,
+  "unparsed": 2,
   "first": {
-    "tool": "msbuild",
-    "code": "CS0103",
-    "file": "D:\\a\\app\\app\\src\\App\\Program.cs",
+    "tool": "cc",
+    "code": null,
+    "file": "native/src/store.c",
     "line": 12,
-    "column": 35
+    "column": 9
   },
   "diagnostics": [
-    "error CS0103 D:\\a\\app\\app\\src\\App\\Program.cs:12",
-    "warning CS0219 D:\\a\\app\\app\\src\\App\\Service.cs:40",
-    "error - D:\\a\\app\\app\\native\\src\\store.c:12",
-    "error C2065 D:\\a\\app\\app\\native\\src\\store.cpp:7"
+    "error - native/src/store.c:12",
+    "error CS0103 src/App/Program.cs:12",
+    "warning CS0219 src/App/Service.cs:40",
+    "error C2065 native/src/store.cpp:7"
   ]
 }
