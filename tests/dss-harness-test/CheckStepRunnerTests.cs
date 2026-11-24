@@ -367,14 +367,15 @@ public sealed class CheckStepRunnerTests : IDisposable
         var kept = File.ReadAllLines(Path.Combine(layout.InstanceDirectory("wait", null), OrchestratorLayout.StepLogsDirectoryName, "build.70.log"));
 
         // Two errors, each once: the matcher's line read by its own form and by the forge is one finding, and so is the
-        // workflow command's; the runner's sentence is no error of a tool's.
-        Assert.Equal((2, 0), (digest["errors"]!.GetValue<int>(), digest["warnings"]!.GetValue<int>()));
+        // workflow command's; the runner's sentence is no error of a tool's. A count of none is no member of it.
+        Assert.Equal(2, digest["errors"]!.GetValue<int>());
+        Assert.False(digest.ContainsKey("warnings"));
 
         var first = digest["first"]!.AsObject();
 
         Assert.Equal(
-            ("msbuild", "CS0103", "src/Program.cs", 12, 35, "The name 'x' does not exist in the current context"),
-            (first["tool"]!.GetValue<string>(), first["code"]!.GetValue<string>(), first["file"]!.GetValue<string>(), first["line"]!.GetValue<int>(), first["column"]!.GetValue<int>(), first["message"]!.GetValue<string>()));
+            ("msbuild", "CS0103", "src/Program.cs", 12, 35, "msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context"),
+            (first["tool"]!.GetValue<string>(), first["code"]!.GetValue<string>(), first["file"]!.GetValue<string>(), first["line"]!.GetValue<int>(), first["column"]!.GetValue<int>(), first["said"]!.GetValue<string>()));
         Assert.Equal([5, 5], first["log"]!.AsArray().Select(line => line!.GetValue<int>()));
         Assert.StartsWith("2026-11-23T00:40:01.0000000Z ##[error]/home/runner/work/app/app/src/Program.cs(12,35): error CS0103", kept[4], StringComparison.Ordinal);
 
@@ -409,8 +410,9 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         var digest = Assert.Single(result.Output!["red"]!.AsArray())!["digest"]!.AsObject();
 
-        Assert.Equal((0, 1), (digest["errors"]!.GetValue<int>(), digest["warnings"]!.GetValue<int>()));
-        Assert.Null(digest["first"]);
+        Assert.Equal(1, digest["warnings"]!.GetValue<int>());
+        Assert.False(digest.ContainsKey("errors"));
+        Assert.False(digest.ContainsKey("first"));
         Assert.Equal([("src/Rates.cs", 1)], digest["byFile"]!.AsArray().Select(entry => (entry!["of"]!.GetValue<string>(), entry["count"]!.GetValue<int>())));
         Assert.Equal(["Coverage fell below 80%"], digest["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));

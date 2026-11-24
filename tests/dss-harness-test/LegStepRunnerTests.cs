@@ -794,9 +794,9 @@ public sealed class LegStepRunnerTests : IDisposable
 
         Assert.Equal("msbuild CS1002 src/Other.cs(40,1): ; expected", more["said"]!.GetValue<string>());
 
-        Assert.Equal(
-            [("CS0103", 2), ("CS1002", 1)],
-            red["digest"]!["byCode"]!.AsArray().Select(entry => (entry!["of"]!.GetValue<string>(), entry["count"]!.GetValue<int>())));
+        // The four say every printing, so nothing is left to count by code or by file, and a model is handed no count of it.
+        Assert.False(model.ContainsKey("byCode"));
+        Assert.False(model.ContainsKey("byFile"));
 
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("build")!.Output!)!, legs));
     }

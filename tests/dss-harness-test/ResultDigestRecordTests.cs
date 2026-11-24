@@ -382,6 +382,44 @@ public sealed class ResultDigestRecordTests
         Assert.Throws<ArgumentException>(() => said.Beside(log));
     }
 
+    /// <summary>
+    /// What a model is handed says each thing once and nothing that says nothing: the first error whole with its message
+    /// said once, in its saying; the next three as their lines; the rest - the printings the four do not say, a warning's
+    /// among them - counted by code and by file; and no count of none, no empty list and no null at any depth. The record
+    /// keeps everything, its counts by code and by file over the whole output.
+    /// </summary>
+    [Fact]
+    public void WhatAModelIsHanded_SaysEachThingOnce_TheRestCounted_AndNothingThatSaysNothing()
+    {
+        var digest = ResultDigest.Of(
+            [
+                new Diagnostic("msbuild", "error", "CS1", "one", "a.cs", 1),
+                new Diagnostic("msbuild", "error", "CS1", "two", "a.cs", 2),
+                new Diagnostic("msbuild", "error", "CS2", "three", "b.cs", 3),
+                new Diagnostic("msbuild", "warning", "CS9", "unused", "c.cs", 1),
+                new Diagnostic("msbuild", "error", "CS2", "four", "b.cs", 4),
+                new Diagnostic("msbuild", "error", "CS3", "five", "b.cs", 5),
+            ],
+            [],
+            []);
+
+        var model = digest.ForAModel();
+
+        Assert.Equal(["errors", "warnings", "first", "diagnostics", "byCode", "byFile"], model.Select(member => member.Key));
+        Assert.Equal(["kind", "tool", "code", "severity", "file", "line", "count", "said"], model["first"]!.AsObject().Select(member => member.Key));
+        Assert.Equal("msbuild CS1 a.cs(1): one", model["first"]!["said"]!.GetValue<string>());
+        Assert.Equal(
+            ["msbuild CS1 a.cs(2): two", "msbuild CS2 b.cs(3): three", "msbuild CS2 b.cs(4): four"],
+            model["diagnostics"]!.AsArray().Select(item => item!["said"]!.GetValue<string>()));
+        Assert.Equal([("CS9", 1), ("CS3", 1)], Counts(model["byCode"]!));
+        Assert.Equal([("b.cs", 1), ("c.cs", 1)], Counts(model["byFile"]!));
+        Assert.Equal([("CS1", 2), ("CS2", 2), ("CS9", 1), ("CS3", 1)], Counts(digest.Document()["byCode"]!));
+        Assert.Equal(0, digest.Document()["notes"]!.GetValue<int>());
+
+        static IEnumerable<(string, int)> Counts(System.Text.Json.Nodes.JsonNode counts)
+            => counts.AsArray().Select(entry => (entry!["of"]!.GetValue<string>(), entry["count"]!.GetValue<int>()));
+    }
+
     /// <summary>The real file system, but holding exactly the files named.</summary>
     private sealed class Holding(params string[] files) : PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create()))
     {

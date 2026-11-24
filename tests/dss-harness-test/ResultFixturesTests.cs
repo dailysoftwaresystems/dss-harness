@@ -24,7 +24,7 @@ public sealed class ResultFixturesTests
     private static string Root => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "results");
 
     /// <summary>The bytes every fixture's digest said for a model costs, in all: pinned, so a change that grows or shrinks them is seen.</summary>
-    private const int HeldBytes = 44_999;
+    private const int HeldBytes = 33_066;
 
     /// <summary>Every fixture's directory: one tool's output, its <c>expect.json</c> and its <c>digest.json</c> inside.</summary>
     private static IReadOnlyList<string> Fixtures =>
@@ -124,11 +124,10 @@ public sealed class ResultFixturesTests
     }
 
     /// <summary>
-    /// The bytes a model is handed, held: for every fixture whose log is longer than the fifty lines a model was handed
-    /// before digests existed, the digest said for a model costs no more than what it was handed then - those lines and the
-    /// whole log the old instruction sent it to read beside them; a shorter log it was handed whole, once, and a digest of
-    /// one may cost its fixed shape more than the few lines it says. The total over every fixture is pinned exactly, so a
-    /// change that grows or shrinks what a model reads is a change someone made on purpose.
+    /// The bytes a model is handed, held: for every fixture, a short log's among them, the digest said for a model costs
+    /// no more than what the model was handed before digests existed - the fifty last lines, and the whole log the old
+    /// instruction sent it to read beside them. The total over every fixture is pinned exactly, so a change that grows or
+    /// shrinks what a model reads is a change someone made on purpose.
     /// </summary>
     [Fact]
     public void TheBytesAModelIsHanded_AreHeld_AndTheirTotalIsPinned()
@@ -141,12 +140,9 @@ public sealed class ResultFixturesTests
             var lines = File.ReadAllLines(Output(fixture));
             var held = Encoding.UTF8.GetByteCount(Placed(fixture, expect, Read(fixture, expect)!).ForAModel().ToJsonString());
 
-            if (lines.Length > 50)
-            {
-                var before = Encoding.UTF8.GetByteCount(string.Join("\n", lines.TakeLast(50))) + Encoding.UTF8.GetByteCount(string.Join("\n", lines));
+            var before = Encoding.UTF8.GetByteCount(string.Join("\n", lines.TakeLast(50))) + Encoding.UTF8.GetByteCount(string.Join("\n", lines));
 
-                Assert.True(held <= before, $"'{fixture}': the digest for a model costs {held} bytes against the {before} it was handed before");
-            }
+            Assert.True(held <= before, $"'{fixture}': the digest for a model costs {held} bytes against the {before} it was handed before");
 
             total += held;
         }

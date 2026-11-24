@@ -9828,7 +9828,10 @@ Where a digest goes (`LegStepRunner.Output`, `Execution\LedgerReport.cs`, `Orche
 red entry of a leg step's output carries one, in `digest`, said for a model - the first error whole with its stack
 rendered to the frames inside the tree (the crossing frame on each side, a line for each run left out, which module
 held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the rest
-counted by code and by file, the lines no parser held - and where the digest holds an error or a failure the entry's
+- every printing the four do not say - counted by code and by file, the lines no parser held; each thing said once,
+the first problem's message in its saying alone, and a member that says nothing - a count of none, an empty list, a
+null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`) - and where the
+digest holds an error or a failure the entry's
 tail holds only those lines, for a model reads either the typed errors or the raw lines, never both repeated; a digest
 of warnings alone leaves the tail as it is (`ResultDigest.TailBeside`, the one owner of what accompanies a digest, a
 red job's failing page as well); and in `log` the log that phase wrote (`FlowStepLegs.LogOf`: the copy the step kept in

@@ -462,9 +462,11 @@ public sealed record ResultDigest
     /// <summary>
     /// The digest as a model reads it: the counts, the first problem said whole with its stack rendered to its frames in
     /// the tree and its causes under it, the next distinct problems to four in all - an error one line each, a test
-    /// failure with its rendered stack - the rest counted by code and by file over the whole output, and the lines no
-    /// parser held. A rule of rendering, never of the record: the whole digest stays in the ledger's own <c>--json</c>
-    /// (<see cref="Document"/>).
+    /// failure with its rendered stack - the rest counted by code and by file (every printing the four do not say, over
+    /// the whole output), and the lines no parser held; each thing said once, and a member that says nothing - a count of
+    /// none, an empty list, a null - left out at every depth, for a model pays for every byte it is handed. A rule of
+    /// rendering, never of the record: the whole digest stays in the ledger's own <c>--json</c> (<see cref="Document"/>),
+    /// its counts by code and by file over everything.
     /// </summary>
     public JsonObject ForAModel()
     {
@@ -477,8 +479,9 @@ public sealed record ResultDigest
             .Take(4)
             .ToList();
         var next = four.Skip(1).ToList();
+        IReadOnlyList<Diagnostic> said = [.. four.Where(item => item.Diagnostic is not null).Select(item => item.Diagnostic!)];
 
-        return new JsonObject
+        return Pruned(new JsonObject
         {
             ["errors"] = Errors,
             ["warnings"] = Warnings,
@@ -504,13 +507,74 @@ public sealed record ResultDigest
                 ["outcome"] = item.Failure.Outcome,
                 ["stack"] = Rendered(item.Failure),
             })]),
-            ["byCode"] = new JsonArray([.. ByCode.Select(counted => (JsonNode)new JsonObject { ["of"] = counted.Of, ["count"] = counted.Count })]),
-            ["byFile"] = new JsonArray([.. ByFile.Select(counted => (JsonNode)new JsonObject { ["of"] = counted.Of, ["count"] = counted.Count })]),
+            ["byCode"] = Rest(ByCode, said, diagnostic => diagnostic.Code),
+            ["byFile"] = Rest(ByFile, said, diagnostic => diagnostic.File),
             ["unparsed"] = new JsonArray([.. Unparsed.Select(line => (JsonNode?)line)]),
-        };
+        });
     }
 
-    /// <summary>The first problem said whole, where it is a diagnostic: its tool, code, severity, place, count, log range, rendered stack and saying.</summary>
+    /// <summary>
+    /// The rest of <paramref name="counts"/> once <paramref name="said"/> is said: each code's or file's printings less
+    /// those of the diagnostics a model is handed whole or as a line, in the order each was first met - none where nothing
+    /// is left - so a model counts nothing twice.
+    /// </summary>
+    /// <param name="counts">The printings by code or by file, over the whole output.</param>
+    /// <param name="said">The diagnostics a model is handed.</param>
+    /// <param name="of">The code or the file a diagnostic is counted under.</param>
+    private static JsonArray Rest(IReadOnlyList<Counted> counts, IReadOnlyList<Diagnostic> said, Func<Diagnostic, string?> of)
+    {
+        var told = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var diagnostic in said)
+        {
+            if (of(diagnostic) is { } key)
+            {
+                told[key] = told.GetValueOrDefault(key) + diagnostic.Count;
+            }
+        }
+
+        return new JsonArray([.. counts
+            .Select(counted => new Counted(counted.Of, counted.Count - told.GetValueOrDefault(counted.Of)))
+            .Where(rest => rest.Count > 0)
+            .Select(rest => (JsonNode)new JsonObject { ["of"] = rest.Of, ["count"] = rest.Count })]);
+    }
+
+    /// <summary>
+    /// <paramref name="said"/> with every member that says nothing left out, at every depth of its objects and of the
+    /// objects its lists hold: a whole number of none, an empty list, a null. What a reader of it finds missing is none.
+    /// </summary>
+    /// <param name="said">What a model is handed.</param>
+    private static JsonObject Pruned(JsonObject said)
+    {
+        foreach (var (name, value) in said.ToList())
+        {
+            switch (value)
+            {
+                case null:
+                case JsonArray { Count: 0 }:
+                case JsonValue number when number.TryGetValue<int>(out var whole) && whole == 0:
+                    said.Remove(name);
+                    break;
+                case JsonObject inner:
+                    Pruned(inner);
+                    break;
+                case JsonArray items:
+                    foreach (var item in items.OfType<JsonObject>())
+                    {
+                        Pruned(item);
+                    }
+
+                    break;
+            }
+        }
+
+        return said;
+    }
+
+    /// <summary>
+    /// The first problem said whole, where it is a diagnostic: its tool, code, severity, place, count, log range, rendered
+    /// stack and saying - its message's first line said once, in its saying.
+    /// </summary>
     private static JsonObject FirstOf(Diagnostic diagnostic)
         => new()
         {
@@ -518,7 +582,6 @@ public sealed record ResultDigest
             ["tool"] = diagnostic.Tool,
             ["code"] = diagnostic.Code,
             ["severity"] = diagnostic.Severity,
-            ["message"] = FirstLine(diagnostic.Message),
             ["file"] = diagnostic.File,
             ["line"] = diagnostic.Line,
             ["column"] = diagnostic.Column,
@@ -528,7 +591,10 @@ public sealed record ResultDigest
             ["said"] = Said(diagnostic),
         };
 
-    /// <summary>The first problem said whole, where it is a test failure: its framework, test, outcome, message, place, log range, rendered stack and its causes, and saying.</summary>
+    /// <summary>
+    /// The first problem said whole, where it is a test failure: its framework, test, outcome, place, log range, rendered
+    /// stack and its causes, and saying - its message said once, in its saying.
+    /// </summary>
     private static JsonObject FirstOf(TestFailure failure)
         => new()
         {
@@ -536,7 +602,6 @@ public sealed record ResultDigest
             ["framework"] = failure.Framework,
             ["id"] = failure.Id,
             ["outcome"] = failure.Outcome,
-            ["message"] = MessageOf(failure),
             ["file"] = failure.File,
             ["line"] = failure.Line,
             ["count"] = 1,
