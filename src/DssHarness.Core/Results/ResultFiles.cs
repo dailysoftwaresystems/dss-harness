@@ -110,16 +110,25 @@ public static class ResultFiles
         }
     }
 
-    /// <summary>A JUnit case that failed, as a failure: its name split at its class, what it said, where, and how long.</summary>
+    /// <summary>
+    /// A JUnit case that failed, as a failure: its name split at its class, what it said, where, and how long. A case
+    /// whose class is its own name - CTest names each test so, a name that holds a dot as much as one that does not - is
+    /// named once, with no class: the report's reader keeps the case's id as an arm declares it (<c>classname.name</c>),
+    /// and the digest names the test as the person who wrote it does.
+    /// </summary>
     private static TestFailure JUnitFailure(JUnitCase @case)
     {
-        var split = @case.Id.LastIndexOf('.');
+        var id = @case.Id;
+        var half = (id.Length - 1) / 2;
+        var once = half > 0 && id.Length % 2 == 1 && id[half] == '.' && id.AsSpan(0, half).SequenceEqual(id.AsSpan(half + 1));
+        var named = once ? id[..half] : id;
+        var split = once ? -1 : named.LastIndexOf('.');
 
         return new TestFailure(
             "junit",
-            @case.Id,
-            Name: split > 0 ? @case.Id[(split + 1)..] : null,
-            Class: split > 0 ? @case.Id[..split] : null,
+            named,
+            Name: once ? named : split > 0 ? named[(split + 1)..] : null,
+            Class: split > 0 ? named[..split] : null,
             Message: @case.Message,
             File: @case.File,
             Line: @case.Line,

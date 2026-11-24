@@ -3,6 +3,7 @@
     "tests": "build/store_tests"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["tests/store_test.cc", "tests/parser_test.cc"],
   "failed": 2,
   "first": null,
   "failures": [

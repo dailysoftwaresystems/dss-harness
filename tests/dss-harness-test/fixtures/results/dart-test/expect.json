@@ -3,6 +3,8 @@
     "tests": "dart"
   },
   "root": "D:\\a\\app\\app",
+  "workingDirectory": "D:\\a\\app\\app\\dart",
+  "tree": ["dart/test/store_test.dart"],
   "failed": 2,
   "first": null,
   "failures": [

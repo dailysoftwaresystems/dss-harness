@@ -4,6 +4,7 @@
     "compiler": "GNU"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["include/types.h", "include/util.h", "main.c", "templ.cpp", "macro.cpp", "unused.c", "missing.c"],
   "errors": 6,
   "first": {
     "tool": "gcc",

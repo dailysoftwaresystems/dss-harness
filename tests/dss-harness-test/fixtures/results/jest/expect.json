@@ -3,6 +3,7 @@
     "tests": "npx"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["src/store.test.js", "src/store.js"],
   "failed": 2,
   "first": null,
   "failures": [

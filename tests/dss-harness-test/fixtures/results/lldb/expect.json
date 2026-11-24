@@ -3,6 +3,7 @@
     "run": true
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["crash.c"],
   "crashed": 1,
   "first": null,
   "failures": [

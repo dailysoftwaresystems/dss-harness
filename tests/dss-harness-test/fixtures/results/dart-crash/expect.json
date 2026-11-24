@@ -3,6 +3,8 @@
     "run": true
   },
   "root": "D:\\a\\app\\app",
+  "workingDirectory": "D:\\a\\app\\app\\dart",
+  "tree": ["dart/bin/crash.dart"],
   "crashed": 1,
   "first": null,
   "failures": [

@@ -4,6 +4,7 @@
     "compiler": "Clang"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["link.c"],
   "errors": 2,
   "first": {
     "tool": "ld",

@@ -3,6 +3,7 @@
     "tests": "cargo"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["src/store.rs", "src/parser.rs", "src/lib.rs"],
   "failed": 2,
   "first": null,
   "failures": [

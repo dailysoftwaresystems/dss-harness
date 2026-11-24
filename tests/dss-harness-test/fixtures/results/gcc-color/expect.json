@@ -4,6 +4,7 @@
     "compiler": "GNU"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["unused.c"],
   "warnings": 1,
   "first": null,
   "diagnostics": [

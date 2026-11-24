@@ -3,6 +3,7 @@
     "file": true
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["include/types.h", "include/util.h", "main.c"],
   "errors": 1,
   "warnings": 1,
   "first": {

@@ -9859,7 +9859,8 @@ and list, cargo's `error: test failed` - is said only where nothing before it sa
 are read as the tools print them at the versions CI runs: MSBuild's canonical form wherever it is
 printed (MSBuild and csc, MSVC's cl and link, tsc with `--pretty false`, clang-cl), a Windows
 drive's path and cl's `fatal error` among them, each diagnostic named for the tool its code belongs
-to; gcc's and clang's form, the chain that led to an error its stack - the include chain, the
+to and its project the project's file (what MSBuild writes after it for an inner build of a project
+that targets several frameworks, `::TargetFramework=...`, left with the build); gcc's and clang's form, the chain that led to an error its stack - the include chain, the
 instantiation chain, the macro expansions - handed whole, for the digest is the one owner of a
 stack's bound; the linkers (GNU ld, gold, lld, ld64, link); CMake's message blocks; Ninja's
 `FAILED:` edge; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
@@ -9915,7 +9916,8 @@ the mutation arm's reader a case at a time (`JUnitReport`, which reads the messa
 time and outcome of a failed case - GoogleTest's attributes, Catch2's summaries, doctest's
 `path(line):` places, a case CTest's `--output-junit` marks `status="fail"` ended as its failure's
 `message` says in CTest's console words (`CTestParser.OutcomeOf`: `Timeout` timed out, a signal or
-a fault crashed) - through its one reader that takes no document type), Dart's JSON reporter
+a fault crashed) - through its one reader that takes no document type, a case whose class is its own
+name, as CTest writes every one, named once in the digest with no class), Dart's JSON reporter
 stream a line at a time by its `type`-carrying lines (a failing test with its error event as its
 message and its `#n` stack, an error no test owns as a diagnostic), and a SARIF log by its runs in
 its 2.1 and 1.0 forms (each result a diagnostic: the driver's name, the level - `warning` where it
@@ -10007,12 +10009,16 @@ its documented form where it does not (tsc, GoogleTest, jest, vitest, Go, Rust, 
 each read through the parsers the phase that printed it chooses, and held two ways. Its
 `expect.json`, written by hand from the tool's own words and never by the code, says what a person
 reads off the output - the counts, the first error and its place, each diagnostic and failure, the
-first stack's frames and which of them are the project's, the causes - and is asserted first; its
-`digest.json`, the whole document, pins everything else against drift, and only it is rewritten with
-`DSSHARNESS_REGENERATE_RESULTS=1`. The bytes a model is handed are held too: where a log is longer
-than the fifty lines a model was handed before, its digest costs no more than those lines and the
-log the old instruction sent it to read, and the total over every fixture is pinned exactly, so a
-change that grows or shrinks it is made on purpose.
+first stack's frames and which of them are the project's, the causes - and is asserted first, and
+the tree the tool ran in: every project file the output names, below the root it names, and where the
+tool ran where it printed paths below a folder of its own (`tree`, `workingDirectory`), so each place is
+read against a file system holding exactly those files, as a run reads it against the tree's, the
+marks the same on every machine; its `digest.json`, the whole document, pins everything else against
+drift, and only it is rewritten with `DSSHARNESS_REGENERATE_RESULTS=1`. The bytes a model is handed are
+held too, as the one writer of every JSON a model reads writes them: for every fixture, a short log's
+among them, the digest costs no more than the fifty last lines a model was handed before and the log
+the old instruction sent it to read, and the total over every fixture is pinned exactly, so a change
+that grows or shrinks it is made on purpose.
 
 ## Reporting
 

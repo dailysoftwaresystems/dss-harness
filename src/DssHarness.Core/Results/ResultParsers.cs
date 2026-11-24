@@ -235,7 +235,9 @@ internal static class ParsedText
 /// belongs to - <c>C</c> and <c>D</c> codes cl's (<c>msvc</c>), <c>LNK</c> link's, <c>TS</c> tsc's, every other MSBuild's.
 /// An MSVC note under an error is its: <c>see reference to ... being compiled</c> a frame of its instantiation chain,
 /// any other a line of its record. MSBuild's summary after <c>Build FAILED.</c> repeats what was said, and is taken
-/// with it; link's <c>LNK1120</c>, a count of the unresolved externals said before it, is said only where none was.
+/// with it; link's <c>LNK1120</c>, a count of the unresolved externals said before it, is said only where none was. The
+/// project in brackets is the project's file: what MSBuild writes after it for one inner build of a project that targets
+/// several frameworks (<c>App.csproj::TargetFramework=net10.0</c>) is the build's, not the file's (<see cref="ProjectOf"/>).
 /// </summary>
 internal sealed class MsBuildParser : IBuiltInParser
 {
@@ -248,6 +250,14 @@ internal sealed class MsBuildParser : IBuiltInParser
         RegexOptions.IgnoreCase);
 
     private static readonly Regex Summary = LinearRegex.Compile(@"^\s*Build (?:FAILED|succeeded)\.\s*$");
+
+    /// <summary>
+    /// The project file a diagnostic's brackets name: the text before the <c>::</c> MSBuild writes ahead of an inner build's
+    /// properties - no path holds two colons running - else the whole; null where the brackets are absent or blank.
+    /// </summary>
+    /// <param name="project">The bracketed project as the line holds it.</param>
+    private static string? ProjectOf(Group project)
+        => ParsedText.Text(project) is { } said && said.IndexOf("::", StringComparison.Ordinal) is var inner and > 0 ? said[..inner].TrimEnd() : ParsedText.Text(project);
 
     private static readonly Regex SummaryLine = LinearRegex.Compile(@"^(?:\s+\d+ (?:Warning|Error)\(s\)|Time Elapsed [\d:.,]+|\s*""[^""]+"" \(.+\) \(\d+\) ->|\s*\(\w+ target\) ->)\s*$");
 
@@ -411,7 +421,7 @@ internal sealed class MsBuildParser : IBuiltInParser
                     column,
                     endLine,
                     endColumn,
-                    Project: ParsedText.Text(placed.Groups["project"]),
+                    Project: ProjectOf(placed.Groups["project"]),
                     Log: (line.Number, line.Last));
             }
 
@@ -424,7 +434,7 @@ internal sealed class MsBuildParser : IBuiltInParser
                     unplaced.Groups["severity"].Value.ToLowerInvariant(),
                     code,
                     Message(unplaced),
-                    Project: ParsedText.Text(unplaced.Groups["project"]) ?? unplaced.Groups["origin"].Value.Trim(),
+                    Project: ProjectOf(unplaced.Groups["project"]) ?? unplaced.Groups["origin"].Value.Trim(),
                     Log: (line.Number, line.Last));
             }
 

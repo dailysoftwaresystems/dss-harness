@@ -4,6 +4,7 @@
     "compiler": "GNU"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["proj/src/main.c"],
   "errors": 1,
   "first": {
     "tool": "gcc",

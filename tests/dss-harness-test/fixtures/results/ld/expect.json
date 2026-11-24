@@ -4,6 +4,7 @@
     "compiler": "GNU"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["link.c"],
   "errors": 4,
   "first": {
     "tool": "ld",

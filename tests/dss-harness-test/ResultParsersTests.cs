@@ -395,7 +395,8 @@ public sealed class ResultParsersTests
 
     /// <summary>
     /// MSBuild's canonical form is read wherever its tools print it: a Windows drive's path, a path holding parentheses,
-    /// and cl's <c>fatal error</c>, each diagnostic named for the tool its code belongs to.
+    /// and cl's <c>fatal error</c>, each diagnostic named for the tool its code belongs to - its project the project's
+    /// file, an inner build's properties MSBuild writes after it left with the build.
     /// </summary>
     [Fact]
     public void TheCanonicalForm_ReadsADrivesPath_AParenthesisedOne_AndAFatalError()
@@ -405,6 +406,7 @@ public sealed class ResultParsersTests
                 @"D:\a\app\app\src\Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [D:\a\app\app\src\App.csproj]",
                 @"C:\Program Files (x86)\Windows Kits\10\Include\um\winbase.h(4,1): fatal error C1083: Cannot open include file: 'b.h': No such file or directory",
                 @"src\app.ts(3,7): error TS2304: Cannot find name 'y'.",
+                @"D:\a\app\app\src\Lib.cs(3,1): warning CS0168: The variable 'e' is declared but never used [D:\a\app\app\src\Lib.csproj::TargetFramework=net10.0]",
             ],
             PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
 
@@ -413,6 +415,7 @@ public sealed class ResultParsersTests
                 ("msbuild", "CS0103", @"D:\a\app\app\src\Program.cs", 12, (int?)35, @"D:\a\app\app\src\App.csproj"),
                 ("msvc", "C1083", @"C:\Program Files (x86)\Windows Kits\10\Include\um\winbase.h", 4, 1, null),
                 ("tsc", "TS2304", @"src\app.ts", 3, 7, null),
+                ("msbuild", "CS0168", @"D:\a\app\app\src\Lib.cs", 3, 1, @"D:\a\app\app\src\Lib.csproj"),
             ],
             digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Code!, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Column, diagnostic.Project)));
     }

@@ -169,7 +169,8 @@ public sealed class ResultFileTests
     /// <summary>
     /// A case CTest wrote failed as CTest says it ended - a timeout timed out, a signal, a fault or an abort crashed, a
     /// failure failed - read from the words its console says them in; a case another runner wrote failed, whatever its
-    /// assertion said.
+    /// assertion said. A case whose class is its own name, as CTest writes every one, is named once - a name holding a
+    /// dot too - and one of a class of its own is named by its class and its name.
     /// </summary>
     [Fact]
     public void ACaseCTestWrote_EndedAsCTestSaysIt_AndAnotherRunnersFailed()
@@ -182,6 +183,7 @@ public sealed class ResultFileTests
               <testcase name="parses" classname="parses" time="0.0133" status="fail"><failure message="SEGFAULT"/></testcase>
               <testcase name="waits" classname="waits" time="3.0016" status="fail"><failure message="Timeout"/></testcase>
               <testcase name="aborts" classname="aborts" time="0.0010" status="fail"><failure message="Child aborted"/></testcase>
+              <testcase name="unit.parser" classname="unit.parser" time="0.0010" status="fail"><failure message="Failed"/></testcase>
               <testcase name="keeps" classname="keeps" time="0.0011" status="run"/>
               <testcase name="Waits" classname="Store" time="0.0020" status="run" result="completed"><failure message="Timeout of 5s was exceeded"/></testcase>
             </testsuite>
@@ -190,9 +192,12 @@ public sealed class ResultFileTests
 
         Assert.Null(problem);
         Assert.Equal(
-            [("folds.folds", "failed"), ("parses.parses", "crashed"), ("waits.waits", "timedOut"), ("aborts.aborts", "crashed"), ("Store.Waits", "failed")],
+            [("folds", "failed"), ("parses", "crashed"), ("waits", "timedOut"), ("aborts", "crashed"), ("unit.parser", "failed"), ("Store.Waits", "failed")],
             digest.Failures.Select(failure => (failure.Id, failure.Outcome)));
-        Assert.Equal((2, 1, 2), (digest.Failed, digest.TimedOut, digest.Crashed));
+        Assert.Equal(
+            [("folds", null), ("unit.parser", null), ("Waits", "Store")],
+            digest.Failures.Where(failure => failure.Outcome == "failed").Select(failure => (failure.Name, failure.Class)));
+        Assert.Equal((3, 1, 2), (digest.Failed, digest.TimedOut, digest.Crashed));
     }
 
     /// <summary>

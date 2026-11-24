@@ -4,6 +4,7 @@
     "compiler": "MSVC"
   },
   "root": "D:\\a\\app\\app",
+  "tree": [],
   "errors": 1,
   "first": {
     "tool": "link",

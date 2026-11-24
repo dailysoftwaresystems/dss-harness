@@ -3,6 +3,7 @@
     "tests": "ctest"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["asan.c", "asan.cpp", "ubsan.c"],
   "crashed": 3,
   "first": null,
   "failures": [

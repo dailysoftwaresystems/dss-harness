@@ -3,6 +3,7 @@
     "tests": "ctest"
   },
   "root": "/home/runner/work/app/app",
+  "tree": [],
   "failed": 1,
   "crashed": 1,
   "timedOut": 1,

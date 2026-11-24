@@ -24,7 +24,7 @@ public sealed class ResultFixturesTests
     private static string Root => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "results");
 
     /// <summary>The bytes every fixture's digest said for a model costs, in all: pinned, so a change that grows or shrinks them is seen.</summary>
-    private const int HeldBytes = 33_094;
+    private const int HeldBytes = 32_557;
 
     /// <summary>Every fixture's directory: one tool's output, its <c>expect.json</c> and its <c>digest.json</c> inside.</summary>
     private static IReadOnlyList<string> Fixtures =>
@@ -124,10 +124,11 @@ public sealed class ResultFixturesTests
     }
 
     /// <summary>
-    /// The bytes a model is handed, held: for every fixture, a short log's among them, the digest said for a model costs
-    /// no more than what the model was handed before digests existed - the fifty last lines, and the whole log the old
-    /// instruction sent it to read beside them. The total over every fixture is pinned exactly, so a change that grows or
-    /// shrinks what a model reads is a change someone made on purpose.
+    /// The bytes a model is handed, held: for every fixture, a short log's among them, the digest said for a model - written
+    /// as every JSON a model reads is (AgentEnvelope.Written) - costs no more than what the model was handed before digests
+    /// existed - the fifty last lines, and the whole log the old instruction sent it to read beside them. The total over
+    /// every fixture is pinned exactly, so a change that grows or shrinks what a model reads is a change someone made on
+    /// purpose.
     /// </summary>
     [Fact]
     public void TheBytesAModelIsHanded_AreHeld_AndTheirTotalIsPinned()
@@ -138,7 +139,7 @@ public sealed class ResultFixturesTests
         {
             var expect = Expectation(fixture);
             var lines = File.ReadAllLines(Output(fixture));
-            var held = Encoding.UTF8.GetByteCount(Placed(fixture, expect, Read(fixture, expect)!).ForAModel().ToJsonString());
+            var held = Encoding.UTF8.GetByteCount(Placed(fixture, expect, Read(fixture, expect)!).ForAModel().ToJsonString(DssHarness.Core.Agents.AgentEnvelope.Written));
 
             var before = Encoding.UTF8.GetByteCount(string.Join("\n", lines.TakeLast(50))) + Encoding.UTF8.GetByteCount(string.Join("\n", lines));
 
@@ -203,9 +204,12 @@ public sealed class ResultFixturesTests
     }
 
     /// <summary>
-    /// <paramref name="digest"/> with every place read against the tree its tool ran in: the expectation's root, holding
-    /// exactly the files its first stack's frames in the tree name - each named below the root as it is written, so the
-    /// tree is the same on every machine. A CI job's digest is placed already, against the job's workspace on its runner.
+    /// <paramref name="digest"/> with every place read against the tree its tool ran in, as a run reads it: the
+    /// expectation's root, holding exactly the files its <c>tree</c> names - every project file the output names, each
+    /// below the root with forward slashes, as a real tree holds them - a relative path read from where the tool ran
+    /// (<c>workingDirectory</c>, the root where it names none), so the in-tree marks are what a real run gives, and the
+    /// same on every machine. The frames the expectation calls the tree's are among those files. A CI job's digest is
+    /// placed already, against the job's workspace on its runner.
     /// </summary>
     private static ResultDigest Placed(string fixture, JsonObject expect, ResultDigest digest)
     {
@@ -215,12 +219,20 @@ public sealed class ResultFixturesTests
         }
 
         var root = expect["root"]?.GetValue<string>() ?? throw new InvalidOperationException($"'{fixture}': its expectation names no root to read its places against");
-        var held = (expect["stack"]?["inTree"]?.AsArray() ?? [])
-            .Select(frame => frame!.GetValue<string>())
-            .Select(frame => PlatformPaths.RelativeAsWritten(root, frame[..frame.LastIndexOf(':')]) ?? throw new InvalidOperationException($"'{fixture}': '{frame}' is not below its root"))
+        var ranIn = expect["workingDirectory"]?.GetValue<string>();
+        var held = (expect["tree"] as JsonArray ?? throw new InvalidOperationException($"'{fixture}': its expectation names no tree - every project file its output names, below its root"))
+            .Select(file => file!.GetValue<string>())
             .ToHashSet(StringComparer.Ordinal);
 
-        return digest.WithInTree(new DigestTree(root, null, new FixtureTree(root, held)));
+        foreach (var frame in (expect["stack"]?["inTree"]?.AsArray() ?? []).Select(frame => frame!.GetValue<string>()))
+        {
+            if (PlatformPaths.RelativeAsWritten(root, frame[..frame.LastIndexOf(':')], ranIn) is not { } file || !held.Contains(file))
+            {
+                throw new InvalidOperationException($"'{fixture}': '{frame}' is in the tree by its expectation, and names no file of its tree");
+            }
+        }
+
+        return digest.WithInTree(new DigestTree(root, ranIn, new FixtureTree(root, held)));
     }
 
     /// <summary>

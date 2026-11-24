@@ -3,6 +3,7 @@
     "build": "cmake"
   },
   "root": "/home/runner/work/app/app",
+  "tree": ["CMakeLists.txt"],
   "errors": 2,
   "first": {
     "tool": "cmake",
