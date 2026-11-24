@@ -1056,55 +1056,120 @@ public sealed class FlowStepMeasureTests
         var hold = new LegStepRunner.StepHold();
 
         hold.Placed(["linux", "windows"]);
-        Assert.Empty(hold.On());
+        Assert.Empty(hold.Held().On);
 
         hold.Admitting("linux", "linux", new AdmissionTold(AdmissionStage.Room));
-        Assert.Empty(hold.On());
+        Assert.Empty(hold.Held().On);
 
         hold.Admitting("windows", "windows", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])));
-        Assert.Equal([FlowWaits.MachineQueue, FlowWaits.MachineRoom], hold.On());
+        Assert.Equal([FlowWaits.MachineQueue, FlowWaits.MachineRoom], hold.Held().On);
 
         hold.Admitting("windows", "windows", new AdmissionTold(AdmissionStage.Taken));
-        Assert.Empty(hold.On());
+        Assert.Empty(hold.Held().On);
 
         hold.Ended("windows");
-        Assert.Equal([FlowWaits.MachineRoom], hold.On());
+        Assert.Equal([FlowWaits.MachineRoom], hold.Held().On);
 
         // A sweep's units: one let start keeps the leg running while another waits; the leg is held once none holds a slot.
         hold.Admitting("linux", "linux", new AdmissionTold(AdmissionStage.Ended));
         hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Taken));
         hold.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Memory));
-        Assert.Empty(hold.On());
+        Assert.Empty(hold.Held().On);
 
         hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Ended));
-        Assert.Equal([FlowWaits.MachineMemory], hold.On());
+        Assert.Equal([FlowWaits.MachineMemory], hold.Held().On);
 
         hold.Ended("linux");
-        Assert.Empty(hold.On());
+        Assert.Empty(hold.Held().On);
     }
 
     /// <summary>
     /// Who stands ahead in the machine's queue is joined over every unit of the step's legs waiting in it: two units of
-    /// one leg behind two tenants, and a unit of another behind one of them again, say the heavy class once with both
-    /// tenants, in the order each first stands; once none waits on the queue, nothing is said.
+    /// one leg, each behind tenants the other is behind too, say the heavy class once with both tenants, in the order each
+    /// first stands. It is said only while the queue holds the step back: while a unit of the leg runs nothing holds the
+    /// step, and nothing is said of the unit still in line, whoever stands ahead of it, until that unit is all of the leg
+    /// left waiting.
     /// </summary>
     [Fact]
-    public void WhoStandsAheadInTheMachinesQueue_IsJoinedOverEveryWaitingUnit()
+    public void WhoStandsAheadInTheMachinesQueue_IsJoinedOverEveryWaitingUnit_WhileTheQueueHoldsTheStepBack()
     {
         var hold = new LegStepRunner.StepHold();
 
         hold.Placed(["linux"]);
-        Assert.Empty(hold.Ahead());
+        Assert.Empty(hold.Held().Ahead);
 
         hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])));
         hold.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/other", "local/src/them"])));
-        Assert.Equal([new QueueAhead(DispatchClassName.Heavy, ["local/src/them", "local/src/other"])], hold.Ahead());
+        Assert.Equal([new QueueAhead(DispatchClassName.Heavy, ["local/src/them", "local/src/other"])], hold.Held().Ahead);
 
         hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Taken));
-        Assert.Equal([new QueueAhead(DispatchClassName.Heavy, ["local/src/other", "local/src/them"])], hold.Ahead());
+        Assert.Empty(hold.Held().On);
+        Assert.Empty(hold.Held().Ahead);
+
+        hold.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Ended));
+        Assert.Equal([FlowWaits.MachineQueue], hold.Held().On);
+        Assert.Equal([new QueueAhead(DispatchClassName.Heavy, ["local/src/other", "local/src/them"])], hold.Held().Ahead);
 
         hold.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Taken));
-        Assert.Empty(hold.Ahead());
+        Assert.Empty(hold.Held().Ahead);
+    }
+
+    /// <summary>
+    /// The engine is told what holds a step's legs back only as that changes, and each telling is a record of the step's:
+    /// while a unit of a sweep's leg runs, the standing of a unit of it still in line changing - the units ahead of it
+    /// arriving or leaving - tells the engine nothing, for nothing that holds the step changed; once the running unit ends
+    /// and the queue holds the step, it is told, with who stands ahead then, and told again as the waiting unit starts.
+    /// </summary>
+    [Fact]
+    public void AStandingChangingBehindAUnitThatRuns_TellsTheEngineNothing()
+    {
+        var events = new ToldHolds();
+        var watch = new LegStepRunner.StepWatch(events);
+
+        watch.Placed([new LegPlace("linux", InACopy: false)]);
+        watch.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Taken));
+        watch.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them", "local/src/other"])));
+        watch.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/other"])));
+        watch.Admitting("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Ended));
+        watch.Admitting("linux", "linux/arm-2", new AdmissionTold(AdmissionStage.Taken));
+
+        Assert.Equal([$"held on {FlowWaits.MachineQueue}, behind heavy: local/src/other", "a leg runs"], events.Told);
+    }
+
+    /// <summary>What a step's legs told the engine of what holds them back, in the words a test reads them in; nothing else.</summary>
+    private sealed class ToldHolds : IFlowRunEvents
+    {
+        /// <summary>Each telling, in order.</summary>
+        public List<string> Told { get; } = [];
+
+        public void LegPlaced(string leg, bool inACopy)
+        {
+        }
+
+        public void EveryLegPlaced()
+        {
+        }
+
+        public void LegCopyMade(string leg)
+        {
+        }
+
+        public void LegEnded(string leg)
+        {
+        }
+
+        public void Used(FlowTurnSpend turn)
+        {
+        }
+
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<QueueAhead> ahead)
+            => Told.Add(on.Count == 0
+                ? "a leg runs"
+                : $"held on {string.Join(", ", on)}{string.Concat(ahead.Select(standing => $", behind {QueueReports.NameOf(standing.Class)}: {string.Join(", ", standing.Tenants)}"))}");
+
+        public void HandoffTaken()
+        {
+        }
     }
 
     /// <summary>

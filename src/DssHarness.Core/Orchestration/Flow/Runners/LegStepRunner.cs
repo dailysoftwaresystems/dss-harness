@@ -437,8 +437,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             {
                 change();
 
-                var on = _hold.On();
-                var ahead = _hold.Ahead();
+                var (on, ahead) = _hold.Held();
 
                 if (!on.SequenceEqual(_told) || !ahead.SequenceEqual(_toldAhead))
                 {
@@ -492,36 +491,40 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         }
 
         /// <summary>
-        /// What the machine holds every leg still to run back for, as <see cref="FlowWaits"/> names each, in the order of
-        /// <see cref="AdmissionStage"/>; empty where a leg of the step runs, or none is left to.
+        /// What holds the step's legs back now, read in one pass: what the machine holds every leg still to run back for,
+        /// as <see cref="FlowWaits"/> names each, in the order of <see cref="AdmissionStage"/>, and who stands ahead in its
+        /// queue, joined over every unit of those legs waiting there - each class once, its tenants in the order each first
+        /// stands. Both are empty where a leg of the step runs, or a unit of one, or none is left to: nothing holds the step
+        /// back then, whoever stands ahead of a unit of it still in line.
         /// </summary>
-        public IReadOnlyList<string> On()
+        public (IReadOnlyList<string> On, IReadOnlyList<QueueAhead> Ahead) Held()
         {
-            var running = _legs.Where(leg => !_ended.Contains(leg)).ToList();
+            var waiting = new HashSet<string>(StringComparer.Ordinal);
             var waits = new SortedSet<AdmissionStage>();
+            var ahead = new List<QueueAhead>();
 
-            foreach (var leg in running)
+            // Every unit asking is of a leg still to run: a leg's units leave as it ends, and a unit as its admission ends.
+            foreach (var (leg, told) in _asking.Values)
             {
-                var stages = _asking.Values.Where(entry => entry.Leg == leg).Select(entry => entry.Told.Stage).ToList();
-
-                if (stages.Count == 0 || stages.Contains(AdmissionStage.Taken))
+                if (told.Stage == AdmissionStage.Taken)
                 {
-                    return [];
+                    return ([], []);
                 }
 
-                waits.UnionWith(stages);
+                _ = waiting.Add(leg);
+                _ = waits.Add(told.Stage);
+
+                if (told is { Stage: AdmissionStage.Queue, Ahead: { } standing })
+                {
+                    ahead.Add(standing);
+                }
             }
 
-            return [.. waits.Select(Words)];
+            // A leg still to run with nothing of it waiting runs, or has yet to ask, and the step is not held.
+            return _legs.Any(leg => !_ended.Contains(leg) && !waiting.Contains(leg))
+                ? ([], [])
+                : ([.. waits.Select(Words)], QueueAhead.Joined(ahead));
         }
-
-        /// <summary>
-        /// Who stands ahead in the machine's queue, over every unit of the step's legs waiting in it, joined: each class
-        /// once, its tenants in the order each first stands; empty where the queue is not among what holds the legs back.
-        /// </summary>
-        public IReadOnlyList<QueueAhead> Ahead()
-            => QueueAhead.Joined(
-                [.. _asking.Values.Where(entry => entry.Told.Stage == AdmissionStage.Queue).Select(entry => entry.Told.Ahead).OfType<QueueAhead>()]);
 
         /// <summary>The words a record says a wait on <paramref name="stage"/> by.</summary>
         private static string Words(AdmissionStage stage) => stage switch
