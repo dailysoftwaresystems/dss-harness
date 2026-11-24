@@ -10024,9 +10024,12 @@ error's line after ` ---> `, the stack in the runtime's order - the
 JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's with Node's `[cause]:`
 among the properties it prints in braces - each nested cause, printed inside the braces of the one
 before it, that one's cause - Dart's, Go's panic and
-`go test`'s console - its verbose stream read too, each test's logged lines kept from the `===` line
-that named it to its result line, which says none of them again, and dropped there or at its
-package's result line, so nothing is held past the test it is of; a result line read at any indent,
+`go test`'s console - its verbose stream read too, where a test's lines come under the `===` line
+that named it and its result line says none of them again; a failed test's message and place are the
+first line it logged that names its place, and its log range runs from the first line it logged
+through its result line, so every other line it logged is one read away and nothing held grows with
+how much a test logs - of a running test only where its lines begin and that first line are held,
+dropped at its result line or its package's, so nothing is held past the test it is of; a result line read at any indent,
 for plain `-v` nests a subtest's under its parent's, a nested `--- PASS` no line its parent logged,
 and a parent whose subtest failed said by it where it logged nothing of its own - and every package
 that did not build said by its own block, the `# pkg` line ahead of its compiler's words read

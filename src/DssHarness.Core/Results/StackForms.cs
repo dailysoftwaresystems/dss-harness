@@ -1105,15 +1105,18 @@ internal sealed class DartStackParser : IBuiltInParser
 /// Go's output: <c>go test</c>'s console - each <c>--- FAIL: TestName (0.00s)</c> with the lines its test logged under
 /// it, the first naming its place as <c>file.go:12: message</c> - and, run verbose, the stream as it happens:
 /// <c>=== RUN</c> naming the test, <c>=== CONT</c> and <c>=== NAME</c> naming it again as its output resumes
-/// (<c>=== PAUSE</c> ends it for then), each test's indented logged lines kept from its <c>===</c> line to its result
-/// line, which says none of them again. A test's result line is read at any indent - Go nests a subtest's under its
-/// parent's, <c>    --- PASS: TestAdd/one</c>, where it prints them after the parent's - and is never a logged line: a
-/// <c>--- FAIL</c> opens that test's failure, its message the lines it logged, those the stream said first; a
-/// <c>--- PASS</c> or <c>--- SKIP</c> ends the test, and what it streamed is dropped. A test whose subtest failed and that
-/// logged nothing of its own is said by its subtest, whichever order Go prints their results in. What a test streamed is
-/// held only while it runs: dropped at its own result line, and at its package's result line (<c>ok</c>, <c>FAIL</c>,
-/// <c>?</c>), which ends every test of the package - one whose binary was killed before it said its result among them -
-/// so no hold outlives the test it is of. A package that did not build is said by its own block: the <c># pkg [variant]</c> line Go prints ahead of its
+/// (<c>=== PAUSE</c> ends it for then), each test's indented logged lines under its <c>===</c> line, which its result line
+/// says none of again. A test's result line is read at any indent - Go nests a subtest's under its parent's,
+/// <c>    --- PASS: TestAdd/one</c>, where it prints them after the parent's - and is never a logged line: a
+/// <c>--- FAIL</c> opens that test's failure, its message and place the first line it logged that names its place - the
+/// stream's first, or the first under its result line where nothing streamed - and its log range from the first line it
+/// logged through the last read of it, so every line it logged is one read away and nothing held grows with how many it
+/// logs; a <c>--- PASS</c> or <c>--- SKIP</c> ends the test, and what was held of its stream is dropped. A test whose
+/// subtest failed and that logged nothing of its own is said by its subtest, whichever order Go prints their results in.
+/// What is held of a test's stream - where it begins and its first line that names its place - is held only while it
+/// runs: dropped at its own result line, and at its package's result line (<c>ok</c>, <c>FAIL</c>, <c>?</c>), which ends
+/// every test of the package - one whose binary was killed before it said its result among them - so no hold outlives
+/// the test it is of. A package that did not build is said by its own block: the <c># pkg [variant]</c> line Go prints ahead of its
 /// compiler's words, read whenever one comes and held for the line under it - a compiler's line <c>file.go:L:C:
 /// message</c>, read as a diagnostic of the package whose head was the last, its project the package's import path -
 /// and the <c>FAIL pkg [build failed]</c> line, which Go prints later and in the packages' order, said only where that
@@ -1178,7 +1181,12 @@ internal sealed class GoPanicParser : IBuiltInParser
     private sealed class Reading : IResultReading
     {
         private (string Name, int Indent, double? Seconds, int From)? _test;
-        private readonly List<string> _logged = [];
+
+        /// <summary>Whether the open test logged a line of its own.</summary>
+        private bool _logs;
+
+        /// <summary>The first line the open test logged that names its place: its failure's message.</summary>
+        private string? _placed;
         private string? _file;
         private int? _line;
         private string? _kind;
@@ -1193,7 +1201,9 @@ internal sealed class GoPanicParser : IBuiltInParser
         private int _from;
         private int _to;
         private string? _running;
-        private readonly Dictionary<string, (int From, List<string> Lines)> _streamed = new(StringComparer.Ordinal);
+
+        /// <summary>Of each test running, by its name, what is held of the lines it streamed: where they begin, and the first that names its place, as printed.</summary>
+        private readonly Dictionary<string, (int From, string? Placed)> _streamed = new(StringComparer.Ordinal);
         private readonly Dictionary<string, bool> _blocks = new(StringComparer.Ordinal);
         private (string Package, int Head, bool First, bool Decided)? _building;
 
@@ -1233,7 +1243,7 @@ internal sealed class GoPanicParser : IBuiltInParser
                     }
 
                     // A subtest that failed: its parent is said by it where the parent logged nothing of its own.
-                    if (_logged.Count == 0)
+                    if (!_logs)
                     {
                         _test = null;
                     }
@@ -1244,13 +1254,8 @@ internal sealed class GoPanicParser : IBuiltInParser
                 }
                 else if (indent > test.Indent && text.Trim().Length > 0 && !result.Success)
                 {
-                    if (_logged.Count == 0 && Logged.Match(text) is { Success: true } logged)
-                    {
-                        _file = logged.Groups["file"].Value;
-                        _line = ParsedText.Whole(logged.Groups["line"]);
-                    }
-
-                    _logged.Add(text.Trim());
+                    // A line the test logged, printed under its result line: in its failure's log range.
+                    Note(text);
                     _to = line.Last;
                     return LineTaken.Took;
                 }
@@ -1263,7 +1268,7 @@ internal sealed class GoPanicParser : IBuiltInParser
             if (result.Success)
             {
                 var name = result.Groups["name"].Value;
-                var streamed = _streamed.Remove(name, out var lines) ? lines : (From: line.Number, Lines: []);
+                (int From, string? Placed)? streamed = _streamed.Remove(name, out var held) ? held : null;
 
                 _running = null;
 
@@ -1275,24 +1280,23 @@ internal sealed class GoPanicParser : IBuiltInParser
 
                 // A test whose subtest failed, its result printed after the subtest's, that logged nothing of its own is
                 // said by its subtest.
-                if (streamed.Lines.Count == 0 && _failedParents.Contains(name))
+                if (streamed is null && _failedParents.Contains(name))
                 {
                     return LineTaken.Took;
                 }
 
-                // The lines the stream logged under the test's === line are its failure's message, its first place their
-                // first line that names one, and its log range runs from the first of them, so they are one read away.
-                _test = (name, result.Groups["indent"].Length, double.TryParse(result.Groups["seconds"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds) ? seconds : null, streamed.From);
+                // The first line the stream logged under the test's === line that names its place is its failure's message
+                // and place, and its log range runs from the first line it logged, so every line it logged is one read away.
+                _test = (name, result.Groups["indent"].Length, double.TryParse(result.Groups["seconds"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds) ? seconds : null, streamed?.From ?? line.Number);
 
-                foreach (var said in streamed.Lines)
+                if (streamed is { } logged)
                 {
-                    if (_file is null && Logged.Match(said) is { Success: true } placed)
-                    {
-                        _file = placed.Groups["file"].Value;
-                        _line = ParsedText.Whole(placed.Groups["line"]);
-                    }
+                    _logs = true;
 
-                    _logged.Add(said.Trim());
+                    if (logged.Placed is { } placed)
+                    {
+                        Note(placed);
+                    }
                 }
 
                 _to = line.Last;
@@ -1324,15 +1328,19 @@ internal sealed class GoPanicParser : IBuiltInParser
 
             if (_running is { } streaming && text.Length - text.TrimStart().Length > 0 && text.Trim().Length > 0)
             {
-                // The stream logs a test's own lines as it runs, under the === line that named it; they are kept until
-                // its result line ends it.
+                // The stream logs a test's own lines as it runs, under the === line that named it: of them only where they
+                // begin and the first that names its place are held until its result line ends it - however many it logs,
+                // the rest are one read away in its failure's log range.
                 if (!_streamed.TryGetValue(streaming, out var logged))
                 {
-                    logged = (line.Number, []);
-                    _streamed[streaming] = logged;
+                    _streamed[streaming] = logged = (line.Number, null);
                 }
 
-                logged.Lines.Add(text);
+                if (logged.Placed is null && Logged.IsMatch(text))
+                {
+                    _streamed[streaming] = logged with { Placed = text };
+                }
+
                 return LineTaken.Took;
             }
 
@@ -1508,6 +1516,22 @@ internal sealed class GoPanicParser : IBuiltInParser
             return null;
         }
 
+        /// <summary>
+        /// Notes a line the open test logged, as printed: the first that names its place is its failure's message and place,
+        /// and every other is one read away in its log range, never held.
+        /// </summary>
+        private void Note(string text)
+        {
+            _logs = true;
+
+            if (_placed is null && Logged.Match(text) is { Success: true } placed)
+            {
+                _placed = text.Trim();
+                _file = placed.Groups["file"].Value;
+                _line = ParsedText.Whole(placed.Groups["line"]);
+            }
+        }
+
         private void CloseTest()
         {
             if (_test is { } test)
@@ -1516,7 +1540,7 @@ internal sealed class GoPanicParser : IBuiltInParser
                     new TestFailure(
                         Framework,
                         test.Name,
-                        Message: ParsedText.Joined(_logged),
+                        Message: _placed,
                         File: _file,
                         Line: _line,
                         Duration: test.Seconds,
@@ -1524,8 +1548,15 @@ internal sealed class GoPanicParser : IBuiltInParser
                     test.Name);
             }
 
+            ForgetTest();
+        }
+
+        /// <summary>The open test is said: nothing of it is held.</summary>
+        private void ForgetTest()
+        {
             _test = null;
-            _logged.Clear();
+            _logs = false;
+            _placed = null;
             _file = null;
             _line = null;
         }
@@ -1546,10 +1577,7 @@ internal sealed class GoPanicParser : IBuiltInParser
                         Outcome: "crashed",
                         Log: (_from, _to)),
                     _test?.Name);
-                _test = null;
-                _logged.Clear();
-                _file = null;
-                _line = null;
+                ForgetTest();
             }
 
             ResetPanic();

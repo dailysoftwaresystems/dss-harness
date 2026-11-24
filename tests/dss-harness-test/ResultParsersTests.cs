@@ -1350,11 +1350,13 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
-    /// A test that logged a line more than once, run without <c>-v</c> - a retry's same <c>t.Errorf</c> twice, two lines
-    /// in turn twice over - keeps every line it logged: Go says a test's lines once, so none of them is a copy of another.
+    /// A Go test's failure is the first line it logged that names its place - its message and its place - and its log
+    /// range runs over every line it logged, so each is one read away and none is held as text: a test run without
+    /// <c>-v</c> that logged a line more than once - a retry's same <c>t.Errorf</c> twice, two lines in turn twice over -
+    /// has every one of them in its range, none taken for a copy of another, for Go says a test's lines once.
     /// </summary>
     [Fact]
-    public void AGoTestsRepeatedLines_AreEachKept()
+    public void AGoTestsFailure_IsItsFirstLineThatNamesItsPlace_EveryLineItLoggedInItsRange()
     {
         var digest = Digested(
             [
@@ -1373,10 +1375,26 @@ public sealed class ResultParsersTests
 
         Assert.Equal(
             [
-                ("TestRetries", (string?)"retry_test.go:9: attempt failed: connection refused\nretry_test.go:9: attempt failed: connection refused"),
-                ("TestAlternates", "alt_test.go:4: A\nalt_test.go:5: B\nalt_test.go:4: A\nalt_test.go:5: B"),
+                ("TestRetries", (string?)"retry_test.go:9: attempt failed: connection refused", "retry_test.go", (int?)9, (1, 3)),
+                ("TestAlternates", "alt_test.go:4: A", "alt_test.go", 4, (4, 8)),
             ],
-            digest.Failures.Select(failure => (failure.Id, failure.Message)));
+            digest.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
+
+        // Run with -v, the same lines are streamed under the test's === line before its result line.
+        var streamed = Digested(
+            [
+                "=== RUN   TestRetries",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "--- FAIL: TestRetries (0.02s)",
+                "FAIL",
+                "FAIL\texample.com/app/retry\t0.021s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [("TestRetries", (string?)"retry_test.go:9: attempt failed: connection refused", "retry_test.go", (int?)9, (2, 4))],
+            streamed.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
     }
 
     /// <summary>
