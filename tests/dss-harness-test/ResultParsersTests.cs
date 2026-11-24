@@ -1321,6 +1321,40 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// samurai's lines are read as ninja's are, by the one owner of both programs' own words
+    /// (<see cref="DssHarness.Core.Build.Ninja.WordOf"/>): its job line for a step that failed, which names the command the
+    /// step ran, opens that step's edge - a step whose output said nothing is said by it, and a diagnostic its output said
+    /// names it as its project - its status lines close an edge, and its end says only that the build ended. The lines
+    /// are samurai's form as its source writes them, told to go on past failing steps as the harness tells it.
+    /// </summary>
+    [Fact]
+    public void SamuraisLines_AreReadAsNinjasAre_ByTheOneOwnerOfTheirWords()
+    {
+        const string Killed = "/usr/bin/cc -o CMakeFiles/app.dir/main.c.o -c /home/runner/work/app/app/main.c";
+        const string Failed = "/usr/bin/cc -o CMakeFiles/app.dir/store.c.o -c /home/runner/work/app/app/store.c";
+
+        var digest = Digested(
+            [
+                "[1/3] Building C object CMakeFiles/app.dir/main.c.o",
+                "[2/3] Building C object CMakeFiles/app.dir/store.c.o",
+                $"samu: job terminated due to signal 9: {Killed}",
+                $"samu: job failed with status 1: {Failed}",
+                "/home/runner/work/app/app/store.c:3:5: error: 'count' undeclared (first use in this function)",
+                "samu: cannot make progress due to previous errors",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig { Toolchains = { ["gcc"] = new ToolchainConfig { CompilerId = { ["C"] = "GNU" } } } }, "cmake", "gcc"))!;
+
+        Assert.Equal(
+            [
+                ("ninja", $"build of '{Killed}' failed", Killed, (3, 3)),
+                ("gcc", "'count' undeclared (first use in this function)", Failed, (5, 5)),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Message, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Equal(2, digest.Errors);
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
     /// MSTest's thrown error is read as one under <c>dotnet test</c>, as xUnit's and NUnit's are: its
     /// <c>Test method X threw exception:</c> head, the error's <c>Type: message</c> line under it with each inner
     /// exception folded onto it after <c> ---&gt; </c>, and the stack in the order the runtime printed it, the inner

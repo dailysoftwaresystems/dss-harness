@@ -43,7 +43,7 @@ internal static class Ninja
     /// What the program says after its name that is no reason a build ended: a warning, the directory it works in, a
     /// build with nothing to do, and samurai's lines explaining why a step runs.
     /// </summary>
-    private static readonly string[] Asides = ["warning: ", "Entering directory", "Leaving directory", "no work to do", "nothing to do", "explain "];
+    private static readonly string[] Asides = [WarningSaid, "Entering directory", "Leaving directory", "no work to do", "nothing to do", "explain "];
 
     /// <summary>What ninja 1.13 and later writes between <c>FAILED: </c> and a failed step's outputs: its exit code.</summary>
     private static readonly Regex FailedCode = LinearRegex.Compile(@"\A\[code=-?[0-9]+\] ");
@@ -62,6 +62,103 @@ internal static class Ninja
     /// line: the status it exited with, the signal that ended it, or a status samurai could not tell.
     /// </summary>
     private static readonly Regex JobFailed = LinearRegex.Compile(@"\Ajob (?:failed with status -?[0-9]+|terminated due to signal [0-9]+|status unknown): ");
+
+    /// <summary>What ninja says after its name to end a build that stopped, whatever stopped it.</summary>
+    private const string BuildStopped = "build stopped: ";
+
+    /// <summary>
+    /// How samurai, told to go on past failing steps, ends a build it can make no more of, after its name - ninja's own
+    /// is a <c>build stopped:</c> line.
+    /// </summary>
+    private const string NoProgress = "cannot make progress due to previous errors";
+
+    /// <summary>What ninja says after its name ahead of a warning of its own.</summary>
+    private const string WarningSaid = "warning: ";
+
+    /// <summary>What ninja says after its name ahead of an error of its own: <c>error: </c>, or <c>fatal: </c> where it cannot go on at all.</summary>
+    private static readonly string[] ErrorSaid = ["error: ", "fatal: "];
+
+    /// <summary>What a line of a build's output is, as ninja's - or samurai's - own words say it (<see cref="WordOf"/>).</summary>
+    internal enum Word
+    {
+        /// <summary>A step's status, <c>[run/planned] </c> and what the step prints: a step started or ended.</summary>
+        Status,
+
+        /// <summary>A step that failed, as ninja says it: its <c>FAILED:</c> line, naming the step's outputs, the command it ran on the line under it.</summary>
+        Failed,
+
+        /// <summary>A step that failed, as samurai says it: its job line, naming the command the step ran.</summary>
+        JobFailed,
+
+        /// <summary>A warning of the program's own.</summary>
+        Warning,
+
+        /// <summary>
+        /// The build's end, which says only that it ended: <c>build stopped:</c>, a nested build's end, an interruption,
+        /// samurai's having no more it can make.
+        /// </summary>
+        End,
+
+        /// <summary>Something of its own that is no reason a build ended: the directory it works in, a build with nothing to do, why a step runs.</summary>
+        Aside,
+
+        /// <summary>An error of the program's own: anything else it says under its name, ninja's <c>error:</c> and <c>fatal:</c> among it.</summary>
+        Error,
+    }
+
+    /// <summary>
+    /// What <paramref name="line"/> is as ninja's own words, or samurai's - read under either program's own name, for a
+    /// build's digest does not know which of the two CMake ran, and ninja says everything of its own under its name
+    /// whatever its file is called - with what it says: a status's step, a failed step's outputs (ninja's) or command
+    /// (samurai's, which names no outputs), a warning's or an error's message without its word, the end's or the aside's
+    /// words; null where it is none of the program's. The one reading of these lines a digest takes, by the words every
+    /// reading of a build's end here is held to.
+    /// </summary>
+    /// <param name="line">The line as the build printed it, its terminal escapes taken off.</param>
+    internal static (Word Kind, string Said)? WordOf(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        if (Status.Match(line) is { Success: true } status)
+        {
+            return (Word.Status, line[status.Length..]);
+        }
+
+        if (FailedListed(line) is { } listed)
+        {
+            return (Word.Failed, listed);
+        }
+
+        if (Said(line, [OwnName, SamuraiName]) is not { } said)
+        {
+            return null;
+        }
+
+        if (JobFailed.Match(said) is { Success: true } job)
+        {
+            return (Word.JobFailed, said[job.Length..]);
+        }
+
+        if (said.StartsWith(WarningSaid, StringComparison.Ordinal))
+        {
+            return (Word.Warning, said[WarningSaid.Length..]);
+        }
+
+        if (Asides.Any(aside => said.StartsWith(aside, StringComparison.Ordinal)))
+        {
+            return (Word.Aside, said);
+        }
+
+        if (said.StartsWith(BuildStopped, StringComparison.Ordinal)
+            || said.TrimEnd('.') == NoProgress
+            || NestedEnds.Any(end => said.TrimEnd('.').EndsWith(end, StringComparison.Ordinal))
+            || Interruptions.Any(interruption => said.StartsWith(interruption, StringComparison.Ordinal)))
+        {
+            return (Word.End, said);
+        }
+
+        return (Word.Error, ErrorSaid.FirstOrDefault(word => said.StartsWith(word, StringComparison.Ordinal)) is { } word ? said[word.Length..] : said);
+    }
 
     /// <summary>
     /// What ninja, and samurai, begin a step's line with as its status says it where <c>NINJA_STATUS</c> sets none of its
@@ -332,7 +429,7 @@ internal static class Ninja
             {
                 Settle(Failing.Nested);
             }
-            else if (output is { Ended: false } && (ninja.StartsWith("build stopped: ", StringComparison.Ordinal) || ninja.StartsWith("error: ", StringComparison.Ordinal)))
+            else if (output is { Ended: false } && (ninja.StartsWith(BuildStopped, StringComparison.Ordinal) || ninja.StartsWith("error: ", StringComparison.Ordinal)))
             {
                 output.Ended = true;
             }

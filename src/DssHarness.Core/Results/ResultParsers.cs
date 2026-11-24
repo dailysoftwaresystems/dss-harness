@@ -1032,7 +1032,7 @@ internal sealed class LinkerParser : IBuiltInParser
 /// CMake's form: <c>CMake Error at path:line (command):</c>, <c>CMake Error in path:</c>, <c>CMake Error: message</c> and
 /// their warnings, with the message block under it - its indented lines, over the blank lines between its paragraphs, as
 /// one line, the command the head names said ahead of it (<c>add_subdirectory: add_subdirectory given source ...</c>),
-/// for a diagnostic's project is the project or target a build names, never a command - and the
+/// for a diagnostic's project is the project or target a build names, never the CMake command that raised it - and the
 /// <c>Call Stack (most recent call first):</c> under it as the error's stack, each frame's command its symbol.
 /// <c>-- Configuring incomplete, errors occurred!</c>, said after what it counts, is taken with it.
 /// </summary>
@@ -1197,21 +1197,16 @@ internal sealed class CMakeParser : IBuiltInParser
 }
 
 /// <summary>
-/// Ninja's form: a <c>FAILED: outputs</c> block - its edge read by the one owner of such a line
-/// (<see cref="Ninja.FailedListed"/>), the exit code ninja writes between it and the outputs taken off - the command it
-/// ran on the line under it, and what that command printed -
-/// the edge every diagnostic said inside it names as its project. An edge is a diagnostic of its own only where nothing
-/// inside it said an error, for then it is all that says what failed. Ninja's own <c>ninja: error:</c> is an error;
-/// <c>ninja: build stopped</c> and its progress lines end an edge.
+/// Ninja's form, and samurai's, read through the one owner of their own words (<see cref="Ninja.WordOf"/>): a step that
+/// failed opens an edge - ninja's <c>FAILED: outputs</c> line, the exit code written between it and the outputs taken
+/// off, with the command it ran on the line under it, or samurai's <c>samu: job failed with status N: command</c>, which
+/// names the command - and what that step printed follows, the edge every diagnostic said inside it names as its
+/// project. An edge is a diagnostic of its own only where nothing inside it said an error, for then it is all that says
+/// what failed. An error the program says of its own is an error and a warning a warning; its status lines and the
+/// build's end close an edge.
 /// </summary>
 internal sealed class NinjaParser : IBuiltInParser
 {
-    private static readonly Regex Own = LinearRegex.Compile(@"^ninja: (?<severity>error|fatal|warning): (?<message>.+)$");
-
-    private static readonly Regex Stopped = LinearRegex.Compile(@"^ninja: build stopped: .*$");
-
-    private static readonly Regex Progress = LinearRegex.Compile(@"^\[\d+/\d+\] ");
-
     public string Name => "ninja";
 
     public IResultReading Begin() => new Reading();
@@ -1233,31 +1228,31 @@ internal sealed class NinjaParser : IBuiltInParser
                 return LineTaken.Took;
             }
 
-            if (Ninja.FailedListed(line.Text) is { } listed)
+            switch (Ninja.WordOf(line.Text))
             {
-                Close(sink);
-                _edge = listed;
-                _from = line.Number;
-                _to = line.Last;
-                _saidBefore = sink.Said;
-                _command = true;
-                sink.Target = _edge;
-                return LineTaken.Took;
-            }
+                case (Ninja.Word.Failed or Ninja.Word.JobFailed, var step) failed:
+                    Close(sink);
+                    _edge = step;
+                    _from = line.Number;
+                    _to = line.Last;
+                    _saidBefore = sink.Said;
 
-            if (Stopped.IsMatch(line.Text) || Progress.IsMatch(line.Text))
-            {
-                Close(sink);
-                return LineTaken.Took;
-            }
+                    // ninja says the command a step ran on the line under its FAILED line; samurai says it on its own.
+                    _command = failed.Kind == Ninja.Word.Failed;
+                    sink.Target = _edge;
+                    return LineTaken.Took;
 
-            if (Own.Match(line.Text) is { Success: true } own)
-            {
-                sink.Add(new Diagnostic("ninja", own.Groups["severity"].Value == "warning" ? "warning" : "error", null, own.Groups["message"].Value.Trim(), Log: (line.Number, line.Last)));
-                return LineTaken.Took;
-            }
+                case (Ninja.Word.Status or Ninja.Word.End, _):
+                    Close(sink);
+                    return LineTaken.Took;
 
-            return LineTaken.Left;
+                case (Ninja.Word.Warning or Ninja.Word.Error, var said) word:
+                    sink.Add(new Diagnostic("ninja", word.Kind == Ninja.Word.Warning ? "warning" : "error", null, said.Trim(), Log: (line.Number, line.Last)));
+                    return LineTaken.Took;
+
+                default:
+                    return LineTaken.Left;
+            }
         }
 
         public LineTaken End(ResultSink sink)

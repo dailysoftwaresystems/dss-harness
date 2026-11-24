@@ -10001,8 +10001,11 @@ it, which says it is the source - so the notes after it still read as its chain 
 macOS's runner and of Ubuntu 22.04; the linkers (GNU ld - a reference by its line where the object holds line information,
 behind its object where ld names it first as MinGW's does, behind a linker named by a drive's path -
 gold, lld, ld64, link); CMake's message blocks (the command that raised one
-said ahead of its message, for a diagnostic's project is the project or target a build names, never a command); Ninja's
-`FAILED:` edge; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
+said ahead of its message, for a diagnostic's project is the project or target a build names, never the CMake
+command that raised it); Ninja's `FAILED:` edge and samurai's job line for a step that failed - the
+edge named as each program names the step, ninja by its outputs and samurai by its command - with
+each program's own errors, warnings, status lines and end, read by the one owner of their words
+(`Build\Ninja.cs`, `Ninja.WordOf`) under either program's name; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
 the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries - MSTest's
 console saying one by its `Test method X threw exception:` head, each inner exception folded onto the
 error's line after ` ---> `, the stack in the runtime's order - the
