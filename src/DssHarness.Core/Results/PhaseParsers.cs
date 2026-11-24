@@ -127,16 +127,24 @@ public static class PhaseParsers
     /// log range as the file numbers its lines. A line no reading took that holds an error's marker - <c>error:</c>,
     /// <c>error CODE:</c>, <c>FAILED</c>, <c>fatal:</c>, <c>panic:</c>, a thrown error's <c>Type: </c> - is handed to
     /// <paramref name="unparsed"/> as the pass meets it, every one, for the digest's owner to count and bound: what the
-    /// parsers did not understand. Null where no parser was chosen, for a log no rule names is a log left as it stands.
+    /// parsers did not understand. Once the last line is read, how the program that printed the log ended is asked of
+    /// <paramref name="exit"/> and given every reading as it ends (<see cref="ResultSink.Exit"/>), for what only the
+    /// program's end tells. Null where no parser was chosen, for a log no rule names is a log left as it stands.
     /// </summary>
     /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it.</param>
     /// <param name="parsers">The parsers chosen for it.</param>
     /// <param name="unparsed">Takes each line no reading took that looks like an error, in the order the pass met it.</param>
-    public static PhaseFindings? FindingsOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers, Action<NumberedLine> unparsed)
+    /// <param name="exit">
+    /// How the program that printed the log ended, asked once its last line has been read: the code it exited with - a
+    /// phase's own (<see cref="Execution.PhaseResult.ProgramExit"/>), or the one the forge says a CI job's failed step ended
+    /// with, which the log states only once the step has ended - or null where that is not known.
+    /// </param>
+    public static PhaseFindings? FindingsOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers, Action<NumberedLine> unparsed, Func<int?> exit)
     {
         ArgumentNullException.ThrowIfNull(lines);
         ArgumentNullException.ThrowIfNull(parsers);
         ArgumentNullException.ThrowIfNull(unparsed);
+        ArgumentNullException.ThrowIfNull(exit);
 
         if (parsers.Count == 0)
         {
@@ -150,7 +158,7 @@ public static class PhaseParsers
             pass.Read(line with { Text = AsRead(line.Text) });
         }
 
-        return pass.Finish();
+        return pass.Finish(exit());
     }
 
     /// <summary>
@@ -257,6 +265,7 @@ public static class PhaseParsers
     private sealed class OnePass
     {
         private readonly IResultReading[] _readings;
+        private readonly SharedReading _shared = new();
         private readonly ResultSink[] _sinks;
         private readonly List<Offered> _held = [];
         private readonly Stack<Offered> _given = new();
@@ -265,10 +274,8 @@ public static class PhaseParsers
 
         public OnePass(IReadOnlyList<IResultParser> parsers, Action<NumberedLine> unparsed)
         {
-            var shared = new SharedReading();
-
             _readings = [.. parsers.Select(parser => parser.Begin())];
-            _sinks = [.. parsers.Select(_ => new ResultSink(shared))];
+            _sinks = [.. parsers.Select(_ => new ResultSink(_shared))];
             _unparsed = unparsed;
         }
 
@@ -280,14 +287,18 @@ public static class PhaseParsers
         }
 
         /// <summary>
-        /// The log ended: a reading that holds lines undecided says whether they are its - lines it gives back are offered
-        /// to the others, never to it again - and then every reading not yet ended finishes what it has open, the last
-        /// chosen first, so a reading chosen ahead of the forms it sums up (a runner's console ahead of its tests' own)
-        /// ends knowing what they said, whichever of them read the last line. Each reading ends once.
+        /// The log ended, its program with <paramref name="exit"/>, which every reading is told as it ends: a reading that
+        /// holds lines undecided says whether they are its - lines it gives back are offered to the others, never to it
+        /// again - and then every reading not yet ended finishes what it has open, the last chosen first, so a reading
+        /// chosen ahead of the forms it sums up (a runner's console ahead of its tests' own) ends knowing what they said,
+        /// whichever of them read the last line. Each reading ends once.
         /// </summary>
-        public PhaseFindings Finish()
+        /// <param name="exit">The code the program that printed the log exited with; null where that is not known.</param>
+        public PhaseFindings Finish(int? exit)
         {
             var ended = new bool[_readings.Length];
+
+            _shared.End(exit);
 
             while (_active >= 0 && _held.Count > 0)
             {

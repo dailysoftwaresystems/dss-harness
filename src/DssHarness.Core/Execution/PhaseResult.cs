@@ -96,6 +96,13 @@ public sealed record PhaseResult(
     public bool Passed => Stopped == PhaseStop.None && ExitCode == 0 && Witnessed != false && MissingOutputs.Count == 0;
 
     /// <summary>
+    /// The code the phase's program ended with, where it ended on its own; null where a bound stopped it, for the code a
+    /// stopped child reports says how it was stopped, never how its program would have ended - as its log's exit line says
+    /// <c>(stopped)</c>. What the parsers of its log are told of how it ended (<see cref="Results.PhaseDigest.Of"/>).
+    /// </summary>
+    public int? ProgramExit => Stopped == PhaseStop.None ? ExitCode : null;
+
+    /// <summary>
     /// The characters the last lines a phase is shown by may take, each with its ending: a page of a tool's answer
     /// (<see cref="Pages.PageRoom"/>), the one owner of how much one look gives - what a reader is shown first, never what
     /// there is: the whole output is in <see cref="LogFile"/>, read by page.

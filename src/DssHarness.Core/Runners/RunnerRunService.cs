@@ -1152,8 +1152,9 @@ public sealed class RunnerRunService(
         }
 
         // Its output as its log keeps it, masked as each line was kept: read from there by whatever looks
-        // for an exception in it, never held; and the directory it ran in, which a relative path it printed is read from.
-        state.Failure = new FailedStep(phase.Name, verdict, result.Output, result.WorkingDirectory);
+        // for an exception in it, never held; the directory it ran in, which a relative path it printed is read from; and
+        // how its program ended, which its digest is read knowing.
+        state.Failure = new FailedStep(phase.Name, verdict, result.Output, result.WorkingDirectory, result.ProgramExit);
         state.Stopped = true;
     }
 
@@ -1214,7 +1215,7 @@ public sealed class RunnerRunService(
         // entry is matched against is read from it, and where the step's own failure is the leg's verdict the leg's
         // entry carries it, as a build's and a test's carry theirs - its places read from the directory the step ran in,
         // as theirs are from where their tools ran.
-        var digest = PhaseDigest.Of(failed.Output, parsers, new DigestTree(request.TreeRoot, failed.WorkingDirectory, _fileSystem, worktreesRoot));
+        var digest = PhaseDigest.Of(failed.Output, failed.Exit, parsers, new DigestTree(request.TreeRoot, failed.WorkingDirectory, _fileSystem, worktreesRoot));
 
         var genuine = new Decision(
             failed.Verdict with { Detail = values.Redact(failed.Verdict.Detail) },
@@ -1899,8 +1900,11 @@ public sealed class RunnerRunService(
         return (program, arguments, working);
     }
 
-    /// <summary>The step whose failure ended the run, with what it reported and the directory it ran in (<see cref="PhaseResult.WorkingDirectory"/>).</summary>
-    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, PhaseOutput Output, string? WorkingDirectory);
+    /// <summary>
+    /// The step whose failure ended the run, with what it reported, the directory it ran in
+    /// (<see cref="PhaseResult.WorkingDirectory"/>) and the code its program ended with (<see cref="PhaseResult.ProgramExit"/>).
+    /// </summary>
+    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, PhaseOutput Output, string? WorkingDirectory, int? Exit);
 
     /// <summary>
     /// The verdict and outcome one attempt reached, with the entry and the gate behind it and the failing step's digest

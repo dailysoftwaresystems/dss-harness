@@ -605,13 +605,14 @@ internal sealed class JvmStackParser : IBuiltInParser
 /// lines, and the error line last, <c>Type: message</c> or the type alone where the error says no message; frames read
 /// innermost first. Tracebacks chained by <c>During handling of the above exception</c> or <c>The above exception was
 /// the direct cause</c> are one error: the last printed the one raised, each before it the cause of the one after. A
-/// traceback no error line ends is given back. The error raised has <c>crashed</c> the program where its traceback runs
-/// through a module's top level (<c>&lt;module&gt;</c>) and is the last thing the program printed - the next line not
-/// blank the log's end or another traceback's head - which is how Python reports the error that ended it, run as a script,
-/// with <c>-m</c> or <c>-c</c>, printing nothing after it; it has <c>errored</c> where it does not: one a handler caught
-/// and printed inside a function, a thread's, or one a handler at a module's top level caught and logged, the program
-/// printing on after it. The reading holds no line while it waits for the line after the chain: a blank one says nothing
-/// either way, and is no record's.
+/// traceback no error line ends is given back. A chain is said as soon as the line after it says it is whole. Whether the
+/// error raised ended its program is decided by how the program ended, never by a line printed after the traceback, which
+/// may as well be another program's - a forge's, make's, a shell's: one whose traceback runs through a module's top level
+/// (<c>&lt;module&gt;</c>), as the error that ends a script, <c>-m</c> or <c>-c</c> does, has <c>crashed</c> the program
+/// where it ended with a code not 0 or how it ended is not known, and has <c>errored</c> where it ended 0, for a handler at
+/// the top level caught and logged it and the program ran on; one that does not, caught and printed inside a function or a
+/// thread's, has <c>errored</c>. How the program ended is known as the reading ends (<see cref="ResultSink.Exit"/>), so it
+/// decides there the chains it said, holding none of them while it reads.
 /// </summary>
 internal sealed class PythonStackParser : IBuiltInParser
 {
@@ -638,9 +639,11 @@ internal sealed class PythonStackParser : IBuiltInParser
         private List<StackFrame>? _frames;
         private bool _chained;
         private bool _blank;
-        private bool _whole;
         private int _from;
         private int _to;
+
+        /// <summary>The first of the chains this reading said since it began or last ended, by its sink's order: those its program's end decides.</summary>
+        private int _undecided;
 
         public LineTaken Offer(NumberedLine line, ResultSink sink)
         {
@@ -669,13 +672,13 @@ internal sealed class PythonStackParser : IBuiltInParser
                     return LineTaken.Took;
                 }
 
-                // A traceback no error line ended is given back, and the program printed on past the chain before it.
+                // A traceback no error line ended is given back, and the chain before it is whole.
                 _frames = null;
-                Close(sink, printedOn: true);
+                Close(sink);
                 return LineTaken.Left;
             }
 
-            if (_chain.Count > 0 && !_whole)
+            if (_chain.Count > 0)
             {
                 if (text.Trim().Length == 0 && !_blank)
                 {
@@ -697,8 +700,8 @@ internal sealed class PythonStackParser : IBuiltInParser
 
                 if (!_chained || !Head.IsMatch(text))
                 {
-                    // The chain is whole; the line after it says whether the program printed on.
-                    _whole = true;
+                    // The chain is whole, and said: what this line is decides nothing of it.
+                    Close(sink);
 
                     if (blank)
                     {
@@ -706,19 +709,6 @@ internal sealed class PythonStackParser : IBuiltInParser
                         return LineTaken.Left;
                     }
                 }
-            }
-
-            if (_whole)
-            {
-                if (text.Trim().Length == 0)
-                {
-                    // A blank line says nothing of whether the program printed on: no record holds it, and none is held.
-                    return LineTaken.Left;
-                }
-
-                // Python prints nothing after the traceback of the error that ended the program: a line of the program's
-                // after it says it ran on, while another traceback's head, or the log's end, says nothing did.
-                Close(sink, printedOn: !Head.IsMatch(text));
             }
 
             if (Head.IsMatch(text))
@@ -738,20 +728,28 @@ internal sealed class PythonStackParser : IBuiltInParser
         public LineTaken End(ResultSink sink)
         {
             _frames = null;
-            Close(sink, printedOn: false);
+            Close(sink);
+
+            // The program ended 0: an error through its top level that it printed was caught and logged by a handler
+            // there, and the program ran on.
+            if (sink.Exit == 0)
+            {
+                sink.Decide(_undecided, said => said.Outcome == "crashed" ? said with { Outcome = "errored" } : said);
+            }
+
+            _undecided = sink.FailuresSaid;
             return LineTaken.Left;
         }
 
         /// <summary>
-        /// Says the chain read: <c>crashed</c> where the error it raised ran through a module's top level and the program
-        /// printed nothing after it, <c>errored</c> where it did not - caught inside a function, a thread's - or where the
-        /// program printed on, its handler having caught and printed it.
+        /// Says the chain read: <c>crashed</c> where the error it raised ran through a module's top level, until the
+        /// program's end says otherwise (<see cref="End"/>), and <c>errored</c> where it did not - caught and printed
+        /// inside a function, a thread's.
         /// </summary>
-        private void Close(ResultSink sink, bool printedOn)
+        private void Close(ResultSink sink)
         {
             _chained = false;
             _blank = false;
-            _whole = false;
 
             if (_chain.Count == 0)
             {
@@ -770,7 +768,7 @@ internal sealed class PythonStackParser : IBuiltInParser
                 ParsedText.Headed(cause!.Type, cause.Message),
                 Message: cause.Message.Length > 0 ? cause.Message : null,
                 Exception: cause,
-                Outcome: !printedOn && cause.Stack.Any(frame => frame.Symbol == ModuleLevel) ? "crashed" : "errored",
+                Outcome: cause.Stack.Any(frame => frame.Symbol == ModuleLevel) ? "crashed" : "errored",
                 Log: (_from, _to)));
             _chain.Clear();
         }

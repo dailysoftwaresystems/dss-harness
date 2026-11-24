@@ -91,6 +91,63 @@ public sealed class CiDigestTests
     }
 
     /// <summary>
+    /// The line the runner ends a failed step with, under its error marker, says the code the step's process exited with;
+    /// no other line says one - the same sentence under another marker, or a program's own echo of it with none.
+    /// </summary>
+    [Fact]
+    public void TheLineTheRunnerEndsAFailedStepWith_SaysTheCodeItsProcessExitedWith()
+    {
+        var log = string.Join(
+            "\n",
+            "2026-11-23T16:48:04.2436858Z test: failure, package: skipped, so ci-check is failure",
+            "2026-11-23T16:48:05.1483402Z ##[error]ci-check is failing: test failure, package skipped.",
+            "2026-11-23T16:48:05.1504036Z ##[error]Process completed with exit code 1.",
+            "2026-11-23T16:48:05.1504036Z ##[error]Process completed with exit code 127.",
+            "2026-11-23T16:48:05.1504036Z ##[warning]Process completed with exit code 1.",
+            "2026-11-23T16:48:05.1504036Z Process completed with exit code 1.",
+            "2026-11-23T16:48:05.1696373Z Cleaning up orphan processes") + "\n";
+
+        Assert.Equal(
+            [(1, (int?)null), (2, null), (3, 1), (4, 127), (5, null), (6, null), (7, null)],
+            CiLog.Of(log).Select(line => (line.Line.Number, line.StepExit)));
+    }
+
+    /// <summary>
+    /// A Python module a job's step ran, that died of an error through its top level, has crashed its program though the
+    /// runner's line that the step failed follows its traceback: that line is the forge's, saying how the step's process
+    /// ended - its code 1 - and never a line the program printed on. The traceback is Python 3.12's own output, in the
+    /// step GitHub's runner wrote around it.
+    /// </summary>
+    [Fact]
+    public void APythonCrashInAJobsStep_HasCrashedItsProgram_ThoughTheRunnersLineFollowsIt()
+    {
+        var log = string.Join(
+            "\n",
+            "2026-11-23T16:48:04.1883660Z ##[group]Run python -m pkg.run",
+            "2026-11-23T16:48:04.1885064Z \u001b[36;1mpython -m pkg.run\u001b[0m",
+            "2026-11-23T16:48:04.2243133Z shell: /usr/bin/bash -e {0}",
+            "2026-11-23T16:48:04.2255994Z ##[endgroup]",
+            "2026-11-23T16:48:04.4312876Z Traceback (most recent call last):",
+            "2026-11-23T16:48:04.4313542Z   File \"<frozen runpy>\", line 198, in _run_module_as_main",
+            "2026-11-23T16:48:04.4313921Z   File \"<frozen runpy>\", line 88, in _run_code",
+            "2026-11-23T16:48:04.4314288Z   File \"/home/runner/work/app/app/pkg/run.py\", line 3, in <module>",
+            "2026-11-23T16:48:04.4314640Z     main()",
+            "2026-11-23T16:48:04.4314990Z   File \"/home/runner/work/app/app/pkg/run.py\", line 2, in main",
+            "2026-11-23T16:48:04.4315344Z     raise RuntimeError(\"run failed\")",
+            "2026-11-23T16:48:04.4315701Z RuntimeError: run failed",
+            "2026-11-23T16:48:04.4512036Z ##[error]Process completed with exit code 1.",
+            "2026-11-23T16:48:04.4696373Z Cleaning up orphan processes") + "\n";
+
+        var digest = CiDigest.Of(log, [], "app", said => said, [])!;
+
+        var failure = Assert.Single(digest.Failures);
+
+        Assert.Equal(("RuntimeError: run failed", "crashed", (5, 12)), (failure.Id, failure.Outcome, failure.Log!.Value));
+        Assert.Equal(("pkg/run.py", 2), (failure.File, failure.Line));
+        Assert.Equal(["Process completed with exit code 1."], digest.Unparsed);
+    }
+
+    /// <summary>
     /// The sentences the forge marked in a log that no form reads - the runner's that a step failed, a workflow's
     /// <c>::error::</c> with no file - are said among the lines no parser held, each once, never as an error ahead of a
     /// tool's: the job's own error is the first.

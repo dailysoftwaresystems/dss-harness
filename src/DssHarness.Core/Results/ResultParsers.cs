@@ -47,9 +47,10 @@ public interface IResultReading
     LineTaken Offer(NumberedLine line, ResultSink sink);
 
     /// <summary>
-    /// The log ended: what the reading has open it finishes into <paramref name="sink"/>. <see cref="LineTaken.Took"/>
-    /// where the lines it held undecided were its after all, <see cref="LineTaken.Left"/> where they are given back.
-    /// Asked more than once, and fed lines again after it, a reading answers as from a fresh start.
+    /// The log ended: what the reading has open it finishes into <paramref name="sink"/>, which says here how the program
+    /// that printed the log ended (<see cref="ResultSink.Exit"/>). <see cref="LineTaken.Took"/> where the lines it held
+    /// undecided were its after all, <see cref="LineTaken.Left"/> where they are given back. Asked more than once, and fed
+    /// lines again after it, a reading answers as from a fresh start.
     /// </summary>
     /// <param name="sink">Where the reading says what it finishes.</param>
     LineTaken End(ResultSink sink);
@@ -61,8 +62,9 @@ public interface IBuiltInParser : IResultParser;
 /// <summary>
 /// Where one reading says what it read, in the order it finished each - and what every reading of one log shares: the
 /// build edge a log is in where a build tool said one, so a diagnostic printed inside it names it, the test it is in where
-/// a runner said one began, so a crash a report says inside it is its, and how many errors and failures the log has said
-/// so far, so a line that only says a build failed is said only where nothing said why.
+/// a runner said one began, so a crash a report says inside it is its, how many errors and failures the log has said
+/// so far, so a line that only says a build failed is said only where nothing said why, and, once the log has ended, how
+/// the program that printed it ended.
 /// </summary>
 public sealed class ResultSink
 {
@@ -101,6 +103,36 @@ public sealed class ResultSink
 
     /// <summary>How many errors and failures every reading of the log has said so far.</summary>
     public int Said => _shared.Said;
+
+    /// <summary>
+    /// How the program that printed the log ended: the code it exited with - a phase's own
+    /// (<see cref="Execution.PhaseResult.ProgramExit"/>), or the one the forge says a CI job's failed step ended with - or
+    /// null where that is not known. Known once the log has ended, as each reading ends (<see cref="IResultReading.End"/>):
+    /// a reading whose records' outcome is how their program ended says them as it reads them and decides them there
+    /// (<see cref="Decide"/>), never by a line printed after them, which may as well be another program's.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The log has not ended yet.</exception>
+    public int? Exit => _shared.Ended
+        ? _shared.Exit
+        : throw new InvalidOperationException("How the program that printed a log ended is known only once the log has ended, as each reading ends.");
+
+    /// <summary>How many failures this sink has been told, in the order told.</summary>
+    internal int FailuresSaid => Failures.Count;
+
+    /// <summary>
+    /// Makes each failure this sink was told from the <paramref name="from"/>th on what <paramref name="decided"/> makes
+    /// it: how a reading that said records before it knew how their program ended (<see cref="Exit"/>) decides them as it
+    /// ends, holding none of them while it reads.
+    /// </summary>
+    /// <param name="from">The first failure to decide, by the order told.</param>
+    /// <param name="decided">What each failure is made.</param>
+    internal void Decide(int from, Func<TestFailure, TestFailure> decided)
+    {
+        for (var at = from; at < Failures.Count; at++)
+        {
+            Failures[at] = decided(Failures[at]);
+        }
+    }
 
     /// <summary>Says <paramref name="diagnostic"/>, naming the build edge the log is in where it names no project of its own.</summary>
     /// <param name="diagnostic">The diagnostic.</param>
@@ -235,6 +267,19 @@ internal sealed class SharedReading
 
     /// <summary>The lines the errors and failures said begin at.</summary>
     public SortedSet<int> SaidAt { get; } = [];
+
+    /// <summary>Whether the log has ended, so how its program ended is known (<see cref="Exit"/>).</summary>
+    public bool Ended { get; private set; }
+
+    /// <summary>The code the program that printed the log exited with, once the log has ended; null where that is not known.</summary>
+    public int? Exit { get; private set; }
+
+    /// <summary>The log ended, its program with <paramref name="exit"/>: null where how it ended is not known.</summary>
+    public void End(int? exit)
+    {
+        Ended = true;
+        Exit = exit;
+    }
 }
 
 /// <summary>

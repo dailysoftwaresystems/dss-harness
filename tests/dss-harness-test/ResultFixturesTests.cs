@@ -176,7 +176,8 @@ public sealed class ResultFixturesTests
     /// carriage return ends a line for the one and not the other; a results file by the same rule, read by its own shape
     /// as the phase's files are and read whole, what a case's own test printed read by the parsers of the runner that wrote
     /// it where the expectation names one (<c>tests</c>); and a CI job's log as a red check's is digested, for the
-    /// repository its job ran (<c>ci</c>), placed against the job's workspace on its runner whatever the tree.
+    /// repository its job ran (<c>ci</c>), placed against the job's workspace on its runner whatever the tree. How a
+    /// phase's program ended is not known: a fixture keeps what its tool printed, and a CI job's log says it of a failed step.
     /// </summary>
     private static ResultDigest? Read(string fixture, JsonObject expect, DigestTree tree)
     {
@@ -193,7 +194,7 @@ public sealed class ResultFixturesTests
         {
             IReadOnlyList<IResultParser> wrote = read["tests"] is { } runs ? PhaseParsers.ForTests(config, runs.GetValue<string>(), null) : [];
 
-            return PhaseDigest.Of(PhaseOutput.Empty, wrote, tree, gathering =>
+            return PhaseDigest.Of(PhaseOutput.Empty, null, wrote, tree, gathering =>
             {
                 Assert.Null(ResultFiles.Read(() => File.OpenRead(output), gathering, wrote));
                 return true;
@@ -220,7 +221,7 @@ public sealed class ResultFixturesTests
             parsers = PhaseParsers.ForRun(config, new RunnerConfig());
         }
 
-        return PhaseDigest.Of(PhaseOutput.Of(File.ReadAllText(output)), parsers, tree);
+        return PhaseDigest.Of(PhaseOutput.Of(File.ReadAllText(output)), null, parsers, tree);
     }
 
     /// <summary>

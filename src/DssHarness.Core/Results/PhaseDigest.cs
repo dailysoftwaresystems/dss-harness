@@ -23,13 +23,17 @@ public static class PhaseDigest
     /// and nothing said.
     /// </summary>
     /// <param name="output">The phase's own lines, read from its log a line at a time.</param>
+    /// <param name="exit">
+    /// The code the phase's program ended with (<see cref="PhaseResult.ProgramExit"/>), which its log's parsers are told as
+    /// they end; null where that is not known.
+    /// </param>
     /// <param name="parsers">The parsers chosen for the phase (<see cref="PhaseParsers"/>).</param>
     /// <param name="tree">The tree the phase ran in, and where its tool ran.</param>
     /// <param name="files">
     /// Reads the phase's results files into the gathering it is given, the files' text masked as the phase's log is, and
     /// answers whether it read or said anything (<see cref="Testing.TestResults.Read"/>); null where the phase names none.
     /// </param>
-    public static ResultDigest? Of(PhaseOutput output, IReadOnlyList<IResultParser> parsers, DigestTree tree, Func<ResultDigest.Gathering, bool>? files = null)
+    public static ResultDigest? Of(PhaseOutput output, int? exit, IReadOnlyList<IResultParser> parsers, DigestTree tree, Func<ResultDigest.Gathering, bool>? files = null)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(parsers);
@@ -41,7 +45,7 @@ public static class PhaseDigest
 
         try
         {
-            log = PhaseParsers.FindingsOf(output.NumberedLines(), parsers, line => gathering.Unparsed(line.Text));
+            log = PhaseParsers.FindingsOf(output.NumberedLines(), parsers, line => gathering.Unparsed(line.Text), () => exit);
         }
         catch (PhaseOutputUnreadException)
         {

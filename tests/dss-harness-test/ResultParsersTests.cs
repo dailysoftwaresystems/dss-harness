@@ -155,11 +155,10 @@ public sealed class ResultParsersTests
 
     /// <summary>
     /// An error that ended its program has crashed it, on every runtime: Node's, printed under the header of where it was
-    /// thrown, and Python's, whose traceback runs through a module's top level - as a script's or <c>-m</c>'s does - and is
-    /// the last its program printed, while one a program caught and printed has errored, the program going on: Node's
-    /// logged with no header, Python's printed by a handler inside a function, or logged by one at a module's top level
-    /// (<c>logging.exception</c>) with the program printing on after it. The lines are each tool's own output, the run's
-    /// directory written as a runner's; the logger's own line ahead of its traceback is no form a parser reads.
+    /// thrown, and Python's, whose traceback runs through a module's top level - as a script's or <c>-m</c>'s does - where
+    /// it is not known that its program ended 0, while one a program caught and printed has errored, the program going on:
+    /// Node's logged with no header, Python's printed by a handler inside a function. The lines are each tool's own
+    /// output, the run's directory written as a runner's.
     /// </summary>
     [Fact]
     public void AnErrorThatEndedItsProgram_HasCrashedIt_AndOneItCaughtAndPrintedHasErrored()
@@ -205,14 +204,6 @@ public sealed class ResultParsersTests
                 "    raise KeyError(\"port\")",
                 "KeyError: 'port'",
                 "went on",
-                "ERROR:root:the store could not be loaded",
-                "Traceback (most recent call last):",
-                "  File \"/home/runner/work/app/app/logged.py\", line 9, in <module>",
-                "    load()",
-                "  File \"/home/runner/work/app/app/logged.py\", line 5, in load",
-                "    raise KeyError(\"port\")",
-                "KeyError: 'port'",
-                "went on",
                 "Traceback (most recent call last):",
                 "  File \"<frozen runpy>\", line 198, in _run_module_as_main",
                 "  File \"<frozen runpy>\", line 88, in _run_code",
@@ -229,17 +220,80 @@ public sealed class ResultParsersTests
                 ("node", "errored", "TypeError: a store needs a path", 8, (1, 9)),
                 ("node", "crashed", "Error: the store could not be read", 3, (15, 30)),
                 ("python", "errored", "KeyError: 'port'", 2, (33, 38)),
-                ("python", "errored", "KeyError: 'port'", 2, (41, 46)),
-                ("python", "crashed", "RuntimeError: run failed", 4, (48, 55)),
+                ("python", "crashed", "RuntimeError: run failed", 4, (40, 47)),
             ],
             digest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count, failure.Log!.Value)));
-        Assert.Equal(["ERROR:root:the store could not be loaded"], digest.Unparsed);
+        Assert.Empty(digest.Unparsed ?? []);
 
         var cause = Assert.Single(digest.Failures[1].Exception!.CausedBy);
 
         Assert.Equal(
             ("SyntaxError", "Unexpected end of JSON input", 9, "/home/runner/work/app/app/cause.js", 2, 0),
             (cause.Type, cause.Message, cause.Stack.Count, cause.Stack[1].File!, cause.Stack[1].Line!.Value, cause.CausedBy.Count));
+    }
+
+    /// <summary>
+    /// Whether a Python error through its program's top level crashed the program is how the program ended, never a line
+    /// printed after its traceback, which may as well be another program's - a shell's, make's: the error that ends a module
+    /// run with <c>-m</c> has crashed it where it ended with a code not 0, followed by the capture's own line of its exit or
+    /// by make's <c>Error 1</c>, and where how it ended is not known; one a handler at the top level logged
+    /// (<c>logging.exception</c>) has errored where the program ended 0, and crashed where it did not or that is not known,
+    /// for its traceback alone is the same. The lines are Python 3.12's and GNU Make 4.3's own output, each with the line the
+    /// capture printed of the exit after it where it printed one, the run's directory written as a runner's; the logger's
+    /// own line ahead of its traceback is no form a parser reads.
+    /// </summary>
+    [Fact]
+    public void WhetherAPythonErrorCrashedItsProgram_IsHowTheProgramEnded_NeverALineAfterIt()
+    {
+        string[] module =
+        [
+            "Traceback (most recent call last):",
+            "  File \"<frozen runpy>\", line 198, in _run_module_as_main",
+            "  File \"<frozen runpy>\", line 88, in _run_code",
+            "  File \"/home/runner/work/app/app/pkg/run.py\", line 3, in <module>",
+            "    main()",
+            "  File \"/home/runner/work/app/app/pkg/run.py\", line 2, in main",
+            "    raise RuntimeError(\"run failed\")",
+            "RuntimeError: run failed",
+        ];
+        string[] logged =
+        [
+            "ERROR:root:the store could not be loaded",
+            "Traceback (most recent call last):",
+            "  File \"/home/runner/work/app/app/logged.py\", line 7, in <module>",
+            "    load()",
+            "  File \"/home/runner/work/app/app/logged.py\", line 4, in load",
+            "    raise KeyError(\"port\")",
+            "KeyError: 'port'",
+        ];
+        (string Name, string[] Lines, int? Exit)[] runs =
+        [
+            ("module", [.. module, "exit 1"], 1),
+            ("module under make", ["python3 -m pkg.run", .. module, "make: *** [Makefile:2: test] Error 1"], 2),
+            ("module", module, null),
+            ("logged", [.. logged, "exit 0"], 0),
+            ("logged", logged, 1),
+            ("logged", logged, null),
+        ];
+
+        var read = runs.Select(run =>
+        {
+            var digest = Digested(run.Lines, PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()), run.Exit)!;
+            var failure = Assert.Single(digest.Failures);
+
+            return (run.Name, run.Exit, failure.Outcome, failure.Id, failure.Frames.Count, failure.Log!.Value, string.Join(" | ", digest.Unparsed ?? []));
+        });
+
+        Assert.Equal(
+            [
+                ("module", (int?)1, "crashed", "RuntimeError: run failed", 4, (1, 8), string.Empty),
+                ("module under make", 2, "crashed", "RuntimeError: run failed", 4, (2, 9), string.Empty),
+                ("module", null, "crashed", "RuntimeError: run failed", 4, (1, 8), string.Empty),
+                ("logged", 0, "errored", "KeyError: 'port'", 2, (2, 7), "ERROR:root:the store could not be loaded"),
+                ("logged", 1, "crashed", "KeyError: 'port'", 2, (2, 7), "ERROR:root:the store could not be loaded"),
+                ("logged", null, "crashed", "KeyError: 'port'", 2, (2, 7), "ERROR:root:the store could not be loaded"),
+            ],
+            read);
     }
 
     /// <summary>
@@ -319,6 +373,7 @@ public sealed class ResultParsersTests
 
         var digest = PhaseDigest.Of(
             new Streaming(trace, lines),
+            null,
             [new Holding(trace), new Taking(trace)],
             new DigestTree(temp.Path, null, new PhysicalFileSystem(FilePermissionsFactory.Create())))!;
 
@@ -384,7 +439,8 @@ public sealed class ResultParsersTests
         var found = PhaseParsers.FindingsOf(
             [new NumberedLine(4, 4, "src/a.c:3:5: error: 'x' undeclared"), new NumberedLine(5, 5, "    3 |   x++;"), new NumberedLine(6, 8, "      |   ^")],
             [ResultParsers.Of("gcc")!],
-            unparsed.Add)!;
+            unparsed.Add,
+            () => null)!;
 
         Assert.Equal((4, 8), Assert.Single(found.Diagnostics).Log);
         Assert.Empty(unparsed);
@@ -812,7 +868,7 @@ public sealed class ResultParsersTests
             .Append("src/main.c:3:5: error: 'x' undeclared");
 
         var unparsed = new List<NumberedLine>();
-        var found = PhaseParsers.FindingsOf(lines.Select((line, at) => new NumberedLine(at + 1, at + 1, line)), [ResultParsers.Of("gcc")!], unparsed.Add)!;
+        var found = PhaseParsers.FindingsOf(lines.Select((line, at) => new NumberedLine(at + 1, at + 1, line)), [ResultParsers.Of("gcc")!], unparsed.Add, () => null)!;
         var stack = Assert.Single(found.Diagnostics).Stack!;
 
         Assert.Empty(unparsed);
@@ -1741,8 +1797,9 @@ public sealed class ResultParsersTests
     /// </summary>
     /// <param name="lines">The lines, each as printed.</param>
     /// <param name="parsers">The parsers chosen for them.</param>
-    internal static ResultDigest? Digested(IReadOnlyList<string> lines, IReadOnlyList<IResultParser> parsers)
-        => PhaseDigest.Of(new Printed(lines), parsers, new DigestTree(NoTree.Root, null, new NoTree()));
+    /// <param name="exit">The code the program that printed them ended with; null, as by default, where that is not known.</param>
+    internal static ResultDigest? Digested(IReadOnlyList<string> lines, IReadOnlyList<IResultParser> parsers, int? exit = null)
+        => PhaseDigest.Of(new Printed(lines), exit, parsers, new DigestTree(NoTree.Root, null, new NoTree()));
 
     /// <summary>A phase's output: the lines given, each one line as its child printed it.</summary>
     private sealed class Printed(IReadOnlyList<string> lines) : PhaseOutput

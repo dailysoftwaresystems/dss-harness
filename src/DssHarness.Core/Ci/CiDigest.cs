@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Platform;
@@ -11,7 +12,11 @@ namespace DssHarness.Core.Ci;
 /// </summary>
 /// <param name="Line">The line, its decoration taken off, numbered as the kept log numbers it.</param>
 /// <param name="Marked">Whether the forge marked it an annotation's.</param>
-public readonly record struct CiLine(NumberedLine Line, bool Marked);
+/// <param name="StepExit">
+/// The code the forge says a step's process completed with, where this is the line the runner ends a failed step with -
+/// <c>Process completed with exit code N.</c> under its error marker; null on every other line.
+/// </param>
+public readonly record struct CiLine(NumberedLine Line, bool Marked, int? StepExit = null);
 
 /// <summary>
 /// A CI job's log as a digest reads it: every line of the kept log, in order and numbered as the kept file numbers it by
@@ -21,7 +26,8 @@ public readonly record struct CiLine(NumberedLine Line, bool Marked);
 /// after it moves: the script is the workflow's text, never what a tool printed, and an <c>::error::</c> it echoes is no
 /// error the job met), and the marker the forge writes ahead of an annotation's line (<c>##[error]</c>,
 /// <c>##[warning]</c>, <c>##[notice]</c>), so what a tool printed under it - a problem matcher's line - is read as the
-/// tool printed it.
+/// tool printed it. The line the runner ends a failed step with says how the step's process ended
+/// (<see cref="CiLine.StepExit"/>).
 /// </summary>
 public static class CiLog
 {
@@ -32,7 +38,10 @@ public static class CiLog
     private static readonly Regex Group = LinearRegex.Compile(@"^##\[(?:group|endgroup)\]");
 
     /// <summary>The marker the forge writes ahead of the line of an annotation it made, and the line under it.</summary>
-    private static readonly Regex Annotation = LinearRegex.Compile(@"^##\[(?:error|warning|notice)\](?<text>.*)$");
+    private static readonly Regex Annotation = LinearRegex.Compile(@"^##\[(?<kind>error|warning|notice)\](?<text>.*)$");
+
+    /// <summary>The line the runner ends a failed step with, under its error marker: the code the step's process exited with.</summary>
+    private static readonly Regex StepEnded = LinearRegex.Compile(@"^Process completed with exit code (?<code>\d+)\.$");
 
     /// <summary>The escape the runner opens each line of a step's script it echoes with: bold cyan.</summary>
     private const string EchoOpens = "\u001b[36;1m";
@@ -75,9 +84,19 @@ public static class CiLog
             return new CiLine(new NumberedLine(number, number, string.Empty), false);
         }
 
-        return Annotation.Match(line) is { Success: true } annotation
-            ? new CiLine(new NumberedLine(number, number, annotation.Groups["text"].Value), true)
-            : new CiLine(new NumberedLine(number, number, line), false);
+        if (Annotation.Match(line) is not { Success: true } annotation)
+        {
+            return new CiLine(new NumberedLine(number, number, line), false);
+        }
+
+        var text = annotation.Groups["text"].Value;
+        int? stepExit = annotation.Groups["kind"].Value == "error"
+            && StepEnded.Match(text) is { Success: true } ended
+            && int.TryParse(ended.Groups["code"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var code)
+                ? code
+                : null;
+
+        return new CiLine(new NumberedLine(number, number, text), true, stepExit);
     }
 }
 
@@ -96,8 +115,10 @@ public static class CiLog
 /// runner's <c>Process completed with exit code 1.</c>, a workflow's <c>::error::</c> with none - is a sentence with no
 /// place, which says that a step failed and not what: the log holds every one under its marker, and a marked line no
 /// form read is said among the lines no parser held, never made the first error ahead of the tool's own that the log
-/// printed before it. A check with no log - one no workflow run made - is its annotations alone, those that name no file
-/// said among the lines no parser held as the log's would be.
+/// printed before it. The runner's line also says the code the failed step's process exited with
+/// (<see cref="CiLine.StepExit"/>): the parsers are told it as how the program that printed the log ended, the last such
+/// line's, and where the log holds none that is not known. A check with no log - one no workflow run made - is its
+/// annotations alone, those that name no file said among the lines no parser held as the log's would be.
 /// </para>
 /// <para>
 /// Every path is placed against the job's workspace on its runner, never against this machine's tree: the runner checks
@@ -150,15 +171,23 @@ public static class CiDigest
         }
 
         // The log read as it streams: each line the forge marked noted with its text as the pass meets it, for what a
-        // marked line becomes is decided once the findings are known; every other line no form read gathered as met.
+        // marked line becomes is decided once the findings are known; every other line no form read gathered as met. The
+        // exit the forge says the job's failed step ended with - the last such line's - is how the program that printed
+        // what the parsers read ended, and the parsers are told it as they end; where the log says none, it is not known.
         var marked = new Dictionary<int, string>();
         var gathering = new ResultDigest.Gathering();
+        int? stepExit = null;
         var found = PhaseParsers.FindingsOf(
             CiLog.Of(log).Select(line =>
             {
                 if (line.Marked)
                 {
                     marked[line.Line.Number] = line.Line.Text;
+                }
+
+                if (line.StepExit is { } code)
+                {
+                    stepExit = code;
                 }
 
                 return line.Line;
@@ -170,7 +199,8 @@ public static class CiDigest
                 {
                     gathering.Unparsed(line.Text);
                 }
-            })!;
+            },
+            () => stepExit)!;
 
         // Each annotation with a place, by its place and message and by its message alone, in the forge's order, for the
         // one the log's line was made into or from to be found once.

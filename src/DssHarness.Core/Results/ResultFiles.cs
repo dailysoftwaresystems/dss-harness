@@ -112,7 +112,8 @@ public static class ResultFiles
     private static void JUnitFailures(JUnitCase @case, IReadOnlyList<IResultParser> parsers, ResultDigest.Gathering into)
     {
         var failure = JUnitFailure(@case);
-        var found = @case.Output.Count == 0 ? null : PhaseParsers.FindingsOf(PhaseParsers.Numbered(@case.Output), parsers, _ => { });
+        // How the program that printed a case's own output ended is not known: no results file says it.
+        var found = @case.Output.Count == 0 ? null : PhaseParsers.FindingsOf(PhaseParsers.Numbered(@case.Output), parsers, _ => { }, () => null);
         List<TestFailure> failures = [.. (found?.Failures ?? []).Select(printed => printed with { Log = null })];
         List<Diagnostic> diagnostics = [.. (found?.Diagnostics ?? []).Select(printed => printed with { Log = null })];
         var through = failures.FirstOrDefault();

@@ -664,6 +664,7 @@ public sealed class BuildService(
                     ? null
                     : PhaseDigest.Of(
                         failing.Output,
+                        failing.ProgramExit,
                         PhaseParsers.ForBuild(config, request.Project.Type, request.Variant.Toolchain),
                         new DigestTree(request.TreeRoot, failing.WorkingDirectory, _fileSystem, config.Worktrees.Root)),
             };

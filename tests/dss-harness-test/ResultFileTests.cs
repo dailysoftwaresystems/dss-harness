@@ -301,6 +301,7 @@ public sealed class ResultFileTests
 
         var digest = PhaseDigest.Of(
             Core.Execution.PhaseOutput.Of(console),
+            null,
             parsers,
             new DigestTree(temp.Path, null, new HarnessFactory().FileSystem),
             into => ResultFiles.Read(() => new MemoryStream(report, writable: false), into, parsers) is null)!;
