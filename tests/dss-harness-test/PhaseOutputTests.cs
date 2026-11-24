@@ -66,7 +66,7 @@ public sealed class PhaseOutputTests
         Assert.Equal(file.IndexOf(Error) + 1, numbered.Single(line => line.Text == Error).Number);
         Assert.True(numbered.Single(line => line.Text == Error).Number > 4, "the header holds lines of its own, and the carriage return ends one");
 
-        var digest = DssHarness.Core.Results.PhaseParsers.DigestOf(numbered, [DssHarness.Core.Results.ResultParsers.Of("msvc")!]);
+        var digest = DssHarness.Core.Results.PhaseParsers.DigestOf(numbered, [DssHarness.Core.Results.ResultParsers.Of("msbuild")!]);
 
         Assert.Equal((file.IndexOf(Error) + 1, file.IndexOf(Error) + 1), digest!.First!.Log);
     }

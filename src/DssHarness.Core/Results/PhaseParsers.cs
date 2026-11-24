@@ -126,15 +126,37 @@ public static class PhaseParsers
     }
 
     /// <summary>
-    /// The digest of a log by the parsers chosen for it (<see cref="FindingsOf"/>): null where no parser was chosen, or
-    /// where the log held nothing any of them said and nothing that looks like an error.
+    /// The digest of a log by the parsers chosen for it (<see cref="FindingsOf"/>), made as it streams by the one owner of
+    /// a digest's bounds (<see cref="ResultDigest.Gathering"/>): each line no parser took that looks like an error is
+    /// gathered as the pass meets it - every one counted, the first <see cref="ResultDigest.Bound"/> held - and the
+    /// findings, merged in the order of their lines, after it. Null where no parser was chosen, or where the log held
+    /// nothing any of them said and nothing that looks like an error.
     /// </summary>
     /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it.</param>
     /// <param name="parsers">The parsers chosen for it.</param>
     public static ResultDigest? DigestOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
-        => FindingsOf(lines, parsers) is { } found && (found.Diagnostics.Count > 0 || found.Failures.Count > 0 || found.Unparsed.Count > 0)
-            ? ResultDigest.Of(found.Diagnostics, found.Failures, found.Unparsed)
-            : null;
+    {
+        var gathering = new ResultDigest.Gathering();
+
+        if (FindingsOf(lines, parsers, line => gathering.Unparsed(line.Text)) is not { } found)
+        {
+            return null;
+        }
+
+        foreach (var diagnostic in found.Diagnostics)
+        {
+            gathering.Add(diagnostic);
+        }
+
+        foreach (var failure in found.Failures)
+        {
+            gathering.Add(failure);
+        }
+
+        var digest = gathering.Digest();
+
+        return digest.HoldsAFinding || digest.UnparsedCount > 0 ? digest : null;
+    }
 
     /// <summary>
     /// What the parsers chosen for a log found in it, read in one pass as it streams - never held whole. Each line, its
@@ -143,23 +165,25 @@ public static class PhaseParsers
     /// them offered to the others, never to itself again, so every line is one reading's at most and is read a bounded
     /// number of times. The findings of every reading are merged in the order of the lines they begin at, each with its
     /// log range as the file numbers its lines. A line no reading took that holds an error's marker - <c>error:</c>,
-    /// <c>error CODE:</c>, <c>FAILED</c>, <c>fatal:</c>, <c>panic:</c>, a thrown error's <c>Type: </c> - is said
-    /// unparsed: what the parsers did not understand. Null where no parser was chosen, for a log no rule names is a log
-    /// left as it stands.
+    /// <c>error CODE:</c>, <c>FAILED</c>, <c>fatal:</c>, <c>panic:</c>, a thrown error's <c>Type: </c> - is handed to
+    /// <paramref name="unparsed"/> as the pass meets it, every one, for the digest's owner to count and bound: what the
+    /// parsers did not understand. Null where no parser was chosen, for a log no rule names is a log left as it stands.
     /// </summary>
     /// <param name="lines">The log's lines, in the order printed, each with the numbers its file gives it.</param>
     /// <param name="parsers">The parsers chosen for it.</param>
-    public static PhaseFindings? FindingsOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers)
+    /// <param name="unparsed">Takes each line no reading took that looks like an error, in the order the pass met it.</param>
+    public static PhaseFindings? FindingsOf(IEnumerable<NumberedLine> lines, IReadOnlyList<IResultParser> parsers, Action<NumberedLine> unparsed)
     {
         ArgumentNullException.ThrowIfNull(lines);
         ArgumentNullException.ThrowIfNull(parsers);
+        ArgumentNullException.ThrowIfNull(unparsed);
 
         if (parsers.Count == 0)
         {
             return null;
         }
 
-        var pass = new OnePass(parsers);
+        var pass = new OnePass(parsers, unparsed);
 
         foreach (var line in lines)
         {
@@ -255,7 +279,7 @@ public static class PhaseParsers
 
     /// <summary>
     /// One pass of the chosen parsers over one log: the reading with a record open, the lines it holds undecided, the
-    /// lines given back and waiting to be offered again, and the lines no reading took that look like errors.
+    /// lines given back and waiting to be offered again, and where the lines no reading took that look like errors go.
     /// </summary>
     private sealed class OnePass
     {
@@ -263,15 +287,16 @@ public static class PhaseParsers
         private readonly ResultSink[] _sinks;
         private readonly List<Offered> _held = [];
         private readonly Stack<Offered> _given = new();
-        private readonly List<string> _unparsed = [];
+        private readonly Action<NumberedLine> _unparsed;
         private int _active = -1;
 
-        public OnePass(IReadOnlyList<IResultParser> parsers)
+        public OnePass(IReadOnlyList<IResultParser> parsers, Action<NumberedLine> unparsed)
         {
             var shared = new SharedReading();
 
             _readings = [.. parsers.Select(parser => parser.Begin())];
             _sinks = [.. parsers.Select(_ => new ResultSink(shared))];
+            _unparsed = unparsed;
         }
 
         /// <summary>Reads the next line of the log.</summary>
@@ -320,7 +345,7 @@ public static class PhaseParsers
             var diagnostics = InLogOrder(_sinks.Select(sink => (IReadOnlyList<Diagnostic>)sink.Diagnostics), diagnostic => diagnostic.Log);
             var failures = InLogOrder(_sinks.Select(sink => (IReadOnlyList<TestFailure>)sink.Failures), failure => failure.Log);
 
-            return new PhaseFindings(diagnostics, failures, _unparsed);
+            return new PhaseFindings(diagnostics, failures);
         }
 
         /// <summary>
@@ -368,9 +393,9 @@ public static class PhaseParsers
                 }
             }
 
-            if (_unparsed.Count < ResultDigest.Bound && LooksLikeError(offered.Line.Text))
+            if (LooksLikeError(offered.Line.Text))
             {
-                _unparsed.Add(offered.Line.Text);
+                _unparsed(offered.Line);
             }
         }
 
@@ -421,12 +446,11 @@ public static class PhaseParsers
 /// <summary>
 /// What the parsers chosen for a log found in it (<see cref="PhaseParsers.FindingsOf"/>), before a digest folds and
 /// bounds them: what a producer that reads more than the log - a forge's annotations beside a job's log - merges with
-/// before the one digest is made of them all.
+/// before the one digest is made of them all. The lines no parser took went where the pass was told, as it met them.
 /// </summary>
 /// <param name="Diagnostics">The diagnostics, in the order of the lines they begin at, each with its log range as the file numbers its lines.</param>
 /// <param name="Failures">The test failures, in the order of the lines they begin at.</param>
-/// <param name="Unparsed">The lines that look like errors and no parser took, in the order printed.</param>
-public sealed record PhaseFindings(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed);
+public sealed record PhaseFindings(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures);
 
 /// <summary>
 /// One configured problem matcher as a parser reads: a line its pattern matches is a diagnostic - its severity a literal,

@@ -7,15 +7,20 @@ using DssHarness.Core.Text;
 namespace DssHarness.Core.Ci;
 
 /// <summary>
+/// One line of a CI job's log as a digest reads it (<see cref="CiLog.Of"/>).
+/// </summary>
+/// <param name="Line">The line, its decoration taken off, numbered as the kept log numbers it.</param>
+/// <param name="Marked">Whether the forge marked it an annotation's.</param>
+public readonly record struct CiLine(NumberedLine Line, bool Marked);
+
+/// <summary>
 /// A CI job's log as a digest reads it: every line of the kept log, in order and numbered as the kept file numbers it by
 /// the one rule of where lines end, with the forge's own decoration taken off each - the timestamp every line is
 /// prefixed with, a group marker a workflow folded its log with (its line left blank, never dropped, so no line after it
 /// moves), and the marker the forge writes ahead of an annotation's line (<c>##[error]</c>, <c>##[warning]</c>,
 /// <c>##[notice]</c>), so what a tool printed under it - a problem matcher's line - is read as the tool printed it.
 /// </summary>
-/// <param name="Lines">Each line, numbered as the kept log numbers it.</param>
-/// <param name="Marked">The number of each line the forge marked an annotation's.</param>
-public sealed record CiLog(IReadOnlyList<NumberedLine> Lines, IReadOnlySet<int> Marked)
+public static class CiLog
 {
     /// <summary>The timestamp a forge prefixes each line of a job's log with.</summary>
     private static readonly Regex Timestamp = LinearRegex.Compile(@"^\d{4}-\d{2}-\d{2}T[\d:.]+Z ?");
@@ -26,37 +31,31 @@ public sealed record CiLog(IReadOnlyList<NumberedLine> Lines, IReadOnlySet<int> 
     /// <summary>The marker the forge writes ahead of the line of an annotation it made, and the line under it.</summary>
     private static readonly Regex Annotation = LinearRegex.Compile(@"^##\[(?:error|warning|notice)\](?<text>.*)$");
 
-    /// <summary>The job's log read as a digest reads it.</summary>
+    /// <summary>
+    /// The job's log read as a digest reads it, a line at a time as it is read, each with whether the forge marked it -
+    /// never held as a list of its lines beside the text it was read from.
+    /// </summary>
     /// <param name="log">The job's log, whole, masked as it was kept.</param>
-    public static CiLog Of(string log)
+    public static IEnumerable<CiLine> Of(string log)
     {
         ArgumentNullException.ThrowIfNull(log);
 
-        var marked = new HashSet<int>();
-        var lines = LineEnds.Spans(log, (start, end, _) => log[start..end]);
-        var read = new List<NumberedLine>(lines.Count);
+        return LineEnds.Streamed(log, (start, end, _) => (start, end)).Select((span, at) => Read(log, span.start, span.end, at + 1));
+    }
 
-        for (var at = 0; at < lines.Count; at++)
+    private static CiLine Read(string log, int start, int end, int number)
+    {
+        // The log's first line carries the byte order mark the forge writes, which no reader of the file sees.
+        var line = Timestamp.Replace(number == 1 ? log[start..end].TrimStart('\uFEFF') : log[start..end], string.Empty);
+
+        if (Group.IsMatch(line))
         {
-            var number = at + 1;
-
-            // The log's first line carries the byte order mark the forge writes, which no reader of the file sees.
-            var line = Timestamp.Replace(at == 0 ? lines[at].TrimStart('\uFEFF') : lines[at], string.Empty);
-
-            if (Group.IsMatch(line))
-            {
-                line = string.Empty;
-            }
-            else if (Annotation.Match(line) is { Success: true } annotation)
-            {
-                marked.Add(number);
-                line = annotation.Groups["text"].Value;
-            }
-
-            read.Add(new NumberedLine(number, number, line));
+            return new CiLine(new NumberedLine(number, number, string.Empty), false);
         }
 
-        return new CiLog(read, marked);
+        return Annotation.Match(line) is { Success: true } annotation
+            ? new CiLine(new NumberedLine(number, number, annotation.Groups["text"].Value), true)
+            : new CiLine(new NumberedLine(number, number, line), false);
     }
 }
 
@@ -126,8 +125,28 @@ public static class CiDigest
             return said.Length == 0 && sentences.Count == 0 ? null : ResultDigest.Of(said, [], sentences).WithInTree(Relative);
         }
 
-        var read = CiLog.Of(log);
-        var found = PhaseParsers.FindingsOf(read.Lines, PhaseParsers.ForCi(matchers))!;
+        // The log read as it streams: each line the forge marked noted with its text as the pass meets it, for what a
+        // marked line becomes is decided once the findings are known; every other line no form read gathered as met.
+        var marked = new Dictionary<int, string>();
+        var gathering = new ResultDigest.Gathering();
+        var found = PhaseParsers.FindingsOf(
+            CiLog.Of(log).Select(line =>
+            {
+                if (line.Marked)
+                {
+                    marked[line.Line.Number] = line.Line.Text;
+                }
+
+                return line.Line;
+            }),
+            PhaseParsers.ForCi(matchers),
+            line =>
+            {
+                if (!marked.ContainsKey(line.Number))
+                {
+                    gathering.Unparsed(line.Text);
+                }
+            })!;
 
         // Each annotation with a place, by its place and message and by its message alone, in the forge's order, for the
         // one the log's line was made into or from to be found once.
@@ -167,18 +186,17 @@ public static class CiDigest
 
         // Each marked line no form read: the line of a workflow command's annotation with a place, which that annotation
         // takes as its log range; else a line the forge marked an error, a warning or a notice that no form understood -
-        // its own sentence, the runner's that a step failed among them - said among the lines no parser held.
-        var unparsed = new List<string>(found.Unparsed);
-        var unread = found.Unparsed.ToHashSet(StringComparer.Ordinal);
+        // its own sentence, the runner's that a step failed among them - said among the lines no parser held, each
+        // sentence once.
+        var sentencesSaid = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var number in read.Marked.Order())
+        foreach (var (number, text) in marked.OrderBy(line => line.Key))
         {
             if (covered.Contains(number))
             {
                 continue;
             }
 
-            var text = read.Lines[number - 1].Text;
             int? echoed = null;
 
             // The first annotation of this message no line of the log was found for yet: one already given its line by
@@ -191,20 +209,26 @@ public static class CiDigest
             if (echoed is { } annotation)
             {
                 said[annotation] = said[annotation] with { Log = (number, number) };
-                unparsed.Remove(text);
-                unread.Remove(text);
             }
-            else if (text.Length > 0 && unread.Add(text))
+            else if (text.Length > 0 && sentencesSaid.Add(text))
             {
-                unparsed.Add(text);
+                gathering.Unparsed(text);
             }
         }
 
-        IReadOnlyList<Diagnostic> diagnostics = [.. said, .. logs];
+        foreach (var diagnostic in said.Concat(logs))
+        {
+            gathering.Add(diagnostic);
+        }
 
-        return diagnostics.Count == 0 && found.Failures.Count == 0 && unparsed.Count == 0
-            ? null
-            : ResultDigest.Of(diagnostics, found.Failures, unparsed).WithInTree(Relative);
+        foreach (var failure in found.Failures)
+        {
+            gathering.Add(failure);
+        }
+
+        var digest = gathering.Digest();
+
+        return digest.HoldsAFinding || digest.UnparsedCount > 0 ? digest.WithInTree(Relative) : null;
     }
 
     /// <summary>An annotation said as a diagnostic: the forge's, its place where it names one, its title before its message and its details below.</summary>

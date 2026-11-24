@@ -30,36 +30,49 @@ public static class LineEnds
     /// <typeparam name="TLine">What a line is made into.</typeparam>
     /// <param name="text">The text.</param>
     /// <param name="line">Makes a line of its start, its end and its next.</param>
-    public static List<TLine> Spans<TLine>(string text, Func<int, int, int, TLine> line)
+    public static List<TLine> Spans<TLine>(string text, Func<int, int, int, TLine> line) => [.. Streamed(text, line)];
+
+    /// <summary>
+    /// Each line of <paramref name="text"/> as <see cref="Spans"/> makes them, made one at a time as they are read - so a
+    /// reader that needs each line once, in order, never holds a second copy of the text as a list of its lines.
+    /// </summary>
+    /// <typeparam name="TLine">What a line is made into.</typeparam>
+    /// <param name="text">The text.</param>
+    /// <param name="line">Makes a line of its start, its end and its next.</param>
+    public static IEnumerable<TLine> Streamed<TLine>(string text, Func<int, int, int, TLine> line)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(line);
 
-        var lines = new List<TLine>();
-        var start = 0;
+        return Each(text, line);
 
-        for (var at = 0; at < text.Length; at++)
+        static IEnumerable<TLine> Each(string text, Func<int, int, int, TLine> line)
         {
-            if (Ends(text[at]))
+            var start = 0;
+            var made = false;
+
+            for (var at = 0; at < text.Length; at++)
             {
-                var end = at;
-
-                if (at + 1 < text.Length && Joined(text[at], text[at + 1]))
+                if (Ends(text[at]))
                 {
-                    at++;
-                }
+                    var end = at;
 
-                lines.Add(line(start, end, at + 1));
-                start = at + 1;
+                    if (at + 1 < text.Length && Joined(text[at], text[at + 1]))
+                    {
+                        at++;
+                    }
+
+                    made = true;
+                    yield return line(start, end, at + 1);
+                    start = at + 1;
+                }
+            }
+
+            if (start < text.Length || !made)
+            {
+                yield return line(start, text.Length, text.Length);
             }
         }
-
-        if (start < text.Length || lines.Count == 0)
-        {
-            lines.Add(line(start, text.Length, text.Length));
-        }
-
-        return lines;
     }
 
     /// <summary>How many lines <paramref name="text"/> holds by this rule - as many as <see cref="Spans"/> makes - counted without making them.</summary>

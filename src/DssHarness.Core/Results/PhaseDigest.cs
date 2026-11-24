@@ -36,7 +36,7 @@ public static class PhaseDigest
 
         try
         {
-            log = PhaseParsers.DigestOf([.. output.NumberedLines()], parsers);
+            log = PhaseParsers.DigestOf(output.NumberedLines(), parsers);
         }
         catch (PhaseOutputUnreadException)
         {

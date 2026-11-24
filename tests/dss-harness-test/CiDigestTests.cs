@@ -76,12 +76,15 @@ public sealed class CiDigestTests
             "2026-11-23T16:48:05.1483402Z ##[error]ci-check is failing: test failure.",
             "2026-11-23T16:48:05.1504036Z ##[warning]Process completed with exit code 1.") + "\n";
 
-        var read = CiLog.Of(log);
-
         Assert.Equal(
-            [(1, "Current runner version: '2.338.2'"), (2, string.Empty), (3, string.Empty), (4, "ci-check is failing: test failure."), (5, "Process completed with exit code 1.")],
-            read.Lines.Select(line => (line.Number, line.Text)));
-        Assert.Equal([4, 5], read.Marked.Order());
+            [
+                (1, "Current runner version: '2.338.2'", false),
+                (2, string.Empty, false),
+                (3, string.Empty, false),
+                (4, "ci-check is failing: test failure.", true),
+                (5, "Process completed with exit code 1.", true),
+            ],
+            CiLog.Of(log).Select(line => (line.Line.Number, line.Line.Text, line.Marked)));
     }
 
     /// <summary>

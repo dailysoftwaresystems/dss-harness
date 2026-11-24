@@ -1,5 +1,9 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 using DssHarness.Core.Text;
 
@@ -37,6 +41,31 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// A phase's log is digested as it streams, through to the digest: each line is offered to the readings before the
+    /// next is read from the log - never the whole log read first and parsed after - and every line no reading took that
+    /// looks like an error is counted as the pass meets it, the first fifty held and the rest said as left out, for the
+    /// one bound of those lines is the digest's own.
+    /// </summary>
+    [Fact]
+    public void APhasesLog_IsDigestedAsItStreams_EveryLineNoReadingTookCounted()
+    {
+        using var temp = new TempDirectory();
+        var trace = new List<string>();
+        string[] lines = [.. Enumerable.Range(1, ResultDigest.Bound + 3).Select(at => $"c{at.ToString(CultureInfo.InvariantCulture)} error: lost")];
+
+        var digest = PhaseDigest.Of(
+            new Streaming(trace, lines),
+            [new Holding(trace), new Taking(trace)],
+            new DigestTree(temp.Path, null, new PhysicalFileSystem(FilePermissionsFactory.Create())))!;
+
+        Assert.Equal(
+            ["read c1 error: lost", "A c1 error: lost", "B c1 error: lost", "read c2 error: lost", "A c2 error: lost", "B c2 error: lost"],
+            trace.Take(6));
+        Assert.Equal((ResultDigest.Bound + 3, 3), (digest.UnparsedCount, digest.UnparsedLeftOut));
+        Assert.Equal(lines.Take(ResultDigest.Bound), digest.Unparsed);
+    }
+
+    /// <summary>
     /// The findings of every reading are merged in the order of the lines they begin at, never parser by parser: a C
     /// compiler's error, MSBuild's and the compiler's again come out as printed, the first error the first printed.
     /// </summary>
@@ -68,7 +97,7 @@ public sealed class ResultParsersTests
             DssHarness.Core.Ci.CiLog.Of(string.Join(
                 "\n",
                 "2026-11-23T00:40:01.0000000Z src/store.c:3:5: error: 'count' undeclared (first use in this function)",
-                @"2026-11-23T00:40:02.0000000Z D:\a\app\app\native\store.cpp(7): error C2065: 'y': undeclared identifier")).Lines,
+                @"2026-11-23T00:40:02.0000000Z D:\a\app\app\native\store.cpp(7): error C2065: 'y': undeclared identifier")).Select(line => line.Line),
             PhaseParsers.ForCi([]))!;
 
         Assert.Equal(
@@ -84,11 +113,14 @@ public sealed class ResultParsersTests
     [Fact]
     public void AFindingsLogRange_RunsFromItsFirstLinesNumber_ToItsLastLinesLast()
     {
+        var unparsed = new List<NumberedLine>();
         var found = PhaseParsers.FindingsOf(
             [new NumberedLine(4, 4, "src/a.c:3:5: error: 'x' undeclared"), new NumberedLine(5, 5, "    3 |   x++;"), new NumberedLine(6, 8, "      |   ^")],
-            [ResultParsers.Of("gcc")!])!;
+            [ResultParsers.Of("gcc")!],
+            unparsed.Add)!;
 
         Assert.Equal((4, 8), Assert.Single(found.Diagnostics).Log);
+        Assert.Empty(unparsed);
     }
 
     /// <summary>
@@ -395,8 +427,11 @@ public sealed class ResultParsersTests
         var lines = Enumerable.Range(1, 70).Select(at => at == 1 ? $"In file included from include/h{at}.h:1," : $"                 from include/h{at}.h:1,")
             .Append("src/main.c:3:5: error: 'x' undeclared");
 
-        var found = PhaseParsers.FindingsOf(lines.Select((line, at) => new NumberedLine(at + 1, at + 1, line)), [ResultParsers.Of("gcc")!])!;
+        var unparsed = new List<NumberedLine>();
+        var found = PhaseParsers.FindingsOf(lines.Select((line, at) => new NumberedLine(at + 1, at + 1, line)), [ResultParsers.Of("gcc")!], unparsed.Add)!;
         var stack = Assert.Single(found.Diagnostics).Stack!;
+
+        Assert.Empty(unparsed);
 
         Assert.Equal((70, "include/h1.h", "include/h70.h"), (stack.Count, stack[0].File, stack[^1].File));
     }
@@ -562,6 +597,19 @@ public sealed class ResultParsersTests
         Assert.Equal(
             [((string?)null, (int?)42, "com.example.Runner.start"), (null, 1583, "java.lang.Thread.run")],
             Assert.Single(digest.Failures).Exception!.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
+    }
+
+    /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
+    private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
+    {
+        public override IEnumerable<string> Lines()
+        {
+            foreach (var line in lines)
+            {
+                trace.Add($"read {line}");
+                yield return line;
+            }
+        }
     }
 
     /// <summary>A reading that holds lines starting with <c>a</c> until <c>end</c>, and leaves them at any other line.</summary>
