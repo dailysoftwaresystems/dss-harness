@@ -167,6 +167,21 @@ public sealed class ResultFileTests
     }
 
     /// <summary>
+    /// A file's text is cut into lines by the one rule of where lines end, whatever ending its writer used: a failure's
+    /// body whose lines a carriage return alone ends says its first line, never the body run together.
+    /// </summary>
+    [Fact]
+    public void AFilesLines_EndWhereTheOneRuleEndsThem_ACarriageReturnAloneAmongThem()
+    {
+        var digest = ResultFiles.Digest(
+            "<testsuites><testsuite name=\"demo\"><testcase classname=\"demo\" name=\"one\"><failure>expected 2 records&#xD;found 3&#xD;</failure></testcase></testsuite></testsuites>",
+            out var problem);
+
+        Assert.Null(problem);
+        Assert.Equal("expected 2 records", Assert.Single(digest.Failures).Message);
+    }
+
+    /// <summary>
     /// A case CTest wrote failed as CTest says it ended - a timeout timed out, a signal, a fault or an abort crashed, a
     /// failure failed - read from the words its console says them in; a case another runner wrote failed, whatever its
     /// assertion said. A case whose class is its own name, as CTest writes every one, is named once - a name holding a

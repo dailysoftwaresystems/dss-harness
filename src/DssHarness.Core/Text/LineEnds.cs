@@ -32,6 +32,15 @@ public static class LineEnds
     /// <param name="line">Makes a line of its start, its end and its next.</param>
     public static List<TLine> Spans<TLine>(string text, Func<int, int, int, TLine> line) => [.. Streamed(text, line)];
 
+    /// <summary>Each line of <paramref name="text"/>, in order, its ending left off: the lines <see cref="Spans"/> cuts, as texts.</summary>
+    /// <param name="text">The text.</param>
+    public static List<string> Lines(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return Spans(text, (start, end, _) => text[start..end]);
+    }
+
     /// <summary>
     /// Each line of <paramref name="text"/> as <see cref="Spans"/> makes them, made one at a time as they are read - so a
     /// reader that needs each line once, in order, never holds a second copy of the text as a list of its lines.

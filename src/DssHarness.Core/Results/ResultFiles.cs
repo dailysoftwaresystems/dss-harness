@@ -6,6 +6,7 @@ using System.Xml;
 using System.Xml.Linq;
 using DssHarness.Core.Json;
 using DssHarness.Core.Mutations;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Results;
 
@@ -25,10 +26,6 @@ namespace DssHarness.Core.Results;
 /// </summary>
 public static class ResultFiles
 {
-    /// <summary>The lines of a stack a file held as data, whatever newlines it was written with.</summary>
-    /// <param name="stack">The stack's text.</param>
-    internal static IReadOnlyList<string> LinesOf(string stack)
-        => stack.Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
 
     /// <summary>
     /// Reads the results file <paramref name="open"/> opens, by its own shape - an XML root a form owns, or JSON of one
@@ -198,7 +195,7 @@ public static class ResultFiles
         var said = error?.Elements().FirstOrDefault(element => element.Name.LocalName == "Message")?.Value.Trim();
         var stack = error?.Elements().FirstOrDefault(element => element.Name.LocalName == "StackTrace")?.Value;
         var split = id.LastIndexOf('.');
-        var thrown = said is null ? null : StackForms.DotNetThrownOf(LinesOf(said), stack is null ? [] : LinesOf(stack));
+        var thrown = said is null ? null : StackForms.DotNetThrownOf(LineEnds.Lines(said), stack is null ? [] : LineEnds.Lines(stack));
 
         yield return new TestFailure(
             "trx",
@@ -207,7 +204,7 @@ public static class ResultFiles
             Class: split > 0 ? id[..split] : null,
             Message: said is { Length: > 0 } message ? message : null,
             Exception: thrown,
-            Stack: thrown is null && stack is not null ? StackForms.DotNetFramesOf(LinesOf(stack)) : [],
+            Stack: thrown is null && stack is not null ? StackForms.DotNetFramesOf(LineEnds.Lines(stack)) : [],
             Duration: TimeSpan.TryParse((string?)result.Attribute("duration"), CultureInfo.InvariantCulture, out var took) && took >= TimeSpan.Zero ? took.TotalSeconds : null,
             Outcome: outcome);
     }
@@ -431,7 +428,7 @@ public static class ResultFiles
         /// </summary>
         private static TestFailure Failure((string Name, string? Url, int? Line) test, string result, (string Error, string? Stack, bool Failure) own)
         {
-            IReadOnlyList<StackFrame> frames = own.Stack is { } thrown ? StackForms.DartFramesOf(LinesOf(thrown)) : [];
+            IReadOnlyList<StackFrame> frames = own.Stack is { } thrown ? StackForms.DartFramesOf(LineEnds.Lines(thrown)) : [];
             var said = own.Error is { Length: > 0 } error ? error : null;
 
             return new TestFailure(

@@ -257,7 +257,7 @@ public sealed class JUnitReport
 
     /// <summary>A failure element's body, its lines as the runner wrote them - a CDATA block's as much as a text's.</summary>
     private static IReadOnlyList<string> BodyOf(XElement failed)
-        => (failed.Value ?? string.Empty).Split('\n').Select(text => text.TrimEnd('\r')).ToList();
+        => LineEnds.Lines(failed.Value ?? string.Empty);
 
     /// <summary>The place doctest writes a failure at: <c>path(line): what failed</c>.</summary>
     private static readonly Regex Place = LinearRegex.Compile(@"^(?<file>.+?)\((?<line>\d+)\)\s*:");
