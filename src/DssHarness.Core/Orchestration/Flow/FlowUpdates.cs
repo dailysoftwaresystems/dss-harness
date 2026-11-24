@@ -669,6 +669,50 @@ public static class FlowUpdateGates
     }
 
     /// <summary>
+    /// The path of the work-item group whose round <paramref name="check"/> opens; null where it opens none. A check
+    /// opens a round where it is the check a <c>forEach</c> group declared beside it opens its rounds with
+    /// (<see cref="OpeningCheckOf"/>) and that group runs in rounds: declared in an iteration of a <c>repeat</c>, which
+    /// runs it again each round, or the group plan updates owe their work to (the group of <c>amend.whenAddScope</c>), to
+    /// which an update adds a round where no loop is around it - whichever opens the round. Never the plan's check, a plan
+    /// update's or a recovery's, whose items are no round's. Where the check opens rounds of two groups, the one plan
+    /// updates owe their work to is named. The one owner of which check opens a round: the engine hands that check alone
+    /// the issues the run owes its next round, and - where its group is the one updates owe - the work they owe it,
+    /// whether it carries that alone, and the plan update its problems raise.
+    /// </summary>
+    /// <param name="definition">The definition: its steps, where the check is declared at the flow's top, and its <c>amend</c> block, which names the group plan updates owe their work to.</param>
+    /// <param name="scopePath">The declaration path of the group the check is declared in; null at the flow's top.</param>
+    /// <param name="scope">The group the check is declared in, whose steps are beside it; null at the flow's top.</param>
+    /// <param name="check">The check's declaration.</param>
+    public static string? RoundOpenedBy(WorkflowDefinition definition, string? scopePath, WorkflowStep? scope, WorkflowStep check)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(check);
+
+        if (check.Type != "validate-plan")
+        {
+            return null;
+        }
+
+        var siblings = scope?.Steps ?? (scopePath is null ? definition.Steps : []);
+        var updated = definition.Amend is { } amend ? ParentOf(amend.WhenAddScope) : null;
+        string? looped = null;
+
+        foreach (var group in siblings.Where(group => OpeningCheckOf(siblings, group) is { } opening && string.Equals(opening.Name, check.Name, StringComparison.Ordinal)))
+        {
+            var path = scopePath is null ? group.Name : $"{scopePath}.{group.Name}";
+
+            if (string.Equals(path, updated, StringComparison.Ordinal))
+            {
+                return path;
+            }
+
+            looped ??= scope?.Repeat is not null ? path : null;
+        }
+
+        return looped;
+    }
+
+    /// <summary>
     /// Why a group around the group at <paramref name="group"/> draws nothing more - its newest visit ended failed,
     /// skipped or never run - so no visit of the group is drawn again in it; null where every one still draws, open or
     /// ended done.

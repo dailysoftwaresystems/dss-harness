@@ -2542,44 +2542,24 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The <c>forEach</c> expression of the work-item group, where <paramref name="check"/> is the check that opens its
-    /// rounds - the <c>validate-plan</c> step whose <c>items</c> the group expands from, declared beside it; null for
-    /// every other check.
+    /// The path of the work-item group whose round <paramref name="check"/> opens, read of the declarations beside it by
+    /// the one owner of that rule (<see cref="FlowUpdateGates.RoundOpenedBy"/>) - whether a loop or a plan update opens
+    /// the round; null for every other check: the plan's, a plan update's, a recovery's.
     /// </summary>
     /// <param name="check">The check about to start.</param>
-    /// <param name="groupPath">The declaration path of the work-item group.</param>
-    private string? OpensTheRound(FlowInstance check, string groupPath)
-    {
-        var group = FlowUpdateGates.StepOf(_definition, groupPath);
-
-        if (group?.ForEach is not { } items
-            || !string.Equals(check.DeclaredScope?.GroupPath, FlowUpdateGates.ParentOf(groupPath), StringComparison.Ordinal)
-            || !ExpandsFrom(group, check))
-        {
-            return null;
-        }
-
-        return items;
-    }
+    private string? RoundOpenedBy(FlowInstance check)
+        => check.DeclaredScope is { } scope
+            ? FlowUpdateGates.RoundOpenedBy(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check.Step)
+            : null;
 
     /// <summary>
-    /// Whether <paramref name="check"/> opens a round of the run's work: a <c>validate-plan</c> step declared in an
-    /// iteration of a <c>repeat</c> - a round - beside a <c>forEach</c> group whose items expand from it. The rounds'
-    /// check in the shipped flow; never the plan's check, a plan update's or a recovery's, whose items are no round's,
-    /// and whatever the run takes plan updates by.
+    /// Whether <paramref name="check"/> opens a round of the group plan updates owe their work to - the group of
+    /// <c>amend.whenAddScope</c> - and so is handed that work and raises the update its problems ask for.
     /// </summary>
-    /// <param name="check">The check about to start.</param>
-    private bool OpensARound(FlowInstance check)
-        => check.Step.Type == "validate-plan"
-            && check.DeclaredScope is { LoopOf.Step.Repeat: not null } round
-            && DeclarationsOf(round).Any(declared => ExpandsFrom(declared, check));
-
-    /// <summary>Whether <paramref name="group"/> is a <c>forEach</c> group whose items its expression reads from <paramref name="check"/>.</summary>
-    /// <param name="group">A step declared beside the check.</param>
-    /// <param name="check">The check.</param>
-    private static bool ExpandsFrom(WorkflowStep group, FlowInstance check)
-        => group.ForEach is { } items
-            && WorkflowExpressions.ReadsOf(items).Any(read => string.Equals(read.Root, check.Step.Name, StringComparison.Ordinal));
+    /// <param name="check">The check about to start, or ended.</param>
+    /// <param name="groupPath">The declaration path of the group plan updates owe their work to.</param>
+    private bool OpensTheUpdatedRound(FlowInstance check, string groupPath)
+        => string.Equals(RoundOpenedBy(check), groupPath, StringComparison.Ordinal);
 
     /// <summary>
     /// The work items plan updates owe to the round that opens next: each piece of an update done that is owed still
@@ -2619,8 +2599,7 @@ public sealed class FlowCoordinator
     {
         if (_definition.Amend is not { } amend
             || FlowUpdateGates.ParentOf(amend.WhenAddScope) is not { } groupPath
-            || instance.Step.Type != "validate-plan"
-            || OpensTheRound(instance, groupPath) is null
+            || !OpensTheUpdatedRound(instance, groupPath)
             || instance.Output?["ok"] is not JsonValue ok
             || (ok.TryGetValue<bool>(out var passed) && passed)
             || instance.Output?["problems"] is not JsonArray found
@@ -12445,13 +12424,13 @@ public sealed class FlowCoordinator
             read["commit"] = FlowValue.Of(pushed);
         }
 
-        if (step.Type == "validate-plan" && OpensARound(instance))
+        if (RoundOpenedBy(instance) is not null)
         {
-            // The issues the run owes its next round, which the check that opens a round holds its items to: each named
-            // in an item's settles, none left unsettled, the settling items ordered first. Live at the start, as
-            // run.nextRound reads it, so a round that opens after one was taken reads it whatever moved meanwhile. A
-            // check of any other list - the plan's, a plan update's, a recovery's remedies - is given none: no issue is
-            // owed it, and an item of it that names one in settles is refused.
+            // The issues the run owes its next round, which the check that opens a round holds its items to - whether a
+            // loop or a plan update opens it: each named in an item's settles, none left unsettled, the settling items
+            // ordered first. Live at the start, as run.nextRound reads it, so a round that opens after one was taken reads
+            // it whatever moved meanwhile. A check of any other list - the plan's, a plan update's, a recovery's remedies
+            // - is given none: no issue is owed it, and an item of it that names one in settles is refused.
             read["next"] = FlowValue.Of(new JsonArray([.. UnsettledNext().Select(issue => (JsonNode?)issue.Value())]));
         }
 
@@ -12479,7 +12458,7 @@ public sealed class FlowCoordinator
             read["known"] = FlowValue.Of(new JsonArray([.. known.Select(name => (JsonNode?)name)]));
             read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));
 
-            if (OpensTheRound(instance, groupPath) is not null)
+            if (OpensTheUpdatedRound(instance, groupPath))
             {
                 read["owed"] = FlowValue.Of(new JsonArray([.. OwedItems()]));
 

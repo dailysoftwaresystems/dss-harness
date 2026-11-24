@@ -3361,9 +3361,12 @@ as the run's issues are, and read again from the triage's own answer by a resume
 in `settles`, once it ends done with a commit of its own made - a `commit` step within it done with `committed` true;
 an item a person skipped, done with nothing landed, settles nothing - and the file names the item
 (`FlowNextIssue.SettledBy`, `FlowCoordinator.SettleTheIssueOf`, called as the item ends and again for every ended item
-a resume finds), whatever the run takes plan updates by. The check that opens a round (`OpensARound`: a `validate-plan`
-in an iteration of a `repeat`, beside the `forEach` that expands from it) is handed the owed issues under `next`, and
-`PlanCheckRunner` refuses a round whose items leave one unsettled, refuses an item that names an issue the run does not
+a resume finds), whatever the run takes plan updates by. The check that opens a round - a `validate-plan` the `forEach`
+declared beside it expands from (`FlowUpdateGates.OpeningCheckOf`), where that group runs in rounds: declared in an
+iteration of a `repeat`, or the group plan updates owe their work to, to which an update adds a round where no loop is
+around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: that check is handed
+the owed issues under `next` and, where its group is the one updates owe, their work (`owed`, `owedAlone`) and the plan
+update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, refuses an item that names an issue the run does not
 owe, and orders the settling items first; no other check - the plan's, a plan update's, a recovery's - is handed any,
 and an item of one that names an issue is refused. The rounds' `until` reads `empty(run.nextRound)`, so a clean
 self-audit does not end them while one is left; never holding the round the issue came from, for the triage never holds

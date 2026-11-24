@@ -1558,6 +1558,58 @@ public sealed class FlowPlanToldTests
     }
 
     /// <summary>
+    /// The check that opens a round of a work-item group with no loop around it is the check that opens a round whichever
+    /// opens it - the group's own first round, and the round a plan update adds - and is handed what that check alone is
+    /// handed: the issues the run owes its next round beside the work updates owe the group. One owner decides which
+    /// check opens a round, so an issue owed the next round reaches the round an update adds, where an item that settles
+    /// it is held to it, never refused as owed to no round.
+    /// </summary>
+    [Fact]
+    public async Task TheCheckOfARoundAnUpdateAdds_WithNoLoopAroundIt_IsHandedTheIssuesOwedTheNextRound()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(Ended());
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var handed = new List<(string Instance, string? Next, string Owed)>();
+        var runner = AddingThree([]).On("item-check", run =>
+        {
+            var owed = run.Read!.TryGetValue("owed", out var owing) && !owing!.IsMissing ? (owing.ToNode() as JsonArray)! : new JsonArray();
+
+            lock (handed)
+            {
+                handed.Add((run.Instance, run.Read.TryGetValue("next", out var next) ? next.ToNode()?.ToJsonString() : null, string.Join(",", owed.Select(FlowWorkItems.NameOf))));
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = UnionOf(run),
+            });
+        });
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(), inputs: new Dictionary<string, string> { ["request"] = "build the tool" }, records: records, updates: () => harness.OrchestrationStore.ReadFlowUpdates(layout));
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var audit = await UntilAskedAsync(coordinator, "anything else?");
+
+            Assert.True(FlowHandedOver.Taken == coordinator.AmendmentHandedOver("add the registry too", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(coordinator.TryAnswer(audit.Id, "go", null, out _));
+
+            var end = await DriveAsync(coordinator);
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+            Assert.Equal("rounds.items+2", UpdatesOf(harness, layout).Updates.Single().AddedIteration);
+        }
+
+        // Each round's check is handed the issues owed the next round - none are owed here, and the list is still the
+        // check's to hold its items to - and the added round's the owed work besides.
+        Assert.Equal([("rounds.item-check", "[]", string.Empty), ("rounds.item-check+2", "[]", "three")], handed);
+    }
+
+    /// <summary>
     /// A round of a work-item group with no loop around it that failed under an update - its failure passed over, so the
     /// run goes on - has ended as a round that ended done has: the work the update owes it is carried by a round added
     /// where <c>amend.maxAddedIterations</c> allows one. Where the run has none left to add, or the round's failure failed

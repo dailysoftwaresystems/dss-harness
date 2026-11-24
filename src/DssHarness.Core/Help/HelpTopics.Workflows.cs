@@ -228,8 +228,9 @@ public static partial class HelpTopics
         builder.AppendLine("sends a defect in code the run's change does not touch, that blocks nothing, to the run's next");
         builder.AppendLine("round - sized, by its files, what must be built and what measured first, in next-round.json,");
         builder.AppendLine("which run.nextRound reads as the issues no work item has settled, and the check that opens a");
-        builder.AppendLine("round - a validate-plan in an iteration of a repeat, beside the forEach that expands from it, and");
-        builder.AppendLine("no other check - holds its items to: each issue named in an item's settles, none left unsettled,");
+        builder.AppendLine("round - a validate-plan the forEach beside it expands from, where that group runs in rounds, in an");
+        builder.AppendLine("iteration of a repeat or as the group plan updates add a round to with no loop around it, and no");
+        builder.AppendLine("other check - holds its items to: each issue named in an item's settles, none left unsettled,");
         builder.AppendLine("the settling items first, and the rounds going on while one is left - never holding the round the");
         builder.AppendLine("issue came from. A forEach item that names an issue in settles settles it once it ends done with a");
         builder.AppendLine("commit of its own made, whatever the run takes plan updates by, and next-round.json says which");

@@ -369,7 +369,8 @@ public sealed partial class HelpTests
     {
         Assert.Contains(
             "in next-round.json, which run.nextRound reads as the issues no work item has settled, and the check that opens a round - "
-                + "a validate-plan in an iteration of a repeat, beside the forEach that expands from it, and no other check - holds its "
+                + "a validate-plan the forEach beside it expands from, where that group runs in rounds, in an iteration of a repeat or as "
+                + "the group plan updates add a round to with no loop around it, and no other check - holds its "
                 + "items to: each issue named in an item's settles, none left unsettled, the settling items first, and the rounds going on "
                 + "while one is left - never holding the round the issue came from. A forEach item that names an issue in settles settles "
                 + "it once it ends done with a commit of its own made, whatever the run takes plan updates by, and next-round.json says "
