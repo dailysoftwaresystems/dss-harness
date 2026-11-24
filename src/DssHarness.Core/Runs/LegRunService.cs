@@ -48,9 +48,9 @@ public sealed record LegRunRequest(
 {
     /// <summary>
     /// The run's priority, as a workflow declared it: what multiplies its tenant's share of the dispatch queue's fair
-    /// order, 1 where nothing declared one.
+    /// order, the least (<see cref="DispatchOrder.LeastPriority"/>) where nothing declared one.
     /// </summary>
-    public int Priority { get; init; } = 1;
+    public int Priority { get; init; } = DispatchOrder.LeastPriority;
 
     /// <summary>
     /// What the command has each leg do, which decides the programs a host must have to be given

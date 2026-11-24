@@ -51,9 +51,9 @@ public abstract record LegCommandRequest
 
     /// <summary>
     /// The run's priority, as a workflow declared it: what multiplies its tenant's share of the dispatch queue's fair
-    /// order, 1 where nothing declared one. A command line gives none.
+    /// order, the least (<see cref="DispatchOrder.LeastPriority"/>) where nothing declared one. A command line gives none.
     /// </summary>
-    public int Priority { get; init; } = 1;
+    public int Priority { get; init; } = DispatchOrder.LeastPriority;
 }
 
 /// <summary>
