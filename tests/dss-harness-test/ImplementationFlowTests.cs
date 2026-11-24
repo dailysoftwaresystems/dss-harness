@@ -2953,8 +2953,9 @@ public sealed class ImplementationFlowTests
             Assert.Contains("Rename the type the tool names.", diagnoses[1].Prompt, StringComparison.Ordinal);
             Assert.StartsWith("The machine's plan check refused the work items you set out", diagnoses[2].Prompt, StringComparison.Ordinal);
 
-            // The problems as a prompt holds a list the engine reads: written as JSON.
-            Assert.Contains(new JsonArray(Refused).ToJsonString(), diagnoses[2].Prompt, StringComparison.Ordinal);
+            // The problems as a prompt holds a list the engine reads: written as JSON with JSON's own escapes alone, so
+            // the apostrophes the check said are handed as they were said.
+            Assert.Contains($"[\"{Refused}\"]", diagnoses[2].Prompt, StringComparison.Ordinal);
 
             // The check read the person's remedy and refused it; the check again read the one said on its problems, and
             // passed it.
