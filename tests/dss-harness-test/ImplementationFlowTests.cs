@@ -583,9 +583,9 @@ public sealed class ImplementationFlowTests
                 held = _held.FirstOrDefault(entry => string.Equals(entry.Definition, step.AgentDefinition, StringComparison.Ordinal) && entry.When(step)).Hold;
             }
 
-            var result = held is { } waiting
+            var result = AsTheGateEnds(step, held is { } waiting
                 ? await HeldAnswerAsync(waiting, step, cancellationToken)
-                : Answer?.Invoke(step) ?? (_queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step));
+                : Answer?.Invoke(step) ?? (_queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step)));
 
             if (Events is { } says)
             {
@@ -607,6 +607,20 @@ public sealed class ImplementationFlowTests
 
             return result;
         }
+
+        /// <summary>
+        /// <paramref name="answer"/> as every client's gate ends it (<see cref="StructuredOutputGate"/>): an output the step's
+        /// own rules refuse (<see cref="AgentOutput.Holds"/>) - a reviewer's reopened finding naming no class of the item -
+        /// is sent back in the agent's conversation, and a script, which answers as it was written however often it is
+        /// asked, ends invalid after its repairs, as an agent that never mends its answer does: so a scripted answer
+        /// reaches no step the gate would have kept it from, and its step fails as the reviewer's own, never the route's.
+        /// </summary>
+        private static AgentRunResult AsTheGateEnds(AgentStepRequest step, AgentRunResult answer)
+            => answer is { Status: AgentRunStatus.Completed, StructuredOutput: { } said }
+                && step.Output is { Holds: { } holds } output
+                && holds(JsonNode.Parse(said)!) is { Count: > 0 } refused
+                    ? AgentEndings.InvalidOutput(output.MaxRepairs, [.. refused.Select(problem => $"$.{AgentEnvelope.Output}.{problem}")], step.Mask ?? new Masking())
+                    : answer;
 
         /// <summary>The held agent's answer: its standard one once the hold is opened, and nothing where what ended it was cancelled.</summary>
         private static async Task<AgentRunResult> HeldAnswerAsync(Held held, AgentStepRequest step, CancellationToken cancellationToken)
@@ -2001,19 +2015,37 @@ public sealed class ImplementationFlowTests
         }
 
         /// <summary>
-        /// A finding classed reopened - another instance of a class the item closes - never goes back as one finding
-        /// alone: the routing step sends the class back once as one send-back carrying all its findings, and where a
-        /// later round reopens the same class again it sends back a home audit instead, the count kept in the item's
-        /// ledger across the loop's rounds. The loop ends only where no send-back and no audit stands.
+        /// A finding classed reopened - another instance of a class the item closes, named as the item's plan names it -
+        /// never goes back as one finding alone: the routing step sends the class back once as one send-back carrying all
+        /// its findings, and where a later round reopens the same class again it sends back a home audit instead, the
+        /// count kept in the item's ledger across the loop's rounds. The loop ends only where no send-back and no audit
+        /// stands.
         /// </summary>
         [Fact]
         public async Task AClassReopenedByTheReview_IsSentBackWhole_AndASecondReopeningAsksForItsHomeAudit()
         {
             using var temp = new TempDirectory();
+
+            // The item closes the frame's class, creating the one place the frame is decided: the class the reviews reopen
+            // is one of the item's, for a reopened finding names a class the item closes.
+            var framed = One();
+            framed["classes"] = new JsonArray(new JsonObject
+            {
+                ["id"] = "c-frame",
+                ["invariant"] = "the report's frame is decided in one place for every period",
+                ["home"] = new JsonObject { ["path"] = "src/one/frame.cs", ["symbol"] = "Frame", ["exists"] = false },
+                ["sites"] = new JsonArray(),
+                ["searches"] = new JsonArray(new JsonObject { ["data"] = "the frame", ["via"] = "graph", ["query"] = "frame:", ["hits"] = 0 }),
+                ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "period", ["values"] = new JsonArray("week", "month"), ["declaredIn"] = "src/one/frame.cs" }), ["cells"] = 2 },
+                ["action"] = "create-home",
+                ["notCovered"] = "",
+            });
+            framed["noClass"] = "";
             var kit = await PrepareAsync(
                 temp,
                 script: agents =>
                 {
+                    agents.Queue("planner", Completed(Plan(framed)));
                     agents.Queue("implementer", Completed(Implement()), Completed(Implement()), Completed(Implement()));
                     agents.Queue(
                         "reviewer-correctness",
@@ -2028,8 +2060,10 @@ public sealed class ImplementationFlowTests
             Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
 
             // Three rounds: the first reopened the class, the second reopened it again, the third was clean - and each
-            // of the first two was worked, for the loop ends only where the routing holds nothing.
+            // of the first two was worked, for the loop ends only where the routing holds nothing; every routing took its
+            // findings, so nothing went to the recovery.
             Assert.Equal(3, kit.Agents.Of("reviewer-correctness").Count);
+            Assert.Empty(kit.Agents.Of("diagnostician"));
             Assert.Equal(3, kit.Agents.Of("implementer").Count);
 
             // The builder's rework prompts read the routing: the first round's the class send-back with both its
