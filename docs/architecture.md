@@ -10220,8 +10220,9 @@ tool the parsers read - captured from the tool where it runs on a developer's ma
 its documented form where it does not (tsc, GoogleTest, jest, vitest, Go, Rust, lldb, the CI log) -
 each digested by the one rule that digests a phase (`PhaseDigest.Of`, a results file through its
 files as a test phase's are), its lines read as a phase's log hands them on (`PhaseOutput.Of`, never a
-file reading that ends a line at a lone carriage return where a phase's log does not), through the
-parsers the phase chooses, and held two ways. Its
+file reading that ends a line at a lone carriage return where a phase's log does not - which the
+linker's own lines of `msvc-link-externals` hold, its second error after the first's lone carriage
+return), through the parsers the phase chooses, and held two ways. Its
 `expect.json`, written by hand from the tool's own words and never by the code, says what a person
 reads off the output - the counts, the first error and its place, each diagnostic and failure, the
 first stack's frames and which of them are the project's, the causes - and is asserted first, and

@@ -1,0 +1,9 @@
+[1/2] Building CXX object CMakeFiles\app.dir\src\main.cpp.obj
+[2/2] Linking CXX executable app.exe
+FAILED: app.exe 
+C:\WINDOWS\system32\cmd.exe /C "cd . && "C:\Program Files\CMake\bin\cmake.exe" -E vs_link_exe --msvc-ver=1952 --intdir=CMakeFiles\app.dir --rc=C:\PROGRA~2\WI3CF2~1\10\bin\100261~1.0\x64\rc.exe --mt=C:\PROGRA~2\WI3CF2~1\10\bin\100261~1.0\x64\mt.exe --manifests  -- C:\PROGRA~1\MICROS~1\18\ENTERP~1\VC\Tools\MSVC\1452~1.370\bin\Hostx64\x64\link.exe /nologo CMakeFiles\app.dir\src\main.cpp.obj  /out:app.exe /implib:app.lib /pdb:app.pdb /version:0.0 /machine:x64 /debug /INCREMENTAL /subsystem:console  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib && cd ."
+LINK Pass 1: command "C:\PROGRA~1\MICROS~1\18\ENTERP~1\VC\Tools\MSVC\1452~1.370\bin\Hostx64\x64\link.exe /nologo CMakeFiles\app.dir\src\main.cpp.obj /out:app.exe /implib:app.lib /pdb:app.pdb /version:0.0 /machine:x64 /debug /INCREMENTAL /subsystem:console kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTFILE:CMakeFiles\app.dir/intermediate.manifest CMakeFiles\app.dir/manifest.res" failed (exit code 1120) with the following output:
+main.cpp.obj : error LNK2019: unresolved external symbol "int __cdecl store::load_records(char const *)" (?load_records@store@@YAHPEBD@Z) referenced in function main
+main.cpp.obj : error LNK2019: unresolved external symbol "int __cdecl store::save_records(char const *,int)" (?save_records@store@@YAHPEBDH@Z) referenced in function main
+app.exe : fatal error LNK1120: 2 unresolved externals
+ninja: build stopped: subcommand failed.
