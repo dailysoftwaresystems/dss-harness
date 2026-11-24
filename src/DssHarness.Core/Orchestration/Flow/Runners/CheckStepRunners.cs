@@ -315,6 +315,9 @@ public sealed class ClassClosureStepRunner(
                 ["byOthers"] = touch.ByOthers,
                 ["all"] = touch.All,
             })]),
+
+            // The record judged, as it was read: what the run's words and its report gather of the item.
+            ["record"] = record.DeepClone(),
         };
 
         if (judged.Problems.Count > 0)

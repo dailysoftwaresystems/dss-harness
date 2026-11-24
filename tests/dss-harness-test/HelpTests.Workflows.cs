@@ -232,10 +232,14 @@ public sealed partial class HelpTests
         // commands the publishing steps run, each with its own limit.
         Assert.Contains(
             "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
-                + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.",
+                + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing, "
+                + "as do {run.closure}, {run.claims}, {run.hotspots} and {run.reopened}: of each item, the class record its newest "
+                + "class-closure check that ended done judged, whole, and each class's claim alone, the hotspots that check named, "
+                + "and the classes its reviews reopened with how many rounds, as its newest routing counted them - a step known by "
+                + "its type, so no other step's closure member is read as an item's record, and an item no check judged has none.",
             workflows,
             StringComparison.Ordinal);
-        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "closure", "hotspots", "leftover", "notRun", "preExisting", "ran", "red"]);
+        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "claims", "closure", "hotspots", "leftover", "notRun", "preExisting", "ran", "red", "reopened"]);
         Assert.Contains(
             "push pushes the commit the run's commit steps recorded last, else the one the run started on - never what the branch "
                 + "names by then, which a hook or a build working in the main checkout could have moved - to the branch of the name "

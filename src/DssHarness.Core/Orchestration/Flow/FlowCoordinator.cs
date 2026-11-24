@@ -11607,21 +11607,16 @@ public sealed class FlowCoordinator
             .SelectMany(instance => instance.Assumptions.Select(one => $"'{instance.Step.Name}' assumed about {one.About}: {one.Assumed} ({one.Why})"))
             .ToList();
 
-        // Every item's record, gathered - the newest answer of each item's implement family, for the self-audit's
-        // instance-closure lens - and the hotspots of every class-closure check the run made.
-        var closure = _created
-            .Where(instance => instance.Output?["closure"] is JsonArray && instance.State == FlowInstanceState.Done)
-            .GroupBy(instance => FlowInstanceId.ItemOf(instance.Id), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .Select(instance => instance.Output!["closure"]!.ToJsonString())
-            .ToList();
-        var hotspots = _created
-            .Where(instance => instance.Output?["hotspots"] is JsonArray { Count: > 0 } && instance.State == FlowInstanceState.Done)
-            .GroupBy(instance => FlowInstanceId.ItemOf(instance.Id), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .SelectMany(instance => (instance.Output!["hotspots"] as JsonArray)!.Select(hotspot
-                => $"'{TextOf(hotspot?["class"])}' home '{TextOf(hotspot?["path"])}' touched {(hotspot?["touches"]?.ToString() ?? "none")} times"))
-            .ToList();
+        // What the run's class-closure checks and routings say of its items' classes, gathered by their one owner: each
+        // item's record as its newest check judged it - whole for the self-audit's instance-closure lens, and each
+        // class's claim alone - the hotspots those checks named, and the classes its reviews reopened.
+        IReadOnlyList<FlowClosureRecords.Step> closing = [.. _created.Select(instance
+            => new FlowClosureRecords.Step(instance.Id, instance.Step.IsGroup ? null : instance.Step.Type, instance.State == FlowInstanceState.Done, instance.Output))];
+        var records = FlowClosureRecords.RecordsOf(closing);
+        var closure = records.Select(record => new JsonArray([.. record.Select(entry => (JsonNode?)entry.DeepClone())]).ToJsonString()).ToList();
+        var claims = records.SelectMany(record => record).Select(entry => $"'{TextOf(entry["class"])}': {TextOf(entry["claim"])}").ToList();
+        var hotspots = FlowClosureRecords.HotspotsOf(closing).Select(hotspot => $"'{hotspot.Class}' home '{hotspot.Path}' touched {hotspot.Touches.ToString(System.Globalization.CultureInfo.InvariantCulture)} times").ToList();
+        var reopened = FlowClosureRecords.ReopenedOf(closing).Select(@class => $"'{@class.Class}' reopened in {@class.Rounds.ToString(System.Globalization.CultureInfo.InvariantCulture)} round(s)").ToList();
 
         return new JsonObject
         {
@@ -11642,7 +11637,9 @@ public sealed class FlowCoordinator
             ["notRun"] = FlowChecks.NotRun(checks.Select(CheckOf), PendingChecks(path => true, checks), passedOver: false),
             ["red"] = FlowChecks.Red(checks.Select(CheckOf)),
             [WorkflowExpressions.RunClosure] = closure.Count > 0 ? string.Join("; ", closure) : FlowChecks.None,
+            [WorkflowExpressions.RunClaims] = claims.Count > 0 ? string.Join("; ", claims) : FlowChecks.None,
             [WorkflowExpressions.RunHotspots] = hotspots.Count > 0 ? string.Join("; ", hotspots) : FlowChecks.None,
+            [WorkflowExpressions.RunReopened] = reopened.Count > 0 ? string.Join("; ", reopened) : FlowChecks.None,
         };
     }
 

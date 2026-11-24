@@ -672,12 +672,17 @@ public static class WorkflowStepTypes
     /// <summary>What an anchor check answers: whether it passed, and each finding as a line the check prints.</summary>
     private static string AnchorOutput => ObjectOf(("passed", Flag), ("findings", ListOf(Text)));
 
-    /// <summary>What a class-closure check answers: whether every class of the item is closed by its record, each problem as a line, the hotspots among its homes, and each home's touches.</summary>
+    /// <summary>
+    /// What a class-closure check answers: whether every class of the item is closed by its record, each problem as a
+    /// line, the hotspots among its homes, each home's touches, and the record it judged, as it read it - what the run's
+    /// words and its report gather of the item (<see cref="FlowClosureRecords"/>).
+    /// </summary>
     private static string ClassClosureOutput => ObjectOf(
         ("passed", Flag),
         ("problems", ListOf(Text)),
         ("hotspots", ListOf(ObjectOf(("class", Text), ("path", Text), ("touches", WholeNumber)))),
-        ("touches", ListOf(ObjectOf(("class", Text), ("path", Text), ("byOthers", WholeNumber), ("all", WholeNumber)))));
+        ("touches", ListOf(ObjectOf(("class", Text), ("path", Text), ("byOthers", WholeNumber), ("all", WholeNumber)))),
+        ("record", UntypedList));
 
     /// <summary>
     /// What routing the review's findings answers: the send-backs - every introduced finding as the review gave it, and one

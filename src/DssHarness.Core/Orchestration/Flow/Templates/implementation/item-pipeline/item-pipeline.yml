@@ -62,8 +62,8 @@ outputs:
     description: The anchor rows the item's fold carried; none where the item was skipped.
     from: fold.rows
   - name: leftover
-    description: The review findings still standing where the review loop ended at its bound, none of them acted on - empty where it ended clean, and none where the item was skipped.
-    from: fix.review.findings
+    description: What the review loop left where it ended at its bound, none of it acted on - its last routing's rework and home audits, as the loop's own leftover reads them; empty where it ended clean, and none where the item was skipped.
+    from: 'union(fix.route.rework, fix.route.homeAudit)'
 steps:
   - name: item-agent
     type: create-agent
@@ -398,12 +398,13 @@ steps:
       rounds: 3
       # Three rounds; past them the loop goes on only while a critical, high or medium finding
       # stands, three rounds more at most - graded as the review graded it, a class reopened
-      # by the worst of its findings. What is left then - a low or a nit after the three,
-      # anything after the six - is written to the backlog and named in the pull request and
-      # the handoff, for the person who reads them at the end; the run goes on.
-      blocking: "any(route.rework, it.severity != 'low' && it.severity != 'nit')"
+      # by the worst of its findings, whether it goes back as rework or to a home audit. What
+      # is left then - a low or a nit after the three, anything after the six, rework and home
+      # audits alike - is written to the backlog and named in the pull request and the
+      # handoff, for the person who reads them at the end; the run goes on.
+      blocking: "any(union(route.rework, route.homeAudit), it.severity != 'low' && it.severity != 'nit')"
       blockersLimitRounds: 3
-      leftover: 'route.rework'
+      leftover: 'union(route.rework, route.homeAudit)'
     answers:
       loopBound: accept
     onFailure: '{input.failTo}'

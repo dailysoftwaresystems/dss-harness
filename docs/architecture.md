@@ -1921,8 +1921,9 @@ iteration only that step and the steps it waits for (V64), and every other step 
 runs before it - one it waits for - or after it, waiting for it as a handler of its ending does
 (V65), so none is left running unseen in an iteration the loop ended at its decision
 (`WorkflowValidator`'s `DecisionRules`). The shipped
-review loop decides at its `review`, so the last rework of a loop that ends at its bound is
-reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
+review loop decides at its `route`, where the review's findings are routed, so the last rework of a loop that ends at
+its bound is reviewed by the round after it and what it leaves is what its last routing left - its rework and its home
+audits alike. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own. The file writes no YAML alias - a
@@ -3328,10 +3329,12 @@ for reviewers are fresh each round and `previous.*` is refused in every prompt. 
 name it (`FlowClosureLedgerFile.Counting`), so a routing run again after a crash, a stop or a resume counts nothing
 more and a first reopening is never read as a second. Every introduced finding goes back in `rework` as itself; the
 reopened findings of one class go back as one send-back - the class (`reopenedClass`, never a finding's own `class`),
-the rounds that reopened it and all its findings, graded by the worst of them, so the loop's `blocking` reads
-`route.rework` as it read `review.findings`; and a class reopened twice or more goes to `homeAudit` instead, which the
-loop's `until` reads beside `rework` and the `class-closure` check asks its home audit for - the one mechanism, whichever
-cause asks. What a finding must say to be routed has one owner, `FindingRoutes`: an object, classed `introduced` or
+the rounds that reopened it and all its findings, graded by the worst of them; and a class reopened twice or more goes
+to `homeAudit` instead, as one such send-back, which the `class-closure` check asks its home audit for - the one
+mechanism, whichever cause asks. The loop reads both lists alike: its `until` waits for both to be empty, its `blocking`
+grades `union(route.rework, route.homeAudit)` as it graded `review.findings`, and what it leaves at its bound is that
+union (`leftover`, and the pipeline's own `leftover` output, read from the loop's last routing), so a class whose home
+audit was still owed at the bound is written to the backlog and named in the pull request and the handoff. What a finding must say to be routed has one owner, `FindingRoutes`: an object, classed `introduced` or
 `reopened`, graded on the route's scale, and a reopened one naming a class of the item's - its `classes`' or its
 `record`'s, exactly, compared ordinally on every machine, for a class id is no path. The reviewers whose answers a
 route reads (a reason step its `findings` names, or each reason step of a group that gathers the member it reads) are
@@ -3374,13 +3377,20 @@ arm reaches - raises `rearm`, a group that goes on with the implementation on `p
 the way a rework's does - `rearm-verify`, `rearm-closure`, `rearm-fold`, `rearm-checkpoint` - before the sweep runs
 again; any other failure of the sweep is the machine's and goes to the pipeline's `failTo`. Only the item's own release
 waits for its arms: its agent is not released until both its review and its arms stand (`release` depends on `fix` and
-`item-arms`). The run's words `{run.closure}` and `{run.hotspots}` (new
-`RunTexts`) gather every item's newest record and every closure check's hotspots, read by the self-audit's
-instance-closure lens (`self-audit.md`, `auditor.md`: the tells - one site and a case named, a theme in the run's
-commit subjects, a hotspot's path, a pin listing the case by hand - and the disproof, searching the data and
-measuring unnamed cells and the optimised form); the report (`FlowReports`) and the pull request's body
-(`pr-body.md`) carry the counts: each item's closing claim, the classes the reviews reopened with how often, and the
-homes touched often enough to name.
+`item-arms`). What the run's closure checks and routings say of its items' classes has one owner,
+`FlowClosureRecords`, read alike by the run's words (`RunTexts`) and its report (`FlowRunReport`): of each item, the
+newest `class-closure` check that ended done - the record it judged, which its output carries (`record`), and the
+hotspots it named - and the newest routing that ended done, with how many rounds reopened each class; a step is known by
+its type, never by the shape of its output, so a plan audit's own `closure` member is no item's record, and an item no
+check judged - one a person skipped - has none. `{run.closure}` gives each record whole and `{run.hotspots}` the
+hotspots, read by the self-audit's instance-closure lens (`self-audit.md`, `auditor.md`: the tells - one site and a case
+named, a theme in the run's commit subjects, a hotspot's path, a pin listing the case by hand - and the disproof,
+searching the data and measuring unnamed cells and the optimised form); the pull request's body (`pr-body.md`) carries
+the counts - each class's claim alone (`{run.claims}`), the classes the reviews reopened with how many rounds
+(`{run.reopened}`) and the hotspots - and says what became of each issue carried to a later round
+(`{run.preExisting}`), and the report's convergence the same claims and hotspots, its reopenings read from the items'
+ledgers (`FlowClosureLedgerFile`), whose count its `classReopenedTwice` signal reads by the route's own rule
+(`FlowClosureReopens.AsksItsHomeAudit`).
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both

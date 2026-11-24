@@ -100,7 +100,7 @@ public sealed class RouteFindingsStepRunner(IHarnessContextLoader contextLoader,
             // One send-back a round: the class whole, graded by the worst of its findings, its findings all in it.
             var sendBack = FindingRoutes.SendBack(id, rounds, ofClass);
 
-            if (rounds >= FlowClosureReopens.HomeAuditAt)
+            if (FlowClosureReopens.AsksItsHomeAudit(rounds))
             {
                 audits.Add(sendBack);
             }

@@ -1527,55 +1527,111 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
-    /// The run's words of the classes its items closed gather every item's newest record - a record its rework
-    /// answered again is the one that stands - beside the hotspots of their closure checks, for the self-audit's
-    /// instance-closure lens; where the run holds neither, each says none.
+    /// The run's words of the classes its items closed are gathered by their one owner from the steps that judge and
+    /// count them, known by their type: each item's record as its newest class-closure check that ended done judged it
+    /// - a check run again after a rework is the one that stands - whole, and each class's claim alone; the hotspots
+    /// that check named; and the classes the item's newest routing says its reviews reopened, with how many rounds. A
+    /// plan audit's own closure member is no item's record, and an item no check judged - one whose checks were skipped
+    /// - has none; where the run holds none of these, each says none.
     /// </summary>
     [Fact]
-    public async Task TheRunsWords_GatherEveryItemsNewestClassRecord_AndTheClosureChecksHotspots()
+    public async Task TheRunsWords_GatherEachItemsNewestJudgedRecord_ByTheStepsThatJudgeAndCountIt()
     {
-        using var temp = new TempDirectory();
         var definition = Parse("""
             name: flow
             steps:
-              - name: build
+              - name: audit
                 type: reason
                 prompt: work.md
                 outputs: work.json
-              - name: check
-                type: reason
-                prompt: work.md
-                outputs: work.json
+              - name: items
+                forEach: 'audit.items'
+                dependsOn: [audit]
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: worker.md
+                    when: "item.name == 'a'"
+                  - name: closing
+                    type: class-closure
+                    in: make
+                    when: "item.name == 'a'"
+                    dependsOn: [make]
+                    classes: 'item.classes'
+                    record: 'item.record'
+                  - name: route
+                    type: route-findings
+                    in: make
+                    when: "item.name == 'a'"
+                    dependsOn: [closing]
+                    findings: 'item.findings'
+                    classes: 'item.classes'
+                    record: 'item.record'
+                  - name: reclosing
+                    type: class-closure
+                    in: make
+                    when: "item.name == 'a'"
+                    dependsOn: [route]
+                    classes: 'item.classes'
+                    record: 'item.record'
               - name: tell
                 type: pause
                 always: true
                 question: |-
                   records: {run.closure}
+                  claims: {run.claims}
+                  reopened: {run.reopened}
                   hotspots: {run.hotspots}
                 options: [ok]
             """);
         FlowStepResult Answer(JsonObject output) => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: output);
         JsonObject Class(string @class, string claim) => new() { ["class"] = @class, ["claim"] = claim };
+        JsonObject Item(string name) => new() { ["name"] = name, ["classes"] = new JsonArray(), ["record"] = new JsonArray(), ["findings"] = new JsonArray() };
+        JsonObject Checked(JsonArray record, JsonArray hotspots) => new()
+        {
+            ["passed"] = true,
+            ["problems"] = new JsonArray(),
+            ["hotspots"] = hotspots,
+            ["touches"] = new JsonArray(),
+            ["record"] = record,
+        };
         var runner = new FakeRunner()
-            .On("build", (FlowStepRun _) => Answer(new JsonObject
+            .On("audit", (FlowStepRun _) => Answer(new JsonObject
             {
-                ["summary"] = "done",
-                ["closure"] = new JsonArray(Class("c-rate", "named a case: one format")),
+                ["items"] = new JsonArray(Item("a"), Item("b")),
+                ["closure"] = new JsonArray(new JsonObject { ["class"] = "c-plan", ["missingSites"] = new JsonArray("src/Plan.cs"), ["missingCells"] = new JsonArray() }),
             }))
-            .On("check", (FlowStepRun _) => Answer(new JsonObject
+            .On("closing", (FlowStepRun _) => Answer(Checked(new JsonArray(Class("c-rate", "named a case: one format")), new JsonArray())))
+            .On("route", (FlowStepRun _) => Answer(new JsonObject
             {
-                ["passed"] = true,
-                ["hotspots"] = new JsonArray(new JsonObject { ["class"] = "c-rate", ["path"] = "src/Rates/Home.cs", ["touches"] = 6 }),
-            }));
+                ["rework"] = new JsonArray(),
+                ["homeAudit"] = new JsonArray(),
+                ["reopened"] = new JsonArray(new JsonObject { ["class"] = "c-rate", ["rounds"] = 2 }),
+            }))
+            .On("reclosing", (FlowStepRun _) => Answer(Checked(
+                new JsonArray(Class("c-rate", "the rate holds over every format"), Class("c-frame", "the frame is decided once")),
+                new JsonArray(new JsonObject { ["class"] = "c-rate", ["path"] = "src/Rates/Home.cs", ["touches"] = 6 }))));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        var asked = coordinator.OpenQuestions.Single(question => question.Kind == "pause");
-        Assert.StartsWith("records: ", asked.Problem, StringComparison.Ordinal);
-        Assert.Contains("\"class\":\"c-rate\"", asked.Problem, StringComparison.Ordinal);
-        Assert.Contains("\"claim\":\"named a case: one format\"", asked.Problem, StringComparison.Ordinal);
-        Assert.EndsWith("hotspots: 'c-rate' home 'src/Rates/Home.cs' touched 6 times", asked.Problem, StringComparison.Ordinal);
+        Assert.Equal(
+            "records: [{\"class\":\"c-rate\",\"claim\":\"the rate holds over every format\"},{\"class\":\"c-frame\",\"claim\":\"the frame is decided once\"}]\n"
+                + "claims: 'c-rate': the rate holds over every format; 'c-frame': the frame is decided once\n"
+                + "reopened: 'c-rate' reopened in 2 round(s)\n"
+                + "hotspots: 'c-rate' home 'src/Rates/Home.cs' touched 6 times",
+            coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+
+        // A run whose items no check judged says none of each.
+        var none = new FlowCoordinator(
+            definition,
+            new FakeRunner().On("audit", (FlowStepRun _) => Answer(new JsonObject { ["items"] = new JsonArray(Item("b")), ["closure"] = new JsonArray() })),
+            new RunnerFacts(),
+            new JumpingClock());
+
+        _ = await none.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal("records: none\nclaims: none\nreopened: none\nhotspots: none", none.OpenQuestions.Single(question => question.Kind == "pause").Problem);
     }
 
     /// <summary>The issues a run owes its next round are their file's too: a resume by another engine restores them, and the run's words say what became of each.</summary>

@@ -178,7 +178,7 @@ public sealed class WorkflowStepTypesTests
                 ("validate-plan", "ok, problems, items"),
                 ("anchor-balance", "passed, findings"),
                 ("anchor-citations", "passed, findings"),
-                ("class-closure", "passed, problems, hotspots, touches"),
+                ("class-closure", "passed, problems, hotspots, touches, record"),
                 ("route-findings", "rework, homeAudit, reopened"),
                 ("ci-read", "passed, branch, matrixRan, legs, red"),
                 ("ci-wait", "passed, commit, checks, red, pending, unsettled"),

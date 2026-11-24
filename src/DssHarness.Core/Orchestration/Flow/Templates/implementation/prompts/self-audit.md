@@ -69,7 +69,7 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 - The registry's checks on the round: {round-checks.findings}
 - What the review loops left: {run.leftover}
 - What was assumed without asking a person: {run.assumptions}
-- Every class record the run's items answered, gathered - each item's newest, whole:
+- Every class record the run's items closed, gathered - each item's, whole, as its newest closure check judged it:
 
 {run.closure}
 

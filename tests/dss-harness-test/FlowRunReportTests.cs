@@ -166,7 +166,7 @@ public sealed class FlowRunReportTests
                     Waited: [new FlowStepWait(FlowWaits.Quiet, 5.0)],
                     Attempts: [Attempt(1, "Failed"), Attempt(2, "Done", usd: 0.02, model: "model-y", tokens: new AgentUsage(90_000, 500, 10_000, 0, 0, 0), fallbackFrom: "model-w", fallbackReason: "key refused")],
                     Totals: new FlowStepTotals(new AgentUsage(90_000, 500, 10_000, 0, 0, 0), 0.02))),
-                Step("c", "orient", "Failed", Began.AddSeconds(50), Began.AddSeconds(60), agent: "item-1", measure: new FlowStepMeasure(Attempts: [Attempt(1, "Failed", exit: 20, error: "it did not pass")]),
+                Step("c", "class-closure", "Failed", Began.AddSeconds(50), Began.AddSeconds(60), agent: "item-1", measure: new FlowStepMeasure(Attempts: [Attempt(1, "Failed", exit: 20, error: "it did not pass")]),
                     output: JsonNode.Parse("""{"hotspots":[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}]}""")),
             ],
             [],

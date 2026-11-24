@@ -1035,7 +1035,7 @@ public sealed record FlowClosureLedgerFile(int Schema, string Agent, IReadOnlyLi
 
     /// <summary>The classes reopened twice or more, by id: those the class-closure check asks a home audit of.</summary>
     public IReadOnlySet<string> ReopenedTwice()
-        => Classes.Where(entry => entry.Reopens >= FlowClosureReopens.HomeAuditAt).Select(entry => entry.Class).ToHashSet(StringComparer.Ordinal);
+        => Classes.Where(entry => FlowClosureReopens.AsksItsHomeAudit(entry.Reopens)).Select(entry => entry.Class).ToHashSet(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -1050,6 +1050,13 @@ public sealed record FlowClosureReopens(string Class, IReadOnlyList<string> By)
     /// <summary>The reopenings at which a class is sent to its home audit instead of back to its builder: the second.</summary>
     public const int HomeAuditAt = 2;
 
+    /// <summary>
+    /// Whether a class reopened in <paramref name="reopens"/> rounds is owed its home audit: the one rule the route, the
+    /// class-closure check and the report read.
+    /// </summary>
+    /// <param name="reopens">How many rounds of review reopened it.</param>
+    public static bool AsksItsHomeAudit(int reopens) => reopens >= HomeAuditAt;
+
     /// <summary>How many rounds of review reopened the class, one send-back a round.</summary>
     [JsonIgnore]
     public int Reopens => By.Count;
@@ -1061,6 +1068,72 @@ public sealed record FlowClosureReopens(string Class, IReadOnlyList<string> By)
             : By.FirstOrDefault(routing => !FlowInstanceId.IsWellFormed(routing)) is { } wrong ? $"the class '{Class}' names '{wrong}', which is not an instance id"
             : By.Distinct(StringComparer.Ordinal).Count() != By.Count ? $"the class '{Class}' names one routing twice"
             : null;
+}
+
+/// <summary>
+/// What a run's class-closure checks and its routings say of its items' classes, gathered alike by the run's words
+/// (<c>{run.closure}</c>, <c>{run.claims}</c>, <c>{run.hotspots}</c>, <c>{run.reopened}</c>) and by its report: of each
+/// item, the newest check that ended done - the record it judged and the hotspots it named - and the newest routing that
+/// ended done - how many rounds reopened each class, as the item's ledger counted them at that routing. A step is known
+/// by its type, never by the shape of its output, so a plan audit's own closure member is no item's record; and an item
+/// no check judged - one a person skipped - has none.
+/// </summary>
+public static class FlowClosureRecords
+{
+    /// <summary>The type of the step that judges an item's record.</summary>
+    public const string CheckType = "class-closure";
+
+    /// <summary>The type of the step that routes a review's findings and counts the item's reopenings.</summary>
+    public const string RouteType = "route-findings";
+
+    /// <summary>One step of the run as the engine and its records both hold it.</summary>
+    /// <param name="Instance">Its instance id.</param>
+    /// <param name="Type">Its type; null for a group.</param>
+    /// <param name="Done">Whether it ended done.</param>
+    /// <param name="Output">What it answered; null for none.</param>
+    public readonly record struct Step(string Instance, string? Type, bool Done, JsonNode? Output);
+
+    /// <summary>
+    /// Each item's record as the newest check that judged it read it, one list of its entries an item, in the order the
+    /// items' checks were first met; an item whose record names no class is left out.
+    /// </summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<IReadOnlyList<JsonObject>> RecordsOf(IEnumerable<Step> steps)
+        => [.. NewestOf(steps, CheckType)
+            .Select(check => (IReadOnlyList<JsonObject>)[.. (check["record"] as JsonArray ?? []).OfType<JsonObject>()])
+            .Where(record => record.Count > 0)];
+
+    /// <summary>Each home the newest check of each item named a hotspot, with its class and how often the run touched it.</summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<ClassClosureHotspot> HotspotsOf(IEnumerable<Step> steps)
+        => [.. NewestOf(steps, CheckType)
+            .SelectMany(check => (check["hotspots"] as JsonArray ?? []).OfType<JsonObject>())
+            .Select(hotspot => new ClassClosureHotspot(TextOf(hotspot["class"]), TextOf(hotspot["path"]), CountOf(hotspot["touches"])))];
+
+    /// <summary>
+    /// Each class the run's reviews reopened, with how many rounds reopened it, as the newest routing of each item that
+    /// ended done answered it - the item's ledger as that routing counted it.
+    /// </summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<(string Class, int Rounds)> ReopenedOf(IEnumerable<Step> steps)
+        => [.. NewestOf(steps, RouteType)
+            .SelectMany(route => (route["reopened"] as JsonArray ?? []).OfType<JsonObject>())
+            .Select(entry => (TextOf(entry[FindingRoutes.ClassMember]), CountOf(entry[FindingRoutes.RoundsMember])))];
+
+    /// <summary>The newest step of <paramref name="type"/> of each item that ended done, its output, in the order the items were first met.</summary>
+    private static IEnumerable<JsonObject> NewestOf(IEnumerable<Step> steps, string type)
+        => steps
+            .Where(step => step.Done && string.Equals(step.Type, type, StringComparison.Ordinal) && step.Output is JsonObject)
+            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
+            .Select(item => (JsonObject)item.Last().Output!);
+
+    /// <summary>A JSON text's value; empty where it is none.</summary>
+    private static string TextOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : string.Empty;
+
+    /// <summary>A JSON whole number's value; 0 where it is none.</summary>
+    private static int CountOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<int>(out var count) ? count : 0;
 }
 
 /// <summary>

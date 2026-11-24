@@ -635,7 +635,11 @@ public static partial class HelpTopics
             + "{carried.notRun} and {carried.red} besides: the same three of the checks upstream of it that ended since the "
             + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check. "
             + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
-            + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.");
+            + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing, "
+            + "as do {run.closure}, {run.claims}, {run.hotspots} and {run.reopened}: of each item, the class record its newest "
+            + "class-closure check that ended done judged, whole, and each class's claim alone, the hotspots that check named, "
+            + "and the classes its reviews reopened with how many rounds, as its newest routing counted them - a step known by "
+            + "its type, so no other step's closure member is read as an item's record, and an item no check judged has none.");
         builder.AppendLine();
         AppendWrapped(
             builder,

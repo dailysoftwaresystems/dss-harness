@@ -729,13 +729,12 @@ public static class FlowRunReport
             })]);
         }
 
-        // What the run's items closed, so a repository can see whether its rounds converge: each item's newest record.
-        var closed = source.Flow.Steps
-            .Where(step => step.Output?["closure"] is JsonArray && step.State == nameof(FlowInstanceState.Done))
-            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .SelectMany(step => (step.Output!["closure"] as JsonArray)!.OfType<JsonObject>()
-                .Select(entry => (Class: TextOf(entry["class"]), Claim: TextOf(entry["claim"]))))
+        // What the run's items closed, so a repository can see whether its rounds converge: each item's record as its
+        // newest closure check judged it, gathered by the one owner the run's words read too.
+        var closing = ClosingOf(source);
+        var closed = FlowClosureRecords.RecordsOf(closing)
+            .SelectMany(record => record)
+            .Select(entry => (Class: TextOf(entry["class"]), Claim: TextOf(entry["claim"])))
             .ToList();
 
         if (closed.Count > 0)
@@ -747,12 +746,10 @@ public static class FlowRunReport
             })]);
         }
 
-        var reopened = source.Flow.Steps
-            .Where(step => step.Output?["reopened"] is JsonArray { Count: > 0 } && step.State == nameof(FlowInstanceState.Done))
-            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .SelectMany(step => (step.Output!["reopened"] as JsonArray)!.OfType<JsonObject>()
-                .Select(entry => (Class: TextOf(entry["class"]), Reopens: TextOf(entry["reopens"]))))
+        // The classes the reviews reopened, by each item's ledger - the one count of them, read by the signals too.
+        var reopened = (source.Ledgers ?? [])
+            .SelectMany(ledger => ledger.Ledger.Classes)
+            .Select(entry => (Class: entry.Class, Reopens: entry.Reopens.ToString(CultureInfo.InvariantCulture)))
             .ToList();
 
         if (reopened.Count > 0)
@@ -764,12 +761,8 @@ public static class FlowRunReport
             })]);
         }
 
-        var hotspots = source.Flow.Steps
-            .Where(step => step.Output?["hotspots"] is JsonArray { Count: > 0 } && step.State == nameof(FlowInstanceState.Done))
-            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
-            .Select(group => group.Last())
-            .SelectMany(step => (step.Output!["hotspots"] as JsonArray)!.OfType<JsonObject>()
-                .Select(hotspot => (Class: TextOf(hotspot["class"]), Path: TextOf(hotspot["path"]), Touches: TextOf(hotspot["touches"]))))
+        var hotspots = FlowClosureRecords.HotspotsOf(closing)
+            .Select(hotspot => (hotspot.Class, hotspot.Path, Touches: hotspot.Touches.ToString(CultureInfo.InvariantCulture)))
             .ToList();
 
         if (hotspots.Count > 0)
@@ -784,6 +777,10 @@ public static class FlowRunReport
 
         return convergence;
     }
+
+    /// <summary>The run's steps as the one owner of what its closure checks and routings say gathers them (<see cref="FlowClosureRecords"/>).</summary>
+    private static IReadOnlyList<FlowClosureRecords.Step> ClosingOf(FlowRunReportSource source)
+        => [.. source.Flow.Steps.Select(step => new FlowClosureRecords.Step(step.Instance, step.Group ? null : step.Type, step.State == nameof(FlowInstanceState.Done), step.Output))];
 
     /// <summary>One JSON value's text, where it is a string or a number; an empty string otherwise.</summary>
     private static string TextOf(JsonNode? node)
@@ -857,12 +854,12 @@ public static class FlowRunReport
             yield return new("reviewAtItsBound", [], "a loop reached its bound and asked");
         }
 
-        foreach (var twice in (source.Ledgers ?? []).SelectMany(ledger => ledger.Ledger.Classes.Where(@class => @class.Reopens >= 2).Select(@class => (ledger.Agent, @class))))
+        foreach (var twice in (source.Ledgers ?? []).SelectMany(ledger => ledger.Ledger.Classes.Where(@class => FlowClosureReopens.AsksItsHomeAudit(@class.Reopens)).Select(@class => (ledger.Agent, @class))))
         {
             yield return new("classReopenedTwice", [], $"'{twice.@class.Class}' was reopened {twice.@class.Reopens.ToString(CultureInfo.InvariantCulture)} times");
         }
 
-        foreach (var hotspot in steps.Where(step => step.Output?["hotspots"] is JsonArray { Count: > 0 }))
+        foreach (var hotspot in steps.Where(step => step.Type == FlowClosureRecords.CheckType && step.Output?["hotspots"] is JsonArray { Count: > 0 }))
         {
             yield return new("hotspot", [hotspot.Instance], $"{hotspot.Instance} named {hotspot.Output!["hotspots"]!.AsArray().Count.ToString(CultureInfo.InvariantCulture)} hotspot(s)");
         }

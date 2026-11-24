@@ -82,9 +82,11 @@ public sealed class FlowReportsTests
     }
 
     /// <summary>
-    /// The report carries the counts by which a repository sees whether its rounds converge: each item's newest class
-    /// record with its closing claim - never a case - the classes its reviews reopened with how often, and the homes
-    /// touched often enough to name, with their counts.
+    /// The report carries the counts by which a repository sees whether its rounds converge, gathered by the one owner
+    /// the run's words read too: each class's claim as its item's newest class-closure check judged the record - a check
+    /// run again after a rework is the one that stands, a plan audit's own closure member is no item's record, and an
+    /// item whose check was skipped has none - the classes its reviews reopened with how often, by each item's ledger,
+    /// which its reopened-twice signal reads by the route's own rule, and the homes touched often enough to name.
     /// </summary>
     [Fact]
     public void TheReportCarriesTheClosureCounts_OfRecordsReopeningsAndHotspots()
@@ -92,6 +94,8 @@ public sealed class FlowReportsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        static JsonNode Checked(string record, string hotspots = "[]")
+            => JsonNode.Parse($$"""{"passed":true,"problems":[],"hotspots":{{hotspots}},"touches":[],"record":{{record}}}""")!;
         var file = new FlowFile(
             1,
             "r1",
@@ -102,23 +106,37 @@ public sealed class FlowReportsTests
             new FlowBudgetRecord(0, 0, 0),
             0,
             [
-                new FlowStepRecord("rounds#1.items[0].implement", "implement", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"closure":[{"class":"c-rate","claim":"named a case: one format"}]}""")),
-                new FlowStepRecord("rounds#1.items[0].rework", "rework", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"closure":[{"class":"c-rate","claim":"the rate holds over every format"}]}""")),
-                new FlowStepRecord("rounds#1.items[1].implement", "implement", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"closure":[{"class":"c-frame","claim":"the frame is decided once"}]}""")),
-                new FlowStepRecord("rounds#1.items[0].fix#1.route", "route", false, "Done", 1, 1, [], [], Type: "route-findings", Output: JsonNode.Parse("""{"reopened":[{"class":"c-rate","reopens":2}]}""")),
-                new FlowStepRecord("rounds#1.items[0].class-closure", "class-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: JsonNode.Parse("""{"hotspots":[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}]}""")),
+                new FlowStepRecord("planning.plan-audit", "plan-audit", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"go":false,"closure":[{"class":"c-plan","missingSites":["src/Plan.cs"],"missingCells":[]}]}""")),
+                new FlowStepRecord("rounds#1.items[0].implement", "implement", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"closure":[{"class":"c-rate","claim":"an answer no check judged"}]}""")),
+                new FlowStepRecord("rounds#1.items[0].class-closure", "class-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-rate","claim":"named a case: one format"}]""")),
+                new FlowStepRecord("rounds#1.items[1].class-closure", "class-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-frame","claim":"the frame is decided once"}]""")),
+                new FlowStepRecord("rounds#1.items[0].fix#1.route", "route", false, "Done", 1, 1, [], [], Type: "route-findings", Output: JsonNode.Parse("""{"rework":[],"homeAudit":[],"reopened":[{"class":"c-rate","rounds":1}]}""")),
+                new FlowStepRecord("rounds#1.items[0].fix#1.revise.reclass-closure", "reclass-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-rate","claim":"the rate holds over every format"}]""", """[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}]""")),
+                new FlowStepRecord("rounds#1.items[2].class-closure", "class-closure", false, "Skipped", 1, 1, [], [], Type: "class-closure", Output: Checked("""[{"class":"c-skip","claim":"never judged"}]""")),
             ],
             [],
             DateTimeOffset.UnixEpoch);
+        var ledgers = new List<(string Agent, FlowClosureLedgerFile Ledger)>
+        {
+            ("a1", new FlowClosureLedgerFile(1, "a1", [new FlowClosureReopens("c-rate", ["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"])])),
+        };
 
-        _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch);
+        _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch, ledgers: ledgers);
 
         var report = harness.FileSystem.ReadAllText(layout.ReportFile).Replace("\r\n", "\n");
 
-        Assert.Contains("- 'c-rate': the rate holds over every format", report, StringComparison.Ordinal);
-        Assert.Contains("- 'c-frame': the frame is decided once", report, StringComparison.Ordinal);
-        Assert.Contains("- 'c-rate', reopened 2 time(s)", report, StringComparison.Ordinal);
-        Assert.Contains("- 'c-rate' home 'src/Rates/Home.cs', touched 6 time(s)", report, StringComparison.Ordinal);
+        Assert.Contains(
+            "## Convergence\n\n"
+                + "- 'c-rate': the rate holds over every format\n"
+                + "- 'c-frame': the frame is decided once\n"
+                + "- 'c-rate', reopened 2 time(s)\n"
+                + "- 'c-rate' home 'src/Rates/Home.cs', touched 6 time(s)\n",
+            report,
+            StringComparison.Ordinal);
+        Assert.Contains("'c-rate' was reopened 2 times", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("c-plan", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("c-skip", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("an answer no check judged", report, StringComparison.Ordinal);
     }
 
     /// <summary>

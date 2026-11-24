@@ -764,10 +764,11 @@ is violated, survived or unattributed goes back to the builder as `rearm`, whose
 rework's does before the sweep runs again on the bytes it landed as; any other failure of the sweep
 is the machine's, and goes where the item's other failures go. The run's report and its
 pull request's body carry the counts by which a repository sees whether its rounds converge: each
-item's closing claim - the universe, never a case - the classes its reviews reopened with how often,
-the homes touched often enough to name, and the issues carried to a later round; the self-audit
-reads the same gathered records and hotspots as `{run.closure}` and `{run.hotspots}`, through the
-instance-closure lens: a diff that touches one site and names a case, a theme repeating in the run's
+class's closing claim as its item's closure check judged the record - the universe, never a case -
+the classes its reviews reopened with how many rounds, and the homes touched often enough to name
+(`{run.claims}`, `{run.reopened}` and `{run.hotspots}`); the pull request's body and the handoff say
+too what became of each issue carried to a later round. The self-audit reads the same records whole
+and the same hotspots as `{run.closure}` and `{run.hotspots}`, through the instance-closure lens: a diff that touches one site and names a case, a theme repeating in the run's
 commit subjects, a hotspot's path, a pin that lists the case by hand - each disproved or made a work
 item. A pre-existing
 issue the triage answers `next` for - a defect in code the run's change does not touch that blocks
@@ -2217,8 +2218,8 @@ Where that step ends any other way - skipped, failed and passed over, never run 
 decided there, and the iteration's end reads them as for a loop that names no deciding step. Its
 `until`, `blocking` and `leftover` read of the iteration only the deciding step and the steps it
 waits for, and every other step of the iteration runs before it or after it. The shipped review
-loop decides at its `review`, so its last rework is always reviewed and its leftover is what its
-last review found.
+loop decides at its `route`, where the review's findings are routed, so its last rework is always
+reviewed and its leftover is what its last routing left - the rework and the home audits alike.
 What only a prompt reads stands where its agent is asked it:
 `{recommendations}` in a reason step's prompt and the advisor's - the bar the repository wrote,
 read live each time it is given - `{text.<name>}` beside it, a workflow's texts, and

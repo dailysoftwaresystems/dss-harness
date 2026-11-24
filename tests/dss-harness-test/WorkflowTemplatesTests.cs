@@ -643,7 +643,7 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Contains("rounds: 3", pipeline, StringComparison.Ordinal);
         Assert.Contains(
-            "blocking: \"any(route.rework, it.severity != 'low' && it.severity != 'nit')\"",
+            "blocking: \"any(union(route.rework, route.homeAudit), it.severity != 'low' && it.severity != 'nit')\"",
             pipeline,
             StringComparison.Ordinal);
         Assert.DoesNotContain("it.production && it.severity", pipeline, StringComparison.Ordinal);
@@ -651,7 +651,7 @@ public sealed class WorkflowTemplatesTests
         var fix = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items", "fix");
 
         Assert.Equal(3, fix.Repeat!.BlockersLimitRounds);
-        Assert.Equal("route.rework", fix.Repeat.Leftover);
+        Assert.Equal("union(route.rework, route.homeAudit)", fix.Repeat.Leftover);
         Assert.Equal("route", fix.Repeat.DecideAfter);
         Assert.Equal(new FlowAnswer("accept", null, null), fix.Answers["loopBound"]);
     }
@@ -714,6 +714,43 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(
             [("remend", "reverify"), ("reclose-class", "reverify"), ("rehome-audit", "reverify"), ("rereconcile", "reverify"), ("recite", "reverify")],
             [.. revise.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
+    }
+
+    /// <summary>
+    /// The review loop reads both lists its routing makes alike - the rework and the home audits: a class reopened twice
+    /// or more, graded by the worst of its findings, keeps the loop going past its rounds as a rework of that grade does,
+    /// and what the loop leaves at its bound holds it, so an audit still owed is written to the backlog and named in the
+    /// pull request; a loop whose routing left nothing blocks nothing and leaves nothing. The pipeline's own leftover
+    /// output reads the same lists of the loop's last routing.
+    /// </summary>
+    [Fact]
+    public void TheReviewLoop_ReadsTheHomeAuditsItsRoutingLeaves_AsItReadsTheRework()
+    {
+        var items = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items");
+        var repeat = StepAt(items.Steps, "fix").Repeat!;
+        var audit = new JsonObject { ["reopenedClass"] = "c-rate", ["rounds"] = 2, ["severity"] = "high", ["findings"] = new JsonArray() };
+        var nit = new JsonObject { ["title"] = "a name", ["severity"] = "nit", ["class"] = "introduced" };
+
+        (bool Blocking, string Leftover) Decided(JsonArray rework, JsonArray homeAudit)
+        {
+            // What the route answered, as the loop reads the step: its root, the tree walking the member read.
+            FlowValue Read(FlowExpression.Path path) => path.Root == "route"
+                ? FlowValue.Of(new JsonObject { ["rework"] = rework.DeepClone(), ["homeAudit"] = homeAudit.DeepClone(), ["reopened"] = new JsonArray() })
+                : throw new InvalidOperationException($"the loop reads '{path.Whole}'");
+
+            return (
+                FlowExpression.Parse(repeat.Blocking!).Evaluate(Read).AsBoolean(() => repeat.Blocking!),
+                FlowExpression.Parse(repeat.Leftover!).Evaluate(Read).ToNode()!.ToJsonString());
+        }
+
+        Assert.Equal((true, new JsonArray(audit.DeepClone()).ToJsonString()), Decided([], [audit.DeepClone()]));
+        Assert.Equal((false, new JsonArray(nit.DeepClone()).ToJsonString()), Decided([nit.DeepClone()], []));
+        Assert.Equal((false, "[]"), Decided([], []));
+        Assert.Equal("empty(route.rework) && empty(route.homeAudit)", repeat.Until);
+        Assert.Equal(
+            "union(fix.route.rework, fix.route.homeAudit)",
+            Assert.Single(items.Use!.Outputs, output => output.Name == "leftover").From);
+        Assert.Equal("union(route.rework, route.homeAudit)", repeat.Leftover);
     }
 
     /// <summary>

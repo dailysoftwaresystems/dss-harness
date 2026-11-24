@@ -24,9 +24,13 @@
 
 ## The classes this run closed
 
-Each item's closing claim, as its record holds it - the universe it ranges over, never a case:
+Each class's closing claim, as its item's closure check judged the record - the universe it ranges over, never a case:
 
-{run.closure}
+{run.claims}
+
+The classes the reviews reopened, with how many rounds reopened each - a second reopening asks the class's home audit:
+
+{run.reopened}
 
 The homes the run touched often enough to name, with how often:
 
