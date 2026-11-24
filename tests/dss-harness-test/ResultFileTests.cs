@@ -338,7 +338,10 @@ public sealed class ResultFileTests
         Assert.Equal(["sarif: (no message) - not held, for a diagnostic says no message"], digest.Unparsed);
     }
 
-    /// <summary>A results file a crash cut short gives every finding before the break and says where it broke - an XML form as a JSON one - never throws.</summary>
+    /// <summary>
+    /// A results file a crash cut short gives every finding before the break and says where it broke - an XML form a case
+    /// at a time, a SARIF log a result at a time - never throws.
+    /// </summary>
     [Fact]
     public void AResultsFileCutShort_GivesWhatItHeld_AndSaysTheBreak()
     {
@@ -347,10 +350,37 @@ public sealed class ResultFileTests
         Assert.Equal(["demo.one"], xml.Failures.Select(failure => failure.Id));
         Assert.StartsWith("it is no XML: ", xmlProblem, StringComparison.Ordinal);
 
-        var json = ResultFiles.Digest(Sarif[..(Sarif.Length / 2)], out var jsonProblem);
+        var json = ResultFiles.Digest(Sarif[..Sarif.IndexOf("\"ruleId\": \"CS0219\"", StringComparison.Ordinal)], out var jsonProblem);
 
-        Assert.Empty(json.Diagnostics);
+        Assert.Equal(["CS0103"], json.Diagnostics.Select(diagnostic => diagnostic.Code));
         Assert.StartsWith("it is no whole JSON document: ", jsonProblem, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A SARIF log is read from its stream a result at a time, never held whole: a result longer than the reader's block is
+    /// taken whole as it is met, and a run whose results come before its tool is read once more for them, so each result
+    /// names its own run's tool - a run naming none said as SARIF's - in the order the log holds them.
+    /// </summary>
+    [Fact]
+    public void ASarifLog_IsReadAResultAtATime_EachNamingItsRunsTool_InTheLogsOrder()
+    {
+        var wide = new string('x', 40_000);
+        var log = """
+            {"version":"2.1.0","runs":[
+              {"tool":{"driver":{"name":"first"}},"results":[{"ruleId":"A1","level":"error","message":{"text":"WIDE"}}]},
+              {"results":[{"ruleId":"B1","level":"error","message":{"text":"b one"}},{"ruleId":"B2","message":{"text":"b two"}}],"tool":{"driver":{"name":"second"}}},
+              {"tool":{"name":"third"},"results":[{"ruleId":"C1","level":"note","message":"c one"}]},
+              {"results":[{"ruleId":"D1","level":"error","message":{"text":"d one"}}]}
+            ]}
+            """.Replace("WIDE", wide, StringComparison.Ordinal);
+
+        var digest = ResultFiles.Digest(log, out var problem);
+
+        Assert.Null(problem);
+        Assert.Equal(
+            [("first", "A1", "error"), ("second", "B1", "error"), ("second", "B2", "warning"), ("third", "C1", "note"), ("sarif", "D1", "error")],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Code!, diagnostic.Severity)));
+        Assert.Equal(wide, digest.Diagnostics[0].Message);
     }
 
     /// <summary>A file no form owns is said with its reason, never guessed at: no XML and no JSON, an XML root no form owns, JSON of no form's shape.</summary>

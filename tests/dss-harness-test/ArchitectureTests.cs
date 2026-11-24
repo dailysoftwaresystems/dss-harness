@@ -406,6 +406,7 @@ public sealed class ArchitectureTests
         // A streamed reader whose state is a JsonReaderState(JsonDepth.Reader) made once, outside the loop.
         [@"DssHarness.Core\Agents\Http\ApiAnswers.cs"] = "a Utf8JsonReader over a refusal's body, its state made of JsonDepth.Reader",
         [@"DssHarness.Core\Codebase\Languages\JsonOutline.cs"] = "a Utf8JsonReader over a JSON file's bytes, its state made of JsonDepth.Reader",
+        [@"DssHarness.Core\Json\JsonTokens.cs"] = "a Utf8JsonReader over each block a stream gives, its state made of JsonDepth.Reader",
 
         // A digest's input: four flat strings, one array, nothing that can nest.
         [@"DssHarness.Core\Web\Index\SitemapSettings.cs"] = "the writing of four flat strings whose bytes are hashed",

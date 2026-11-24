@@ -17,9 +17,9 @@ namespace DssHarness.Core.Results;
 /// <c>--reporter json</c> stream, and a SARIF log (csc <c>-errorlog</c> in its 1.0 and 2.1 forms, gcc 13 and later
 /// <c>-fdiagnostics-format=sarif-file</c>, clang <c>-fdiagnostics-format=sarif</c>). A file a tool wrote as data is read
 /// before any log line is parsed, for what a file holds is typed already; what it does not hold no parser of lines
-/// invents. Each is read as a stream - an XML form a test result at a time, the Dart stream a line at a time - so no file
-/// is held whole for its size, and each is read to its end: a file a crash cut short gives every finding before the
-/// break, and the break is said, never thrown. Its places are read as a log's are, by one owner
+/// invents. Each is read as a stream - an XML form a test result at a time, the Dart stream a line at a time, a SARIF log a
+/// result at a time - so no file is held whole for its size, and each is read to its end: a file a crash cut short gives
+/// every finding before the break, and the break is said, never thrown. Its places are read as a log's are, by one owner
 /// (<see cref="ParsedText.FileOf"/>): a <c>file:</c> URI as the path it names, any other text as the tool wrote it - and
 /// read against the tree in one place (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>); its texts are
 /// masked where the digest is (<see cref="ResultDigest.MaskedBy"/>).
@@ -211,7 +211,7 @@ public static class ResultFiles
 
     /// <summary>
     /// The JSON forms: Dart's reporter stream by its first line - an object with a <c>type</c> member - read on a line at
-    /// a time; anything else as one document, a SARIF log by its runs.
+    /// a time; anything else as a SARIF log, read from its stream a result at a time (<see cref="SarifLog"/>).
     /// </summary>
     private static string? Json(TextReader text, Func<Stream> open, ResultDigest.Gathering into)
     {
@@ -222,21 +222,7 @@ public static class ResultFiles
             return DartStream.Read(line, text, into);
         }
 
-        JsonNode? whole;
-
-        try
-        {
-            using var stream = open();
-            whole = JsonDepth.ParseStream(stream);
-        }
-        catch (JsonException ex)
-        {
-            return $"it is no whole JSON document: {ex.Message}";
-        }
-
-        return whole is JsonObject log && log["runs"] is not null
-            ? Sarif(log, into)
-            : "it is JSON, and none of the results forms owns it";
+        return SarifLog.Read(open, into);
     }
 
     /// <summary>One line read as a JSON document, or <see langword="null"/> where it is none - a line a stop cut short, or one of a document laid over several.</summary>
@@ -253,24 +239,160 @@ public static class ResultFiles
     }
 
     /// <summary>
-    /// A SARIF log's results, each a diagnostic: its tool's name, its level - <c>warning</c> where it names none, as SARIF
-    /// says - its rule, its message and its place, a <c>file:</c> URI the path it names, in the 2.1 form and the 1.0 form
-    /// csc writes by default. A member of another shape than the form's is read as absent, never thrown over.
+    /// A SARIF log, read from its stream a result at a time and never held whole, however large: each run's tool and each
+    /// of its results taken whole as it is met, every other member passed by (<see cref="JsonTokens"/>). Each result a
+    /// diagnostic: its tool's name, its level - <c>warning</c> where it names none, as SARIF says - its rule, its message and
+    /// its place, a <c>file:</c> URI the path it names, in the 2.1 form and the 1.0 form csc writes by default. A run whose
+    /// results come before its tool is read once more for them, its tool then known, so every result names its tool and
+    /// the log's order is kept. A member of another shape than the form's is read as absent, never thrown over; a log a
+    /// stop cut short gives every result before the break, and says the break.
     /// </summary>
-    private static string? Sarif(JsonObject log, ResultDigest.Gathering into)
+    private static class SarifLog
     {
-        if (log["runs"] is not JsonArray runs)
+        /// <summary>What a JSON document no results form owns is said as.</summary>
+        private const string Unowned = "it is JSON, and none of the results forms owns it";
+
+        /// <summary>The tool a result is said as where its run names none.</summary>
+        private const string NoTool = "sarif";
+
+        /// <summary>Reads the log <paramref name="open"/> opens into <paramref name="into"/>, and answers what could not be read of it.</summary>
+        public static string? Read(Func<Stream> open, ResultDigest.Gathering into)
         {
-            return "it holds no list of runs";
+            var tools = new List<string?>();
+
+            try
+            {
+                int? deferred;
+
+                using (var stream = open())
+                {
+                    if (Pass(new JsonTokens(stream), tools, into, from: null, out deferred) is { } problem)
+                    {
+                        return problem;
+                    }
+                }
+
+                if (deferred is { } first)
+                {
+                    using var again = open();
+                    Pass(new JsonTokens(again), tools, into, first, out _);
+                }
+
+                return null;
+            }
+            catch (JsonException ex)
+            {
+                return $"it is no whole JSON document: {ex.Message}";
+            }
         }
 
-        foreach (var run in runs.OfType<JsonObject>())
+        /// <summary>
+        /// One pass over the log: in the first (<paramref name="from"/> null), every run's tool, and the results of each run
+        /// up to the first whose results came before its tool - that run's index given back as <paramref name="deferred"/>;
+        /// in the second, the results of every run from <paramref name="from"/> on, every tool known by then.
+        /// </summary>
+        private static string? Pass(JsonTokens tokens, List<string?> tools, ResultDigest.Gathering into, int? from, out int? deferred)
         {
-            var tool = TextOf(Member(Member(run["tool"], "driver"), "name")) ?? TextOf(Member(run["tool"], "name")) ?? "sarif";
+            deferred = null;
 
-            foreach (var found in (run["results"] as JsonArray ?? []).OfType<JsonObject>())
+            if (!tokens.Read() || tokens.TokenType != JsonTokenType.StartObject)
             {
-                var place = (found["locations"] as JsonArray ?? []).OfType<JsonObject>()
+                return Unowned;
+            }
+
+            var runs = false;
+
+            while (tokens.Read() && tokens.TokenType == JsonTokenType.PropertyName)
+            {
+                var name = tokens.GetString();
+
+                tokens.Read();
+
+                if (!string.Equals(name, "runs", StringComparison.Ordinal))
+                {
+                    tokens.Skip();
+                    continue;
+                }
+
+                if (tokens.TokenType != JsonTokenType.StartArray)
+                {
+                    return "it holds no list of runs";
+                }
+
+                runs = true;
+
+                var index = -1;
+
+                while (tokens.Read() && tokens.TokenType != JsonTokenType.EndArray)
+                {
+                    if (tokens.TokenType != JsonTokenType.StartObject)
+                    {
+                        tokens.Skip();
+                        continue;
+                    }
+
+                    index++;
+
+                    if (tools.Count <= index)
+                    {
+                        tools.Add(null);
+                    }
+
+                    Run(tokens, index, tools, into, from, ref deferred);
+                }
+            }
+
+            return runs ? null : Unowned;
+        }
+
+        /// <summary>One run, its first token read: its tool in the first pass, its results where this pass reads them.</summary>
+        private static void Run(JsonTokens tokens, int index, List<string?> tools, ResultDigest.Gathering into, int? from, ref int? deferred)
+        {
+            var toolMet = false;
+
+            while (tokens.Read() && tokens.TokenType == JsonTokenType.PropertyName)
+            {
+                var name = tokens.GetString();
+
+                tokens.Read();
+
+                if (from is null && string.Equals(name, "tool", StringComparison.Ordinal))
+                {
+                    var tool = tokens.TakeNode();
+
+                    tools[index] = TextOf(Member(Member(tool, "driver"), "name")) ?? TextOf(Member(tool, "name"));
+                    toolMet = true;
+                }
+                else if (string.Equals(name, "results", StringComparison.Ordinal) && tokens.TokenType == JsonTokenType.StartArray
+                    && (from is { } again ? index >= again : deferred is null && toolMet))
+                {
+                    Results(tokens, tools[index] ?? NoTool, into);
+                }
+                else
+                {
+                    if (from is null && deferred is null && !toolMet && string.Equals(name, "results", StringComparison.Ordinal))
+                    {
+                        deferred = index;
+                    }
+
+                    tokens.Skip();
+                }
+            }
+        }
+
+        /// <summary>A run's results, their array's first token read: each taken whole and said as a diagnostic of <paramref name="tool"/>.</summary>
+        private static void Results(JsonTokens tokens, string tool, ResultDigest.Gathering into)
+        {
+            while (tokens.Read() && tokens.TokenType != JsonTokenType.EndArray)
+            {
+                if (tokens.TokenType != JsonTokenType.StartObject)
+                {
+                    tokens.Skip();
+                    continue;
+                }
+
+                var found = tokens.TakeNode();
+                var place = (Member(found, "locations") as JsonArray ?? []).OfType<JsonObject>()
                     .Select(location => Member(location, "physicalLocation") ?? Member(location, "resultFile"))
                     .OfType<JsonObject>()
                     .FirstOrDefault();
@@ -278,14 +400,14 @@ public static class ResultFiles
 
                 into.Add(new Diagnostic(
                     tool,
-                    TextOf(found["level"]) switch
+                    TextOf(Member(found, "level")) switch
                     {
                         "error" => "error",
                         "note" or "none" or "pass" or "notApplicable" or "informational" => "note",
                         _ => "warning",
                     },
-                    TextOf(found["ruleId"]),
-                    TextOf(found["message"]) ?? TextOf(Member(found["message"], "text")) ?? string.Empty,
+                    TextOf(Member(found, "ruleId")),
+                    TextOf(Member(found, "message")) ?? TextOf(Member(Member(found, "message"), "text")) ?? string.Empty,
                     ParsedText.FileOf(TextOf(Member(Member(place, "artifactLocation"), "uri")) ?? TextOf(Member(place, "uri"))),
                     WholeOf(Member(region, "startLine")),
                     WholeOf(Member(region, "startColumn")),
@@ -293,8 +415,6 @@ public static class ResultFiles
                     WholeOf(Member(region, "endColumn"))));
             }
         }
-
-        return null;
     }
 
     /// <summary><paramref name="node"/>'s member <paramref name="name"/>, where it is an object; <see langword="null"/> where it is anything else.</summary>

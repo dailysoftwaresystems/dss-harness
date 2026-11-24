@@ -9926,7 +9926,7 @@ a fault crashed) - through its one reader that takes no document type, a case wh
 name, as CTest writes every one, named once in the digest with no class), Dart's JSON reporter
 stream a line at a time by its `type`-carrying lines (a failing test with its error event as its
 message and its `#n` stack, an error no test owns as a diagnostic), and a SARIF log by its runs in
-its 2.1 and 1.0 forms (each result a diagnostic: the driver's name, the level - `warning` where it
+its 2.1 and 1.0 forms, read from its stream a result at a time and never held whole (each result a diagnostic: the driver's name, the level - `warning` where it
 names none - the rule, the message, the place and its range). A member of another shape than the
 form's is read as absent; a file a crash cut short gives every finding before the break and says
 the break, and a line of the Dart stream that is no event is counted and the first said. Text read
