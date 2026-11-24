@@ -1,6 +1,7 @@
 {
   "read": {
-    "file": true
+    "file": true,
+    "tests": "ctest"
   },
   "root": "/home/runner/work/app/app",
   "tree": ["check.c"],

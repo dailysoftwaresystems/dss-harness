@@ -334,26 +334,29 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
-    /// Masking a digest masks every text it holds - each message, expected and actual, each test's id, each frame's line,
-    /// each exception's message down its causes, each unparsed line - by the one rule, whichever reader made it.
+    /// What is gathered through a mask - a results file's text, which no log's mask saw - is masked as it is gathered:
+    /// each message, expected and actual, each test's id, each frame's line, each exception's message down its causes,
+    /// each unparsed line - by the one rule, whichever reader made it - and gathered into the gathering the view is of.
     /// </summary>
     [Fact]
-    public void MaskingADigest_MasksEveryTextItHolds()
+    public void WhatIsGatheredThroughAMask_IsMaskedAsItIsGathered_EveryTextItHolds()
     {
         const string Secret = "sk-secret-one";
         var frame = new StackFrame($"at Login({Secret})");
-        var digest = ResultDigest.Of(
-            [new Diagnostic("csc", "error", "CS1", $"key {Secret} leaked", Stack: [frame])],
-            [
-                new TestFailure("trx", $"Login({Secret})", Message: $"saw {Secret}", Expected: Secret, Actual: Secret, Stack: [frame]),
-                new TestFailure("dotnet", "Thrown", Exception: new ExceptionRecord("E", $"outer {Secret}", [frame], [new ExceptionRecord("I", $"inner {Secret}", [frame], [])])),
-            ],
-            [$"line {Secret}"]);
+        var gathering = new ResultDigest.Gathering();
+        var masking = gathering.Through(new Masking(Secret));
 
-        var masked = digest.MaskedBy(new Masking(Secret)).Document().ToJsonString();
+        masking.Add(new Diagnostic("csc", "error", "CS1", $"key {Secret} leaked", Stack: [frame]));
+        masking.Add(new TestFailure("trx", $"Login({Secret})", Message: $"saw {Secret}", Expected: Secret, Actual: Secret, Stack: [frame]));
+        masking.Add(new TestFailure("dotnet", "Thrown", Exception: new ExceptionRecord("E", $"outer {Secret}", [frame], [new ExceptionRecord("I", $"inner {Secret}", [frame], [])])));
+        masking.Unparsed($"line {Secret}");
 
+        var masked = gathering.Digest().Document().ToJsonString();
+
+        Assert.Same(gathering, gathering.Through(null));
         Assert.DoesNotContain(Secret, masked, StringComparison.Ordinal);
         Assert.Equal(13, masked.Split("***").Length - 1);
+        Assert.Equal(masked, masking.Digest().Document().ToJsonString());
     }
 
     /// <summary>
@@ -373,19 +376,73 @@ public sealed class ResultDigestRecordTests
         Assert.Equal(["error: odd"], failed.TailBeside(tail));
     }
 
-    /// <summary>What results files that held no finding said is put ahead of the log's own unparsed lines, counted with them; a digest holding a finding is never set aside.</summary>
+    /// <summary>
+    /// A phase's log is gathered beside what its results files gave, each finding once: a diagnostic the files hold - the
+    /// same code at the same place, however each form wrote the path - is not said again, one they lack is; a failure of a
+    /// test the files name is no second failure and gives the file's what it lacks, its range in the log among it; a
+    /// failure of a test no file names that crashed - the test host's - is said, and one that merely failed is the files'
+    /// test in the console's own words, said once; where the files name no failure, the log's every failure is said; and
+    /// the log's unparsed lines are gathered after what the files said.
+    /// </summary>
     [Fact]
-    public void WhatTheFilesSaid_IsSaidBesideTheLogsDigest()
+    public void ALogsFindings_AreGatheredBesideTheFiles_EachOnce_WhatTheFilesLackAdded()
     {
-        var log = ResultDigest.Of([], [new TestFailure("ctest", "demo_test")], ["error: odd"]);
-        var said = ResultDigest.Of([], [], ["results: 'junit.xml' named no file"]);
+        var gathering = new ResultDigest.Gathering();
 
-        var beside = log.Beside(said);
+        gathering.Add(new Diagnostic("Microsoft Visual C# Compiler", "error", "CS0103", "The name 'x' does not exist in the current context.", "d:/src/Program.cs", 12, 35));
+        gathering.Add(new TestFailure("junit", "parses_input", Message: "SEGFAULT", Outcome: "crashed"));
+        gathering.Add(new TestFailure("trx", "Demo.Tests.One", Message: "Assert.Equal() Failure", Log: null));
+        gathering.Unparsed("results: 'b.xml' named no file");
+        gathering.Unparsed("error: lost");
 
-        Assert.Equal(["results: 'junit.xml' named no file", "error: odd"], beside.Unparsed);
-        Assert.Equal(2, beside.UnparsedCount);
-        Assert.Equal(["demo_test"], beside.Failures.Select(failure => failure.Id));
-        Assert.Throws<ArgumentException>(() => said.Beside(log));
+        gathering.Beside(
+            new PhaseFindings(
+                [
+                    new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", @"d:\src\Program.cs", 12, 35, Log: (3, 3)),
+                    new Diagnostic("msbuild", "warning", "CS0219", "The variable 'y' is assigned but its value is never used", @"d:\src\Program.cs", 20, 13, Log: (4, 4)),
+                ],
+                [
+                    new TestFailure("ctest", "parses_input", Message: "Exception: SegFault", File: "src/parse.c", Line: 9, Outcome: "crashed", Log: (7, 7)),
+                    new TestFailure("dotnet", "test run", Message: "Test host process crashed : Stack overflow", Outcome: "crashed", Log: (9, 9)),
+                    new TestFailure("dotnet", "Demo Tests One", Message: "Assert.Equal() Failure", Log: (11, 11)),
+                ]),
+            file => file.Replace('\\', '/'));
+
+        var digest = gathering.Digest();
+
+        Assert.Equal([("error", "Microsoft Visual C# Compiler"), ("warning", "msbuild")], digest.Diagnostics.Select(diagnostic => (diagnostic.Severity, diagnostic.Tool)));
+        Assert.Equal((1, 1), (digest.Errors, digest.Warnings));
+        Assert.Equal(
+            [("parses_input", "SEGFAULT", "src/parse.c", (int?)9, ((int, int)?)(7, 7)), ("Demo.Tests.One", "Assert.Equal() Failure", null, null, null), ("test run", "Test host process crashed : Stack overflow", null, null, (9, 9))],
+            digest.Failures.Select(failure => (failure.Id, failure.Message!, failure.File, failure.Line, failure.Log)));
+        Assert.Equal((1, 2), (digest.Failed, digest.Crashed));
+        Assert.Equal(["results: 'b.xml' named no file", "error: lost"], digest.Unparsed);
+        Assert.Throws<InvalidOperationException>(() => gathering.Through(new Masking("x")).Beside(new PhaseFindings([], []), file => file));
+
+        var unfiled = new ResultDigest.Gathering();
+
+        unfiled.Unparsed("results: 'junit.xml' named no file");
+        unfiled.Beside(new PhaseFindings([], [new TestFailure("ctest", "folds_duplicates", Log: (5, 5))]), file => file);
+
+        Assert.Equal(["folds_duplicates"], unfiled.Digest().Failures.Select(failure => failure.Id));
+    }
+
+    /// <summary>
+    /// A test a results file's case was said through - the first failure its own output printed, whose message and place
+    /// the case took - is one the files named: the log's printing of that failure is no second failure.
+    /// </summary>
+    [Fact]
+    public void ATestACaseWasSaidThrough_IsOneTheFilesNamed()
+    {
+        var gathering = new ResultDigest.Gathering();
+        var printed = new TestFailure("gtest", "StoreTest.Loads", Message: "Expected equality", File: "test/store_test.cc", Line: 12);
+
+        gathering.Add(new TestFailure("junit", "unit_tests", Message: "Expected equality", File: "test/store_test.cc", Line: 12), printed);
+        gathering.Beside(new PhaseFindings([], [printed with { Log = (4, 6) }]), file => file);
+
+        var only = Assert.Single(gathering.Digest().Failures);
+
+        Assert.Equal(("unit_tests", ((int, int)?)null), (only.Id, only.Log));
     }
 
     /// <summary>

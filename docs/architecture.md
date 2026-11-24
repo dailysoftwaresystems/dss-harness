@@ -9964,8 +9964,14 @@ naming the host as the configuration declares it, never by an address its name r
 this build writes refused as a ledger it cannot read is. A phase is digested in one place (`Results\PhaseDigest.cs`)
 wherever its failure is the leg's verdict - a moving tree's or a shared directory's says nothing of the code - a
 build's failing phase by the parsers its project and its toolchain's compiler chose and a test's by its runner's, each
-with the matchers that read it (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first, and its
-log only where they gave no finding, what they could not give said beside it. Every place is then read against the
+with the matchers that read it (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first
+- what a JUnit case's own test printed (its failure's body, `system-out`, `system-err`) read by the runner's parsers, a
+stack there by its runtime's own form, so a case that says only how its test ended (CTest's `Failed`) takes its message
+and place from the first failure its test printed, or says all it printed where nothing is typed - and its log read
+beside them in the same digest all the same, each finding said once (`ResultDigest.Gathering.Beside`): a diagnostic the
+files lack, a crash, a host that died, a test that hung, every failure where the files name none, is added; a test both
+name is the file's, given what the log holds of it and the file lacks, its range in the log among it; and what the files
+could not give is said beside them. Every place is then read against the
 tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed - a diagnostic's file and its
 project's, each frame's, a failure's, each count's by file): a path - relative ones read from the directory the tool
 ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by

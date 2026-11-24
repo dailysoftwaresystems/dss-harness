@@ -15,14 +15,16 @@ namespace DssHarness.Core.Results;
 /// can be asked to leave behind - a TRX (<c>dotnet test --logger trx</c>, xUnit v3 <c>--report-trx</c>), the JUnit XML
 /// family (ctest <c>--output-junit</c>, gtest <c>--gtest_output=xml</c>, Catch2, jest-junit, vitest), Dart's
 /// <c>--reporter json</c> stream, and a SARIF log (csc <c>-errorlog</c> in its 1.0 and 2.1 forms, gcc 13 and later
-/// <c>-fdiagnostics-format=sarif-file</c>, clang <c>-fdiagnostics-format=sarif</c>). A file a tool wrote as data is read
-/// before any log line is parsed, for what a file holds is typed already; what it does not hold no parser of lines
-/// invents. Each is read as a stream - an XML form a test result at a time, the Dart stream a line at a time, a SARIF log a
+/// <c>-fdiagnostics-format=sarif-file</c>, clang <c>-fdiagnostics-format=sarif</c>). A file a tool wrote as data is
+/// gathered ahead of the phase's log, for what a file holds is typed already, and the log is read beside it for what it
+/// lacks (<see cref="PhaseDigest"/>); what a JUnit case's own test printed - its failure's body, its <c>system-out</c> and
+/// <c>system-err</c> - is read by the phase's parsers, a stack by its runtime's own form (<see cref="JUnitFailures"/>).
+/// Each is read as a stream - an XML form a test result at a time, the Dart stream a line at a time, a SARIF log a
 /// result at a time - so no file is held whole for its size, and each is read to its end: a file a crash cut short gives
 /// every finding before the break, and the break is said, never thrown. Its places are read as a log's are, by one owner
 /// (<see cref="ParsedText.FileOf"/>): a <c>file:</c> URI as the path it names, any other text as the tool wrote it - and
 /// read against the tree in one place (<see cref="ResultDigest.WithInTree(Func{string, string?}, Func{string, string, string?})"/>); its texts are
-/// masked where the digest is (<see cref="ResultDigest.MaskedBy"/>).
+/// masked as they are gathered (<see cref="ResultDigest.Gathering.Through"/>).
 /// </summary>
 public static class ResultFiles
 {
@@ -35,11 +37,16 @@ public static class ResultFiles
     /// </summary>
     /// <param name="open">Opens the file; opened again where a form is read from its start a second way.</param>
     /// <param name="into">Gathers what the file holds.</param>
+    /// <param name="parsers">
+    /// The parsers chosen for the phase that wrote it, which read what a JUnit case's own test printed
+    /// (<see cref="JUnitFailures"/>); none where no phase is known, and a case's output is then read by none.
+    /// </param>
     /// <exception cref="IOException">The file could not be read.</exception>
-    public static string? Read(Func<Stream> open, ResultDigest.Gathering into)
+    public static string? Read(Func<Stream> open, ResultDigest.Gathering into, IReadOnlyList<IResultParser> parsers)
     {
         ArgumentNullException.ThrowIfNull(open);
         ArgumentNullException.ThrowIfNull(into);
+        ArgumentNullException.ThrowIfNull(parsers);
 
         using var text = new StreamReader(open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
 
@@ -50,7 +57,7 @@ public static class ResultFiles
 
         return text.Peek() switch
         {
-            '<' => Xml(text, () => new StreamReader(open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true), into),
+            '<' => Xml(text, () => new StreamReader(open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true), into, parsers),
             '{' => Json(text, open, into),
             _ => "it is no XML and no JSON",
         };
@@ -62,19 +69,20 @@ public static class ResultFiles
     /// </summary>
     /// <param name="text">The file's text.</param>
     /// <param name="problem">What could not be read of it; null where it was read whole.</param>
-    public static ResultDigest Digest(string text, out string? problem)
+    /// <param name="parsers">The parsers chosen for the phase that wrote it; none where it is not known.</param>
+    public static ResultDigest Digest(string text, out string? problem, IReadOnlyList<IResultParser>? parsers = null)
     {
         ArgumentNullException.ThrowIfNull(text);
 
         var gathering = new ResultDigest.Gathering();
         var bytes = Encoding.UTF8.GetBytes(text);
 
-        problem = Read(() => new MemoryStream(bytes, writable: false), gathering);
+        problem = Read(() => new MemoryStream(bytes, writable: false), gathering, parsers ?? []);
         return gathering.Digest();
     }
 
     /// <summary>The XML forms: a TRX by its root, a JUnit report by the mutation arm's reader, which owns that form - each through the one guarded reader.</summary>
-    private static string? Xml(TextReader text, Func<TextReader> open, ResultDigest.Gathering into)
+    private static string? Xml(TextReader text, Func<TextReader> open, ResultDigest.Gathering into, IReadOnlyList<IResultParser> parsers)
     {
         try
         {
@@ -91,7 +99,7 @@ public static class ResultFiles
                     {
                         if (@case is { Ran: true, Red: true })
                         {
-                            into.Add(JUnitFailure(@case));
+                            JUnitFailures(@case, parsers, into);
                         }
                     });
 
@@ -104,6 +112,64 @@ public static class ResultFiles
         catch (XmlException ex)
         {
             return JUnitReport.Unread(ex, open);
+        }
+    }
+
+    /// <summary>
+    /// A JUnit case that failed, gathered (<see cref="JUnitFailure"/>) with what its own test printed
+    /// (<see cref="JUnitCase.Output"/>: its failure's body, its <c>system-out</c>, its <c>system-err</c>) read by the
+    /// phase's parsers, as the lines its test printed - none of them a log's, so nothing read there has a log range. The
+    /// case takes from the first failure they find what it lacks: that failure's stack and its thrown error - a body's
+    /// stack read by its runtime's own stack form - its place where the case names none, what was expected and what there
+    /// was, and its message where the case says only how its test ended; the case is gathered said through it, so the
+    /// log's printing of it is no second failure. Where they find no failure, the case takes its place from the first
+    /// error they find; where they find neither and the case says only how its test ended, its message is what its test
+    /// printed, whole. Every other failure and every diagnostic they find is gathered as its own: what the test printed
+    /// is never set aside.
+    /// </summary>
+    private static void JUnitFailures(JUnitCase @case, IReadOnlyList<IResultParser> parsers, ResultDigest.Gathering into)
+    {
+        var failure = JUnitFailure(@case);
+        var found = @case.Output.Count == 0 ? null : PhaseParsers.FindingsOf(PhaseParsers.Numbered(@case.Output), parsers, _ => { });
+        List<TestFailure> failures = [.. (found?.Failures ?? []).Select(printed => printed with { Log = null })];
+        List<Diagnostic> diagnostics = [.. (found?.Diagnostics ?? []).Select(printed => printed with { Log = null })];
+        var through = failures.FirstOrDefault();
+
+        if (through is not null)
+        {
+            var told = @case.SaysOnlyHowItEnded && (through.Message is not null || through.Exception is not null);
+
+            failure = failure with
+            {
+                Message = told ? through.Message : failure.Message,
+                Expected = failure.Expected ?? through.Expected,
+                Actual = failure.Actual ?? through.Actual,
+                File = failure.File ?? through.File,
+                Line = failure.File is null ? through.Line : failure.Line,
+                Stack = through.Stack,
+                StackCut = through.StackCut,
+                Exception = through.Exception,
+            };
+        }
+        else if (diagnostics.FirstOrDefault(diagnostic => diagnostic.Severity == "error") is { } error)
+        {
+            failure = failure with { File = failure.File ?? error.File, Line = failure.File is null ? error.Line : failure.Line };
+        }
+        else if (@case.SaysOnlyHowItEnded && string.Join("\n", @case.Output).Trim() is { Length: > 0 } printed)
+        {
+            failure = failure with { Message = printed };
+        }
+
+        into.Add(failure, through);
+
+        foreach (var diagnostic in diagnostics)
+        {
+            into.Add(diagnostic);
+        }
+
+        foreach (var other in failures.Skip(1))
+        {
+            into.Add(other);
         }
     }
 

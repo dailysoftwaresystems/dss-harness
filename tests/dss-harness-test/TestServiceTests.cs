@@ -393,9 +393,9 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
-    /// Where the files the invocation names gave no finding - the runner stopped before it wrote them - the phase's own
-    /// console is read for the digest, as where it named none, and what the files could not give is said beside it: a
-    /// red ctest run's failed list is never lost to a results file that was never written.
+    /// Where the file the invocation names was never written - the runner stopped before it wrote it - the phase's own
+    /// console gives the digest's failures, and what the files could not give is said beside it: a red ctest run's
+    /// failed list is never lost to a results file that was never written.
     /// </summary>
     [Fact]
     public async Task AResultsFileNeverWritten_LeavesTheDigestToTheConsole_SayingSoBesideIt()
@@ -416,6 +416,42 @@ public sealed class TestServiceTests
 
         Assert.Equal(("ctest", "demo_test", "failed"), (one.Framework, one.Id, one.Outcome));
         Assert.Equal("results: '{resultsDir}/junit.xml' named no file", result.Entry.Digest.Unparsed[0]);
+    }
+
+    /// <summary>
+    /// Where the file the invocation names holds its failures, the phase's console is read beside it all the same: a case
+    /// that says only how its test ended takes its message from what its test printed, read by the runner's parsers, and
+    /// its range in the log from the console's line for it; a test the console says hung, which the file holds nothing
+    /// of, is said from the console.
+    /// </summary>
+    [Fact]
+    public async Task ARedRunsConsole_IsReadBesideItsResultsFile_ForWhatTheFileLacks()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        const string Report = """
+            <testsuite name="(empty)" tests="2" failures="1">
+              <testcase name="folds" classname="folds" status="fail"><failure message="Failed"/><system-out>check.c:9: expected 2 records, found 3&#10;</system-out></testcase>
+            </testsuite>
+            """;
+
+        var runner = new ScriptedRunner(
+            () => File.WriteAllTextAsync(Path.Combine(ResultsDirectory(temp), "junit.xml"), Report, TestContext.Current.CancellationToken),
+            8,
+            "The following tests FAILED:",
+            "\t  2 - folds (Failed)",
+            "\t  4 - waits (Timeout)");
+        var result = await Service(factory, runner).RunAsync(
+            Config(),
+            Request(temp, new TestInvocation { Runner = "ctest", Args = ["--output-junit", "{resultsDir}/junit.xml"], SuccessPattern = "tests passed" }, results: ["{resultsDir}/junit.xml"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        Assert.Equal(
+            [("junit", "folds", "failed", "check.c:9: expected 2 records, found 3"), ("ctest", "waits", "timedOut", "Timeout")],
+            result.Entry.Digest!.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message!)));
+        Assert.NotNull(result.Entry.Digest.Failures[0].Log);
     }
 
     /// <summary>
@@ -831,7 +867,7 @@ public sealed class TestServiceTests
                 await Task.Delay(SettleDelay, TestContext.Current.CancellationToken);
             },
             exitCode: 0,
-            line: "All 42 tests passed");
+            "All 42 tests passed");
 
         var result = await Service(factory, runner).RunAsync(
             Config(),
@@ -855,7 +891,7 @@ public sealed class TestServiceTests
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
         temp.WriteFile(Fixture, "fixture");
-        var runner = new ScriptedRunner(() => Task.CompletedTask, exitCode: 0, line: "tests passed");
+        var runner = new ScriptedRunner(() => Task.CompletedTask, exitCode: 0, "tests passed");
         var kind = ScriptedWatchKind.Refusing();
 
         var refused = await Assert.ThrowsAsync<InputsUnwatchedException>(
@@ -878,7 +914,7 @@ public sealed class TestServiceTests
         var runner = new ScriptedRunner(
             () => File.WriteAllTextAsync(path, "moved", TestContext.Current.CancellationToken),
             exitCode: 1,
-            line: "2 tests failed");
+            "2 tests failed");
 
         var result = await Service(factory, runner).RunAsync(
             Config(),
@@ -1446,7 +1482,7 @@ public sealed class TestServiceTests
     /// A runner that does something to the tree while the phase is running, then reports what the
     /// suite said. The edit is what a real suite cannot be made to make at a known moment.
     /// </summary>
-    private sealed class ScriptedRunner(Func<Task> duringRun, int exitCode, string line) : IProcessRunner
+    private sealed class ScriptedRunner(Func<Task> duringRun, int exitCode, params string[] lines) : IProcessRunner
     {
         /// <summary>What the phase asked to start.</summary>
         public ProcessRequest? Started { get; private set; }
@@ -1457,9 +1493,13 @@ public sealed class TestServiceTests
 
             Started = request;
             await duringRun().ConfigureAwait(false);
-            request.OnOutputLine?.Invoke(line);
 
-            return new ProcessResult(exitCode, line + "\n", string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false);
+            foreach (var line in lines)
+            {
+                request.OnOutputLine?.Invoke(line);
+            }
+
+            return new ProcessResult(exitCode, string.Concat(lines.Select(line => line + "\n")), string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false);
         }
 
         public string? FindExecutable(string command) => command;

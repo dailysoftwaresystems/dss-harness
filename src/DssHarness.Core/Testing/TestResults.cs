@@ -11,7 +11,8 @@ namespace DssHarness.Core.Testing;
 /// its runner at and its <c>results</c> name paths under, so a file read there is that run's and never an earlier one's.
 /// Where the invocation does not pass, each named file - a TRX, a JUnit XML, Dart's JSON stream, a SARIF log, by its own
 /// shape and never by its name - is read as a stream, never through a link, masked as the phase's log is, and digested
-/// with every other into the typed diagnostics and failures the leg's entry carries. Nothing is copied and nothing is
+/// with every other into the typed diagnostics and failures the leg's entry carries, the phase's log read beside them
+/// for what they lack (<see cref="PhaseDigest"/>). Nothing is copied and nothing is
 /// refused: the verdict is already reached, and what a path could not give is said in the digest's unparsed lines - a
 /// path naming nothing may mean the failure came before it was written, and a file no form owns is a line to fix.
 /// </summary>
@@ -54,36 +55,44 @@ public static class TestResults
     }
 
     /// <summary>
-    /// Reads what <paramref name="declared"/> names under <paramref name="resultsDirectory"/>: one digest of every file
-    /// that read - each file's findings gathered with every other's before the digest's bounds apply, so its counts are
-    /// over all of them - said beside it what every path could not give, masked through <paramref name="mask"/>; null
-    /// where nothing was declared, and where nothing was read and nothing said.
+    /// Reads what <paramref name="declared"/> names under <paramref name="resultsDirectory"/> into
+    /// <paramref name="into"/>: every file that reads - each file's findings gathered with every other's before the
+    /// digest's bounds apply, so its counts are over all of them, a case's own output read by <paramref name="parsers"/>
+    /// (<see cref="ResultFiles.Read"/>) - and what every path could not give said beside them, all of it masked through
+    /// <paramref name="mask"/> as it is gathered. Answers whether anything was read or said; false where nothing was
+    /// declared.
     /// </summary>
     /// <param name="fileSystem">The file system the files are read on.</param>
     /// <param name="declared">The declared paths, as the invocation names them, relative to the results directory - <c>{resultsDir}</c> among the names they use.</param>
     /// <param name="paths">The leg's paths, the placeholders' own.</param>
     /// <param name="resultsDirectory">The run's results directory, the root the paths are read under and no link is followed beneath.</param>
+    /// <param name="parsers">The parsers chosen for the phase, which read what a case's own test printed.</param>
+    /// <param name="into">Gathers what the files hold.</param>
     /// <param name="mask">The mask the phase's log is written through; null where it is written through none.</param>
     /// <param name="cancellationToken">Ends the reading.</param>
-    public static ResultDigest? Read(
+    public static bool Read(
         IFileSystem fileSystem,
         IReadOnlyList<string>? declared,
         LegPaths paths,
         string resultsDirectory,
+        IReadOnlyList<IResultParser> parsers,
+        ResultDigest.Gathering into,
         ILineMask? mask,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentException.ThrowIfNullOrWhiteSpace(resultsDirectory);
+        ArgumentNullException.ThrowIfNull(parsers);
+        ArgumentNullException.ThrowIfNull(into);
 
         if (declared is not { Count: > 0 })
         {
-            return null;
+            return false;
         }
 
         var found = DeclaredFiles.Find(fileSystem, declared, paths, resultsDirectory, resultsDirectory, "test.results");
-        var gathering = new ResultDigest.Gathering();
+        var gathering = into.Through(mask);
         var said = 0;
 
         void Say(string line)
@@ -122,7 +131,7 @@ public static class TestResults
 
             try
             {
-                if (ResultFiles.Read(() => UnfollowedFiles.OpenRead(fileSystem, resultsDirectory, file), gathering) is { } problem)
+                if (ResultFiles.Read(() => UnfollowedFiles.OpenRead(fileSystem, resultsDirectory, file), gathering, parsers) is { } problem)
                 {
                     Say($"results: '{relative}': {problem}");
                 }
@@ -139,13 +148,6 @@ public static class TestResults
             }
         }
 
-        var digest = gathering.Digest();
-
-        if (read == 0 && said == 0)
-        {
-            return null;
-        }
-
-        return mask is null ? digest : digest.MaskedBy(mask);
+        return read > 0 || said > 0;
     }
 }

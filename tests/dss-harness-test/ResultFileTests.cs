@@ -182,6 +182,134 @@ public sealed class ResultFileTests
     }
 
     /// <summary>
+    /// What a JUnit case's own test printed is read by the phase's parsers: a case that says only how its test ended takes
+    /// its message and its place from the first failure its output holds - every other failure there said as its own -
+    /// and where its output holds nothing typed, its message is all its test printed; a case with no output keeps the word
+    /// its test ended in.
+    /// </summary>
+    [Fact]
+    public void AJUnitCasesOwnOutput_IsReadByThePhasesParsers_ACaseSayingOnlyHowItEndedTakingItsMessage()
+    {
+        var gtest = string.Join(
+            "&#10;",
+            "[ RUN      ] StoreTest.LoadsItsRecords",
+            "/home/runner/work/app/app/tests/store_test.cc:14: Failure",
+            "Expected equality of these values:",
+            "  store.size()",
+            "    Which is: 3",
+            "  2",
+            "[  FAILED  ] StoreTest.LoadsItsRecords (0 ms)",
+            "[ RUN      ] Sizes/ParserTest.ReadsItsForm/1",
+            "/home/runner/work/app/app/tests/parser_test.cc:22: Failure",
+            "Value of: parser.Read(GetParam())",
+            "  Actual: false",
+            "Expected: true",
+            "[  FAILED  ] Sizes/ParserTest.ReadsItsForm/1, where GetParam() = 3 (1 ms)",
+            string.Empty);
+
+        var digest = ResultFiles.Digest(
+            $"""
+            <testsuite name="(empty)" tests="3" failures="3">
+              <testcase name="folds_duplicates" classname="folds_duplicates" status="fail"><failure message="Failed"/><system-out>check.c:9: expected 2 records, found 3&#10;</system-out></testcase>
+              <testcase name="store_tests" classname="store_tests" status="fail"><failure message="Failed"/><system-out>{gtest}</system-out></testcase>
+              <testcase name="parses_input" classname="parses_input" status="fail"><failure message="SEGFAULT"/><system-out></system-out></testcase>
+            </testsuite>
+            """,
+            out var problem,
+            PhaseParsers.ForTests(new Core.Configuration.HarnessConfig(), "ctest", null));
+
+        Assert.Null(problem);
+        Assert.Equal(
+            [("folds_duplicates", "failed"), ("store_tests", "failed"), ("Sizes/ParserTest.ReadsItsForm/1", "failed"), ("parses_input", "crashed")],
+            digest.Failures.Select(failure => (failure.Id, failure.Outcome)));
+        Assert.Equal(("check.c:9: expected 2 records, found 3", (string?)null), (digest.Failures[0].Message, digest.Failures[0].File));
+        Assert.StartsWith("Expected equality of these values:", digest.Failures[1].Message, StringComparison.Ordinal);
+        Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", (int?)14), (digest.Failures[1].File, digest.Failures[1].Line));
+        Assert.Equal(("/home/runner/work/app/app/tests/parser_test.cc", (int?)22, (((int, int)?)null)), (digest.Failures[2].File, digest.Failures[2].Line, digest.Failures[2].Log));
+        Assert.Equal("SEGFAULT", digest.Failures[3].Message);
+    }
+
+    /// <summary>
+    /// A JUnit failure whose body holds a stack has it read by its runtime's own form, as the phase's parsers read it: the
+    /// thrown error with its frames is the failure's, its message the one the runner gave it - never a second failure.
+    /// </summary>
+    [Fact]
+    public void AJUnitFailuresBody_HoldingAStack_IsReadAsThatFailuresThrownError()
+    {
+        var digest = ResultFiles.Digest(
+            """
+            <testsuites><testsuite name="store"><testcase classname="store adds" name="store adds" time="0.002"><failure message="expected 2 to be 3" type="AssertionError">AssertionError: expected 2 to be 3
+                at Object.&lt;anonymous&gt; (/home/u/app/test/store.test.js:5:13)
+                at processTicksAndRejections (node:internal/process/task_queues:95:5)</failure></testcase></testsuite></testsuites>
+            """,
+            out var problem,
+            PhaseParsers.ForTests(new Core.Configuration.HarnessConfig(), "node", null));
+
+        Assert.Null(problem);
+
+        var one = Assert.Single(digest.Failures);
+
+        Assert.Equal(("store adds", "expected 2 to be 3", "AssertionError"), (one.Id, one.Message, one.Exception?.Type));
+        Assert.Equal(2, one.Exception!.Stack.Count);
+        Assert.Equal(("/home/u/app/test/store.test.js", (int?)5), (one.Exception.Stack[0].File, one.Exception.Stack[0].Line));
+        Assert.Empty(one.Stack);
+    }
+
+    /// <summary>
+    /// A red CTest run is digested from its JUnit file and its console together, each failure once: a case its console
+    /// names too is the file's, given its range in the log; a case saying only how it ended takes its message from what
+    /// its test printed; and a test the console names that the file holds nothing of - one that hung after the file was
+    /// cut - is said from the console.
+    /// </summary>
+    [Fact]
+    public void ARedCTestRun_IsDigestedFromItsJUnitAndItsConsole_EachFailureOnce()
+    {
+        using var temp = new TempDirectory();
+        var parsers = PhaseParsers.ForTests(new Core.Configuration.HarnessConfig(), "ctest", null);
+        var report = System.Text.Encoding.UTF8.GetBytes("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="(empty)" tests="3" failures="2">
+              <testcase name="reads_records" classname="reads_records" time="0.0008" status="run"><system-out></system-out></testcase>
+              <testcase name="folds_duplicates" classname="folds_duplicates" time="0.0008" status="fail"><failure message="Failed"/><system-out>check.c:9: expected 2 records, found 3&#10;</system-out></testcase>
+              <testcase name="parses_input" classname="parses_input" time="0.0133" status="fail"><failure message="SEGFAULT"/><system-out></system-out></testcase>
+            </testsuite>
+            """);
+        var console = string.Join(
+            "\n",
+            "Test project /home/runner/work/app/app/build",
+            "    Start 1: reads_records",
+            "1/4 Test #1: reads_records ....................   Passed    0.00 sec",
+            "    Start 2: folds_duplicates",
+            "2/4 Test #2: folds_duplicates .................***Failed    0.00 sec",
+            "check.c:9: expected 2 records, found 3",
+            "    Start 3: parses_input",
+            "3/4 Test #3: parses_input .....................***Exception: SegFault  0.01 sec",
+            "    Start 4: waits_for_lock",
+            "4/4 Test #4: waits_for_lock ...................***Timeout   3.00 sec",
+            string.Empty,
+            "25% tests passed, 3 tests failed out of 4",
+            string.Empty,
+            "The following tests FAILED:",
+            "\t  2 - folds_duplicates (Failed)",
+            "\t  3 - parses_input (SEGFAULT)",
+            "\t  4 - waits_for_lock (Timeout)",
+            "Errors while running CTest",
+            string.Empty);
+
+        var digest = PhaseDigest.Of(
+            Core.Execution.PhaseOutput.Of(console),
+            parsers,
+            new DigestTree(temp.Path, null, new HarnessFactory().FileSystem),
+            into => ResultFiles.Read(() => new MemoryStream(report, writable: false), into, parsers) is null)!;
+
+        Assert.Equal(
+            [("folds_duplicates", "failed", "check.c:9: expected 2 records, found 3", ((int, int)?)(5, 5)), ("parses_input", "crashed", "SEGFAULT", (8, 8)), ("waits_for_lock", "timedOut", "Timeout", (10, 10))],
+            digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Message!, failure.Log)));
+        Assert.Equal((1, 1, 1), (digest.Failed, digest.Crashed, digest.TimedOut));
+        Assert.Equal((0, 0), (digest.Errors, digest.UnparsedCount));
+    }
+
+    /// <summary>
     /// A case CTest wrote failed as CTest says it ended - a timeout timed out, a signal, a fault or an abort crashed, a
     /// failure failed - read from the words its console says them in; a case another runner wrote failed, whatever its
     /// assertion said. A case whose class is its own name, as CTest writes every one, is named once - a name holding a
@@ -420,16 +548,20 @@ public sealed class ResultFileTests
         temp.WriteFile(Path.Combine("results", "a.xml"), Report("one", $"saw {Secret}"));
         temp.WriteFile(Path.Combine("results", "b.xml"), Report("two", "plain"));
         var paths = new Core.Execution.LegPaths(temp.Path, temp.Combine("build")) { ResultsDirectory = results };
+        var gathering = new ResultDigest.Gathering();
 
-        var digest = Core.Testing.TestResults.Read(
+        var read = Core.Testing.TestResults.Read(
             new HarnessFactory().FileSystem,
             ["{resultsDir}/*.xml", $"{Secret}.xml"],
             paths,
             results,
+            [],
+            gathering,
             new Masking(Secret),
             TestContext.Current.CancellationToken);
+        var digest = gathering.Digest();
 
-        Assert.NotNull(digest);
+        Assert.True(read);
         Assert.Equal(
             [("demo.one", "saw ***"), ("demo.two", "plain")],
             digest.Failures.Select(failure => (failure.Id, failure.Message)));

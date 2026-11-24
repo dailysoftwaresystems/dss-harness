@@ -23,6 +23,15 @@ namespace DssHarness.Core.Mutations;
 /// where CTest wrote the case (<c>timedOut</c>, <c>crashed</c>, <c>errored</c> or <c>failed</c>), else <c>failed</c>;
 /// null where it did not fail.
 /// </param>
+/// <param name="Output">
+/// What its test printed, as the report holds it, where it failed: its failure's or error's body - a stack, an
+/// assertion's words - then its <c>system-out</c>, then its <c>system-err</c>, a line at a time; empty where it passed
+/// or the report holds none of it.
+/// </param>
+/// <param name="SaysOnlyHowItEnded">
+/// Whether its failure says no more than how its test ended: no message, or - where CTest wrote the case - the word its
+/// console says the end in (<c>Failed</c>, <c>Timeout</c>, <c>SEGFAULT</c>), which <paramref name="Outcome"/> holds.
+/// </param>
 public sealed record JUnitCase(
     string Id,
     bool Ran,
@@ -31,7 +40,13 @@ public sealed record JUnitCase(
     string? Message = null,
     string? File = null,
     int? Line = null,
-    string? Outcome = null);
+    string? Outcome = null,
+    IReadOnlyList<string>? Output = null,
+    bool SaysOnlyHowItEnded = false)
+{
+    /// <summary>What its test printed, as the report holds it; empty where it holds none.</summary>
+    public IReadOnlyList<string> Output { get; init; } = Output ?? [];
+}
 
 /// <summary>
 /// A test binary's JUnit XML report, read the one way GoogleTest, Catch2, doctest, Boost.Test and CTest's
@@ -205,7 +220,7 @@ public sealed class JUnitReport
             : $"it is no XML: {ex.Message}";
     }
 
-    /// <summary>One case, whole: its identity as ever, and - where it failed - how long, what it said, and where.</summary>
+    /// <summary>One case, whole: its identity as ever, and - where it failed - how long, what it said, where, and what its test printed.</summary>
     private static JUnitCase Read(XElement @case)
     {
         var failed = @case.Elements().FirstOrDefault(child => child.Name.LocalName is "failure" or "error");
@@ -223,6 +238,7 @@ public sealed class JUnitReport
         var body = BodyOf(failed);
         var said = (string?)failed.Attribute("message") is { Length: > 0 } message ? message
             : body.FirstOrDefault(line => line.Trim().Length > 0)?.Trim();
+        var ctest = string.Equals((string?)@case.Attribute("status"), "fail", StringComparison.Ordinal);
 
         // Where it was: the case's own place where the runner wrote one (GoogleTest's attributes), else the first
         // place its body names (doctest writes its failures as `path(line): what failed`).
@@ -246,9 +262,19 @@ public sealed class JUnitReport
             File: file,
             Line: line,
             Outcome: failed.Name.LocalName == "error" ? "errored"
-                : string.Equals((string?)@case.Attribute("status"), "fail", StringComparison.Ordinal) && said is not null ? CTestParser.OutcomeOf(said) ?? "failed"
-                : "failed");
+                : ctest && said is not null ? CTestParser.OutcomeOf(said) ?? "failed"
+                : "failed",
+            Output: [.. Printed(failed), .. Printed(@case, "system-out"), .. Printed(@case, "system-err")],
+            SaysOnlyHowItEnded: said is null || (ctest && CTestParser.OutcomeOf(said) is not null));
     }
+
+    /// <summary>What the case's own <paramref name="stream"/> elements hold, a line at a time; none where it has none.</summary>
+    private static IEnumerable<string> Printed(XElement @case, string stream)
+        => @case.Elements().Where(child => child.Name.LocalName == stream).SelectMany(Printed);
+
+    /// <summary>What <paramref name="element"/> holds, a line at a time; none where it holds nothing.</summary>
+    private static IEnumerable<string> Printed(XElement element)
+        => element.Value.Length == 0 ? [] : LineEnds.Lines(element.Value);
 
     /// <summary>The case's own time, in seconds as the report writes it; null where it says none.</summary>
     private static double? SecondsIn(XElement @case)

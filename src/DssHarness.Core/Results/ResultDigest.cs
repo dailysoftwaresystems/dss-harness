@@ -104,7 +104,10 @@ public sealed record Diagnostic(
 /// <param name="Duration">How long the test took, in seconds; null where the runner does not say.</param>
 /// <param name="Outcome">How it failed: <c>failed</c>, <c>errored</c>, <c>timedOut</c> or <c>crashed</c>.</param>
 /// <param name="Shard">The shard that ran it, its index of the count of shards; null where the leg ran unsharded.</param>
-/// <param name="Log">The line range of the log it was read from (from, to); null where it was read from no log - a results file's.</param>
+/// <param name="Log">
+/// The line range of the log it was read from (from, to) - a results file's, that of the log's failure of the same test
+/// (<see cref="ResultDigest.Gathering.Beside"/>); null where no log said it.
+/// </param>
 public sealed record TestFailure(
     string Framework,
     string Id,
@@ -290,29 +293,6 @@ public sealed record ResultDigest
     }
 
     /// <summary>
-    /// This digest with what <paramref name="said"/> could not give ahead of its own unparsed lines: what a reading of
-    /// results files that held no finding said of them, beside what the log's own parsers made of the phase - held to the
-    /// same bound, counted the same way.
-    /// </summary>
-    /// <param name="said">A digest that holds no finding: its unparsed lines are what it says.</param>
-    /// <exception cref="ArgumentException"><paramref name="said"/> holds a finding, which is never set aside.</exception>
-    public ResultDigest Beside(ResultDigest said)
-    {
-        ArgumentNullException.ThrowIfNull(said);
-
-        if (said.HoldsAFinding)
-        {
-            throw new ArgumentException("A digest that holds a finding is the digest, never said beside another.", nameof(said));
-        }
-
-        return this with
-        {
-            Unparsed = [.. said.Unparsed.Concat(Unparsed).Take(Bound)],
-            UnparsedCount = UnparsedCount + said.UnparsedCount,
-        };
-    }
-
-    /// <summary>
     /// This digest with every place it names read against <paramref name="tree"/>, a tree this machine ran the phase in:
     /// a file the tree holds is in the tree, named relative to its root with <c>/</c>; any other is not, and stays as the
     /// tool wrote it. A path is read in the form the tool wrote it, never by this machine's own rules
@@ -447,40 +427,6 @@ public sealed record ResultDigest
 
             return relative;
         }
-    }
-
-    /// <summary>
-    /// This digest with every text it holds masked through <paramref name="mask"/> - each message, expected and actual, each
-    /// test's id and name, each frame's line, each exception's message down its causes, each unparsed line: what a results
-    /// file held is masked as its phase's log is, by one rule, whichever reader made it.
-    /// </summary>
-    /// <param name="mask">The mask the phase's log is written through.</param>
-    public ResultDigest MaskedBy(ILineMask mask)
-    {
-        ArgumentNullException.ThrowIfNull(mask);
-
-        return this with
-        {
-            Diagnostics = [.. Diagnostics.Select(diagnostic => diagnostic with { Message = mask.Redact(diagnostic.Message), Stack = Frames(diagnostic.Stack) })],
-            Failures = [.. Failures.Select(failure => failure with
-            {
-                Id = mask.Redact(failure.Id),
-                Name = Text(failure.Name),
-                Message = Text(failure.Message),
-                Expected = Text(failure.Expected),
-                Actual = Text(failure.Actual),
-                Stack = Frames(failure.Stack),
-                Exception = failure.Exception is { } thrown ? Thrown(thrown) : null,
-            })],
-            Unparsed = [.. Unparsed.Select(line => mask.Redact(line))],
-        };
-
-        string? Text(string? text) => text is null ? null : mask.Redact(text);
-
-        IReadOnlyList<StackFrame> Frames(IReadOnlyList<StackFrame> stack) => [.. stack.Select(frame => frame with { Text = mask.Redact(frame.Text) })];
-
-        ExceptionRecord Thrown(ExceptionRecord thrown)
-            => thrown with { Message = mask.Redact(thrown.Message), Stack = Frames(thrown.Stack), CausedBy = [.. thrown.CausedBy.Select(Thrown)] };
     }
 
     /// <summary>
@@ -1382,7 +1328,8 @@ public sealed record ResultDigest
     /// one past its severity's bound is counted by severity, by code and by file all the same. Every stack is held to
     /// <see cref="StackTrace.FrameBound"/> and every cause chain to <see cref="ExceptionRecord.CauseBound"/>, the cuts said;
     /// a finding that is not one a digest holds - a severity, an outcome or a line no tool means - is said among the
-    /// unparsed lines with why, never held and never dropped unsaid.
+    /// unparsed lines with why, never held and never dropped unsaid. A phase's two accounts of one run - the results files
+    /// its runner wrote and the log it printed - are gathered into one digest, each finding said once (<see cref="Beside"/>).
     /// </summary>
     public sealed class Gathering
     {
@@ -1397,14 +1344,44 @@ public sealed record ResultDigest
         private readonly List<Counted> _byFile = [];
         private readonly Dictionary<string, int> _fileAt = new(StringComparer.Ordinal);
         private readonly List<TestFailure> _failures = [];
+        private readonly HashSet<string> _named = new(StringComparer.Ordinal);
         private readonly List<string> _unparsed = [];
+        private readonly Gathering? _into;
+        private readonly ILineMask? _mask;
         private int _unparsedCount;
+
+        /// <summary>An empty gathering.</summary>
+        public Gathering()
+        {
+        }
+
+        /// <summary>A view of <paramref name="into"/> that masks what it is given through <paramref name="mask"/>.</summary>
+        private Gathering(Gathering into, ILineMask mask)
+        {
+            _into = into;
+            _mask = mask;
+        }
+
+        /// <summary>
+        /// This gathering as it gathers text no log's mask saw - a results file's: every finding and line given to it masked
+        /// through <paramref name="mask"/> as it is gathered - each message, expected and actual, each test's id and name,
+        /// each frame's line, each exception's message down its causes, each unparsed line - by the one rule, whichever
+        /// reader made it, and gathered here; this gathering itself where there is no mask.
+        /// </summary>
+        /// <param name="mask">The mask the phase's log is written through; null where it is written through none.</param>
+        public Gathering Through(ILineMask? mask) => mask is null ? this : new Gathering(this, mask);
 
         /// <summary>Gathers <paramref name="diagnostic"/>, the next the output met.</summary>
         /// <param name="diagnostic">The diagnostic, as its parser read it.</param>
         public void Add(Diagnostic diagnostic)
         {
             ArgumentNullException.ThrowIfNull(diagnostic);
+
+            if (_into is { } into)
+            {
+                into.Add(diagnostic with { Message = _mask!.Redact(diagnostic.Message), Stack = Masked(diagnostic.Stack, _mask) });
+                return;
+            }
 
             var held = diagnostic with { Stack = StackTrace.Held(diagnostic.Stack, out var cut), StackCut = diagnostic.StackCut + cut };
 
@@ -1442,21 +1419,35 @@ public sealed record ResultDigest
 
         /// <summary>Gathers <paramref name="failure"/>, the next the runner met.</summary>
         /// <param name="failure">The failure, as its reader read it.</param>
-        public void Add(TestFailure failure)
+        public void Add(TestFailure failure) => Add(failure, saidThrough: null);
+
+        /// <summary>
+        /// Gathers <paramref name="failure"/>, the next the runner met, said through <paramref name="saidThrough"/>: the
+        /// failure its test's own output printed first, whose message and place it took - so the test that failure names
+        /// is one this gathering has said, as much as the failure's own.
+        /// </summary>
+        /// <param name="failure">The failure, as its reader read it.</param>
+        /// <param name="saidThrough">The failure it was said through; null where it was said through none.</param>
+        public void Add(TestFailure failure, TestFailure? saidThrough)
         {
             ArgumentNullException.ThrowIfNull(failure);
 
-            var held = failure with
+            if (_into is { } into)
             {
-                Stack = StackTrace.Held(failure.Stack, out var cut),
-                StackCut = failure.StackCut + cut,
-                Exception = failure.Exception?.Held(),
-            };
-
-            if (held.Problem() is { } wrong)
-            {
-                Unparsed($"{failure.Framework} {failure.Id}: not held, for {wrong}");
+                into.Add(Masked(failure, _mask!), saidThrough is null ? null : Masked(saidThrough, _mask!));
                 return;
+            }
+
+            if (Held(failure) is not { } held)
+            {
+                return;
+            }
+
+            _named.Add(held.Id);
+
+            if (saidThrough is not null)
+            {
+                _named.Add(saidThrough.Id);
             }
 
             _byOutcome[held.Outcome] = _byOutcome.GetValueOrDefault(held.Outcome) + 1;
@@ -1473,6 +1464,12 @@ public sealed record ResultDigest
         {
             ArgumentNullException.ThrowIfNull(line);
 
+            if (_into is { } into)
+            {
+                into.Unparsed(_mask!.Redact(line));
+                return;
+            }
+
             _unparsedCount++;
 
             if (_unparsed.Count < Bound)
@@ -1481,9 +1478,144 @@ public sealed record ResultDigest
             }
         }
 
-        /// <summary>The digest of everything gathered so far.</summary>
+        /// <summary>
+        /// Gathers what a phase's log found beside what its results files gave, gathered here first - the files the runner's
+        /// own typed record of its run, the log the phase's account of all it printed - so each finding is said once, by the
+        /// account that holds it typed, and nothing the log said that the files lack is lost: a diagnostic the build or the
+        /// runner printed, a crash, a host that died, a test that hung, a run whose files name no failure. Every diagnostic of
+        /// the log that no file holds - none at the same place, as <paramref name="place"/> reads both, of the same code, or
+        /// of the same message where it names no code - is gathered, in the order the log met them, and every failure of a
+        /// test no file names that did not merely fail - it crashed, errored or timed out, which no results file is written
+        /// for - or, where the files name no failure at all, every one. A test that merely failed is one the files hold
+        /// where they hold any: its console names it in its own words (jest's <c>›</c> path against jest-junit's joined
+        /// title), and it is never said twice. A failure of a test a file names is no second failure: it gives the file's
+        /// failure of that test what the file's lacks - a message where it says none, a place where it names none, its stack
+        /// and its thrown error where it holds neither, and its range in the log, so the lines the log printed of it are one
+        /// read away.
+        /// </summary>
+        /// <param name="log">What the log's parsers found in it, in the order of its lines.</param>
+        /// <param name="place">
+        /// A path as a tool wrote it, read as the tree reads it - the same file named the same way whichever form wrote it, a
+        /// SARIF log's URI and a console's path alike.
+        /// </param>
+        /// <exception cref="InvalidOperationException">This is a masked view (<see cref="Through"/>), which gathers a file's findings alone.</exception>
+        public void Beside(PhaseFindings log, Func<string, string> place)
+        {
+            ArgumentNullException.ThrowIfNull(log);
+            ArgumentNullException.ThrowIfNull(place);
+
+            if (_into is not null)
+            {
+                throw new InvalidOperationException("A masked view gathers a results file's findings; a log's are gathered beside them by the gathering itself.");
+            }
+
+            var filed = _counted.Select(identity => Same(identity.Code, identity.File, identity.Line, identity.Column, identity.Message)).ToHashSet();
+            var anyFiled = _byOutcome.Count > 0;
+            var named = log.Failures.Where(failure => _named.Contains(failure.Id)).ToList();
+            var unnamed = log.Failures.Where(failure => !_named.Contains(failure.Id) && (!anyFiled || failure.Outcome != "failed")).ToList();
+            var heldAt = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            for (var at = 0; at < _failures.Count; at++)
+            {
+                heldAt.TryAdd(_failures[at].Id, at);
+            }
+
+            foreach (var failure in named)
+            {
+                if (heldAt.TryGetValue(failure.Id, out var at) && Held(failure, say: false) is { } said)
+                {
+                    _failures[at] = Given(_failures[at], said);
+                }
+            }
+
+            foreach (var diagnostic in log.Diagnostics)
+            {
+                if (!filed.Contains(Same(diagnostic.Code, diagnostic.File, diagnostic.Line, diagnostic.Column, diagnostic.Message)))
+                {
+                    Add(diagnostic);
+                }
+            }
+
+            foreach (var failure in unnamed)
+            {
+                Add(failure);
+            }
+
+            // One diagnostic, however each form writes it: its code and place, its message where it names no code.
+            (string? Code, string? File, int? Line, int? Column, string? Message) Same(string? code, string? file, int? line, int? column, string message)
+                => (code, file is null ? null : place(file), line, column, code is null ? message : null);
+
+            // A file's failure given what the log's of the same test holds and it lacks: its stack and thrown error as one.
+            static TestFailure Given(TestFailure filed, TestFailure logged)
+            {
+                var bare = filed.Stack.Count == 0 && filed.Exception is null;
+
+                return filed with
+                {
+                    Message = filed.Message ?? logged.Message,
+                    File = filed.File ?? logged.File,
+                    Line = filed.File is null ? logged.Line : filed.Line,
+                    Stack = bare ? logged.Stack : filed.Stack,
+                    StackCut = bare ? logged.StackCut : filed.StackCut,
+                    Exception = bare ? logged.Exception : filed.Exception,
+                    Log = filed.Log ?? logged.Log,
+                };
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="failure"/> as a digest holds it - its stack and its cause chain held to their bounds - or null
+        /// where it is no failure a digest holds, said among the unparsed lines with why where <paramref name="say"/>.
+        /// </summary>
+        private TestFailure? Held(TestFailure failure, bool say = true)
+        {
+            var held = failure with
+            {
+                Stack = StackTrace.Held(failure.Stack, out var cut),
+                StackCut = failure.StackCut + cut,
+                Exception = failure.Exception?.Held(),
+            };
+
+            if (held.Problem() is not { } wrong)
+            {
+                return held;
+            }
+
+            if (say)
+            {
+                Unparsed($"{failure.Framework} {failure.Id}: not held, for {wrong}");
+            }
+
+            return null;
+        }
+
+        /// <summary><paramref name="failure"/> with every text it holds masked through <paramref name="mask"/>.</summary>
+        private static TestFailure Masked(TestFailure failure, ILineMask mask)
+            => failure with
+            {
+                Id = mask.Redact(failure.Id),
+                Name = Text(failure.Name, mask),
+                Message = Text(failure.Message, mask),
+                Expected = Text(failure.Expected, mask),
+                Actual = Text(failure.Actual, mask),
+                Stack = Masked(failure.Stack, mask),
+                Exception = failure.Exception is { } thrown ? Masked(thrown, mask) : null,
+            };
+
+        /// <summary><paramref name="thrown"/> with its message and its frames masked, down its causes.</summary>
+        private static ExceptionRecord Masked(ExceptionRecord thrown, ILineMask mask)
+            => thrown with { Message = mask.Redact(thrown.Message), Stack = Masked(thrown.Stack, mask), CausedBy = [.. thrown.CausedBy.Select(cause => Masked(cause, mask))] };
+
+        /// <summary><paramref name="stack"/> with each frame's line masked.</summary>
+        private static IReadOnlyList<StackFrame> Masked(IReadOnlyList<StackFrame> stack, ILineMask mask)
+            => [.. stack.Select(frame => frame with { Text = mask.Redact(frame.Text) })];
+
+        /// <summary><paramref name="text"/> masked; null where there is none.</summary>
+        private static string? Text(string? text, ILineMask mask) => text is null ? null : mask.Redact(text);
+
+        /// <summary>The digest of everything gathered so far - a masked view's, of the gathering it gathers into.</summary>
         public ResultDigest Digest()
-            => new()
+            => _into is { } into ? into.Digest() : new()
             {
                 Diagnostics = [.. _held],
                 Failures = [.. _failures],

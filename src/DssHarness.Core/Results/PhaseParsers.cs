@@ -266,7 +266,8 @@ public static class PhaseParsers
         => [.. plan.Select(ResultParsers.Named), .. matchers.Where(matcher => matcher.Compiled is not null).Select(matcher => new MatcherParser(matcher))];
 
     /// <summary>The lines numbered from 1, in the order they stream.</summary>
-    private static IEnumerable<NumberedLine> Numbered(IEnumerable<string> lines)
+    /// <param name="lines">The lines.</param>
+    internal static IEnumerable<NumberedLine> Numbered(IEnumerable<string> lines)
     {
         var number = 0;
 

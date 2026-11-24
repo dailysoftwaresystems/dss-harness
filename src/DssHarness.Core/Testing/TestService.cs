@@ -385,16 +385,21 @@ public sealed class TestService(
         // The digest only where the tests' failure is the verdict, as a build's is: one a moving tree or a shared
         // directory outranked was a run of a tree that never existed. What the invocation named as its structured
         // results is read first, where the runner wrote it - nothing copied, its text masked as the phase's log is - for
-        // what a file holds typed already is the digest; where the files gave no finding, the phase's own log is read
-        // by the runner's parsers, for a red run's console says what its file never got to, and what the files could
-        // not give is said beside it.
-        var digest = reached.Verdict != LegVerdict.Failed
-            ? null
-            : PhaseDigest.Of(
+        // what a file holds is typed already; the phase's own log is read by the runner's parsers all the same, for a red
+        // run's console says what its files never got to - a crash, a host that died - and what it adds is said beside
+        // them, each finding once.
+        ResultDigest? digest = null;
+
+        if (reached.Verdict == LegVerdict.Failed)
+        {
+            var parsers = PhaseParsers.ForTests(config, command.Program, invocation.Matchers);
+
+            digest = PhaseDigest.Of(
                 phase.Output,
-                PhaseParsers.ForTests(config, command.Program, invocation.Matchers),
+                parsers,
                 new DigestTree(request.TreeRoot, working, _fileSystem),
-                TestResults.Read(_fileSystem, invocation.Results, paths, paths.ResultsDirectory!, asked.Mask, cancellationToken));
+                into => TestResults.Read(_fileSystem, invocation.Results, paths, paths.ResultsDirectory!, parsers, into, asked.Mask, cancellationToken));
+        }
 
         var entry = new LegEntry
         {
