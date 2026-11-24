@@ -3349,7 +3349,9 @@ audit was still owed at the bound is written to the backlog and named in the pul
 route reads (a reason step its `findings` names, or each reason step of a group that gathers the member it reads) are
 held to the same rules at their own answer (`FlowStepRun.AnswerHolds`, `AgentOutput.Holds`): the gate asks a reviewer
 again in its own conversation, under the same repairs as a schema's problem, for the recovery cannot change a
-reviewer's answer; findings that still do not hold fail the route (12), nothing routed and the ledger untouched. The shipped flow's fix loop decides after `route` (`decideAfter`), and its
+reviewer's answer; an answer that still does not hold after those repairs ends `InvalidOutput` and fails the
+reviewer's step (20), as one its schema refuses does, nothing routed; findings that reach the route unheld - from no
+reviewer's gate - fail it (12), nothing routed and the ledger untouched. The shipped flow's fix loop decides after `route` (`decideAfter`), and its
 `rework.md` reads `route.rework` and `route.homeAudit`. A pre-existing issue the triage answers `next` for - a defect in
 code the run's change does not touch that blocks nothing - is owed the run's next round instead: `FlowCoordinator` sizes
 it from the triage's answer (`size`: its files, what must be built, what measured first - an answer whose size names no
