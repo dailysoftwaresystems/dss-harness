@@ -9867,7 +9867,8 @@ drive's path and cl's `fatal error` among them, each diagnostic named for the to
 to and its project the project's file (what MSBuild writes after it for an inner build of a project
 that targets several frameworks, `::TargetFramework=...`, left with the build); gcc's and clang's form, the chain that led to an error its stack - the include chain, the
 instantiation chain, the macro expansions - handed whole, for the digest is the one owner of a
-stack's bound; the linkers (GNU ld, gold, lld, ld64, link); CMake's message blocks; Ninja's
+stack's bound; the linkers (GNU ld, gold, lld, ld64, link); CMake's message blocks (the command that raised one
+said ahead of its message, for a diagnostic's project is the project or target a build names, never a command); Ninja's
 `FAILED:` edge; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
 the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries, the
 JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's, Dart's, Go's panic and

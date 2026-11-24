@@ -874,7 +874,9 @@ internal sealed class LinkerParser : IBuiltInParser
 /// <summary>
 /// CMake's form: <c>CMake Error at path:line (command):</c>, <c>CMake Error in path:</c>, <c>CMake Error: message</c> and
 /// their warnings, with the message block under it - its indented lines, over the blank lines between its paragraphs, as
-/// one line - and the <c>Call Stack (most recent call first):</c> under it as the error's stack.
+/// one line, the command the head names said ahead of it (<c>add_subdirectory: add_subdirectory given source ...</c>),
+/// for a diagnostic's project is the project or target a build names, never a command - and the
+/// <c>Call Stack (most recent call first):</c> under it as the error's stack, each frame's command its symbol.
 /// <c>-- Configuring incomplete, errors occurred!</c>, said after what it counts, is taken with it.
 /// </summary>
 internal sealed class CMakeParser : IBuiltInParser
@@ -900,6 +902,7 @@ internal sealed class CMakeParser : IBuiltInParser
     private sealed class Reading : IResultReading
     {
         private Diagnostic? _open;
+        private string? _command;
         private readonly List<string> _message = [];
         private readonly List<StackFrame> _frames = [];
         private bool _stack;
@@ -990,8 +993,8 @@ internal sealed class CMakeParser : IBuiltInParser
                 head.Value.Trim(),
                 file,
                 at,
-                Project: command,
                 Log: (line.Number, line.Last));
+            _command = command;
             _to = line.Last;
         }
 
@@ -1002,14 +1005,19 @@ internal sealed class CMakeParser : IBuiltInParser
                 return;
             }
 
+            // The block CMake printed, the command the head named ahead of it; the head itself where no block followed,
+            // which names the command already.
             sink.Add(open with
             {
-                Message = _message.Count > 0 ? string.Join(' ', _message) : open.Message,
+                Message = _message.Count == 0 ? open.Message
+                    : _command is { } command ? $"{command}: {string.Join(' ', _message)}"
+                    : string.Join(' ', _message),
                 Stack = [.. _frames],
                 Log = (open.Log!.Value.From, _to),
             });
             _errorSaid |= open.Severity == "error";
             _open = null;
+            _command = null;
             _message.Clear();
             _frames.Clear();
             _stack = false;

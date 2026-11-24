@@ -421,6 +421,40 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
+    /// A CMake error says the command that raised it ahead of the message CMake printed under it - never as its project,
+    /// which is the project or target a build names - while a head with no message under it is its own message, the
+    /// command in it already, and one CMake names no command for says its message alone.
+    /// </summary>
+    [Fact]
+    public void ACMakeError_SaysItsCommandAheadOfItsMessage_AndNamesNoProject()
+    {
+        var digest = PhaseParsers.DigestOf(
+            [
+                "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
+                "  add_subdirectory given source \"lib/missing\" which is not an existing",
+                "  directory.",
+                string.Empty,
+                string.Empty,
+                "CMake Error in src/CMakeLists.txt:",
+                "  No SOURCES given to target: store",
+                string.Empty,
+                string.Empty,
+                "CMake Error at CMakeLists.txt:9 (find_package):",
+                "-- Configuring incomplete, errors occurred!",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [
+                ("CMakeLists.txt", (int?)3, (string?)null, "add_subdirectory: add_subdirectory given source \"lib/missing\" which is not an existing directory."),
+                ("src/CMakeLists.txt", null, null, "No SOURCES given to target: store"),
+                ("CMakeLists.txt", 9, null, "CMake Error at CMakeLists.txt:9 (find_package):"),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.File!, diagnostic.Line, diagnostic.Project, diagnostic.Message)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
     /// A compiler's chain is handed whole, however deep: the digest is the one owner of a stack's bound, so a parser
     /// never cuts one of its own.
     /// </summary>
