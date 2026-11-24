@@ -155,9 +155,14 @@ public sealed class RecordsAgentRunner(
     /// <param name="cancellationToken">Ends the run.</param>
     private async Task<Ran> RunAsync(RecordsAgent agent, CancellationToken cancellationToken)
     {
+        // What a run that was begun spent, and the model it was resolved to, held where a throw cannot lose them: a
+        // client that fails after paid turns is why no model answered, and what it spent is still said and kept - never
+        // lost with the throw that kept its result from being read.
+        var begun = new BegunRun();
+
         try
         {
-            return await RanAsync(agent, cancellationToken).ConfigureAwait(false);
+            return await RanAsync(agent, begun, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -170,12 +175,22 @@ public sealed class RecordsAgentRunner(
             // failure is read by.
             var meaning = KnownCauses.Meaning(failed);
 
-            return new Ran(meaning.Message, meaning.ExitCode);
+            return new Ran(meaning.Message, meaning.ExitCode, begun.Model, begun.Spend);
         }
     }
 
+    /// <summary>What a run of an agent on records was begun on, held where a throw cannot lose it.</summary>
+    private sealed class BegunRun
+    {
+        /// <summary>The model the agent was resolved to run on; null until it was.</summary>
+        public string? Model { get; set; }
+
+        /// <summary>What the run spends, as its turns are reported; null until the run was made.</summary>
+        public AgentRunSpend? Spend { get; set; }
+    }
+
     /// <inheritdoc cref="RunAsync"/>
-    private async Task<Ran> RanAsync(RecordsAgent agent, CancellationToken cancellationToken)
+    private async Task<Ran> RanAsync(RecordsAgent agent, BegunRun begun, CancellationToken cancellationToken)
     {
         var (place, context) = await FlowStepRunners.PlaceOf(
             new FlowStepRun(
@@ -220,6 +235,8 @@ public sealed class RecordsAgentRunner(
         {
             return new Ran(model.NoModel(providers), HarnessExit.ConfigInvalid);
         }
+
+        begun.Model = resolution.Serving.Model;
 
         var order = _launch.Order(providers, resolution, context.Layout);
 
@@ -302,6 +319,7 @@ public sealed class RecordsAgentRunner(
         // What the agent spends is counted as every agent run of the engine's is, from its turns as they come: every
         // token of every kind, at the configuration's prices - over every repair of its answer, for it is one paid run.
         var spend = new AgentRunSpend(providers, resolution.Serving.Model);
+        begun.Spend = spend;
         var result = await _runner.RunAsync(request, spend, cancellationToken).ConfigureAwait(false);
 
         // The answer is masked as the run's records are: whatever the agent read or was told, no secret the slot holds

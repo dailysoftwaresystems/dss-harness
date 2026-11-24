@@ -1159,8 +1159,10 @@ public sealed class FlowService(
                 : $"analyze-orchestrator-report was refused: no model analysed it: {analysed.WhyNot}";
             var exit = analysed.ExitCode ?? HarnessExit.CommandFailed;
 
+            // The directory is named wherever any record of the call exists, by the same rule the text's records lines
+            // read, so a script is told where they are as a reader is.
             return CommandOutcome.Failed(exit, refused, [.. cost is null ? [] : new[] { cost }, .. records])
-                with { Data = json ? [FlowReports.AnalysisRefused(exit, refused, hash, analysed, analysed.Ran ? directory : string.Empty)] : [] };
+                with { Data = json ? [FlowReports.AnalysisRefused(exit, refused, hash, analysed, AnyAnalysisRecord(directory, analysed) ? directory : string.Empty)] : [] };
         }
 
         if (json)
@@ -1194,18 +1196,36 @@ public sealed class FlowService(
     /// <param name="analysed">What the analyst's run answered.</param>
     private IReadOnlyList<string> AnalysisRecordsOf(string directory, FlowAnalysed analysed)
     {
-        var records = new (string What, string Path)[]
-        {
+        var records = AnalysisRecordFiles(directory)
+            .Where(record => _fileSystem.FileExists(record.Path))
+            .Select(record => $"{record.What}: {record.Path}")
+            .ToList();
+
+        return AnyAnalysisRecord(directory, analysed)
+            ? [$"records: {directory}", .. records]
+            : ["records: none was written, for no analyst ran"];
+    }
+
+    /// <summary>
+    /// Whether any record of the call exists: a file its analyst's run left behind, or a run that was made and its
+    /// records still to come - the one rule the text's records lines and the answer's record member read, so the two
+    /// name the same place whatever became of the run.
+    /// </summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    /// <param name="analysed">What the analyst's run answered.</param>
+    private bool AnyAnalysisRecord(string directory, FlowAnalysed analysed)
+        => analysed.Ran || AnalysisRecordFiles(directory).Any(record => _fileSystem.FileExists(record.Path));
+
+    /// <summary>The files a run of the analyst leaves in its own directory, by what each is.</summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    private static (string What, string Path)[] AnalysisRecordFiles(string directory)
+        =>
+        [
             ("analysis", Path.Combine(directory, OrchestratorLayout.AnalysisFileName)),
             ("analysisMarkdown", Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName)),
             ("report", Path.Combine(directory, OrchestratorLayout.AnalysisReportFileName)),
             ("stream", Path.Combine(directory, Agents.StoredStream.FileName)),
-        }.Where(record => _fileSystem.FileExists(record.Path)).Select(record => $"{record.What}: {record.Path}").ToList();
-
-        return records.Count > 0 || analysed.Ran
-            ? [$"records: {directory}", .. records]
-            : ["records: none was written, for no analyst ran"];
-    }
+        ];
 
     /// <summary>
     /// Writes what one run of the analyst leaves where the run keeps its analyses: the report it read - the very bytes
@@ -1301,10 +1321,16 @@ public sealed class FlowService(
 
             return question is null
                 ? Answered(layout, CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, $"no model worded this: {none}"]), asks, text, null, null, null, null, json)
-                : CommandOutcome.Failed(
-                    HarnessExit.ConfigInvalid,
-                    $"ask-orchestrator was refused: {none}",
-                    [$"record: {Path.Combine(asks, AskFileName)}"]);
+                : Answered(
+                    layout,
+                    CommandOutcome.Failed(HarnessExit.ConfigInvalid, $"ask-orchestrator was refused: {none}"),
+                    asks,
+                    text,
+                    answer: null,
+                    whyNot: null,
+                    model: null,
+                    cost: null,
+                    json);
         }
 
         var reported = await new RecordsAgentRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates).ReportAsync(
@@ -1351,10 +1377,19 @@ public sealed class FlowService(
                 reported.Model,
                 spent,
                 json)
-            : CommandOutcome.Failed(
-                reported.ExitCode ?? HarnessExit.CommandFailed,
-                $"ask-orchestrator was refused: no model worded an answer: {reported.WhyNot}",
-                [.. facts, string.Empty, $"record: {Path.Combine(asks, AskFileName)}"]);
+            : Answered(
+                layout,
+                CommandOutcome.Failed(
+                    reported.ExitCode ?? HarnessExit.CommandFailed,
+                    $"ask-orchestrator was refused: no model worded an answer: {reported.WhyNot}",
+                    [.. facts, string.Empty]),
+                asks,
+                text,
+                answer: null,
+                reported.WhyNot,
+                reported.Model,
+                spent,
+                json);
     }
 
     /// <summary>The name of the file one call of the two ask commands keeps its own record in.</summary>

@@ -3936,7 +3936,10 @@ the schema's (a pattern for every text, an enum for every closed list), and a ru
 as one, no pain point named. What a run of the analyst leaves is kept under `analysis/<stamp>/` whatever it answered -
 `report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis or why it was refused
 and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
-it cost; where no analyst ran, the command says nothing was written. It runs on the tier `reporting` names in
+it cost, the `--json` document's `record` the same directory the text's lines name wherever any record is; where no
+analyst ran, the command says nothing was written. What a run that was begun spent is said however it ended - a client
+that throws after paid turns is why no analysis holds, its spend and its model held past the throw
+(`RecordsAgentRunner`'s begun run) and still said and kept in `analysis.json`. It runs on the tier `reporting` names in
 `tierConfig`, which `init` seeds as it seeds every other tier (`Agents\Templates\agent-providers.json`: the balanced
 tier's models, the person's to change), refused (12) naming the key where a configuration defines none.
 
@@ -4529,7 +4532,10 @@ the reporter's own files do not read - whatever keeps the reporter from wording 
 model did, read by `KnownCauses.Meaning`, and never an error of the command - 13
 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model
 failed, 21 where it could not be reached or its account is at its limit - `AgentRunResult.ToOutcome`
-the one mapping), and neither command installs Claude Code or brings one up to date. An orchestrator
+the one mapping), and what a run that was begun spent is said however it ended - a client that throws after paid
+turns is why no model worded them, its spend and its model held past the throw (`RecordsAgentRunner`'s begun run) and
+still said and kept in the call's own `ask.json`, the `--json` answer in the command's shape with its record named -
+and neither command installs Claude Code or brings one up to date. An orchestrator
 made by hand, which no flow runs, has no reporter and fewer facts: its status prints what
 `list-orchestrator` has of it and says so, and the person's question is refused (12).
 

@@ -39,6 +39,9 @@ public sealed class RunReporterTests
         /// <summary>The events the run says before it answers, as a client says them.</summary>
         public List<AgentEvent> Says { get; } = [];
 
+        /// <summary>Whether the run throws once its events are said, as a client that fails after paid turns.</summary>
+        public bool Throws { get; set; }
+
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
             Asked.Add(step);
@@ -46,6 +49,11 @@ public sealed class RunReporterTests
             foreach (var said in Says)
             {
                 await events!.EmitAsync(said);
+            }
+
+            if (Throws)
+            {
+                throw new InvalidOperationException("the client failed after paid turns");
             }
 
             return Answer(step);
@@ -378,6 +386,50 @@ public sealed class RunReporterTests
         var asked = await service.AskAsync(temp.Path, run, "what is it doing?", json: false, Token).WaitAsync(Bound, Token);
 
         Assert.Equal((HarnessExit.ConfigInvalid, $"ask-orchestrator was refused: no model worded an answer: {why}"), (asked.ExitCode, asked.Message));
+    }
+
+    /// <summary>
+    /// A reporter's client that throws after paid turns keeps what it spent said and kept: the person's question is
+    /// refused with why, and the cost and the model that served the turns are named in the text and in the
+    /// <c>--json</c> answer - in the command's own shape, with its record named - and the call's own record holds them,
+    /// where the throw lost the spend with the result it kept the engine from reading.
+    /// </summary>
+    [Fact]
+    public async Task AReporterClientThatThrowsAfterPaidTurns_KeepsItsSpendSaidAndKept()
+    {
+        var (harness, temp, reporter, service, run) = await PausedAsync();
+        using var disposed = temp;
+        var turn = new AgentUsage(1, 2, 3, 4, 5, 6);
+        reporter.Says.Add(new UsageReported(turn, turn));
+        reporter.Throws = true;
+
+        var asked = await service.AskAsync(temp.Path, run, "what is it doing?", json: false, Token).WaitAsync(Bound, Token);
+        var answered = await service.AskAsync(temp.Path, run, "what is it doing?", json: true, Token).WaitAsync(Bound, Token);
+
+        var served = reporter.Asked[0].Model!;
+        var priced = AgentProviders.Resolve(harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)))!.Providers!.Of(served)
+            ?? throw new InvalidOperationException($"'{served}' is no model the configuration lists");
+
+        Assert.Equal(HarnessExit.InternalError, asked.ExitCode);
+        Assert.StartsWith("ask-orchestrator was refused: no model worded an answer: Unexpected InvalidOperationException: ", asked.Message, StringComparison.Ordinal);
+
+        var said = string.Join("\n", asked.Details!);
+
+        Assert.Contains("This answer cost ", said, StringComparison.Ordinal);
+        Assert.Contains($" ({served}, 15 tokens). It is not counted in the run's budget.", said, StringComparison.Ordinal);
+        Assert.Contains($"Record: {reporter.Asked[0].RecordDirectory!}", said, StringComparison.Ordinal);
+
+        var document = JsonNode.Parse(Assert.Single(answered.Data))!.AsObject();
+
+        Assert.Equal(HarnessExit.InternalError, (int)document["exitCode"]!);
+        Assert.Equal(
+            (served, AgentPrices.CostOf(priced.Provider, priced.Model, turn), turn.AllTokens),
+            ((string)document["cost"]!["model"]!, (double?)document["cost"]!["usd"], (long)document["cost"]!["tokens"]!));
+        Assert.Equal(reporter.Asked[1].RecordDirectory!, (string)document["record"]!);
+
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(reporter.Asked[0].RecordDirectory!, "ask.json")))!;
+
+        Assert.Equal((AgentPrices.CostOf(priced.Provider, priced.Model, turn), turn.AllTokens), ((double?)record["usd"]!, (long)record["tokens"]!));
     }
 
     /// <summary>

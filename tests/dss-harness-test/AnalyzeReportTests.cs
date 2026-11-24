@@ -126,6 +126,50 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
+    /// An analyst's client that throws after paid turns is refused with why, and what it spent is still said and kept:
+    /// the run's spend and its model outlive the throw, so the cost names them, analysis.json is written with them, and
+    /// the refusal names the directory its records are in - in the text and in the --json document alike - where the
+    /// throw lost the spend with the result it kept the engine from reading.
+    /// </summary>
+    [Fact]
+    public async Task AClientThatThrowsAfterPaidTurns_StillSaysAndKeepsWhatItSpent()
+    {
+        var (harness, temp, analyst, service, run) = await AnalyzableAsync();
+        using var disposed = temp;
+        var turn = new AgentUsage(100, 40, 0, 0, 0, 0);
+        analyst.Says.Add(new UsageReported(turn, turn));
+        analyst.Throws = true;
+
+        var text = await service.AnalyzeReportAsync(temp.Path, run, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var json = await service.AnalyzeReportAsync(temp.Path, run, json: true, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var served = analyst.Asked[0].Model!;
+        var priced = AgentProviders.Resolve(harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)))!.Providers!.Of(served)
+            ?? throw new InvalidOperationException($"'{served}' is no model the configuration lists");
+        var document = JsonNode.Parse(Assert.Single(json.Data))!.AsObject();
+
+        Assert.Equal(HarnessExit.InternalError, text.ExitCode);
+        Assert.StartsWith("analyze-orchestrator-report was refused: the analyst's run gave no analysis that holds: Unexpected InvalidOperationException: ", text.Message, StringComparison.Ordinal);
+
+        var said = string.Join("\n", text.Details!);
+
+        Assert.Contains("This analysis cost ", said, StringComparison.Ordinal);
+        Assert.Contains(", 140 tokens). It is not counted in the run's budget.", said, StringComparison.Ordinal);
+        Assert.Contains($"records: {analyst.Asked[0].RecordDirectory!}", said, StringComparison.Ordinal);
+
+        Assert.Equal(HarnessExit.InternalError, (int)document["exitCode"]!);
+        Assert.Null((JsonNode?)document["analysis"]!);
+        Assert.Equal(
+            (served, AgentPrices.CostOf(priced.Provider, priced.Model, turn), turn.AllTokens),
+            ((string)document["cost"]!["model"]!, (double?)document["cost"]!["usd"], (long)document["cost"]!["tokens"]!));
+        Assert.Equal(analyst.Asked[1].RecordDirectory!, (string)document["record"]!);
+
+        var kept = JsonNode.Parse(File.ReadAllText(Path.Combine(analyst.Asked[0].RecordDirectory!, "analysis.json")))!;
+
+        Assert.Equal((AgentPrices.CostOf(priced.Provider, priced.Model, turn), turn.AllTokens), ((double?)kept["usd"]!, (long)kept["tokens"]!));
+    }
+
+    /// <summary>
     /// The analyst's answer is held to the report by the structured-output gate itself - the check the runner gives its
     /// output (<see cref="AgentOutput.Holds"/>), asked again for in the analyst's own conversation under the schema's
     /// count of repairs, never by a run asked anew: a citation the report does not hold is a problem at its path; the
@@ -440,6 +484,9 @@ public sealed class AnalyzeReportTests
         /// <summary>The events the run says before it answers, as a client says them.</summary>
         public List<AgentEvent> Says { get; } = [];
 
+        /// <summary>Whether the run throws once its events are said, as a client that fails after paid turns.</summary>
+        public bool Throws { get; set; }
+
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
             Asked.Add(step);
@@ -447,6 +494,11 @@ public sealed class AnalyzeReportTests
             foreach (var said in Says)
             {
                 await events!.EmitAsync(said);
+            }
+
+            if (Throws)
+            {
+                throw new InvalidOperationException("the client failed after paid turns");
             }
 
             return Answer(step);
