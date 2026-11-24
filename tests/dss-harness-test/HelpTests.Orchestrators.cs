@@ -346,6 +346,22 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic says where the resume completes a cut-off attempt from, by the kind of step: a reason
+    /// step's stored stream, charging only what its record had not, and a machine step's ledger in its directory, its
+    /// legs and where its work stopped - so a reader knows what is read for each.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhereTheResumeCompletesACutAttemptFrom_ByTheKindOfStep()
+    {
+        Assert.Contains(
+            "an attempt a crash cut off is completed at the resume from the step's own records: a reason step's stored "
+                + "stream, charging only what its record had not, and a machine step's ledger in its directory, its legs and "
+                + "where its work stopped",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic says what an analysis's impact is held to: every number it says one of its citations',
     /// a number joined to its unit as well - as written or converted exactly to the report's unit - and a word that reads
     /// as no one number refused, as the evidence check holds it.

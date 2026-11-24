@@ -3868,7 +3868,12 @@ record still `Running` - is completed at the resume from its own stored stream (
 events of the attempt the record says it was on, replayed through the engine's own count of a run's spending, each turn
 priced as it was reported): only the turns past what its entry was charged (`reports`) are charged now, its run ends
 where its stream did, and a stream that does not read whole, or cannot be priced, says so as the part's uncounted
-reason. The machine a step's legs run on tells its holds as each wait of a leg's admission begins and ends
+reason. A machine step keeps no stream: its cut attempt is completed from the ledger its legs' run kept in its step
+directory (`LegStepRunner.CutAccountOf`, read through the same account every cut step is completed by) - each line a leg
+of the attempt as its measure keeps it, and the attempt closed where the ledger was written, the latest time the step's
+own records give; a directory that holds no ledger, or one an attempt before left there - written before this attempt's
+run began, and so not this attempt's - leaves the attempt with no legs and its run closed at the run's last record, as a
+step that kept no record of its own. The machine a step's legs run on tells its holds as each wait of a leg's admission begins and ends
 (`AdmissionRequest.Told`, `ILegRunWatch.Admitting`; an ssh host's by a note its dispatcher reads) - a wait for a slot in
 the dispatch queue's fair order, for the memory and for the room, then taken as the queue grants the leg its slot and
 ended as the slot is given back or the leg is refused or stopped as it waits, so the measure sees every wait the queue

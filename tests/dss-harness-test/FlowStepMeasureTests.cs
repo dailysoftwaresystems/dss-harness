@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
@@ -762,6 +763,183 @@ public sealed class FlowStepMeasureTests
     }
 
     /// <summary>
+    /// A machine step's attempt that a crash cut off is completed from the ledger its legs' run kept in the step's own
+    /// directory: its run closes where that ledger was written - the latest time the step's own records give, where it
+    /// had closed at the run's last record, which stood at the attempt's start - and its legs are the ledger's lines,
+    /// each read as the live ending writes them, with the machine's wait and the digest's counts.
+    /// </summary>
+    [Fact]
+    public async Task AResume_ClosesACutMachineStep_AtItsOwnLedgersTime_WithTheLegsItsLinesSay()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: build
+            """);
+        var runner = new Runner();
+        runner.Hold("build");
+        var (harness, layout, records) = Records("r1", temp.Path, definition, new ManualClock(Began));
+
+        using (records)
+        {
+            var seen = new Seen(records);
+            var running = seen.SeenAsync(snapshot => Step(snapshot, "build").State == FlowInstanceState.Running);
+            using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            var session = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: seen).RunAsync(engine.Token);
+            await runner.StartedAsync("build");
+            await running.WaitAsync(Bound, Token);
+
+            // The crash, with the legs' run over and its ledger written in the step's directory, before the engine read
+            // the run's answer.
+            await engine.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+        }
+
+        // The ledger the legs' run left, as the tool writes it, written 90 seconds into the attempt's run.
+        var written = Began.AddSeconds(90);
+        var directory = layout.InstanceDirectory("build", agent: null);
+        var ledger = Path.Combine(directory, OrchestratorLayout.StepLedgerFileName);
+        var report = LedgerReport.From(
+            [
+                new LegEntry { Leg = "linux", Verdict = LegVerdict.Passed, Duration = TimeSpan.FromSeconds(30) },
+                new LegEntry
+                {
+                    Leg = "windows-gcc",
+                    Verdict = LegVerdict.Failed,
+                    Duration = TimeSpan.FromSeconds(90),
+                    Admission = new AdmissionFact(Admitted: true, WaitedSeconds: 2.5),
+                    Digest = ResultDigest.Of(
+                        [
+                            new Diagnostic("gcc", "error", "-Wreturn-type", "control reaches end of non-void function", "src/app.c", 41),
+                            new Diagnostic("gcc", "error", "-Wunused-variable", "unused variable 'held'", "src/rows.c", 12),
+                            new Diagnostic("gcc", "warning", "-Wformat", "format '%d' expects argument of type 'int'", "src/app.c", 50),
+                        ],
+                        [],
+                        ["a stray line nobody parsed"]),
+                },
+            ],
+            durationWarningFactor: 0);
+        harness.FileSystem.CreateDirectory(directory);
+        harness.FileSystem.WriteAllTextAtomic(ledger, report.ToJson(cancelled: false, unfinished: []) + "\n");
+        harness.FileSystem.SetLastWriteTimeUtc(ledger, written.UtcDateTime);
+
+        var (_, _, again) = Records("r1", temp.Path, definition, new ManualClock(Began.AddHours(1)));
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(
+                definition,
+                new Runner(),
+                new RunnerFacts(),
+                new ManualClock(Began.AddHours(1)),
+                resume: TakeUp(harness, layout, definition),
+                records: again,
+                streamAccount: new LedgerAccount(harness.FileSystem, layout));
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var build = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single().Measure!;
+        var cut = build.Attempts![0];
+
+        Assert.Equal((1, "Stopped", "the engine's process ended"), (cut.N, cut.Outcome, cut.Error));
+        Assert.Equal([new FlowStepSpan(Began, written)], cut.Runs);
+        Assert.Equal(
+            [
+                new FlowStepLeg("linux", "passed", 30.0),
+                new FlowStepLeg("windows-gcc", "failed", 90.0, 2.5, null, 2, 1, 0, 1),
+            ],
+            cut.Legs);
+        Assert.Equal(("Done", 2), (build.Attempts[1].Outcome, build.Attempts[1].N));
+        Assert.Equal((90.0, 3510.0), (build.Ran, build.Paused));
+    }
+
+    /// <summary>
+    /// A ledger an attempt before left in the step's directory is not the cut attempt's own: written before this
+    /// attempt's run began, its lines are left out of the cut attempt's measure - which keeps no legs of the step's
+    /// earlier attempt - and its run closes at the run's last record, as the engine closes a step that kept no record of
+    /// its own.
+    /// </summary>
+    [Fact]
+    public async Task AResume_LeavesALedgerAnAttemptBeforeLeft_OutOfTheCutAttempt()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: build
+                onFailure: stop
+            """);
+        var runner = new Runner().OnAsync("build", (run, asked) => asked == 1
+            ? Task.FromResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it did not build") with
+            {
+                Attempt = new FlowStepAttempt(1, Legs: [new FlowStepLeg("linux", "passed", 30.0)]),
+            })
+            : new TaskCompletionSource<FlowStepResult>().Task);
+        var (harness, layout, records) = Records("r1", temp.Path, definition, new ManualClock(Began));
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(Began), records: records);
+
+            Assert.Equal(FlowRunStatus.Failed, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        // The ledger the failed attempt's legs' run left in the step's directory, written before the next attempt began.
+        var directory = layout.InstanceDirectory("build", agent: null);
+        var ledger = Path.Combine(directory, OrchestratorLayout.StepLedgerFileName);
+        var report = LedgerReport.From(
+            [new LegEntry { Leg = "linux", Verdict = LegVerdict.Passed, Duration = TimeSpan.FromSeconds(30) }],
+            durationWarningFactor: 0);
+        harness.FileSystem.CreateDirectory(directory);
+        harness.FileSystem.WriteAllTextAtomic(ledger, report.ToJson(cancelled: false, unfinished: []) + "\n");
+        harness.FileSystem.SetLastWriteTimeUtc(ledger, Began.AddSeconds(30).UtcDateTime);
+
+        var resumedAt = Began.AddHours(1);
+        var (_, _, again) = Records("r1", temp.Path, definition, new ManualClock(resumedAt));
+
+        using (again)
+        {
+            var seen = new Seen(again);
+            var running = seen.SeenAsync(snapshot => Step(snapshot, "build").State == FlowInstanceState.Running && Step(snapshot, "build").Attempt == 2);
+            using var engine = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            var session = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock(resumedAt), resume: TakeUp(harness, layout, definition), records: seen).RunAsync(engine.Token);
+            await running.WaitAsync(Bound, Token);
+
+            // The crash, with the second attempt under way and the directory still holding the first attempt's ledger.
+            await engine.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(Bound, Token));
+        }
+
+        var (_, _, onceMore) = Records("r1", temp.Path, definition, new ManualClock(Began.AddHours(2)));
+
+        using (onceMore)
+        {
+            var coordinator = new FlowCoordinator(
+                definition,
+                new Runner(),
+                new RunnerFacts(),
+                new ManualClock(Began.AddHours(2)),
+                resume: TakeUp(harness, layout, definition),
+                records: onceMore,
+                streamAccount: new LedgerAccount(harness.FileSystem, layout));
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var build = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single().Measure!;
+
+        Assert.Equal(["Failed", "Stopped", "Done"], build.Attempts!.Select(attempt => attempt.Outcome));
+        Assert.Equal([new FlowStepLeg("linux", "passed", 30.0)], build.Attempts![0].Legs);
+        Assert.Null(build.Attempts[1].Legs);
+        Assert.Equal([new FlowStepSpan(resumedAt, resumedAt)], build.Attempts[1].Runs);
+        Assert.Equal("the engine's process ended", build.Attempts[1].Error);
+    }
+
+    /// <summary>
     /// The time a machine step's machine holds every leg of it back is its wait on that cause, never its run: the attempt's
     /// run stops while it is held and goes on as a leg is let start, and its record says what it waits on meanwhile.
     /// </summary>
@@ -1013,6 +1191,17 @@ public sealed class FlowStepMeasureTests
             Asked.Add(run);
             return Task.FromResult<FlowCutAttempt?>(cut);
         }
+    }
+
+    /// <summary>The account of a cut-off machine step, read from its step directory's ledger as the leg runner reads it.</summary>
+    private sealed class LedgerAccount(IFileSystem fileSystem, OrchestratorLayout layout) : IFlowStreamAccount
+    {
+        /// <inheritdoc/>
+        public string? Account(FlowStepRun run) => null;
+
+        /// <inheritdoc/>
+        public Task<FlowCutAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+            => Task.FromResult(LegStepRunner.CutAccountOf(fileSystem, layout, run));
     }
 
     /// <summary>A run's records written as the engine writes them, telling a test the first snapshot that holds what it waits for.</summary>

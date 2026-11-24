@@ -1944,10 +1944,11 @@ public sealed class FlowCoordinator
     /// Completes the measure of the attempt a crash cut off of <paramref name="instance"/> - its record <c>Running</c> -
     /// for the attempt its record says it was on: what its stored stream holds past the turns its entry was charged with,
     /// each charged through the one place a token is counted, so nothing the record already holds is counted twice; its run
-    /// closed where the crash left it - the later of its stream's last event and the run's last record - with the
-    /// account its whole stream gives; and from there to the resume, the time it stood stopped, its pause. A stream that
-    /// cannot be read whole or priced leaves what it spent past its record not known, and says why on its entry and in the
-    /// run's dollars, never as nothing. An entry the record already ended stands as it was.
+    /// closed where the crash left it - the later of what its own records say its work stopped at (a reason step's stream,
+    /// a machine step's ledger) and the run's last record - with the account its whole records give; and from there to the
+    /// resume, the time it stood stopped, its pause. A stream that cannot be read whole or priced leaves what it spent
+    /// past its record not known, and says why on its entry and in the run's dollars, never as nothing. An entry the
+    /// record already ended stands as it was.
     /// </summary>
     /// <param name="instance">The instance the crash left running.</param>
     /// <param name="cancellationToken">Cancels the reading of the repository.</param>
@@ -1960,7 +1961,10 @@ public sealed class FlowCoordinator
             return;
         }
 
-        var cut = instance.Step.Type == "reason" && _streamAccount is { } account
+        // The account of the cut attempt as its own records give it: a reason step's stored stream, a machine step's
+        // ledger, null for a type that keeps neither - the runner of the type decides, through the one account every
+        // reader of a cut step reads.
+        var cut = _streamAccount is { } account
             ? await account.AttemptOf(RunOf(instance, instance.Step, attempt, new Dictionary<string, FlowValue>(StringComparer.Ordinal), handoff: null), cancellationToken).ConfigureAwait(false)
             : null;
 
@@ -1977,10 +1981,17 @@ public sealed class FlowCoordinator
         }
 
         var last = _resumedFrom ?? entry.Runs?.LastOrDefault()?.StartedAt ?? _clock.GetUtcNow();
-        var at = cut?.EndedAt is { } streamed && streamed > last ? streamed : last;
+        var at = cut?.EndedAt is { } stopped && stopped > last ? stopped : last;
+
+        // The account is the attempt's own only where its records were written under it: a ledger an earlier attempt of
+        // the step left in its directory was written before this attempt's run began, and its lines are not this
+        // attempt's legs - the run still closes no earlier than the run's last record, as `at` already holds.
+        var own = cut is { Unread: null } read && (read.EndedAt is not { } written || entry.Runs?.LastOrDefault()?.StartedAt is not { } began || written >= began)
+            ? read
+            : null;
 
         instance.Measure = instance.Measure!
-            .Ended(attempt, at, ended => (cut is { Unread: null } read ? ended.Accounted(read.Account, whole: true) : ended) with
+            .Ended(attempt, at, ended => (own is { } recorded ? ended.Accounted(recorded.Account, whole: true) : ended) with
             {
                 Outcome = FlowInstanceState.Stopped.ToString(),
                 Error = "the engine's process ended",

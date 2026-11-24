@@ -608,6 +608,36 @@ public sealed record FlowStepLeg(
             digest is null ? null : digest.Unparsed?.Count ?? 0);
     }
 
+    /// <summary>
+    /// What <paramref name="line"/>, a leg's line of its step's ledger as the step's directory keeps it, says the leg did:
+    /// the same reading as <see cref="Of"/>, of the line's recorded form. The recorded line holds no phase times, so the
+    /// leg's phases are not read back; everything else the measure keeps of a leg is.
+    /// </summary>
+    /// <param name="line">The leg's line, as the ledger document in the step's directory holds it.</param>
+    public static FlowStepLeg Recorded(JsonObject line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        var digest = line["digest"] as JsonObject;
+
+        return new FlowStepLeg(
+            line["leg"]?.GetValue<string>() ?? string.Empty,
+            line["verdict"]?.GetValue<string>() ?? string.Empty,
+            Seconds(line["durationSeconds"]),
+            (line["admission"] as JsonObject)?["waitedSeconds"] is { } waited ? waited.GetValue<double>() : null,
+            Phases: null,
+            digest is null ? null : Whole(digest, "errors"),
+            digest is null ? null : Whole(digest, "warnings"),
+            digest is null ? null : Whole(digest, "failed") + Whole(digest, "errored") + Whole(digest, "timedOut") + Whole(digest, "crashed"),
+            digest is null ? null : (digest["unparsed"] as JsonArray)?.Count ?? 0);
+
+        static double? Seconds(JsonNode? seconds)
+            => seconds is JsonValue held && held.TryGetValue<double>(out var ran) && ran > 0 ? ran : null;
+
+        static int Whole(JsonObject? digest, string member)
+            => digest?[member] is JsonValue held && held.TryGetValue<int>(out var counted) ? counted : 0;
+    }
+
     /// <summary>What is wrong with this leg's record; null when nothing is.</summary>
     public string? Problem()
         => string.IsNullOrWhiteSpace(Leg) ? "a leg names no leg"

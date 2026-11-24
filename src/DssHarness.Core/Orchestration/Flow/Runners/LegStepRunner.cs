@@ -43,7 +43,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">Keeps the ledger and the red logs in the step's directory.</param>
 /// <param name="children">Records in its directory the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
-public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation) : IFlowStepTypeRunner
+public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IAgentIsolation isolation) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     private readonly FlowStepLegs _legs = new(fileSystem, children, isolation);
 
@@ -176,6 +176,81 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             Cause = result.Cause,
             Attempt = account,
         };
+    }
+
+    /// <summary>No handoff turn of a machine step: its legs keep no conversation, and the engine writes the handoff itself.</summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the turn.</param>
+    Task<string?> IFlowHandoffRunner.HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
+        => Task.FromResult<string?>(null);
+
+    /// <summary>No account of a machine step's stored stream: it keeps none, and the handoff stands on its first line alone.</summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    string? IFlowHandoffRunner.Account(FlowStepRun run) => null;
+
+    /// <summary>
+    /// The account of the attempt <paramref name="run"/> names, where a crash cut the machine step off before the engine
+    /// read its runner's answer: the ledger its legs' run kept in the step's directory, read back as the cut attempt's own
+    /// (<see cref="CutAccountOf"/>) - each line a leg the attempt ran, with its verdict, its time and its digest's counts -
+    /// closed where that ledger was written, the latest time the step's own records give.
+    /// </summary>
+    /// <param name="run">The step, the instance and the attempt the record says was current.</param>
+    /// <param name="cancellationToken">Cancels the reading of the repository.</param>
+    async Task<FlowCutAttempt?> IFlowHandoffRunner.AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+
+        return CutAccountOf(fileSystem, OrchestratorLayout.Of(context.Layout, place.Run), run);
+    }
+
+    /// <summary>
+    /// The cut attempt's account out of the ledger a step's directory keeps, <see cref="OrchestratorLayout.StepLedgerFileName"/>
+    /// under <paramref name="layout"/>'s directory for the step: each line a leg of the attempt as its measure keeps it
+    /// (<see cref="FlowStepLeg.Recorded"/>), and the attempt closed where the ledger was written - the latest time the
+    /// step's own records give. Null where the directory holds no ledger, or one that does not read: nothing of the
+    /// attempt is taken then, and its run closes where the engine would close it for a step that kept no record of its
+    /// own - the run's last, as the resume reads it.
+    /// </summary>
+    /// <param name="fileSystem">Reads the step's ledger.</param>
+    /// <param name="layout">The run's layout, which names the step's directory.</param>
+    /// <param name="run">The step, the instance and the attempt the record says was current.</param>
+    internal static FlowCutAttempt? CutAccountOf(IFileSystem fileSystem, OrchestratorLayout layout, FlowStepRun run)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(run);
+
+        var ledger = Path.Combine(layout.InstanceDirectory(run.Instance, run.WorksIn), OrchestratorLayout.StepLedgerFileName);
+
+        if (fileSystem.KindOf(ledger) != PathKind.File)
+        {
+            return null;
+        }
+
+        try
+        {
+            // The ledger as the step's legs' run wrote it, one write at their run's end; a file another run left there is
+            // told from this attempt's run by when it was written, which the engine reads from the account it is given.
+            var lines = Json.JsonDepth.ParseNode(fileSystem.ReadAllText(ledger)) as JsonObject ?? throw new JsonException("the step's ledger is no JSON object");
+
+            if (lines["legs"] is not JsonArray entries)
+            {
+                return null;
+            }
+
+            return new FlowCutAttempt(
+                new FlowStepAttempt(run.Attempt, Legs: [.. entries.OfType<JsonObject>().Select(FlowStepLeg.Recorded)]),
+                [],
+                new DateTimeOffset(fileSystem.LastWriteTimeUtc(ledger), TimeSpan.Zero));
+        }
+        catch (Exception failed) when (failed is JsonException or InvalidOperationException or IOException)
+        {
+            // A ledger that cannot be read is no account of the attempt: nothing of it is taken, not even its time, and
+            // the resume is not stopped by a record the crash tore.
+            return null;
+        }
     }
 
     /// <summary>Runs the step's legs in <paramref name="tree"/> through its type's use case, telling <paramref name="watch"/> of each.</summary>
