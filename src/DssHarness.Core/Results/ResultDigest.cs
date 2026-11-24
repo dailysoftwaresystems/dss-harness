@@ -336,10 +336,10 @@ public sealed record ResultDigest
     /// This digest with every place it names placed by <paramref name="inTree"/> - the one place a frame is marked and a
     /// path made the tree's, for a tree this machine ran the phase in (<see cref="WithInTree(DigestTree)"/>) as for one
     /// another machine ran a job in, which only that machine's convention places: each frame of every stack, every cause's
-    /// among them, marked by whether its file is in the tree, and every file in it - a frame's, a diagnostic's, a
-    /// failure's, a count's by file - named as the tree names it; a file outside it named as the tool wrote it, and a frame
-    /// that names no file in no tree. A failure's place is then the top frame of its stack in the tree, where one is - the
-    /// assertion's line, not the framework's - else the place its runner named apart.
+    /// among them, marked by whether its file is in the tree, and every file in it - a frame's, a diagnostic's and its
+    /// project's, a failure's, a count's by file - named as the tree names it; a file outside it named as the tool wrote it,
+    /// and a frame that names no file in no tree. A failure's place is then the top frame of its stack in the tree, where
+    /// one is - the assertion's line, not the framework's - else the place its runner named apart.
     /// </summary>
     /// <param name="inTree">A file as the tool wrote it, named as the tree names it; null where it is not in the tree.</param>
     public ResultDigest WithInTree(Func<string, string?> inTree)
@@ -351,7 +351,7 @@ public sealed record ResultDigest
 
         return this with
         {
-            Diagnostics = [.. Diagnostics.Select(diagnostic => diagnostic with { File = Placed(diagnostic.File), Stack = Marked(diagnostic.Stack) })],
+            Diagnostics = [.. Diagnostics.Select(diagnostic => diagnostic with { File = Placed(diagnostic.File), Project = Placed(diagnostic.Project), Stack = Marked(diagnostic.Stack) })],
             Failures = [.. Failures.Select(Failure)],
             ByFile = [.. ByFile
                 .Select(counted => counted with { Of = Placed(counted.Of)! })

@@ -9852,8 +9852,9 @@ wherever its failure is the leg's verdict - a moving tree's or a shared director
 build's failing phase by the parsers its project and its toolchain's compiler chose and a test's by its runner's, each
 with the matchers that read it (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first, and its
 log only where they gave no finding, what they could not give said beside it. Every place is then read against the
-tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed): a path - relative ones read from the
-directory the tool ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by
+tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed - a diagnostic's file and its
+project's, each frame's, a failure's, each count's by file): a path - relative ones read from the directory the tool
+ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by
 its own text in the form it is written in (`PlatformPaths.RelativeAsWritten`) and never by the reading machine's rules
 - a Windows path a tool wrote is in no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a bare name the
 tree has no file of (`Thread.java`) in none, a `file:` URI the path it names - and a failure's place is the top frame

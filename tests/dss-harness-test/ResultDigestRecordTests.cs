@@ -269,7 +269,8 @@ public sealed class ResultDigestRecordTests
     }
 
     /// <summary>
-    /// Every place is read against the tree once: a file the tree holds is in it, named relative to its root - a rooted one
+    /// Every place is read against the tree once - a diagnostic's file and its project's, each frame's, a failure's: a file
+    /// the tree holds is in it, named relative to its root - a rooted one
     /// in either slash and any case of the root's own form, a relative one read from where the tool ran, a file URI -
     /// while a bare name the tree has no file of, a frame naming no file, a runtime's own module and a path elsewhere are
     /// in no tree and stay as written; a failure's place is then the top frame the tree holds, and the counts by file are
@@ -279,7 +280,7 @@ public sealed class ResultDigestRecordTests
     public void EveryPlace_IsReadAgainstTheTreeOnce_InTheTreeWhereTheTreeHoldsItsFile()
     {
         const string Root = @"D:\work\tree";
-        var files = new Holding(Path.Combine(Root, "src/a.cs"), Path.Combine(Root, "src/Engine.cs"), Path.Combine(Root, "include/h.h"));
+        var files = new Holding(Path.Combine(Root, "src/a.cs"), Path.Combine(Root, "src/Engine.cs"), Path.Combine(Root, "include/h.h"), Path.Combine(Root, "src/App.csproj"));
         var stack = new List<StackFrame>
         {
             new("at System.Collections.Generic.Dictionary.Insert()"),
@@ -290,7 +291,7 @@ public sealed class ResultDigestRecordTests
         };
         var digest = ResultDigest.Of(
             [
-                new Diagnostic("gcc", "error", null, "jammed", "../../include/h.h", 3, Stack: [new StackFrame("In file included from file:///D:/work/tree/src/a.cs:2", "file:///D:/work/tree/src/a.cs", 2, Kind: "include")]),
+                new Diagnostic("gcc", "error", null, "jammed", "../../include/h.h", 3, Project: @"D:\work\tree\src\App.csproj", Stack: [new StackFrame("In file included from file:///D:/work/tree/src/a.cs:2", "file:///D:/work/tree/src/a.cs", 2, Kind: "include")]),
             ],
             [new TestFailure("dotnet", "Engine", Exception: new ExceptionRecord("System.Exception", "boom", stack, []), File: "D:/elsewhere/Tests.cs", Line: 1)],
             []);
@@ -299,7 +300,7 @@ public sealed class ResultDigestRecordTests
 
         var diagnostic = marked.Diagnostics[0];
 
-        Assert.Equal(("include/h.h", "src/a.cs", true), (diagnostic.File, diagnostic.Stack[0].File, diagnostic.Stack[0].InTree));
+        Assert.Equal(("include/h.h", "src/App.csproj", "src/a.cs", true), (diagnostic.File, diagnostic.Project, diagnostic.Stack[0].File, diagnostic.Stack[0].InTree));
         Assert.Equal(
             [
                 ((string?)null, false),
