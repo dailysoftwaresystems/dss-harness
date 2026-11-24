@@ -322,7 +322,8 @@ internal sealed class DotNetTestParser : IBuiltInParser
 /// each failure inside it - <c>path:line: Failure</c>, or <c>path(line): error: message</c> where MSVC built it - with the
 /// lines of its message under it; a parameterized test's <c>Instance/Suite.Name/0</c> and its <c>, where GetParam() =
 /// ...</c>. The log is in the test from its <c>[ RUN ]</c> to its end (<see cref="ResultSink.Test"/>), so a crash a report
-/// says inside it - a sanitizer's, the C runtime's failed assertion - is its failure; a test that a <c>[ RUN ]</c> opened
+/// says ended the program inside it - a sanitizer's, the C runtime's failed assertion - is its failure, and a report the
+/// program ran on from names it and leaves the test to its own end; a test that a <c>[ RUN ]</c> opened
 /// and nothing closed has crashed, and is said so where no such report said it already. The summary repeats the failed
 /// tests, and says one only where its own block did not.
 /// </summary>

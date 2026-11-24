@@ -938,7 +938,7 @@ public sealed class ResultParsersTests
     }
 
     /// <summary>
-    /// A crash a report says inside a test a runner said began is that test's failure, said once: a GoogleTest test that
+    /// A crash a report says ended the program inside a test a runner said began is that test's failure, said once: a GoogleTest test that
     /// crashed under AddressSanitizer is the test's own crash - the report's words its message, its first stack the
     /// failure's - and one the C runtime's failed assertion killed is the test's own too, the assertion's words its
     /// message and its place the failure's, never a second failure the runner says beside them. The lines are each
@@ -966,6 +966,56 @@ public sealed class ResultParsersTests
         Assert.Equal("virtual void StoreTest_Loads_Test::TestBody(): Assertion `count == 2' failed.", killed.Message);
         Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 18), (killed.File, killed.Line));
         Assert.Empty(assertion.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A sanitizer's report a test's program recovered from and ran on is the report's own, its message naming the test it
+    /// ran in, and the test is said by its runner as it ended: one GoogleTest says failed is said once, as that failure,
+    /// and one it says passed is in no failure. The lines are each tool's own form - GoogleTest's console as a test binary
+    /// run directly prints it, UndefinedBehaviorSanitizer's runtime error as g++ 13's recovering UBSan prints it.
+    /// </summary>
+    [Fact]
+    public void ASanitizersReportATestRanOn_IsTheReportsOwn_AndTheTestIsSaidByItsRunner()
+    {
+        const string Overflow = "signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'";
+
+        var digest = Digested(
+            [
+                "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+                "[==========] Running 2 tests from 1 test suite.",
+                "[----------] Global test environment set-up.",
+                "[----------] 2 tests from StoreTest",
+                "[ RUN      ] StoreTest.Loads",
+                $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}",
+                "/home/runner/work/app/app/tests/store_test.cc:14: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: -2147483648",
+                "  2",
+                "[  FAILED  ] StoreTest.Loads (0 ms)",
+                "[ RUN      ] StoreTest.Counts",
+                $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}",
+                "[       OK ] StoreTest.Counts (0 ms)",
+                "[----------] 2 tests from StoreTest (0 ms total)",
+                string.Empty,
+                "[----------] Global test environment tear-down",
+                "[==========] 2 tests from 1 test suite ran. (0 ms total)",
+                "[  PASSED  ] 1 test.",
+                "[  FAILED  ] 1 test, listed below:",
+                "[  FAILED  ] StoreTest.Loads",
+                string.Empty,
+                " 1 FAILED TEST",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+
+        Assert.Equal(
+            [
+                ("gtest", "StoreTest.Loads", "failed", "Expected equality of these values:\n  store.Count()\n    Which is: -2147483648\n  2", (5, 12)),
+                ("sanitizer", $"UndefinedBehaviorSanitizer: {Overflow}", "errored", $"{Overflow} (while the test StoreTest.Loads ran)", (6, 6)),
+                ("sanitizer", $"UndefinedBehaviorSanitizer: {Overflow}", "errored", $"{Overflow} (while the test StoreTest.Counts ran)", (14, 14)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message!, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
     }
 
     /// <summary>

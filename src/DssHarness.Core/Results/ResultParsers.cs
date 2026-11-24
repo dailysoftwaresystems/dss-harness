@@ -89,7 +89,8 @@ public sealed class ResultSink
 
     /// <summary>
     /// The test the log is in - one a runner said began and has not said ended - or null where it is in none: a crash a
-    /// report says while it is set is that test's (<see cref="AddCrash"/>). A runner's reading sets it as it reads a test
+    /// report says ended the program while it is set is that test's, and a report the program ran on from names it
+    /// (<see cref="AddCrash"/>). A runner's reading sets it as it reads a test
     /// begin and clears it as the test ends; a line a runner of tests prints of its own - CTest's next test - ends it too.
     /// </summary>
     public OpenTest? Test
@@ -138,10 +139,12 @@ public sealed class ResultSink
 
     /// <summary>
     /// Says a crash a report read - a sanitizer's, a debugger's, the C runtime's failed assertion. Where the log is in a test
-    /// (<see cref="Test"/>), the crash is that test's failure: named for the test, its message the report's own words -
-    /// its error's type ahead of what it said - its place, stack and log range the report's, and the test marked as said by
-    /// it, so the runner that began it says it no second time; a crash that ended its program ends the test too. Where the
-    /// log is in none, the crash is said as the report's own.
+    /// (<see cref="Test"/>) and the crash ended its program, the crash is that test's failure: named for the test, its
+    /// message the report's own words - its error's type ahead of what it said - its place, stack and log range the
+    /// report's, and the test ended and marked as said by it, so the runner that began it says it no second time. A report
+    /// the program recovered from and ran on is said as the report's own, its message naming the test it ran in, and the
+    /// test runs on, for its runner to say as it ends - passed or failed. Where the log is in no test, the crash is said as
+    /// the report's own.
     /// </summary>
     /// <param name="crash">The crash, as its report's reader read it.</param>
     public void AddCrash(TestFailure crash)
@@ -154,12 +157,14 @@ public sealed class ResultSink
             return;
         }
 
-        test.Said = true;
-
-        if (crash.Outcome == "crashed")
+        if (crash.Outcome != "crashed")
         {
-            _shared.Test = null;
+            Add(crash with { Message = $"{crash.Message ?? crash.Id} (while the test {test.Id} ran)" });
+            return;
         }
+
+        test.Said = true;
+        _shared.Test = null;
 
         Add(crash with
         {
@@ -212,7 +217,7 @@ public sealed class OpenTest(string framework, string id, string? @class, string
     /// <summary>Its method; null where the runner gives none.</summary>
     public string? Method { get; } = method;
 
-    /// <summary>Whether a crash read while it ran was said as its failure.</summary>
+    /// <summary>Whether a crash that ended its program while it ran was said as its failure.</summary>
     public bool Said { get; internal set; }
 }
 
