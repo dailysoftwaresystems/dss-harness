@@ -646,7 +646,7 @@ internal abstract class GnuFormParser : IBuiltInParser
                     return LineTaken.Took;
                 }
 
-                if (_source && !Heads(text))
+                if (_source && !OpensARecord(text))
                 {
                     // The line under a diagnostic or a note, which clang before 17 printed with no gutter: held for
                     // the one line after it, the caret under it, which says whether it is the source. A line that
@@ -782,7 +782,7 @@ internal abstract class GnuFormParser : IBuiltInParser
             => Said.Match(text) is { Success: true } said ? said : SaidAsMsvc.Match(text);
 
         /// <summary>Whether <paramref name="text"/> opens a record of this reading: a diagnostic or a note in either place form, the driver's own word, or a line of a chain.</summary>
-        private static bool Heads(string text)
+        private static bool OpensARecord(string text)
             => SaidOf(text).Success || Driver.Match(text) is { Success: true } || Included.Match(text) is { Success: true } || Context.Match(text) is { Success: true } || Required.Match(text) is { Success: true };
 
         /// <summary>The flag that names a diagnostic: <c>-Wx</c>, also where <c>-Werror=x</c> or <c>-Werror,-Wx</c> promoted it.</summary>
@@ -1084,6 +1084,7 @@ internal sealed class CMakeParser : IBuiltInParser
                     }
 
                     // The second blank line in a row, which ends the block, with the one before it.
+                    _to = line.Last;
                     Close(sink);
                     return LineTaken.Took;
                 }
