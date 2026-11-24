@@ -167,6 +167,74 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
+    /// A leg granted after a wait for a slot is told the queue once, as the wait begins, then Taken as it starts - never
+    /// before the wait has ended - and Ended once its admission ends with the slot given back.
+    /// </summary>
+    [Fact]
+    public async Task ALegGrantedAfterItsQueueWait_IsToldTheQueue_ThenTaken_ThenEnded()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var stages = new List<AdmissionStage>();
+        var waits = 0;
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"), AdmissionKit.Holder(harness, "second"));
+
+        // The first holder gives its slot back while this leg waits its second poll.
+        var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock, settle: TimeSpan.Zero, onWait: () =>
+        {
+            if (++waits == 2)
+            {
+                AdmissionKit.Write(record, [.. AdmissionKit.Read(record).Where(entry => entry.Leg != "first")]);
+            }
+        }).AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, settleLeast: 0, settleMost: 0), []) with { Told = stages.Add },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(60, admitted.Fact.WaitedSeconds);
+        Assert.Equal([AdmissionStage.Queue, AdmissionStage.Taken], stages);
+
+        admitted.Dispose();
+        Assert.Equal([AdmissionStage.Queue, AdmissionStage.Taken, AdmissionStage.Ended], stages);
+    }
+
+    /// <summary>
+    /// A leg holding its slot that waits for room is told the room once, as the wait begins, then Taken as it starts:
+    /// the room is a wait of the machine's own, told as the queue's is, and never counted as the leg's run.
+    /// </summary>
+    [Fact]
+    public async Task ALegThatWaitsForRoom_IsToldTheRoomBeforeTaken()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var stages = new List<AdmissionStage>();
+        var waits = 0;
+
+        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
+
+        var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room, onWait: () =>
+        {
+            if (++waits == 2)
+            {
+                AdmissionKit.WriteClaims(record);
+            }
+        }).AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(settleLeast: 0, settleMost: 0, pollSeconds: 30), [], room: AdmissionKit.Room(10)) with { Told = stages.Add },
+            TestContext.Current.CancellationToken);
+        using (admitted)
+        {
+            Assert.True(admitted.Fact.Admitted);
+            Assert.Equal(60, admitted.Fact.WaitedSeconds);
+            Assert.Equal([AdmissionStage.Room, AdmissionStage.Taken], stages);
+        }
+    }
+
+    /// <summary>
     /// A leg about to wait on the memory has WSL's page cache dropped first - memory this machine counts as in use and
     /// could have back - and reads the memory again once what the drop gives back has reached this machine's count, a
     /// minute later at the most: its line says how much was dropped, and the memory before and after, and the leg goes on
