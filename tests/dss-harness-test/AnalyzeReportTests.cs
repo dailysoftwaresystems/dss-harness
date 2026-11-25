@@ -521,6 +521,56 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
+    /// A word is an id only where the report holds it as one - a row's id, a name the id is made of as the row's own
+    /// members hold it (a hotspot's item and path), a section's or a member's name - or a citation writes it as its path,
+    /// and an id is written whole, its <c>: + @ # /</c> and brackets included, its digits no number of the impact's own: a
+    /// hotspot's path whose file name starts with a date, a forEach step's instance, its failed attempt and that attempt's
+    /// cited member. The same characters in a word the report holds as no id are refused for their digits: an attempt or a
+    /// signal the report never had, and the hotspot's path where the report holds no such hotspot - an analysis cannot pass
+    /// a number off as part of a name the report does not hold.
+    /// </summary>
+    [Fact]
+    public void AWordIsAnIdOnlyWhereTheReportOrACitationHoldsIt_AndEveryOtherDigitIsRefused()
+    {
+        const string Hotspot = "hotspots:rounds#2.items[0]:c-rate:db/migrate/20240101_users.rb";
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with
+        {
+            Flow = source.Flow with
+            {
+                Steps = [.. source.Flow.Steps.Select(step => step.Instance == "c"
+                    ? step with { Instance = "rounds#2.items[0].fix+2", State = "Done", Output = JsonNode.Parse("""{"hotspots":[{"class":"c-rate","path":"db/migrate/20240101_users.rb","touches":6}]}""") }
+                    : step)],
+            },
+        });
+        var evidence = string.Join(
+            ",",
+            Cited("criticalPath", "b", "seconds", "30.0"),
+            Cited("errors", "rounds#2.items[0].fix+2@1", "exit", "20"),
+            Cited("convergence", Hotspot, "touches", "6"));
+
+        static IEnumerable<string> Ids(JsonNode? rows)
+            => rows!.AsArray().Select(row => row!["id"]!.GetValue<string>());
+
+        // The rows the impact names are the report's own: the step's instance, its failed attempt, its hotspot, a signal.
+        Assert.Equal(["a", "b", "rounds#2.items[0].fix+2"], Ids(report["steps"]));
+        Assert.Equal(["b@1", "rounds#2.items[0].fix+2@1"], Ids(report["errors"]));
+        Assert.Equal([Hotspot], Ids(report["convergence"]!["hotspots"]));
+        Assert.Contains("slowestStep#2", Ids(report["signals"]));
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            AnalysisOf(evidence, $"the hotspot `db/migrate/20240101_users.rb` of item rounds#2.items[0] ({Hotspot}.touches says {{3}}) cost the gate {{1}}; rounds#2.items[0].fix+2's attempt rounds#2.items[0].fix+2@1 exited {{2}}, as rounds#2.items[0].fix+2@1.exit says - b@1, slowestStep#2 and classesReopened:item-1:c-rate are the report's rows."),
+            report));
+        Assert.Equal(
+            [$"painPoints[0].impact: writes 'b@2,', {OfItsOwn}", $"painPoints[0].impact: writes 'slowestStep#9', {OfItsOwn}", $"painPoints[0].impact: writes 'rounds#2.items[0].fix+2@2.', {OfItsOwn}"],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "the gate waited on b@2, slowestStep#9 and rounds#2.items[0].fix+2@2."), report));
+        Assert.Equal(
+            [$"painPoints[0].impact: writes '`db/migrate/20240101_users.rb`', {OfItsOwn}"],
+            FlowAnalysisEvidence.Problems(
+                AnalysisOf(Cited("criticalPath", "b", "seconds", "30.0"), "the hotspot `db/migrate/20240101_users.rb` cost the gate {1}."),
+                FlowRunReport.Of(source)));
+    }
+
+    /// <summary>
     /// A placeholder names one of its pain point's citations by its place in the evidence, and only one that holds a number
     /// the report measures: <c>{3}</c> past two citations and <c>{0}</c> name none, and one that names a text of words is
     /// refused; one whose citation the report does not hold says nothing more than that citation's own problem.
