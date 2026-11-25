@@ -15,6 +15,31 @@ namespace DssHarness.Tests;
 public sealed class RemoteSyncTransportTests
 {
     /// <summary>
+    /// What the end of a request to a host's side of the sync could not reach or end is said under the sync, naming the
+    /// host, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatTheEndOfARequestCouldNotReachOrEnd_IsSaidNamingTheHost(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new RemoteSyncTransport(
+                    HostId.Ssh("vps"),
+                    new HostSession(new HostConnection { Host = HostId.Local }, CliRunner.CliProgram),
+                    new UnreachingHostCommands(new HostCommandRunner(harness.ProcessRunner), stop),
+                    harness.Output)
+                .CreateRootAsync(temp.Combine("copy"), cancellationToken: token));
+
+        Assert.Equal([UnreachedSaid.Warned(SyncService.CommandName, "ssh vps")], said);
+    }
+
+    /// <summary>
     /// A file named as a file of arguments is - '@notes' - is written, read and deleted on the host as itself. Read there as
     /// a file of arguments, its deletion read 'notes' beside the copy and deleted the path that named instead; and a file
     /// named as an option is, '-v', was taken for one, and its operation for one given too few arguments.

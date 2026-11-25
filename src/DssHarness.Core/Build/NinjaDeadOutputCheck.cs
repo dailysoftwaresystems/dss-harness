@@ -44,6 +44,10 @@ public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSyst
     /// <summary>Asks ninja about one build directory.</summary>
     /// <param name="buildDirectory">The directory to ask about.</param>
     /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of the program could not reach or end
+    /// (<see cref="Processes.UnreachedSaying"/>).
+    /// </param>
     /// <param name="program">The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one up.</param>
     /// <param name="environment">The environment the build's phases ran in.</param>
     /// <param name="told">
@@ -54,6 +58,7 @@ public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSyst
     public async Task<NinjaDeadOutputs> CheckAsync(
         string buildDirectory,
         ProgramDirectories programDirectories,
+        Action<string> say,
         string? program = null,
         IReadOnlyDictionary<string, string?>? environment = null,
         Action<Waiting.WaitTold>? told = null,
@@ -77,6 +82,8 @@ public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSyst
                     // -n: named, never removed. The harness removes nothing of a build directory it keeps.
                     NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-n", "-t", "cleandead"], programDirectories, program, environment),
                     $"'ninja -t cleandead' to name the dead outputs of '{buildDirectory}'",
+                    "'ninja -t cleandead'",
+                    say,
                     told,
                     _clock,
                     cancellationToken)

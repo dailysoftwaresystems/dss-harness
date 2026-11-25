@@ -931,7 +931,7 @@ public sealed class BuildService(
         foreach (var compiler in identified)
         {
             var answer = await _compilerVersions
-                .AskAsync(compiler, new LegRecords(request.RunDirectory, request.Leg).Directory, environment, request.ProgramDirectories, Told(request), cancellationToken)
+                .AskAsync(compiler, new LegRecords(request.RunDirectory, request.Leg).Directory, environment, request.ProgramDirectories, Said(request), Told(request), cancellationToken)
                 .ConfigureAwait(false);
 
             // An id whose version this build does not know how to put together, as CMake's own formula does,
@@ -1450,6 +1450,9 @@ public sealed class BuildService(
     /// </summary>
     private Action<Waiting.WaitTold> Told(BuildRequest request) => told => _output.Info(CommandName, $"{request.Leg}: {told.Line()}");
 
+    /// <summary>How what a stop of a probe of the build could not reach or end is said: on the leg's own line, as a warning (<see cref="Processes.UnreachedSaying"/>).</summary>
+    private Action<string> Said(BuildRequest request) => line => _output.Warn(CommandName, $"{request.Leg}: {line}");
+
     /// <summary>What ninja says of the outputs no target of this build produces any more; never a failure of the build.</summary>
     private async Task<NinjaDeadOutputs> ReadDeadOutputsAsync(
         BuildRequest request,
@@ -1457,7 +1460,7 @@ public sealed class BuildService(
         IReadOnlyDictionary<string, string?> environment,
         CancellationToken cancellationToken)
         => await _deadOutputCheck
-            .CheckAsync(buildDirectory, request.ProgramDirectories, _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram, environment, Told(request), cancellationToken)
+            .CheckAsync(buildDirectory, request.ProgramDirectories, Said(request), _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram, environment, Told(request), cancellationToken)
             .ConfigureAwait(false);
 
     /// <summary>
@@ -1491,7 +1494,7 @@ public sealed class BuildService(
             // phases had, a host's own among them.
             var recorded = _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram;
 
-            return (await _dependencyCheck.CheckAsync(buildDirectory, request.ProgramDirectories, recorded, environment, Told(request), cancellationToken).ConfigureAwait(false), null);
+            return (await _dependencyCheck.CheckAsync(buildDirectory, request.ProgramDirectories, Said(request), recorded, environment, Told(request), cancellationToken).ConfigureAwait(false), null);
         }
         catch (HarnessException ex)
         {

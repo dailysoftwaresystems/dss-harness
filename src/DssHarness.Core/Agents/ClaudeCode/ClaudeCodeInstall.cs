@@ -170,9 +170,13 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
     /// answer says which. A cold first start that takes minutes is waited for, never cut.
     /// </summary>
     /// <param name="program">The program.</param>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of the program could not reach or end
+    /// (<see cref="Processes.UnreachedSaying"/>).
+    /// </param>
     /// <param name="tell">Told each line of the wait; nothing is told where none is given.</param>
     /// <param name="cancellationToken">Ends the asking.</param>
-    public async Task<ClaudeCodeVersion> VersionAsync(string program, Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
+    public async Task<ClaudeCodeVersion> VersionAsync(string program, Action<string> say, Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(program);
 
@@ -183,7 +187,9 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
             // The program runs by the caller's token, which is the one that ends it: the wait adds no stopper of its
             // own, so a reading back nothing can stop - the change's, given none - runs the program unstopped.
             asked = await ProgramWait.ToItsEndAsync(
-                    _ => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"], Environment = EveryStart }, cancellationToken),
+                    _ => _processRunner
+                        .RunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"], Environment = EveryStart }, cancellationToken)
+                        .SayingUnreached($"'{program} --version'", say),
                     $"'{program}' to answer its --version",
                     tell ?? (_ => { }),
                     _time,

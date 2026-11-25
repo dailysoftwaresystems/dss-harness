@@ -40,6 +40,36 @@ public sealed class ToolProvisionServiceTests
     /// <summary>What a tool reports once this run has installed it.</summary>
     private const string InstalledVersion = "1.12.1";
 
+    /// <summary>
+    /// What the end of a program provisioning runs on a host could not reach or end is said under the command, naming the
+    /// program and the host, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatTheEndOfAProvisioningProgramCouldNotReachOrEnd_IsSaidNamingItAndTheHost(bool stopped)
+    {
+        Fixture? fixture = null;
+
+        try
+        {
+            var (said, _) = await UnreachedSaid.ByAsync(
+                () => fixture!.Error.ToString(),
+                stopped,
+                (stop, token) =>
+                {
+                    fixture = new Fixture(runs: commands => new UnreachingHostCommands(commands, stop, call => call == "sh"));
+                    return fixture.ProvisionAsync(cancellationToken: token);
+                });
+
+            Assert.Equal([UnreachedSaid.Warned(ToolProvisionService.CommandName, $"'sh' on wsl {Distro}")], said);
+        }
+        finally
+        {
+            fixture?.Dispose();
+        }
+    }
+
     [Fact]
     public async Task AHostWithNoDotnetOnItsLoginFreePath_HasTheSdkInstalled_AndIsThenReady()
     {
@@ -1997,7 +2027,8 @@ public sealed class ToolProvisionServiceTests
             Dictionary<string, string>? offPath = null,
             ProcessResult? shellProbe = null,
             string installed = InstalledVersion,
-            bool sdk = false)
+            bool sdk = false,
+            Func<IHostCommandRunner, IHostCommandRunner>? runs = null)
         {
             var declared = tools ?? [];
 
@@ -2127,7 +2158,7 @@ public sealed class ToolProvisionServiceTests
             _service = new ToolProvisionService(
                 HostDoubles.Loader(config, _repository.Path),
                 connector,
-                commands,
+                runs?.Invoke(commands) ?? commands,
                 programs,
                 Survey,
                 output,
@@ -2145,8 +2176,8 @@ public sealed class ToolProvisionServiceTests
 
         public StringWriter Error { get; } = new();
 
-        public Task<ToolProvisionReport> ProvisionAsync(IReadOnlyList<string>? legs = null, bool dryRun = false)
-            => _service.ProvisionAsync(_repository.Path, legs, dryRun, TestContext.Current.CancellationToken);
+        public Task<ToolProvisionReport> ProvisionAsync(IReadOnlyList<string>? legs = null, bool dryRun = false, CancellationToken? cancellationToken = null)
+            => _service.ProvisionAsync(_repository.Path, legs, dryRun, cancellationToken ?? TestContext.Current.CancellationToken);
 
         public void Dispose() => _repository.Dispose();
 

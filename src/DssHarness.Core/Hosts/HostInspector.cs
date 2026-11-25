@@ -802,7 +802,7 @@ public sealed class HostInspector(
                     StandardInput = input ?? string.Empty,
                     HoldStandardInputOpen = holdOpen,
                 },
-                token),
+                token).SayingUnreached($"'{program}' on {connection.Host}", line => _output?.Warn(ToolPackage.Command, line)),
             $"'{program}' on {connection.Host} to answer",
             ProgramWait.Told(_output, ToolPackage.Command),
             _clock,

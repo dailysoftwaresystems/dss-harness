@@ -110,7 +110,8 @@ public static class ServiceRegistration
         services.AddSingleton(_ => FilePermissionsFactory.Create());
         services.AddSingleton(provider => ProcessTableFactory.Create(
             provider.GetRequiredService<IHostPlatform>(),
-            provider.GetRequiredService<IProcessRunner>()));
+            provider.GetRequiredService<IProcessRunner>(),
+            provider.GetRequiredService<IHarnessOutput>()));
 
         services.AddSingleton<IProcessIdentity, ProcessIdentity>();
 
@@ -251,7 +252,8 @@ public static class ServiceRegistration
             provider.GetRequiredService<IHostPlatform>(),
             provider.GetRequiredService<IProcessRunner>(),
             told: static told => Waits.Told(told),
-            clock: provider.GetRequiredService<TimeProvider>()));
+            clock: provider.GetRequiredService<TimeProvider>(),
+            output: provider.GetRequiredService<IHarnessOutput>()));
         services.AddSingleton<Agents.Isolation.IAgentIsolation>(provider => new Agents.Isolation.AgentIsolation(
             provider.GetRequiredService<IIsolationPlatform>(),
             provider.GetRequiredService<Git.IGitClient>(),

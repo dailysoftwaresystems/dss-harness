@@ -19,6 +19,25 @@ public sealed class GitPublisherTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// What a stop of ssh's reading of its configuration could not reach or end is said under ssh, by the command line,
+    /// once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfSshsReadingCouldNotReachOrEnd_IsSaidUnderSsh(bool stopped)
+    {
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new SshHostNames(UnreachingRunner.For(stop, _ => HostResults.Ok("hostname github.com\n")), harness.Output).HostNameAsync("work-gh", token));
+
+        Assert.Equal([UnreachedSaid.Warned(SshHostNames.Said, "'ssh -G work-gh'")], said);
+    }
+
+    /// <summary>
     /// What is staged is each path named, read literally - a name that would be a pattern stages that file alone - and the
     /// removal of each path named deleted, one the index does not hold left as it is; what is not named stays unstaged.
     /// </summary>

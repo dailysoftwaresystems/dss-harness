@@ -568,6 +568,7 @@ public sealed class RemoteSyncTransport(
                     },
                 },
                 cancellationToken)
+            .SayingUnreached($"{Host}", line => _output.Warn(SyncService.CommandName, line))
             .ConfigureAwait(false);
 
         if (HostProbes.BeatLost(result) is { } unheard)

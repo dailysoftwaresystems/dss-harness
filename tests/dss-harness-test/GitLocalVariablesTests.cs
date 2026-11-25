@@ -10,6 +10,22 @@ namespace DssHarness.Tests;
 public sealed class GitLocalVariablesTests
 {
     /// <summary>
+    /// What a stop of git's question could not reach or end is handed to the caller that owns the git it is asked for,
+    /// naming the question, once (<see cref="UnreachedSaying"/>): the question has no output of its own.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheQuestionCouldNotReachOrEnd_IsHandedToItsCaller(bool stopped)
+    {
+        var (said, _) = await UnreachedSaid.HandedAsync(
+            stopped,
+            (stop, token, say) => new GitLocalVariables(UnreachingRunner.For(stop, _ => HostResults.Ok("GIT_DIR\nGIT_COMMON_DIR\n"))).NamesAsync(say, token));
+
+        Assert.Equal([UnreachedSaid.Handed("'git rev-parse --local-env-vars'")], said);
+    }
+
+    /// <summary>
     /// git is asked, and once: the list is git's own, and was written down as three names while git gives
     /// fifteen, GIT_COMMON_DIR among them.
     /// </summary>
@@ -21,8 +37,8 @@ public sealed class GitLocalVariablesTests
         var variables = new GitLocalVariables(processes);
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var names = await variables.NamesAsync(cancellationToken);
-        var again = await variables.NamesAsync(cancellationToken);
+        var names = await variables.NamesAsync(UnreachedSaid.Nowhere, cancellationToken);
+        var again = await variables.NamesAsync(UnreachedSaid.Nowhere, cancellationToken);
 
         Assert.Same(names, again);
         Assert.Single(processes.Started);
@@ -44,14 +60,14 @@ public sealed class GitLocalVariablesTests
         var variables = new GitLocalVariables(runner);
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => variables.NamesAsync(cancellationToken));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => variables.NamesAsync(UnreachedSaid.Nowhere, cancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
         Assert.Equal(
             "git could not name the variables it reads a repository from ('git rev-parse --local-env-vars': its answer did not name GIT_DIR), "
             + "so nothing was run: a git command started with one of them set could answer for a repository nobody named.",
             refused.Message);
-        Assert.Equal(["GIT_DIR", "GIT_COMMON_DIR"], await variables.NamesAsync(cancellationToken));
+        Assert.Equal(["GIT_DIR", "GIT_COMMON_DIR"], await variables.NamesAsync(UnreachedSaid.Nowhere, cancellationToken));
     }
 
     /// <summary>git failing to answer is said with what it said, and fails the command rather than running git unguarded.</summary>
@@ -62,7 +78,7 @@ public sealed class GitLocalVariablesTests
         runner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(Exited(129, stderr: "error: unknown option\n"));
 
         var refused = await Assert.ThrowsAsync<HarnessException>(
-            () => new GitLocalVariables(runner).NamesAsync(TestContext.Current.CancellationToken));
+            () => new GitLocalVariables(runner).NamesAsync(UnreachedSaid.Nowhere, TestContext.Current.CancellationToken));
 
         Assert.Contains("('git rev-parse --local-env-vars': it exited 129: error: unknown option)", refused.Message, StringComparison.Ordinal);
     }

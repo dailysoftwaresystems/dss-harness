@@ -441,6 +441,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     },
                 },
                 cancellationToken)
+            .SayingUnreached(leg.Name, line => _output.Warn(commandName, line))
             .ConfigureAwait(false);
 
         // A command that ended badly ends on its failure line, with what follows it, and that is the host's conclusion:

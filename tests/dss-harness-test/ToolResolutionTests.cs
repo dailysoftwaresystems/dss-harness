@@ -25,6 +25,29 @@ public sealed class ToolResolutionTests
     private static readonly HostSettings NoSettings = new LocalHostConfig();
 
     /// <summary>
+    /// What a stop of a copy asked its version could not reach or end is said under the tool, naming the copy, once
+    /// (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfACopyAskedItsVersionCouldNotReachOrEnd_IsSaidNamingTheCopy(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var python = Executable(onPath, "python3");
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new ProgramFloors(Resolver(onPath), UnreachingRunner.For(stop, _ => HostResults.Ok("Python 3.13.1\n")), HostDoubles.Platform(PlatformId.Linux, "x86_64"), harness.Output)
+                .ResolveAsync(["python3"], [], [Floor("python3", "3.12.0")], token));
+
+        Assert.Equal([UnreachedSaid.Warned(ToolPackage.Command, $"'{python}'")], said);
+    }
+
+    /// <summary>
     /// A platform's own list replaces the built-in one, and only when it has something in it.
     /// Declared but empty would otherwise mean "search nowhere", which turns every program off the
     /// PATH into one that is missing and is never what somebody writing the key meant.

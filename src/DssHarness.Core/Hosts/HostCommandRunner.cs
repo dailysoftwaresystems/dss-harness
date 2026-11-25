@@ -354,7 +354,11 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
 
         var (_, again) = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
 
-        return again with { StandardError = result.StandardError + again.StandardError };
+        return again with
+        {
+            StandardError = result.StandardError + again.StandardError,
+            Uncontained = result.Uncontained is not { } first ? again.Uncontained : again.Uncontained is not { } second ? first : $"{first}, and {second}",
+        };
     }
 
     /// <summary>

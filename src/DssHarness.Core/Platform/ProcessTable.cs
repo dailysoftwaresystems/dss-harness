@@ -84,16 +84,27 @@ public static class ProcessTableFactory
     /// <summary>The reader for this machine.</summary>
     /// <param name="platform">Says which machine this is.</param>
     /// <param name="processRunner">Starts the program a platform has to be asked through.</param>
-    public static IProcessTable Create(IHostPlatform platform, IProcessRunner processRunner)
-        => new ProcessTable(platform, processRunner);
+    /// <param name="output">
+    /// Where what a stop of that program could not reach or end is said; nowhere where none is given - the process runner's
+    /// own reading, made while it ends a session, is never stopped.
+    /// </param>
+    public static IProcessTable Create(IHostPlatform platform, IProcessRunner processRunner, Output.IHarnessOutput? output = null)
+        => new ProcessTable(platform, processRunner, output: output);
 }
 
 /// <inheritdoc cref="IProcessTable"/>
 /// <param name="platform">Says which machine this is.</param>
 /// <param name="processRunner">Starts the program a platform has to be asked through: PowerShell on Windows, ps on macOS.</param>
 /// <param name="kernel">What the kernel says in place - Linux's <c>/proc</c>, macOS's libproc -; this machine's where none is given.</param>
-public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processRunner, IProcessKernel? kernel = null) : IProcessTable
+/// <param name="output">
+/// Where what a stop of PowerShell or ps could not reach or end is said, under the tool's name
+/// (<see cref="UnreachedSaying"/>); nowhere where none is given.
+/// </param>
+public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processRunner, IProcessKernel? kernel = null, Output.IHarnessOutput? output = null) : IProcessTable
 {
+    /// <summary>Says a line through the output, under the tool's name.</summary>
+    private readonly Action<string> _say = line => output?.Warn(Hosts.ToolPackage.Command, line);
+
     private readonly IHostPlatform _platform = platform;
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IProcessKernel _kernel = kernel ?? new ProcessKernel(platform);
@@ -178,7 +189,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                     Convert.ToBase64String(Encoding.Unicode.GetBytes(script)),
                 ],
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken).SayingUnreached("PowerShell reading the process table", _say).ConfigureAwait(false);
 
         if (!result.Succeeded)
         {
@@ -312,7 +323,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
 
         var named = await _processRunner.RunAsync(
             new ProcessRequest { FileName = "ps", Arguments = ["-A", "-ww", "-o", "pid=,comm="], Environment = environment },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken).SayingUnreached("'ps -A -ww -o pid=,comm=' reading the process table", _say).ConfigureAwait(false);
 
         if (!named.Succeeded)
         {
@@ -333,7 +344,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
 
         var result = await _processRunner.RunAsync(
             new ProcessRequest { FileName = "ps", Arguments = ["-A", "-ww", "-o", "pid=,ppid=,lstart=,args="], Environment = environment },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken).SayingUnreached("'ps -A -ww -o pid=,ppid=,lstart=,args=' reading the process table", _say).ConfigureAwait(false);
 
         if (!result.Succeeded)
         {

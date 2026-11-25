@@ -16,6 +16,37 @@ public sealed class GhCiJobSourceTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// What a stop of the forge's tool could not reach or end is said under its own name, by the command line asked, once
+    /// (<see cref="UnreachedSaying"/>): the tool's own, and the question of which variables git reads, which it hands its
+    /// sayer.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheForgesToolCouldNotReachOrEnd_IsSaidUnderItsName(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) =>
+            {
+                var runner = UnreachingRunner.For(stop, request => HostResults.Ok(request.Arguments.Contains("--local-env-vars") ? "GIT_DIR\n" : "[]"));
+
+                return new GhProcess(runner, new GitLocalVariables(runner), _ => null, harness.Output).RunAsync(temp.Path, ["pr", "list"], "so nothing was read", limit: null, token);
+            });
+
+        Assert.Equal(
+            [
+                UnreachedSaid.Warned(GhProcess.Executable, "'git rev-parse --local-env-vars'"),
+                .. stopped ? Array.Empty<string>() : [UnreachedSaid.Warned(GhProcess.Executable, "'gh pr list'")],
+            ],
+            said);
+    }
+
+    /// <summary>
     /// Every call is started so that it cannot ask - gh, a credential manager, git - without any variable git reads a
     /// repository from, and with its caller's limit, else gh's own five minutes.
     /// </summary>

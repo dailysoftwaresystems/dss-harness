@@ -120,7 +120,7 @@ public sealed class KeepAwake
                 // And ends with this process as the leg's own programs do, whether or not it waits on it.
                 Bound = true,
             },
-            stop.Token);
+            stop.Token).SayingUnreached($"{leg}: keepAwake", line => _output.Warn(commandName, line));
 
         return new Holding(this, commandName, leg, Watch(commandName, leg, running, stop.Token), stop);
     }

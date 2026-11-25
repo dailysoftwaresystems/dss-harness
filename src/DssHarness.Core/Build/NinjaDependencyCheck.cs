@@ -78,6 +78,10 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
     /// <summary>Checks one build directory.</summary>
     /// <param name="buildDirectory">The directory to read.</param>
     /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of ninja could not reach or end
+    /// (<see cref="Processes.UnreachedSaying"/>).
+    /// </param>
     /// <param name="program">
     /// The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one
     /// up. Read by the program that wrote them, the records are read the way they were written, and a
@@ -102,6 +106,7 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
     public async Task<NinjaDependencyReport> CheckAsync(
         string buildDirectory,
         ProgramDirectories programDirectories,
+        Action<string> say,
         string? program = null,
         IReadOnlyDictionary<string, string?>? environment = null,
         Action<Waiting.WaitTold>? told = null,
@@ -126,7 +131,7 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
         }
 
         var records = await NinjaRebuildGraph
-            .ReadRecordsAsync(_processRunner, buildDirectory, programDirectories, program, environment, told, _clock, cancellationToken)
+            .ReadRecordsAsync(_processRunner, buildDirectory, programDirectories, program, environment, say, told, _clock, cancellationToken)
             .ConfigureAwait(false);
 
         var withoutHeaders = records.Values.Where(record => record.Count == 0).Select(record => record.Object).ToList();

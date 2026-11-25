@@ -129,7 +129,7 @@ public sealed class EmulatorProbe(
                             Environment = emulator.Env.ToDictionary(pair => pair.Key, pair => (string?)pair.Value, StringComparer.Ordinal),
                             ProgramDirectories = found.Directories,
                         },
-                        token),
+                        token).SayingUnreached($"the witness '{command[0]}'", line => _output?.Warn(ToolPackage.Command, line)),
                     $"the witness '{command[0]}' to end",
                     ProgramWait.Told(_output, ToolPackage.Command),
                     _clock,

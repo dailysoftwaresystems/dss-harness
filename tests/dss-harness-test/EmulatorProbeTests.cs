@@ -14,6 +14,28 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class EmulatorProbeTests
 {
+    /// <summary>
+    /// What a stop of an emulator's witness could not reach or end is said under the tool, naming the witness's program,
+    /// once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheWitnessCouldNotReachOrEnd_IsSaidNamingIt(bool stopped)
+    {
+        var harness = new HarnessFactory();
+        var emulator = Emulator(prints: "aarch64", pattern: @"^\[aarch64\]$");
+        UnreachingRunner? runner = null;
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new EmulatorProbe(Platform("linux", "x86_64"), runner = UnreachingRunner.For(stop, _ => HostResults.Ok("[aarch64]\n")), FileSystem(), harness.Output)
+                .CheckAsync(emulator, Found(emulator), token));
+
+        Assert.Equal([UnreachedSaid.Warned(ToolPackage.Command, $"the witness '{Assert.Single(runner!.Requests).FileName}'")], said);
+    }
+
     [Fact]
     public async Task CheckAsync_Passes_WhenTheWitnessPrintsWhatOnlyTheEmulatedProcessorWould()
     {

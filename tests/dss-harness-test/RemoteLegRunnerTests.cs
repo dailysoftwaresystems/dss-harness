@@ -20,6 +20,30 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class RemoteLegRunnerTests
 {
+    /// <summary>
+    /// What the end of a leg's command on its host could not reach or end is said under the command running the leg, on
+    /// the leg's own line, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatTheEndOfALegsCommandCouldNotReachOrEnd_IsSaidOnTheLegsOwnLine(bool stopped)
+    {
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+            return HostResults.Finished(command, 0);
+        });
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new RemoteLegRunner(new UnreachingHostCommands(hosts, stop), harness.Output).RunAsync("test", Leg(), [], cancellationToken: token));
+
+        Assert.Equal([UnreachedSaid.Warned("test", Leg().Name)], said);
+    }
+
     [Fact]
     public async Task TheHostIsAskedToRunTheSameCommand_ForThatLegAlone_AndOnItself()
     {

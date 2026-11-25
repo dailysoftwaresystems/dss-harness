@@ -223,7 +223,7 @@ public sealed class MutationService(
             request.SelfTest ? new FixtureMutationSource() : new TreeMutationSource(_syncService),
             new WorkerCopies(_syncService, _localTransport, _fileSystem, _output, _identity, CommandName),
             new WorkerSite(_fileSystem, _clock),
-            new ArmBuilder(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem),
+            new ArmBuilder(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem, _output),
             new ArmTestRunner(_phaseRunner, _fileSystem, _clock),
             new CtestDescription(_processRunner, _fileSystem, _platform, _output, _clock),
             _pathBudget,

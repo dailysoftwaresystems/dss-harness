@@ -79,9 +79,13 @@ public sealed class NpmClient(
             : "npm";
 
     /// <summary>Finds npm: what to start it as, or why there is nothing to start.</summary>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of the program could not reach or end
+    /// (<see cref="Processes.UnreachedSaying"/>).
+    /// </param>
     /// <param name="tell">Told each line of a wait on node's answer, where npm is found as its batch file; nothing is told where none is given.</param>
     /// <param name="cancellationToken">Ends the finding.</param>
-    public async Task<NpmFound> FindAsync(Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
+    public async Task<NpmFound> FindAsync(Action<string> say, Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
     {
         var path = _environment(ProcessRunner.PathVariable);
 
@@ -102,7 +106,7 @@ public sealed class NpmClient(
         {
             null => new NpmFound(null, $"no npm is on the PATH. Looked for: {LookedFor}"),
             _ when string.Equals(Path.GetExtension(found), ".cmd", StringComparison.OrdinalIgnoreCase)
-                => await BesideCmdAsync(found, path, tell, cancellationToken).ConfigureAwait(false),
+                => await BesideCmdAsync(found, path, say, tell, cancellationToken).ConfigureAwait(false),
             _ => new NpmFound(new NpmProgram(found, []), null),
         };
     }
@@ -114,7 +118,7 @@ public sealed class NpmClient(
     /// <c>npm.cmd</c> where the prefix holds none, as <c>npm.cmd</c> itself passes it over. Where node is nowhere, or
     /// the <c>npm-cli.js</c> it would start is not there, nothing can be started, and the answer says which.
     /// </summary>
-    private async Task<NpmFound> BesideCmdAsync(string cmd, string? path, Action<Waiting.WaitTold>? tell, CancellationToken cancellationToken)
+    private async Task<NpmFound> BesideCmdAsync(string cmd, string? path, Action<string> say, Action<Waiting.WaitTold>? tell, CancellationToken cancellationToken)
     {
         var beside = Path.GetDirectoryName(cmd) ?? ".";
         var node = Path.Combine(beside, "node.exe");
@@ -132,7 +136,7 @@ public sealed class NpmClient(
         }
 
         var asked = Path.Combine(beside, "node_modules", "npm", "bin", "npm-prefix.js");
-        var prefix = await AskAsync(node, [asked], tell, cancellationToken).ConfigureAwait(false);
+        var prefix = await AskAsync(node, [asked], say, tell, cancellationToken).ConfigureAwait(false);
 
         if (prefix is { Length: > 0 })
         {
@@ -155,9 +159,13 @@ public sealed class NpmClient(
 
     /// <summary>Where npm's global packages are, as npm itself says (<c>npm root -g</c>), or how asking it ended: awaited to its end and told while it lasts.</summary>
     /// <param name="npm">The npm to ask.</param>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of the program could not reach or end
+    /// (<see cref="Processes.UnreachedSaying"/>).
+    /// </param>
     /// <param name="tell">Told each line of the wait; nothing is told where none is given.</param>
     /// <param name="cancellationToken">Ends the asking.</param>
-    public async Task<NpmRoot> RootAsync(NpmProgram npm, Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
+    public async Task<NpmRoot> RootAsync(NpmProgram npm, Action<string> say, Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(npm);
 
@@ -165,7 +173,9 @@ public sealed class NpmClient(
 
         try
         {
-            asked = await ProgramWait.ToItsEndAsync(token => _processRunner.RunAsync(RootRequest(npm), token), RootSubject, tell ?? (_ => { }), _clock, cancellationToken).ConfigureAwait(false);
+            asked = await ProgramWait
+                .ToItsEndAsync(token => _processRunner.RunAsync(RootRequest(npm), token).SayingUnreached("'npm root -g'", say), RootSubject, tell ?? (_ => { }), _clock, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (ProgramStartException ex)
         {
@@ -197,12 +207,12 @@ public sealed class NpmClient(
     /// One question of node, awaited to its end and told while it lasts, its answer trimmed; null where it would not
     /// answer - which <c>npm.cmd</c> itself passes over for the <c>npm-cli.js</c> beside it, as this does.
     /// </summary>
-    private async Task<string?> AskAsync(string program, IReadOnlyList<string> arguments, Action<Waiting.WaitTold>? tell, CancellationToken cancellationToken)
+    private async Task<string?> AskAsync(string program, IReadOnlyList<string> arguments, Action<string> say, Action<Waiting.WaitTold>? tell, CancellationToken cancellationToken)
     {
         try
         {
             var asked = await ProgramWait.ToItsEndAsync(
-                    token => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = arguments }, token),
+                    token => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = arguments }, token).SayingUnreached($"'{program}' saying npm's prefix", say),
                     $"'{program}' to say npm's prefix",
                     tell ?? (_ => { }),
                     _clock,

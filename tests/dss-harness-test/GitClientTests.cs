@@ -13,6 +13,37 @@ namespace DssHarness.Tests;
 /// <summary>The git client against real git and real repositories.</summary>
 public sealed class GitClientTests
 {
+    /// <summary>
+    /// What a stop of git could not reach or end is said under git, by the command line asked for - none of the settings
+    /// the tool adds of its own - once (<see cref="UnreachedSaying"/>): git's own, and the question of which variables
+    /// git reads, which the client hands its sayer.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfGitCouldNotReachOrEnd_IsSaidUnderGit_ByTheCommandLineAskedFor(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) =>
+            {
+                var runner = UnreachingRunner.For(stop, request => HostResults.Ok(request.Arguments.Contains("--local-env-vars") ? "GIT_DIR\n" : "true\n"));
+
+                return new GitClient(runner, harness.Output, localVariables: new GitLocalVariables(runner)).IsRepositoryAsync(temp.Path, token);
+            });
+
+        Assert.Equal(
+            [
+                UnreachedSaid.Warned("git", "'git rev-parse --local-env-vars'"),
+                .. stopped ? Array.Empty<string>() : [UnreachedSaid.Warned("git", "'git rev-parse --is-inside-work-tree'")],
+            ],
+            said);
+    }
+
     [Fact]
     public void IsInstalled_FindsGit()
     {

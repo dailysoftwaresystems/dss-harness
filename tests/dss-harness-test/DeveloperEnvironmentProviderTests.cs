@@ -21,6 +21,31 @@ public sealed class DeveloperEnvironmentProviderTests
     private static readonly Dictionary<string, string> NoHostEnvironment = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// What a stop of vcvarsall.bat's capture could not reach or end is said under the developer environments, naming
+    /// the environment and the batch file's arguments, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfVcvarsallCouldNotReachOrEnd_IsSaidNamingTheEnvironment(bool stopped)
+    {
+        using var visualStudio = new ScriptedVisualStudio();
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new DeveloperEnvironmentProvider(
+                    HostDoubles.Platform(PlatformId.Windows, "x86_64"),
+                    UnreachingRunner.For(stop, request => visualStudio.RunAsync(request, token).GetAwaiter().GetResult()),
+                    new PhysicalFileSystem(FilePermissionsFactory.Create()),
+                    harness.Output)
+                .SetUpAsync("vs", visualStudio.Found, "x86_64", NoHostEnvironment, token));
+
+        Assert.Equal([UnreachedSaid.Warned(DeveloperEnvironmentProvider.CommandName, "developer environment 'vs': vcvarsall.bat amd64")], said);
+    }
+
+    /// <summary>
     /// What vcvarsall.bat added or changed is set up - its tools ahead on PATH, INCLUDE, LIB, the
     /// tools version, the processor - and nothing it left alone: not the host's own variables, not
     /// cmd.exe's, and not what the harness handed the batch file.

@@ -568,9 +568,32 @@ as another user, one whose own security refuses the harness its end, or one gone
 is passed over, its refusal said once, and still has its children taken from the reading that found
 it, by its listed id and creation time alone, no right asked of it, as a root that could not be ended
 has its own from the first reading. What a stop could not end it says beside what a container could
-not reach (`ProcessResult.Uncontained`, which a leg's phase warns, and warns from the `ProcessStoppedException` its caller's own stop throws, which carries it in place of a result), and what then holds the child's
+not reach (`ProcessResult.Uncontained`, and `ProcessStoppedException.Uncontained`, which the stop its caller gave up is
+thrown carries in place of a result), and what then holds the child's
 output is said to be such a process or one the child left running, never a refusal taken for a
-leftover (`ProcessResult.OutputHeld`). The
+leftover (`ProcessResult.OutputHeld`). That is data of the run, worded once by the runner, and said by
+the caller that owns the operation's output - once, with its own context, from the result and from the
+stop alike (`UnreachedSaying`, read where the run is awaited, inside any wait over it that would end
+at the caller's token with a cancellation of its own) - and by no second teller of the process's, so
+nothing is said twice: a leg's phase on the leg's line (`PhaseRunner`); a leg run on its host, a
+sync's request, a hold and `host-exec`'s command under their command, naming the host
+(`RemoteLegRunner`, `RemoteSyncTransport`, `HoldAwakeRegistry`, `HostExecService`, with WSL naming its
+default distribution); a machine's `keepAwake` on the leg's line (`KeepAwake`); git and gh under
+their own names, by the command line asked (`GitClient`, `GhProcess`); the tool's probes under the
+tool or the command they serve, naming what ran - ssh's settings and shell probe, a program a
+connection, a lookup, an inspection or a provisioning runs on a host, a copy asked its version, an
+emulator's witness, `vswhere`, `vcvarsall.bat`, the process table's reader, a stopped isolation
+probe, ctest describing the tests, `dotnet tool list`, the drop of WSL's page cache - and a
+set-up's line under its direction (`SetUpService`). A caller with no output of its own for the
+operation is handed its caller's way of saying it and names what it ran: git's question of the
+variables it reads (`GitLocalVariables`), handed git's or gh's; the build's questions of a compiler
+and of ninja (`CompilerVersionProbe`, `NinjaDeadOutputCheck`, `NinjaDependencyCheck`,
+`NinjaRebuildGraph`), handed the build's or a mutation worker's line; npm's client and Claude
+Code's installation (`NpmClient`, `ClaudeCodeInstall`), handed the command that asks Claude Code
+ready. A host's commands (`HostCommandRunner`) hand it on as it came, a pinned ssh call run again
+without its pin with what both attempts could not reach or end; an isolation probe's trial reports
+it as why no mechanism proved itself, since a container that leaves a process of the trial running
+proves nothing; Claude Code's launch says it as its end's notice and keeps it in the step's result. The
 walk keeps each process it ends in what its caller gives it (`EndedProcesses`), and each
 caller waits for what it needs: a stop waits until every process it ended has gone before the
 child's output's end is looked for (above), as a contained child's end does, so what is said to hold

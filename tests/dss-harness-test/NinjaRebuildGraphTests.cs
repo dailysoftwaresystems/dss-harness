@@ -25,6 +25,31 @@ public sealed class NinjaRebuildGraphTests
     private const string OddLibrary = "lib/libodd.so";
 
     /// <summary>
+    /// What a stop of ninja listing its dependency records could not reach or end is handed to the caller that reads
+    /// them, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheRecordsListingCouldNotReachOrEnd_IsHandedToItsCaller(bool stopped)
+    {
+        var (said, _) = await UnreachedSaid.HandedAsync(
+            stopped,
+            (stop, token, say) => NinjaRebuildGraph.ReadRecordsAsync(
+                UnreachingRunner.For(stop, _ => HostResults.Ok("a.o: #deps 1, deps mtime 1 (VALID)\n    a.cpp\n")),
+                "build",
+                ProgramDirectories.None,
+                null,
+                null,
+                say,
+                null,
+                TimeProvider.System,
+                token));
+
+        Assert.Equal([UnreachedSaid.Handed("'ninja -t deps'")], said);
+    }
+
+    /// <summary>
     /// <c>ninja -t deps</c> read a line at a time: each record's header, the dependencies indented beneath it, keyed as
     /// ninja canonicalizes the object, its line endings either way; a line that is neither ends the record before it.
     /// </summary>
@@ -58,8 +83,8 @@ public sealed class NinjaRebuildGraphTests
         var cancellationToken = TestContext.Current.CancellationToken;
 
         var failure = await Assert.ThrowsAsync<HarnessException>(
-            () => NinjaRebuildGraph.ReadRecordsAsync(new Answering("ninja: no work to do.\n"), "build", ProgramDirectories.None, null, null, null, TimeProvider.System, cancellationToken));
-        var records = await NinjaRebuildGraph.ReadRecordsAsync(new Answering("a.o: #deps 1, deps mtime 1 (VALID)\r\n    a.cpp\r\n"), "build", ProgramDirectories.None, null, null, null, TimeProvider.System, cancellationToken);
+            () => NinjaRebuildGraph.ReadRecordsAsync(new Answering("ninja: no work to do.\n"), "build", ProgramDirectories.None, null, null, UnreachedSaid.Nowhere, null, TimeProvider.System, cancellationToken));
+        var records = await NinjaRebuildGraph.ReadRecordsAsync(new Answering("a.o: #deps 1, deps mtime 1 (VALID)\r\n    a.cpp\r\n"), "build", ProgramDirectories.None, null, null, UnreachedSaid.Nowhere, null, TimeProvider.System, cancellationToken);
 
         Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
         Assert.Contains("'ninja -t deps' listed no objects for 'build'", failure.Message, StringComparison.Ordinal);

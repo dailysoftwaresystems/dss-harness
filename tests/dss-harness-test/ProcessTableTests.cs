@@ -11,6 +11,33 @@ public sealed class ProcessTableTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// What a stop of the program a table is read through could not reach or end - PowerShell on Windows, each of the two
+    /// readings of ps on macOS - is said under the tool, naming the reading, once each (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(PlatformId.Windows, false)]
+    [InlineData(PlatformId.Windows, true)]
+    [InlineData(PlatformId.MacOs, false)]
+    [InlineData(PlatformId.MacOs, true)]
+    public async Task WhatAStopOfTheTablesReaderCouldNotReachOrEnd_IsSaidNamingTheReading(PlatformId system, bool stopped)
+    {
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new ProcessTable(HostDoubles.Platform(system), UnreachingRunner.For(stop), new ScriptedKernel(), harness.Output).ReadAsync(token));
+
+        string[] names = system == PlatformId.Windows
+            ? ["PowerShell reading the process table"]
+            : stopped
+                ? ["'ps -A -ww -o pid=,comm=' reading the process table"]
+                : ["'ps -A -ww -o pid=,comm=' reading the process table", "'ps -A -ww -o pid=,ppid=,lstart=,args=' reading the process table"];
+
+        Assert.Equal([.. names.Select(name => UnreachedSaid.Warned(DssHarness.Core.Hosts.ToolPackage.Command, name))], said);
+    }
+
+    /// <summary>
     /// On macOS a process is named by the program it runs, read from a listing that holds the program alone: the path of
     /// a program may hold a space, and in the listing that carries the command line nothing says where the program ends.
     /// Named by the first word of that line, a tool kept under a volume whose name holds a space was a process called

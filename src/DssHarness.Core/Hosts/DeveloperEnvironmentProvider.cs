@@ -345,7 +345,7 @@ public sealed class DeveloperEnvironmentProvider(
                             WorkingDirectory = scratch,
                             Environment = environment,
                         },
-                        token),
+                        token).SayingUnreached($"developer environment '{name}': vcvarsall.bat {vcvars.Arguments}", line => _output.Warn(CommandName, line)),
                     $"vcvarsall.bat {vcvars.Arguments} of developer environment '{name}' to end",
                     ProgramWait.Told(_output, CommandName),
                     _clock,

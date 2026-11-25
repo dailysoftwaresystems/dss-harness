@@ -16,6 +16,33 @@ public sealed class WslPageCacheTests
     private const string Printed = "Cached:         24249804 kB\nCached:          1346724 kB\n";
 
     /// <summary>
+    /// What the end of WSL listing the distributions running, or of the drop itself, could not reach or end is said under
+    /// the machine's queue, naming which, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task WhatTheEndOfTheListingOrTheDropCouldNotReachOrEnd_IsSaidNamingWhich(bool stopped, bool listing)
+    {
+        var harness = new HarnessFactory();
+        var hosts = new ScriptedHostCommands((_, _) => HostResults.Ok(Printed)) { RunningWslDistributions = () => HostResults.Ok("Ubuntu-24.04\n") };
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => DropAsync(
+                new UnreachingHostCommands(hosts, stop, call => listing == (call == nameof(IHostCommandRunner.ListRunningWslDistributionsAsync))),
+                PlatformId.Windows,
+                harness.Output,
+                token,
+                ("ubuntu", "Ubuntu-24.04")));
+
+        Assert.Equal([UnreachedSaid.Warned(DssHarness.Core.Execution.MachineDispatchQueue.CommandName, listing ? "WSL listing the distributions running" : "wsl ubuntu: the drop of WSL's page cache")], said);
+    }
+
+    /// <summary>
     /// The cache is dropped as root in the first distribution a host reaches that is running - every distribution runs in
     /// the one virtual machine - by the command that writes what is pending first, and the line says through which host
     /// and how much it dropped.
@@ -230,6 +257,15 @@ public sealed class WslPageCacheTests
     /// be read, where it names none.
     /// </summary>
     private static Task<PageCacheDrop?> DropAsync(ScriptedHostCommands hosts, PlatformId platform, params (string Host, string? Distribution)[] declared)
+        => DropAsync(hosts, platform, null, TestContext.Current.CancellationToken, declared);
+
+    /// <summary>The drop over <paramref name="hosts"/>, said through <paramref name="output"/> where one is given.</summary>
+    private static Task<PageCacheDrop?> DropAsync(
+        IHostCommandRunner hosts,
+        PlatformId platform,
+        DssHarness.Core.Output.IHarnessOutput? output,
+        CancellationToken cancellationToken,
+        params (string Host, string? Distribution)[] declared)
     {
         var config = new HarnessConfig();
         var secrets = Substitute.For<IHostSecretsStore>();
@@ -243,7 +279,7 @@ public sealed class WslPageCacheTests
                     : new SecretsRead<WslItem>(new WslItem { Name = host, Distribution = distribution }, string.Empty));
         }
 
-        return new WslPageCache(secrets, hosts, HostDoubles.Platform(platform))
-            .DropAsync(new HarnessContext(new HarnessLayout(TestHost.TemporaryRoot, TestHost.TemporaryRoot), config), TestContext.Current.CancellationToken);
+        return new WslPageCache(secrets, hosts, HostDoubles.Platform(platform), output)
+            .DropAsync(new HarnessContext(new HarnessLayout(TestHost.TemporaryRoot, TestHost.TemporaryRoot), config), cancellationToken);
     }
 }

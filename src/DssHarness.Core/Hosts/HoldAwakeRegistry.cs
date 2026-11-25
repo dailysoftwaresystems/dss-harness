@@ -180,7 +180,7 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                             }
                         },
                     },
-                    token),
+                    token).SayingUnreached($"{connection.Host}: the hold", line => _output.Warn(commandName, line)),
                 $"{connection.Host} to answer the hold",
                 ProgramWait.Told(_output, commandName),
                 _clock,

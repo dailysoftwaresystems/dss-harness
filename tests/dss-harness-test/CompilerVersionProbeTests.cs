@@ -10,6 +10,31 @@ namespace DssHarness.Tests;
 public sealed class CompilerVersionProbeTests
 {
     /// <summary>
+    /// What a stop of the compiler asked its version could not reach or end is handed to the build that asks, naming the
+    /// compiler, once (<see cref="UnreachedSaying"/>): the probe has no output of its own.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheCompilerCouldNotReachOrEnd_IsHandedToTheBuild(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var program = temp.WriteFile("cc", "a compiler");
+
+        var (said, _) = await UnreachedSaid.HandedAsync(
+            stopped,
+            (stop, token, say) => new CompilerVersionProbe(UnreachingRunner.For(stop, _ => HostResults.Ok("dssharness_compiler_version 13 13 2 0\n")), new HarnessFactory().FileSystem).AskAsync(
+                new IdentifiedCompiler("C", "GNU", "13.2.0", program, [], MsvcOptions: false),
+                temp.Combine("scratch"),
+                new Dictionary<string, string?>(),
+                ProgramDirectories.None,
+                say,
+                cancellationToken: token));
+
+        Assert.Equal([UnreachedSaid.Handed($"the C compiler '{program}'")], said);
+    }
+
+    /// <summary>
     /// What CMake 4.3 wrote in its records, beside what each compiler printed preprocessing the probed
     /// line, measured on each: MSVC through Visual Studio 18, MinGW gcc, Linux gcc and clang. Clang's
     /// row carries the __GNUC__ 4.2.1 clang defines too, which its version is never made of; the last
@@ -97,6 +122,7 @@ public sealed class CompilerVersionProbeTests
             scratch,
             environment,
             ProgramDirectories.After([temp.Combine("tools")]),
+            UnreachedSaid.Nowhere,
             cancellationToken: TestContext.Current.CancellationToken);
 
         var request = Assert.Single(runner.Requests);
@@ -121,6 +147,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
+            UnreachedSaid.Nowhere,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
@@ -150,6 +177,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
+            UnreachedSaid.Nowhere,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
@@ -175,6 +203,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
+            UnreachedSaid.Nowhere,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(answer);
@@ -199,6 +228,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
+            UnreachedSaid.Nowhere,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
@@ -227,6 +257,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
+            UnreachedSaid.Nowhere,
             wait =>
             {
                 told.Add(wait.Line());

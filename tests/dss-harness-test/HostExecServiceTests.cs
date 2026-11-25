@@ -24,6 +24,36 @@ public sealed class HostExecServiceTests
         },
     };
 
+    /// <summary>
+    /// What the end of a host's command, or of WSL naming its default distribution, could not reach or end is said under
+    /// the command, naming the host - or the question - once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task WhatTheEndOfAHostsCommandCouldNotReachOrEnd_IsSaidNamingTheHost(bool stopped, bool naming)
+    {
+        Fixture? fixture = null;
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            () => fixture!.Error.ToString(),
+            stopped,
+            (stop, token) =>
+            {
+                fixture = Create(
+                    platform: HostDoubles.Platform(PlatformId.Windows),
+                    respond: (_, command) => HostResults.Finished(command, 0),
+                    runs: commands => new UnreachingHostCommands(commands, stop, call => naming == (call == nameof(IHostCommandRunner.ProbeDefaultWslDistributionAsync))));
+                fixture.Commands.DefaultWslDistribution = () => HostResults.Ok("Ubuntu\n");
+
+                return fixture.Service.RunAsync(Root, null, string.Empty, ["verify-git"], token);
+            });
+
+        Assert.Equal([UnreachedSaid.Warned(HostExecService.CommandName, naming ? "WSL naming its default distribution" : "wsl Ubuntu")], said);
+    }
+
     [Theory]
     [InlineData(null, null)]
     [InlineData("vps", "")]
@@ -532,7 +562,8 @@ public sealed class HostExecServiceTests
         IHostPlatform? platform = null,
         bool verbose = false,
         IHarnessContextLoader? loader = null,
-        SyncedCopyRefusals? copyRefusals = null)
+        SyncedCopyRefusals? copyRefusals = null,
+        Func<IHostCommandRunner, IHostCommandRunner>? runs = null)
     {
         var inspector = new RecordingInspector(report ?? Reachable);
 
@@ -543,7 +574,7 @@ public sealed class HostExecServiceTests
         var service = new HostExecService(
             loader ?? HostDoubles.Loader(Config, Root),
             inspector,
-            commands,
+            runs?.Invoke(commands) ?? commands,
             platform ?? HostDoubles.Platform(),
             new ConsoleHarnessOutput(output, error, verbose),
             copyRefusals ?? new SyncedCopyRefusals(new ConsoleHarnessOutput(output, error, verbose)));

@@ -31,6 +31,49 @@ public sealed class HostInspectorTests
 
     private static readonly string[] ToolChanges = ["install", "update"];
 
+    /// <summary>
+    /// What the end of a program the inspection runs on a host could not reach or end is said under the tool, naming what
+    /// ran, once (<see cref="UnreachedSaying"/>): ssh reading its settings, and again pinned, and probing the host's shell,
+    /// and a program run there by the connection - <c>uname</c> - or by the inspection itself - the SDKs' listing.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "ReadSshSettingsAsync")]
+    [InlineData(true, "ReadSshSettingsAsync")]
+    [InlineData(false, "ProbeShellAsync")]
+    [InlineData(true, "ProbeShellAsync")]
+    [InlineData(false, "uname -sm")]
+    [InlineData(true, "uname -sm")]
+    [InlineData(false, "dotnet --list-sdks")]
+    [InlineData(true, "dotnet --list-sdks")]
+    public async Task WhatTheEndOfAProgramRunOnAHostCouldNotReachOrEnd_IsSaidNamingWhatRan(bool stopped, string call)
+    {
+        var harness = new HarnessFactory();
+        var ssh = call is "ReadSshSettingsAsync" or "ProbeShellAsync";
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            async (stop, _) =>
+            {
+                using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(), output: harness.Output, runs: commands => new UnreachingHostCommands(commands, stop, asked => asked == call));
+
+                await fixture.InspectAsync(ssh ? HostId.Ssh(SshName) : HostId.Wsl(Distro));
+            });
+
+        string[] what = call switch
+        {
+            // Read again pinned once the first reading ended, to see the pin goes where the name does.
+            "ReadSshSettingsAsync" => stopped
+                ? [$"ssh reading its settings for ssh {SshName}"]
+                : [$"ssh reading its settings for ssh {SshName}", $"ssh reading its settings for ssh {SshName} pinned"],
+            "ProbeShellAsync" => [$"ssh probing the shell of ssh {SshName}"],
+            "uname -sm" => [$"'uname' on wsl {Distro}"],
+            _ => [$"'dotnet' on wsl {Distro}"],
+        };
+
+        Assert.Equal([.. what.Select(ran => UnreachedSaid.Warned(ToolPackage.Command, ran))], said);
+    }
+
     [Fact]
     public async Task Local_IsMeasuredInProcess_WithoutRunningAnything()
     {
@@ -1575,7 +1618,9 @@ public sealed class HostInspectorTests
             int holdAwakeSeconds = 0,
             TimeSpan? wakePoll = null,
             IWslDiskImages? diskImages = null,
-            IReadOnlyList<string>? resolvesTo = null)
+            IReadOnlyList<string>? resolvesTo = null,
+            IHarnessOutput? output = null,
+            Func<IHostCommandRunner, IHostCommandRunner>? runs = null)
         {
             Repository = new TempDirectory();
 
@@ -1646,20 +1691,22 @@ public sealed class HostInspectorTests
             var secrets = new HostSecretsStore(fileSystem, Permissions, platform);
             _lookup = new FixedLookup(resolves ? resolvesTo ?? ["192.0.2.10"] : []);
             var addresses = new HostAddressResolver(_lookup, TimeProvider.System, TimeSpan.FromTicks(1));
-            var programs = new HostProgramResolver(new LocalProgramResolver(platform, FilePermissionsFactory.Create()), Commands);
+            var commands = runs?.Invoke(Commands) ?? Commands;
+            var programs = new HostProgramResolver(new LocalProgramResolver(platform, FilePermissionsFactory.Create()), commands, output);
             CopyRefusals = new SyncedCopyRefusals(new ConsoleHarnessOutput(new StringWriter(), _copyNotices, verbose: false));
             var connector = new HostConnector(
                 platform,
                 processRunner,
-                Commands,
+                commands,
                 secrets,
                 addresses,
                 programs,
                 new SshWakeWindow(wakeLookup ?? Substitute.For<INameLookup>(), TimeProvider.System, wakePoll ?? TimeSpan.Zero),
-                CopyRefusals);
+                CopyRefusals,
+                output);
 
-            Holds = new HoldAwakeRegistry(Commands, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false), stopsWithin: TimeSpan.Zero);
-            _inspector = new HostInspector(Commands, connector, identity, agent, Holds, diskImages ?? Substitute.For<IWslDiskImages>(), fileSystem);
+            Holds = new HoldAwakeRegistry(commands, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false), stopsWithin: TimeSpan.Zero);
+            _inspector = new HostInspector(commands, connector, identity, agent, Holds, diskImages ?? Substitute.For<IWslDiskImages>(), fileSystem, output);
         }
 
         private readonly StringWriter _copyNotices = new();

@@ -61,12 +61,18 @@ public sealed class GitLocalVariables
     }
 
     /// <summary>Every name git calls repository-local.</summary>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the git it is asked for, what a stop of the question could not
+    /// reach or end (<see cref="UnreachedSaying"/>).
+    /// </param>
     /// <param name="cancellationToken">Stops the question.</param>
     /// <exception cref="HarnessException">
     /// git could not answer, or its answer did not name GIT_DIR (<see cref="HarnessExit.CommandFailed"/>).
     /// </exception>
-    public async Task<IReadOnlyList<string>> NamesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> NamesAsync(Action<string> say, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(say);
+
         if (_names is { } known)
         {
             return known;
@@ -76,7 +82,7 @@ public sealed class GitLocalVariables
 
         try
         {
-            return _names ??= await AskAsync(cancellationToken).ConfigureAwait(false);
+            return _names ??= await AskAsync(say, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -86,22 +92,24 @@ public sealed class GitLocalVariables
 
     /// <summary>Marks every repository-local name in <paramref name="environment"/> as removed.</summary>
     /// <param name="environment">A child's environment overrides, where a null value removes the variable.</param>
+    /// <param name="say">As <see cref="NamesAsync"/>.</param>
     /// <param name="cancellationToken">Stops the question, when it has not been answered yet.</param>
     /// <exception cref="HarnessException">As <see cref="NamesAsync"/>.</exception>
-    public async Task ClearAsync(IDictionary<string, string?> environment, CancellationToken cancellationToken = default)
+    public async Task ClearAsync(IDictionary<string, string?> environment, Action<string> say, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(environment);
 
-        foreach (var name in await NamesAsync(cancellationToken).ConfigureAwait(false))
+        foreach (var name in await NamesAsync(say, cancellationToken).ConfigureAwait(false))
         {
             environment[name] = null;
         }
     }
 
-    private async Task<IReadOnlyList<string>> AskAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> AskAsync(Action<string> say, CancellationToken cancellationToken)
     {
         var result = await _processRunner!
             .RunAsync(new ProcessRequest { FileName = "git", Arguments = QueryArguments }, cancellationToken)
+            .SayingUnreached($"'git {string.Join(' ', QueryArguments)}'", say)
             .ConfigureAwait(false);
 
         var names = result.StandardOutput

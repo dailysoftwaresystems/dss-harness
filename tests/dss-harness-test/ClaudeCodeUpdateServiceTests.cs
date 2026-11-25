@@ -14,6 +14,51 @@ namespace DssHarness.Tests;
 public sealed class ClaudeCodeUpdateServiceTests
 {
     /// <summary>
+    /// What a stop of a program the update asks - npm's prefix through its node, npm's root, Claude Code's version - could
+    /// not reach or end is said under the command asking, naming the program, once each (<see cref="UnreachedSaying"/>):
+    /// the update is what hands npm's client and the installation its sayer.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfAProgramTheUpdateAsksCouldNotReachOrEnd_IsSaidUnderTheCommandAsking(bool stopped)
+    {
+        using var kit = new Kit(package: "2.1.296", program: "2.1.296");
+        var harness = new HarnessFactory();
+        var asker = ClaudeCodeAsker.Run();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => kit.Service(output: harness.Output, runner: UnreachingRunner.For(stop, request => kit.Runner.RunAsync(request, token).GetAwaiter().GetResult()))
+                .ReadyAsync(kit.Layout, [], client: null, asker, token));
+
+        Assert.Equal(
+            [
+                UnreachedSaid.Warned(asker.Command, $"'{kit.Node}' saying npm's prefix"),
+                .. stopped ? Array.Empty<string>() : [UnreachedSaid.Warned(asker.Command, "'npm root -g'"), UnreachedSaid.Warned(asker.Command, $"'{kit.Program} --version'")],
+            ],
+            said);
+    }
+
+    /// <summary>
+    /// What a stop of Claude Code asked its version could not reach or end is handed to the caller that owns the
+    /// operation, naming the program, once (<see cref="UnreachedSaying"/>): the installation has no output of its own.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfClaudeCodeAskedItsVersionCouldNotReachOrEnd_IsHandedToItsCaller(bool stopped)
+    {
+        var (said, _) = await UnreachedSaid.HandedAsync(
+            stopped,
+            (stop, token, say) => new ClaudeCodeInstall(new HarnessFactory().FileSystem, UnreachingRunner.For(stop, _ => HostResults.Ok("2.1.296 (Claude Code)\n")))
+                .VersionAsync("claude", say, cancellationToken: token));
+
+        Assert.Equal([UnreachedSaid.Handed("'claude --version'")], said);
+    }
+
+    /// <summary>
     /// A ready installation is said by the version its program answered - read from the line Claude Code really prints,
     /// <c>2.1.296 (Claude Code)</c>, and never compared as that text - and nothing is changed.
     /// </summary>
@@ -1111,10 +1156,10 @@ public sealed class ClaudeCodeUpdateServiceTests
         /// The service over the kit's machine, its bound on following links measured by <paramref name="clock"/> where one
         /// is given, and its process table <paramref name="table"/> where one is given - else the kit's own.
         /// </summary>
-        public ClaudeCodeUpdateService Service(TimeProvider? clock = null, IProcessTable? table = null, DssHarness.Core.Output.IHarnessOutput? output = null)
+        public ClaudeCodeUpdateService Service(TimeProvider? clock = null, IProcessTable? table = null, DssHarness.Core.Output.IHarnessOutput? output = null, IProcessRunner? runner = null)
             => new(
                 table ?? Table,
-                Runner,
+                runner ?? Runner,
                 Files,
                 Permissions,
                 Platform,

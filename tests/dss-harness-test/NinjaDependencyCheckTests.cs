@@ -24,6 +24,26 @@ public sealed class NinjaDependencyCheckTests
     private const string BuildName = "the build";
 
     /// <summary>
+    /// What a stop of ninja listing the dependency records could not reach or end is handed to the build that asks the
+    /// check, once (<see cref="UnreachedSaying"/>): the check has no output of its own.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheRecordsListingCouldNotReachOrEnd_IsHandedToTheBuild(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("build.ninja", string.Empty);
+
+        var (said, _) = await UnreachedSaid.HandedAsync(
+            stopped,
+            (stop, token, say) => new NinjaDependencyCheck(UnreachingRunner.For(stop, _ => HostResults.Ok("app.o: #deps 1, deps mtime 1 (VALID)\n    app.h\n")), FileSystem())
+                .CheckAsync(temp.Path, ProgramDirectories.None, say, cancellationToken: token));
+
+        Assert.Equal([UnreachedSaid.Handed("'ninja -t deps'")], said);
+    }
+
+    /// <summary>
     /// A build laid out the way CMake lays out an MSVC one: the rule, with <c>deps = msvc</c>, in
     /// <c>CMakeFiles/rules.ninja</c>, and each source named absolutely, escaped. A source that includes
     /// nothing is excused; one whose quoted include resolves beside it to a header ninja keeps, and
@@ -666,7 +686,7 @@ public sealed class NinjaDependencyCheckTests
     /// <summary>Checks <paramref name="build"/>, whose ninja answers <c>-t deps</c> with <paramref name="answer"/>.</summary>
     private static Task<NinjaDependencyReport> CheckAnswered(string build, string answer)
         => new NinjaDependencyCheck(new DepsAnswer(answer), FileSystem())
-            .CheckAsync(build, ProgramDirectories.None, cancellationToken: TestContext.Current.CancellationToken);
+            .CheckAsync(build, ProgramDirectories.None, UnreachedSaid.Nowhere, cancellationToken: TestContext.Current.CancellationToken);
 
     private static PhysicalFileSystem FileSystem() => new(FilePermissionsFactory.Create());
 

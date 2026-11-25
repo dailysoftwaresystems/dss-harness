@@ -333,29 +333,19 @@ public sealed class PhaseRunner(
         };
 
         var startedUtc = _wallClock.GetUtcNow();
-        ProcessResult result;
-        PhaseStop stopped;
-
-        try
-        {
-            (result, stopped) = await RunBoundedAsync(processRequest, request.StallSeconds, clock, cancellationToken).ConfigureAwait(false);
-        }
-        catch (ProcessStoppedException ex) when (ex.Uncontained is { } unreached)
-        {
-            // The caller's own stop - an interrupt, a stop of the run, the engine's end - hands no result: what it could not
-            // reach or end is said all the same, for it may still run, and the stop goes on.
-            Unreached(request, unreached);
-            throw;
-        }
-
-        var wall = _wallClock.GetUtcNow() - startedUtc;
 
         // What the child's end could not reach or end - a contained child's container, a process of its tree that refuses
-        // its end at a stop - is said, for it may still run.
-        if (result.Uncontained is { } left)
-        {
-            Unreached(request, left);
-        }
+        // its end at a stop - is said as the run is read, for it may still run: from its result, and from the stop its
+        // caller's own (an interrupt, a stop of the run, the engine's end) throws in place of one, which then goes on.
+        var (result, stopped) = await RunBoundedAsync(
+                processRequest,
+                request.StallSeconds,
+                clock,
+                request.Leg,
+                line => _output.Warn(request.Phase, line),
+                cancellationToken)
+            .ConfigureAwait(false);
+        var wall = _wallClock.GetUtcNow() - startedUtc;
 
         // Every character the child wrote is in the log; what a process it left running - a server its build started,
         // kept for the next phase - writes from now on is that process's own, and is not read. Said, so a log that ends
@@ -416,13 +406,6 @@ public sealed class PhaseRunner(
     }
 
     /// <summary>
-    /// Says what <paramref name="request"/>'s child's end could not reach or end (<see cref="ProcessResult.Uncontained"/>),
-    /// however the phase ended - at its own end, at its bound, or at its caller's stop, which hands no result - as a warning
-    /// of the phase's: the one place a phase says it.
-    /// </summary>
-    private void Unreached(PhaseRequest request, string unreached) => _output.Warn(request.Phase, $"{request.Leg}: {unreached}");
-
-    /// <summary>
     /// Runs the child, stopping it when it goes <paramref name="stallSeconds"/> without a line on
     /// either stream, and says which bound stopped it, if one did. The bound is enforced through a
     /// source of this method's own, so a hung phase and a run the operator interrupted stay
@@ -434,17 +417,21 @@ public sealed class PhaseRunner(
     /// reported the stop: the silence bound where this method's own source fired - it fires only once
     /// the child has been quiet that long - and otherwise the wall-clock bound the request carries,
     /// which is the only other bound that stops a child the caller did not give up on. Where both pass
-    /// in one moment the silence bound is named, and that is true too.
+    /// in one moment the silence bound is named, and that is true too. What the child's end could not reach or end is
+    /// said through <paramref name="say"/>, under <paramref name="leg"/>, as each run is read (<see cref="UnreachedSaying"/>)
+    /// - at the phase's end, at either bound, at the caller's stop - once.
     /// </remarks>
     private async Task<(ProcessResult Result, PhaseStop Stopped)> RunBoundedAsync(
         ProcessRequest request,
         int stallSeconds,
         StallClock clock,
+        string leg,
+        Action<string> say,
         CancellationToken cancellationToken)
     {
         if (stallSeconds <= 0)
         {
-            var unbounded = await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+            var unbounded = await _processRunner.RunAsync(request, cancellationToken).SayingUnreached(leg, say).ConfigureAwait(false);
 
             return (unbounded, unbounded.TimedOut ? PhaseStop.WallClock : PhaseStop.None);
         }
@@ -456,7 +443,7 @@ public sealed class PhaseRunner(
 
         try
         {
-            var result = await _processRunner.RunAsync(request, stall.Token).ConfigureAwait(false);
+            var result = await _processRunner.RunAsync(request, stall.Token).SayingUnreached(leg, say).ConfigureAwait(false);
 
             return (
                 result,
@@ -468,8 +455,8 @@ public sealed class PhaseRunner(
         {
             // The bound fired, and the runner stopped the child and its descendants. The exit code
             // is meaningless, which is what a stopped phase reports; the lines the child wrote
-            // before it went quiet were kept as they arrived, and what the stop could not reach or end
-            // is said.
+            // before it went quiet were kept as they arrived, and what the stop could not reach or end,
+            // said as the run was read, is kept in the phase's result.
             return (
                 new ProcessResult(-1, string.Empty, string.Empty, clock.Elapsed, TimedOut: true) { Uncontained = (ex as ProcessStoppedException)?.Uncontained },
                 PhaseStop.Silence);

@@ -8,6 +8,28 @@ namespace DssHarness.Tests;
 
 public sealed class NpmClientTests
 {
+    /// <summary>
+    /// What a stop of npm, or of the node npm.cmd starts, could not reach or end is handed to the caller that owns the
+    /// operation, naming what ran, once (<see cref="UnreachedSaying"/>): npm's client has no output of its own.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfNpmOrItsNodeCouldNotReachOrEnd_IsHandedToItsCaller(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var dance = new Dance(temp);
+
+        var (prefix, _) = await UnreachedSaid.HandedAsync(
+            stopped,
+            (stop, token, say) => Client(temp, ["path"], runs: recording => UnreachingRunner.For(stop, request => recording.RunAsync(request, token).GetAwaiter().GetResult())).Client.FindAsync(say, cancellationToken: token));
+        var (root, _) = await UnreachedSaid.HandedAsync(
+            stopped,
+            (stop, token, say) => Client(temp, ["path"], runs: _ => UnreachingRunner.For(stop, _ => HostResults.Ok(temp.Combine("prefix") + "\n"))).Client.RootAsync(new NpmClient.NpmProgram("npm", []), say, cancellationToken: token));
+
+        Assert.Equal([UnreachedSaid.Handed($"'{dance.Node}' saying npm's prefix"), UnreachedSaid.Handed("'npm root -g'")], [.. prefix, .. root]);
+    }
+
     [Fact]
     public async Task OnWindows_AnNpmExeOnThePath_IsStartedAsItIs()
     {
@@ -15,7 +37,7 @@ public sealed class NpmClientTests
         temp.WriteFile("path/npm.exe", "a program");
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Equal(Path.Combine(temp.Path, "path", "npm.exe"), found.Npm!.Program);
         Assert.Empty(found.Npm.Leading);
@@ -30,7 +52,7 @@ public sealed class NpmClientTests
         var dance = new Dance(temp);
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         // The node beside npm.cmd, starting the npm-cli.js of the prefix npm names - the npm a person installed over
         // the one Node.js brought - never the batch file itself.
@@ -53,7 +75,7 @@ public sealed class NpmClientTests
         var node = Path.Combine(temp.Path, "other", "node.exe");
         var (client, runner) = Client(temp, ["path", "other"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Equal(node, found.Npm!.Program);
         Assert.Equal([dance.InstalledCli], found.Npm.Leading);
@@ -67,7 +89,7 @@ public sealed class NpmClientTests
         new Dance(temp, ownNpm: false);
         var (client, _) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Equal([Path.Combine(temp.Path, "path", "node_modules", "npm", "bin", "npm-cli.js")], found.Npm!.Leading);
     }
@@ -81,7 +103,7 @@ public sealed class NpmClientTests
         temp.WriteFile("second/npm.cmd", "@echo off\n");
         var (client, _) = Client(temp, ["first", "second"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Equal(exe, found.Npm!.Program);
     }
@@ -96,7 +118,7 @@ public sealed class NpmClientTests
         var exe = Path.Combine(temp.Path, "path", "npm.exe");
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Equal(exe, found.Npm!.Program);
         Assert.Empty(runner.Ran);
@@ -108,7 +130,7 @@ public sealed class NpmClientTests
         using var temp = new TempDirectory();
         var (client, _) = Client(temp, ["empty"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Null(found.Npm);
         Assert.Equal("no npm is on the PATH. Looked for: npm.exe and npm.cmd, and the node.exe and npm-cli.js npm.cmd starts", found.Missing);
@@ -123,7 +145,7 @@ public sealed class NpmClientTests
         File.Delete(dance.Node);
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Null(found.Npm);
         Assert.Equal(
@@ -142,7 +164,7 @@ public sealed class NpmClientTests
         var (client, _) = Client(temp, ["path"]);
         File.Delete(Path.Combine(temp.Path, "path", "node_modules", "npm", "bin", "npm-cli.js"));
 
-        var found = await client.FindAsync(cancellationToken: Token);
+        var found = await client.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Null(found.Npm);
         Assert.Equal(
@@ -168,8 +190,8 @@ public sealed class NpmClientTests
         var (found, _) = Client(temp, ["cmds", "bin"], system);
         var (none, runner) = Client(temp, ["cmds"], system);
 
-        var program = await found.FindAsync(cancellationToken: Token);
-        var missing = await none.FindAsync(cancellationToken: Token);
+        var program = await found.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
+        var missing = await none.FindAsync(UnreachedSaid.Nowhere, cancellationToken: Token);
 
         Assert.Equal(npm, program.Npm!.Program);
         Assert.Empty(program.Npm.Leading);
@@ -224,14 +246,14 @@ public sealed class NpmClientTests
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    private static (NpmClient Client, RecordingRunner Runner) Client(TempDirectory temp, string[] directories, PlatformId system = PlatformId.Windows)
+    private static (NpmClient Client, RecordingRunner Runner) Client(TempDirectory temp, string[] directories, PlatformId system = PlatformId.Windows, Func<RecordingRunner, IProcessRunner>? runs = null)
     {
         var path = string.Join(Path.PathSeparator, directories.Select(named => Path.Combine(temp.Path, named)));
         var runner = new RecordingRunner { Prefix = Path.Combine(temp.Path, "prefix") };
         var files = new FilesThatAreThere();
 
         return (new NpmClient(
-            runner,
+            runs?.Invoke(runner) ?? runner,
             new PassThroughFileSystem(new PhysicalFileSystem(files)),
             files,
             HostDoubles.Platform(system),

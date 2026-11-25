@@ -743,7 +743,7 @@ public sealed class ToolProvisionService(
                             Arguments = arguments,
                             StandardInput = input,
                         },
-                        token),
+                        token).SayingUnreached($"'{program}' on {connection.Host}", line => _output.Warn(CommandName, line)),
                     $"'{program}' on {connection.Host} to end",
                     ProgramWait.Told(_output, CommandName),
                     _clock,

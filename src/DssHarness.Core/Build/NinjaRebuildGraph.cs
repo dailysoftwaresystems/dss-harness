@@ -73,6 +73,10 @@ internal sealed class NinjaRebuildGraph(
     /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
     /// <param name="program">The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one up.</param>
     /// <param name="environment">The environment the build's phases ran in.</param>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of the program could not reach or end
+    /// (<see cref="Processes.UnreachedSaying"/>).
+    /// </param>
     /// <param name="told">Told where the wait for ninja stands, every <see cref="Waits.SaidEvery"/> it lasts; nothing where null.</param>
     /// <param name="clock">Times the wait: ninja is waited for to its end, however long it takes.</param>
     /// <param name="cancellationToken">Stops ninja.</param>
@@ -87,6 +91,7 @@ internal sealed class NinjaRebuildGraph(
         ProgramDirectories programDirectories,
         string? program,
         IReadOnlyDictionary<string, string?>? environment,
+        Action<string> say,
         Action<WaitTold>? told,
         TimeProvider clock,
         CancellationToken cancellationToken)
@@ -101,6 +106,8 @@ internal sealed class NinjaRebuildGraph(
                     processRunner,
                     NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-t", "deps"], programDirectories, program, environment),
                     $"'ninja -t deps' to list the dependency records of '{buildDirectory}'",
+                    "'ninja -t deps'",
+                    say,
                     told,
                     clock,
                     cancellationToken)

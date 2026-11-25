@@ -123,7 +123,7 @@ public sealed class WslPageCache(
 
         try
         {
-            listed = await WaitedAsync(_hostCommands.ListRunningWslDistributionsAsync, "WSL to say which distributions run", cancellationToken).ConfigureAwait(false);
+            listed = await WaitedAsync(_hostCommands.ListRunningWslDistributionsAsync, "WSL to say which distributions run", "WSL listing the distributions running", cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -154,6 +154,7 @@ public sealed class WslPageCache(
             dropped = await WaitedAsync(
                     token => _hostCommands.RunAsync(connection, new HostCommand { Program = "sh", Arguments = ["-c", DropCommand], AsRoot = true, StandardInput = string.Empty }, token),
                     $"{through.Host} to drop WSL's page cache",
+                    $"{through.Host}: the drop of WSL's page cache",
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -169,10 +170,16 @@ public sealed class WslPageCache(
 
     /// <summary>
     /// <paramref name="run"/>'s answer, waited for to its end (<see cref="ProgramWait"/>) and told under the admission
-    /// the drop is made for, while it lasts.
+    /// the drop is made for, while it lasts - what its end could not reach or end said there too, as
+    /// <paramref name="what"/> (<see cref="UnreachedSaying"/>).
     /// </summary>
-    private Task<ProcessResult> WaitedAsync(Func<CancellationToken, Task<ProcessResult>> run, string subject, CancellationToken cancellationToken)
-        => ProgramWait.ToItsEndAsync(run, subject, ProgramWait.Told(_output, MachineDispatchQueue.CommandName), _clock, cancellationToken);
+    private Task<ProcessResult> WaitedAsync(Func<CancellationToken, Task<ProcessResult>> run, string subject, string what, CancellationToken cancellationToken)
+        => ProgramWait.ToItsEndAsync(
+            token => run(token).SayingUnreached(what, line => _output?.Warn(MachineDispatchQueue.CommandName, line)),
+            subject,
+            ProgramWait.Told(_output, MachineDispatchQueue.CommandName),
+            _clock,
+            cancellationToken);
 
     /// <summary>
     /// How much of the cache <paramref name="printed"/> - what <see cref="DropCommand"/> prints - says was dropped, or
