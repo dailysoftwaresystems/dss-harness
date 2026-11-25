@@ -4,9 +4,9 @@ using Microsoft.Win32.SafeHandles;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// What a stop ends, ended as the machine ends it - but for the process a test names, or every job where it says so, whose
-/// end is held back until the runner first asks whether anything it ended has gone: a process whose end is slow, still
-/// ending - still holding what it held - when the stop has made its ends, which no real process can be made to be on
+/// What a stop ends, ended as the machine ends it - but for the process a test names, or every job or group where it says
+/// so, whose end is held back until the runner first asks whether anything it ended has gone: a process whose end is slow,
+/// still ending - still holding what it held - when the stop has made its ends, which no real process can be made to be on
 /// demand. A runner that never asks never ends it, and the test ends it itself.
 /// </summary>
 internal sealed class SlowEnds : ProcessEnds
@@ -15,6 +15,7 @@ internal sealed class SlowEnds : ProcessEnds
     private readonly List<Action> _held = [];
     private int _slow;
     private bool _jobs;
+    private bool _groups;
     private int _heldBack;
 
     /// <summary>How many ends were held back: a test whose runner held none back tested nothing.</summary>
@@ -48,6 +49,15 @@ internal sealed class SlowEnds : ProcessEnds
         }
     }
 
+    /// <summary>Holds back the end of every group.</summary>
+    public void SlowGroups()
+    {
+        lock (_gate)
+        {
+            _groups = true;
+        }
+    }
+
     public override void End(KeptProcess process)
     {
         ArgumentNullException.ThrowIfNull(process);
@@ -78,6 +88,21 @@ internal sealed class SlowEnds : ProcessEnds
         }
 
         base.EndJob(job);
+    }
+
+    public override void EndGroup(int group)
+    {
+        lock (_gate)
+        {
+            if (_groups)
+            {
+                _held.Add(() => base.EndGroup(group));
+                _heldBack++;
+                return;
+            }
+        }
+
+        base.EndGroup(group);
     }
 
     public override bool Gone(KeptProcess process)

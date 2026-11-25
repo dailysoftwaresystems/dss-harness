@@ -53,6 +53,14 @@ internal sealed class EndedProcesses(ProcessEnds ends) : IDisposable
     /// <param name="job">The job.</param>
     public void EndJob(SafeWaitHandle job) => _ends.EndJob(job);
 
+    /// <summary>Ends every process of the group <paramref name="group"/> at once, on Linux and macOS, as the machine ends a group, or as a test stands in for it.</summary>
+    /// <param name="group">The group's id.</param>
+    public void EndGroup(int group) => _ends.EndGroup(group);
+
+    /// <summary>The processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, as the machine lists them, or as a test stands in for it.</summary>
+    /// <param name="group">The group's id.</param>
+    public IEnumerable<int> MembersOf(int group) => _ends.Members(group);
+
     /// <summary>
     /// Has <paramref name="look"/> asked again once every process kept has gone: it finds, keeps and ends what its source
     /// holds that is not kept yet - a child one of them made while it was being ended - and says how many it found.
@@ -173,8 +181,9 @@ internal sealed class KeptProcess : IDisposable
 }
 
 /// <summary>
-/// How a process a stop keeps is ended, and seen to have gone: the machine's own (<see cref="Machine"/>) - or a test's,
-/// standing in for a process whose end is slow, which no real process can be made to be on demand.
+/// How a process a stop keeps is ended, and seen to have gone, and a group listed and ended: the machine's own
+/// (<see cref="Machine"/>) - or a test's, standing in for a process whose end is slow, or a listing that misses a member,
+/// which no real process or listing can be made to be on demand.
 /// </summary>
 internal class ProcessEnds
 {
@@ -188,6 +197,14 @@ internal class ProcessEnds
     /// <summary>Ends every member of <paramref name="job"/> at once, on Windows.</summary>
     /// <param name="job">The job.</param>
     public virtual void EndJob(SafeWaitHandle job) => Containment.Terminate(job);
+
+    /// <summary>Ends every process of the group <paramref name="group"/> at once, on Linux and macOS: SIGKILL to the group as one.</summary>
+    /// <param name="group">The group's id.</param>
+    public virtual void EndGroup(int group) => Containment.EndGroupNow(group);
+
+    /// <summary>The processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, read now (<see cref="Containment.MembersOf"/>).</summary>
+    /// <param name="group">The group's id.</param>
+    public virtual IEnumerable<int> Members(int group) => Containment.MembersOf(group);
 
     /// <summary>Whether <paramref name="process"/> has gone, asked of the system now and never waited on.</summary>
     /// <param name="process">The process, kept.</param>

@@ -106,8 +106,8 @@ internal static class Containment
     /// Ends a contained child's whole session on Linux and macOS - or, where <paramref name="group"/>, the whole process
     /// group a child apart from the terminal leads within its starter's session: every process in it, and while the
     /// child stands every one in its tree, is asked to end - the group as one, each member outside
-    /// the group on its own - and waited for for as long as any of them stands, told every five minutes
-    /// (<see cref="Waits.SaidEvery"/>); every one still standing once they have all gone or <paramref name="bound"/> - the
+    /// the group on its own - and waited for for as long as any of them stands, a zombie standing for none, told every five
+    /// minutes (<see cref="Waits.SaidEvery"/>); every one still standing once they have all gone or <paramref name="bound"/> - the
     /// bound its run was configured with - is spent is killed, and waited for until it has gone or is a zombie, so nothing
     /// this end killed still holds what the child's output is read from once it returns.
     /// </summary>
@@ -145,7 +145,12 @@ internal static class Containment
     /// under the same id and start, so an id given to another process meanwhile is left alone. Each
     /// is held still (SIGSTOP) as it is found - the group as one before the table is read again - so
     /// none starts another or goes before it is killed, and kept by its id and start read while it is
-    /// held, then killed and waited for (<see cref="EndedProcesses.GoneAsync"/>). A
+    /// held, then killed - the group as one first, while it stands, so a member no reading showed goes
+    /// with it, and every other by its own id (<see cref="HeldStill.Kill"/>) - and waited for
+    /// (<see cref="EndedProcesses.GoneAsync"/>). A member is ended, for the wait before the bound, once
+    /// nothing answers to its id or what does is a zombie (<see cref="ProcessGoing.HasEnded"/>), which
+    /// nothing may ever reap, and the group once nothing in it can be signalled or every member it is
+    /// listed to hold is a zombie. A
     /// session with nothing in it is not read again, nor signalled. A process that left
     /// both the session and the tree - a daemon that made a session of its own and whose parent
     /// has gone - is reached by nothing here. A group is ended the same way, by its own members and
@@ -187,12 +192,19 @@ internal static class Containment
             calls.Signal(member.Id, Posix.AskToEnd);
         }
 
-        // The signal with no number asks nothing and reports everything: a group or a process it
-        // cannot signal is one that has ended. Waited for while any of it stands, and made to at the bound.
+        // The signal with no number asks nothing and reports everything: a group or a process it cannot signal is one that
+        // has ended, and one it can has ended all the same where it is a zombie, which nothing may ever reap - the group
+        // once every member it is listed to hold is one. Waited for while any of it stands, and made to at the bound.
+        bool MemberEnded(int process) => calls.Signal(process, 0) == -1 || ProcessGoing.HasEnded(process);
+
+        bool GroupEnded()
+            => calls.SignalGroup(leader, 0) == -1
+                || (ends.Members(leader).ToList() is { Count: > 0 } listed && listed.All(ProcessGoing.HasEnded));
+
         await Waits.ForAsync(
             async cancellationToken =>
             {
-                while (!(calls.SignalGroup(leader, 0) == -1 && members.All(member => calls.Signal(member.Id, 0) == -1)))
+                while (!(members.All(member => MemberEnded(member.Id)) && GroupEnded()))
                 {
                     await Task.Delay(EndingLook, cancellationToken).ConfigureAwait(false);
                 }
@@ -203,31 +215,15 @@ internal static class Containment
             CancellationToken.None).ConfigureAwait(false);
 
         // What still stands is made to end, held still first - the group as one before it is listed, then each member by
-        // its own id, its leader first so it is killed last, and each member outside the group as the table finds it - so
-        // none starts another, or goes and has its id given out, before it is killed by that id.
+        // its own id, and each member outside the group as the table finds it - so none starts another, or goes and has
+        // its id given out, before it is killed: the group as one, then every other by its id.
         using var ended = new EndedProcesses(ends);
-        var still = new List<int>();
-        var holding = new HashSet<int>();
-
-        void Hold(int process)
-        {
-            if (holding.Add(process) && calls.Signal(process, Posix.HoldStill) != -1)
-            {
-                still.Add(process);
-            }
-        }
-
+        var holding = new HeldStill(calls, ended, failed: null);
         HeldEnding ending;
 
         try
         {
-            if (calls.SignalGroup(leader, Posix.HoldStill) != -1)
-            {
-                foreach (var member in MembersOf(leader).OrderBy(member => member != leader))
-                {
-                    Hold(member);
-                }
-            }
+            _ = holding.HoldGroup(leader);
 
             ending = unread is not null
                 ? new HeldEnding(Found: true, Unreached(unread, held, "its group was ended"))
@@ -236,7 +232,7 @@ internal static class Containment
         finally
         {
             // Whatever reading the table again met, nothing held still is left so.
-            KillHeld(still, ended);
+            holding.Kill();
         }
 
         await ended.GoneAsync($"{held} ({leader.ToString(System.Globalization.CultureInfo.InvariantCulture)}) to go once made to", tell, clock).ConfigureAwait(false);
@@ -253,7 +249,7 @@ internal static class Containment
                 // parent: only what left it can no longer be told from another process under the same id.
                 foreach (var member in members.Where(member => In(member.Id)))
                 {
-                    Hold(member.Id);
+                    _ = holding.Hold(member.Id);
                 }
 
                 return new HeldEnding(
@@ -272,7 +268,7 @@ internal static class Containment
 
             foreach (var member in again.Processes.Where(process => known.Contains((process.Id, process.StartedUtc)) || In(process.Id)))
             {
-                Hold(member.Id);
+                _ = holding.Hold(member.Id);
             }
 
             return new HeldEnding(Found: true, null);
@@ -297,8 +293,9 @@ internal static class Containment
     /// On Linux and macOS each process is held still (SIGSTOP) before its children are taken: held, it starts no other,
     /// and a child of it is never reaped and its id given out before the walk acts on it (<see cref="HoldDescendants"/>).
     /// Every process of the tree is held so, then the group - as one before it is listed, and each member by its own id -
-    /// and only then each is kept by its id and start and killed by that id, the root last. A root the runtime has seen
-    /// end is not walked: its children were handed on, and its id may be another's.
+    /// and only then each is kept by its id and start and killed (<see cref="HeldStill.Kill"/>): the group as one first,
+    /// while it stands, so a member its listing did not show goes with it, and every other process by its own id, the root
+    /// last. A root the runtime has seen end is not walked: its children were handed on, and its id may be another's.
     /// </para>
     /// <para>
     /// On Windows, where nothing is held still, each process is ended as it is found - the root first, so it starts no
@@ -351,6 +348,10 @@ internal static class Containment
             _ = Posix.Calls().Signal(process.Id, Posix.Kill);
         }
     }
+
+    /// <summary>Kills every process of the group <paramref name="group"/> at once, on Linux and macOS: SIGKILL to the group as one.</summary>
+    /// <param name="group">The group's id, its leader's.</param>
+    public static void EndGroupNow(int group) => _ = Posix.Calls().SignalGroup(group, Posix.Kill);
 
     /// <summary>
     /// Whether a kept process has gone, asked now: on Windows its handle signalled, which comes only once its handle table
@@ -524,13 +525,55 @@ internal static class Containment
     /// <summary>The Linux and macOS half of <see cref="EndTree"/>.</summary>
     private static void EndTreeOnPosix(Process root, bool group, EndedProcesses ended, List<Exception> failed)
     {
-        var calls = Posix.Calls();
-        var held = new List<int>();
-        var holding = new HashSet<int>();
+        var holding = new HeldStill(Posix.Calls(), ended, failed);
 
-        bool Hold(int id)
+        try
         {
-            if (!holding.Add(id))
+            if (!HasExited(root) && holding.Hold(root.Id))
+            {
+                HoldDescendants(holding);
+            }
+
+            if (group)
+            {
+                _ = holding.HoldGroup(root.Id);
+            }
+        }
+        finally
+        {
+            // Whatever the walk met, nothing it held still is left so.
+            holding.Kill();
+        }
+    }
+
+    /// <summary>
+    /// What an end holds still on Linux and macOS before it kills any of it - each process by its own id, and a group as
+    /// one with each member it is listed to hold - and the one order all of it is killed in (<see cref="Kill"/>): the walk
+    /// of a tree's and a session's end alike.
+    /// </summary>
+    /// <param name="calls">The C library's calls.</param>
+    /// <param name="ended">What keeps each process killed, and lists a group's members.</param>
+    /// <param name="failed">Where a process that could not be held is said; <see langword="null"/> where nothing is said.</param>
+    private sealed class HeldStill(Posix calls, EndedProcesses ended, List<Exception>? failed)
+    {
+        private readonly HashSet<int> _tried = [];
+        private int? _group;
+
+        /// <summary>Every process held, in the order it was: the first - the root, the leader - killed last.</summary>
+        public List<int> Processes { get; } = [];
+
+        /// <summary>Whether holding the process <paramref name="id"/> names was tried already, held or not.</summary>
+        /// <param name="id">The process's id.</param>
+        public bool Tried(int id) => _tried.Contains(id);
+
+        /// <summary>
+        /// Holds the process <paramref name="id"/> names still (SIGSTOP); whether it was held now - one tried already, or
+        /// gone, is not, and one that may not be signalled is said in what fails.
+        /// </summary>
+        /// <param name="id">The process's id.</param>
+        public bool Hold(int id)
+        {
+            if (!_tried.Add(id))
             {
                 return false;
             }
@@ -541,57 +584,70 @@ internal static class Containment
 
                 if (error != Posix.NoSuchProcess)
                 {
-                    failed.Add(new Win32Exception(error, $"pid {id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could not be ended: {new Win32Exception(error).Message}"));
+                    failed?.Add(new Win32Exception(error, $"pid {id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could not be ended: {new Win32Exception(error).Message}"));
                 }
 
                 return false;
             }
 
-            held.Add(id);
+            Processes.Add(id);
             return true;
         }
 
-        try
+        /// <summary>
+        /// Holds the group <paramref name="group"/> still as one, then each member it is listed to hold by its own id, its
+        /// leader first: whether the group stood. Held as one, none of it starts another or goes, so the group stands -
+        /// its id its own - until it is killed.
+        /// </summary>
+        /// <param name="group">The group's id, its leader's.</param>
+        public bool HoldGroup(int group)
         {
-            if (!HasExited(root) && Hold(root.Id))
+            if (calls.SignalGroup(group, Posix.HoldStill) == -1)
             {
-                HoldDescendants(held, holding, Hold);
+                return false;
             }
 
-            // Then the group, held still as one before it is listed, and each member listed held by its own id as well.
-            if (group && calls.SignalGroup(root.Id, Posix.HoldStill) != -1)
+            _group = group;
+
+            foreach (var member in ended.MembersOf(group).OrderBy(member => member != group))
             {
-                foreach (var member in MembersOf(root.Id))
+                _ = Hold(member);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Keeps and kills all that is held, each start read while it is held, so it is that very process's. The group,
+        /// where one is held, is killed as one first (SIGKILL), while it stands - so a member its listing did not show, one
+        /// <c>/proc</c> hides or whose reading failed, goes with it and is never left held still - and each member of it
+        /// is killed by the group alone: once the group is killed a member's id may be given out again, so it is never
+        /// signalled by that id after. Every other process held is killed by its own id, from the last held to the first,
+        /// so the root goes last. One whose start cannot be read is killed and not kept.
+        /// </summary>
+        public void Kill()
+        {
+            var stamps = Processes.ConvertAll(Identity.StampOf);
+            var byGroup = Processes.ConvertAll(id => _group is { } group && calls.GroupOf(id) == group);
+
+            if (_group is { } held)
+            {
+                ended.EndGroup(held);
+            }
+
+            for (var index = Processes.Count - 1; index >= 0; index--)
+            {
+                if (stamps[index] is { Length: > 0 } stamp && new KeptProcess(Processes[index], stamp) is var kept && ended.Keep(kept))
                 {
-                    _ = Hold(member);
+                    if (!byGroup[index])
+                    {
+                        ended.End(kept);
+                    }
                 }
-            }
-        }
-        finally
-        {
-            // Whatever the walk met, nothing it held still is left so.
-            KillHeld(held, ended);
-        }
-    }
-
-    /// <summary>
-    /// Keeps and kills every process of <paramref name="held"/>, each held still: its start read while it is, so the start
-    /// is that very process's; killed from the last held to the first, so the first - the root, the leader - goes last,
-    /// once the rest have been told to. One whose start cannot be read is killed and not kept.
-    /// </summary>
-    private static void KillHeld(List<int> held, EndedProcesses ended)
-    {
-        var stamps = held.ConvertAll(Identity.StampOf);
-
-        for (var index = held.Count - 1; index >= 0; index--)
-        {
-            if (stamps[index] is { Length: > 0 } stamp && new KeptProcess(held[index], stamp) is var kept && ended.Keep(kept))
-            {
-                ended.End(kept);
-            }
-            else
-            {
-                _ = Posix.Calls().Signal(held[index], Posix.Kill);
+                else if (!byGroup[index])
+                {
+                    _ = calls.Signal(Processes[index], Posix.Kill);
+                }
             }
         }
     }
@@ -610,9 +666,9 @@ internal static class Containment
     }
 
     /// <summary>
-    /// Holds still every descendant of what <paramref name="held"/> holds, on Linux and macOS, each through
-    /// <paramref name="hold"/> - which adds it to both - and its own children taken only once it is held: a child of a
-    /// process held still is never reaped, and its id never given out, before the walk acts on it.
+    /// Holds still every descendant of what <paramref name="holding"/> holds, on Linux and macOS, its own children taken
+    /// only once it is held: a child of a process held still is never reaped, and its id never given out, before the walk
+    /// acts on it.
     /// </summary>
     /// <remarks>
     /// macOS lists the children of one process at a time, asked once that process is held, so what it lists is that
@@ -621,8 +677,10 @@ internal static class Containment
     /// that takes none was read once every process held was, so it named every child any of them has. Each round is one
     /// reading of the table, however deep the tree.
     /// </remarks>
-    private static void HoldDescendants(List<int> held, HashSet<int> holding, Func<int, bool> hold)
+    private static void HoldDescendants(HeldStill holding)
     {
+        var held = holding.Processes;
+
         if (OperatingSystem.IsMacOS())
         {
             // The list grows as each child is held, and is walked to its end.
@@ -630,7 +688,7 @@ internal static class Containment
             {
                 foreach (var child in Posix.Listed(Posix.ByParent, held[index]))
                 {
-                    _ = hold(child);
+                    _ = holding.Hold(child);
                 }
             }
 
@@ -647,7 +705,7 @@ internal static class Containment
             {
                 foreach (var child in byParent[parent])
                 {
-                    if (!holding.Contains(child) && FieldOf(child, ProcStat.ParentField) == parent && hold(child))
+                    if (!holding.Tried(child) && FieldOf(child, ProcStat.ParentField) == parent && holding.Hold(child))
                     {
                         walking.Enqueue(child);
                     }
@@ -661,8 +719,13 @@ internal static class Containment
         }
     }
 
-    /// <summary>The ids of the processes in the group <paramref name="group"/>, on Linux and macOS.</summary>
-    private static IEnumerable<int> MembersOf(int group)
+    /// <summary>
+    /// The ids of the processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, read now: one
+    /// Linux's <c>/proc</c> hides - a member of another user's under <c>hidepid</c> - or whose reading failed is not among
+    /// them, which the group's kill as one reaches all the same.
+    /// </summary>
+    /// <param name="group">The group's id.</param>
+    internal static IEnumerable<int> MembersOf(int group)
         => OperatingSystem.IsMacOS()
             ? Posix.Listed(Posix.ByGroup, group)
             : Proc(ProcStat.GroupField).Where(process => process.Value == group).Select(process => process.Id);

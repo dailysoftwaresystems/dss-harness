@@ -269,7 +269,8 @@ member goes with it; and since its members also end when its last handle closes,
 engine leaves behind ends with it there. On Linux and macOS the runner ends the child's session as
 the child ends or is stopped - every process still in it, and at a stop every one still in the
 child's tree, read before anything is signalled, asked to end with SIGTERM and waited for while
-any of it stands - told every five minutes, and killed at what is left of the child's time limit,
+any of it stands, a zombie - which nothing may ever reap - standing for none, and the group for none
+once every member it is listed to hold is one - told every five minutes, and killed at what is left of the child's time limit,
 or at once where a sweep ends what a killed run left, that run's bound having passed with it.
 Whatever a stop or a container's end ends is waited for until it has gone before the output's end
 is looked for (`EndedProcesses`): the system answers a kill before the process's end has run - a
@@ -500,7 +501,10 @@ and macOS it holds each process still (SIGSTOP) before it takes that process's c
 process starts no other, and a child of it is never reaped and its id given out before the walk
 acts on it; Linux's table is read once a round however deep the tree, each child asked again once
 its parent is held, until a round takes none - then the group, as one before it is listed and each member by its own
-id, and only then kills each by its id, the child last. On Windows, where nothing is held still, it
+id, and only then kills it all: the group as one first, while it stands, so a member its listing did not show - one
+`/proc` hides, or whose reading failed - goes with it and is never left held still, each member killed by the group
+alone, since its id may be given out again once the group is killed, and every other process by its own id, the child
+last (`Containment.HeldStill`, the one order a session's end kills in too). On Windows, where nothing is held still, it
 ends each process as it finds it, the child first, a child being one the list Windows keeps of every
 process names as created by a process the walk ended, created no later than that process, and the
 very one the list named, as its own handle's creation time says, so an id taken since the list was

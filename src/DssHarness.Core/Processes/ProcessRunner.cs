@@ -706,7 +706,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <summary>
     /// Ends everything a contained child's container holds, and waits until it has gone, told every five minutes: on
     /// Windows the job, all at once, each member kept by a handle first; on Linux and macOS the session the child leads,
-    /// asked to end, waited for while any of it stands - told every five minutes - and made to at <paramref name="bound"/>,
+    /// asked to end, waited for while any of it stands - a zombie standing for none - told every five minutes - and made to at <paramref name="bound"/>,
     /// what is left of the child's time limit.
     /// </summary>
     /// <param name="job">The job holding the child on Windows, or <see langword="null"/> elsewhere.</param>

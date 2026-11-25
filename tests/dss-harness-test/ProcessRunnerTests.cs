@@ -942,7 +942,7 @@ public sealed class ProcessRunnerTests
         Assert.SkipUnless(OperatingSystem.IsLinux(), "Linux keeps a zombie's start readable; on macOS a zombie's start reads as gone, and Windows keeps no zombie.");
 
         var identity = new DssHarness.Core.Execution.ProcessIdentity(new HostPlatform());
-        var zombie = SpawnUnreaped("/bin/sh", "sh", "-c", "exit 0");
+        var zombie = Unreaped.Spawn("/bin/sh", group: null, "sh", "-c", "exit 0");
 
         try
         {
@@ -965,38 +965,9 @@ public sealed class ProcessRunnerTests
         }
         finally
         {
-            _ = WaitPid(zombie, out _, 0);
+            Unreaped.Reap(zombie);
         }
     }
-
-    /// <summary>Starts <paramref name="program"/> by the C library's own call, which no runtime reaps: its zombie stays until this process asks for it.</summary>
-    private static int SpawnUnreaped(string program, params string[] arguments)
-    {
-        var spelled = arguments.Select(Marshal.StringToHGlobalAnsi).Append(IntPtr.Zero).ToArray();
-
-        try
-        {
-            var refused = PosixSpawn(out var id, program, IntPtr.Zero, IntPtr.Zero, spelled, [IntPtr.Zero]);
-
-            Assert.Equal(0, refused);
-            return id;
-        }
-        finally
-        {
-            foreach (var argument in spelled.Where(argument => argument != IntPtr.Zero))
-            {
-                Marshal.FreeHGlobal(argument);
-            }
-        }
-    }
-
-    [DllImport("libc", EntryPoint = "posix_spawn", SetLastError = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
-    private static extern int PosixSpawn(out int id, string path, IntPtr fileActions, IntPtr attributes, IntPtr[] arguments, IntPtr[] environment);
-
-    [DllImport("libc", EntryPoint = "waitpid", SetLastError = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
-    private static extern int WaitPid(int id, out int status, int options);
 
     /// <summary>
     /// A start that fails as a program being written does is made again until it succeeds, where the system refuses to

@@ -758,9 +758,10 @@ public sealed class ContainExecTests
     /// What a contained child's session holds that refuses to be asked to end, made to once what is left of the child's
     /// time limit has passed at the child's own end, has gone before the end of the child's output is looked for, on Linux
     /// and macOS: a killed process's end runs after the kill is answered, and a member still ending then - still holding
-    /// the output it inherited - was taken for a process the child left running. The member's slow end is stood in for: it
-    /// ends only once the runner first asks whether what the session's end killed has gone. The clock the bound is
-    /// measured by is moved past it once the session's wait for what it asked to end has begun.
+    /// the output it inherited - was taken for a process the child left running. The slow end of the group the member is
+    /// killed with is stood in for: it ends only once the runner first asks whether what the session's end killed has
+    /// gone. The clock the bound is measured by is moved past it once the session's wait for what it asked to end has
+    /// begun.
     /// </summary>
     [Fact]
     public async Task AContainedChildsSessionMadeToEndAtItsBound_HasGoneBeforeTheEndOfItsOutputIsLookedFor()
@@ -777,6 +778,8 @@ public sealed class ContainExecTests
         var holder = LearnedProcess.None;
         var limit = TimeSpan.FromHours(1);
 
+        ends.SlowGroups();
+
         try
         {
             // A table that reads nothing of the child's: what the session holds is found by its group, which needs none,
@@ -790,7 +793,6 @@ public sealed class ContainExecTests
                     {
                         if (LearnedProcess.In(line, "holder=") is { } found)
                         {
-                            ends.Slow(found.Id);
                             learned.TrySetResult(found);
                         }
                     },
@@ -809,7 +811,7 @@ public sealed class ContainExecTests
                 (0, false, $"holder={holder}\n", (string?)null, (string?)null),
                 (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld, result.Uncontained));
 
-            // The member's end was held back: what this test is about happened.
+            // The group's end was held back: what this test is about happened.
             Assert.Equal(1, ends.HeldBack);
             Assert.False(holder.Running, $"the holder {holder} outlived the session's end that killed it");
         }
@@ -817,6 +819,102 @@ public sealed class ContainExecTests
         {
             holder.TryEnding();
         }
+    }
+
+    /// <summary>
+    /// A member of a group that is ended which the group's listing does not show - one <c>/proc</c> hides, or whose reading
+    /// failed - is killed with the group, on Linux and macOS, never left held still: the group is held still as one before
+    /// it is listed, and killed as one once what it is listed to hold is kept. The member here is no descendant of the
+    /// group's leader - the walk of its tree never meets it - and the listing is stood in for, leaving it out.
+    /// </summary>
+    [Fact]
+    public async Task AGroupsMemberItsListingMisses_IsKilledWithTheGroup_NeverLeftHeldStill()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a process group is the C library's; on Windows a tree is ended by its handles and a job by itself.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var leader = Process.Start(TestHost.StartOf(Child("own-group-and-sleep", "300000")))!;
+        var missed = 0;
+
+        try
+        {
+            Assert.True(Until(() => GroupOf(leader.Id) == leader.Id), $"the process {leader.Id} never led a group of its own");
+
+            missed = Unreaped.Spawn("/bin/sleep", leader.Id, "sleep", "300");
+
+            Assert.Equal(leader.Id, GroupOf(missed));
+
+            using (var ended = new EndedProcesses(new ListingMisses(missed)))
+            {
+                Containment.EndTree(leader, group: true, ended);
+                await ended.GoneAsync("the group's leader to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+            }
+
+            // Its parent is this process, which has not reaped it: killed, it is a zombie; held still, it would be stopped.
+            Assert.True(Until(() => ProcessGoing.HasEnded(missed)), $"the member {missed} the listing missed was left held still");
+        }
+        finally
+        {
+            if (missed != 0)
+            {
+                Unreaped.Reap(missed);
+            }
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A zombie nobody reaps in a group asked to end never holds the wait for it, on Linux and macOS: once its leader has
+    /// gone the zombie is all the group holds, and a zombie has ended - its descriptors closed - whether or not anything
+    /// ever reaps it, so the end goes on to its kill long before the bound, which the clock it is measured by never reaches.
+    /// The zombie is this process's child, never reaped until the test ends, in the leader's group.
+    /// </summary>
+    [Fact]
+    public async Task AZombieNobodyReapsInAGroupAskedToEnd_NeverHoldsTheWaitForIt()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a process group is the C library's, and Windows keeps no zombie.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var leader = Process.Start(TestHost.StartOf(Child("own-group-and-sleep", "300000")))!;
+        var zombie = 0;
+
+        try
+        {
+            Assert.True(Until(() => GroupOf(leader.Id) == leader.Id), $"the process {leader.Id} never led a group of its own");
+
+            zombie = Unreaped.Spawn("/bin/sh", leader.Id, "sh", "-c", "exit 0");
+
+            Assert.True(Until(() => ProcessGoing.HasEnded(zombie)), $"the process {zombie} never ended");
+
+            var table = ProcessTableFactory.Create(new HostPlatform(), ContainingRunner());
+            var ending = await Containment.EndSessionAsync(leader.Id, table.ReadAsync, TimeSpan.FromHours(1), _ => { }, new TimerClock(), ProcessEnds.Machine, group: true)
+                .WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its group's end");
+        }
+        finally
+        {
+            if (zombie != 0)
+            {
+                Unreaped.Reap(zombie);
+            }
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>The machine's ends, but for a listing of a group that leaves out the process <c>missed</c> names: a member <c>/proc</c> hides, or whose reading failed.</summary>
+    private sealed class ListingMisses(int missed) : ProcessEnds
+    {
+        public override IEnumerable<int> Members(int group) => base.Members(group).Where(member => member != missed);
     }
 
     /// <summary>
