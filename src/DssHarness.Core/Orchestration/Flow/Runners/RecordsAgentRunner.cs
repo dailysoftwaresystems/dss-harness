@@ -127,7 +127,7 @@ public sealed class RecordsAgentRunner(
                     providers => $"tierConfig names no 'reporting' tier for the analyst to run on (defined: {(string.Join(", ", providers.Tiers) is { Length: > 0 } defined ? defined : "none")}); add one - \"reporting\": [a model to word the analyses] - under tierConfig"),
                 layout => Path.Combine(layout.AnalysisDirectory, call.Stamp),
                 // Its answer is held to the report it read beyond the schema: every citation the report's own, every step
-                // it names a row of the report's, every number its impact says one of its citations'.
+                // it names a row of the report's, and its impact a template of its citations, with no number of its own.
                 Holds: answer => FlowAnalysisEvidence.Problems(answer, call.Report),
                 Retries: null,
                 BackoffSeconds: null),
@@ -138,9 +138,16 @@ public sealed class RecordsAgentRunner(
             return Analysed(analysis: null, whyNot, ran.ExitCode, ran);
         }
 
-        return ran.Output is { } output && output.Deserialize<FlowAnalysis>(JsonStateFile.Options) is { } analysis
+        if (ran.Output is not { } output)
+        {
+            return Analysed(analysis: null, "the analyst's run completed without an answer", HarnessExit.CommandFailed, ran);
+        }
+
+        // The impacts are written by the tool from the templates the gate held: each placeholder the cited value in the
+        // report's unit. An answer the report does not hold is no analysis, and what its run spent is still said and kept.
+        return FlowAnalysisEvidence.Rendered(output, call.Report, out var problems) is { } rendered && rendered.Deserialize<FlowAnalysis>(JsonStateFile.Options) is { } analysis
             ? Analysed(analysis, whyNot: null, exitCode: null, ran)
-            : Analysed(analysis: null, "the analyst's run completed without an answer", HarnessExit.CommandFailed, ran);
+            : Analysed(analysis: null, problems.Count > 0 ? $"the analyst's answer is not held by the report it read: {string.Join("; ", problems)}" : "the analyst's run completed without an answer", HarnessExit.CommandFailed, ran);
 
         static HarnessException Unshipped()
             => new(HarnessExit.InternalError, "this build ships no report analyst: its agent, prompt and schema are incomplete in it");

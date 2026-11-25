@@ -384,44 +384,34 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The orchestrators topic says what an analysis's impact is held to: every number it says one of its citations',
-    /// read in the unit the report holds the cited member in - bare as written, joined to its unit converted exactly into
-    /// the member's, a compound duration as its sum, a kind no member is never, another currency by its sign, its code or
-    /// its name, a unit through Markdown's marks and a line's end, a currency only by the number's own phrase - its name,
-    /// code or sign directly before or after it - and never by a word farther from it, a sign before a currency's sign the
-    /// number's - a word an id only where the report or a citation holds it as one and every other parted so no number
-    /// goes unread, a colon or a slash between digits kept, and a word that reads as no one number refused, as the
-    /// evidence check holds it.
+    /// The orchestrators topic says what an analysis's impact is: a template with no number of its own, every figure a
+    /// placeholder of one of its citations that the tool writes as the cited value in the report's unit, as the report
+    /// writes it; a digit elsewhere refused but inside an id the report or a citation holds, and a placeholder past the
+    /// evidence or naming no number refused; and analysis.json keeping the written impact with its template beside it -
+    /// as the evidence check and the analysis's document hold them.
     /// </summary>
     [Fact]
-    public void OrchestratorsTopic_SaysEveryNumberAnImpactSays_WithItsUnitOrNot_IsACitationsValue()
+    public void OrchestratorsTopic_SaysAnImpactIsATemplate_WhoseFiguresTheToolWrites()
     {
+        var help = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
         Assert.Contains(
-            "and every number its impact says is one of its citations', read in the unit the report holds the cited member in (a "
-                + "time in seconds, the budget's reasoning in minutes, a cost in dollars, a cache share in percent, the rest a "
-                + "count): a number written bare is the cited value as written, one joined to its unit (3600s, 1.5h, 12k tokens, "
-                + "$0.02, US$0.02, 28%) is held where a cited member of its unit's kind holds it, converted exactly into that "
-                + "member's unit - 1.5h is a budget's 90 minutes, and 60 hours no wait's 60 seconds - numbers joined to units of "
-                + "one kind from the largest to the smallest (1h 30m, 1h30m, 2 min 5 s) are one value, their sum, and one of a "
-                + "kind no member is (2x, a size, another currency, by its sign, its ISO 4217 code in capitals or its name: "
-                + "€0.02, R$0.02, 0.02 EUR, 0.02 euros, 0.02 Canadian dollars) never. A unit is a number's through Markdown's "
-                + "emphasis and code marks (**1.5** hours) and through a line's end but where a list's item opens the next "
-                + "line, and never through a sentence's punctuation. A currency is a number's only by the number's own phrase - "
-                + "a currency's name, code or sign, behind a country's name of a closed list or not, directly before it, a colon "
-                + "between allowed (EUR: 0.02, Euros: 0.02, Canadian dollars: 0.02), or after it, beside it, in brackets or "
-                + "after the word in (0.02 (EUR), 0.02 in euros, 0.02 Canadian dollars, 0.02 US dollars) - and never by a "
-                + "currency's word farther from it in its sentence (in 'exited 20 and cost time and dollars' 20 is bare, and "
-                + "Wasted dollars: 0.02 is the report's dollars); per cent is a share in percent, and a currency whose "
-                + "name is an ordinary word (won, real) is read by its code, its sign or a country's name before it alone. A "
-                + "minus before a currency's sign is the number's sign (-$0.02), and a currency's code in capitals glued to a "
-                + "digit starts the number (USD0.40, EUR0.40). A word is an id only where the report holds it as one - a row's "
-                + "id or a name it is made of, a section's or a member's name - or a citation writes it as its path, and an "
-                + "id's digits are never read; every other word is parted at : + @ # / = - but a colon or a slash between two "
-                + "digits - and every other mark but hyphens, points and underscores, so a number joined to a word is read "
-                + "(queue:3600s, T+3600s, wait=3600s, queue—3600s—before) and windows-2022, net10.0 or claude-opus-4-5 stays "
-                + "whole and unread; and a word that starts as a number and reads as no one number (a date, a time of day, a "
-                + "ratio, a range: 2026-11-24, 10:30, 1/2, 3-5) is refused. An analysis cannot invent a measurement.",
-            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            "each step it names is a row of the report's steps; and its impact - the time and dollars it cost - states no "
+                + "number of its own: it is a template whose every figure is a placeholder naming one of its citations by its "
+                + "place in the evidence, {1} the first, which the tool writes as the cited value in the unit the report holds "
+                + "that member in, as the report writes it (a time in seconds, 412.3 s; the budget's reasoning in minutes, 90.0 "
+                + "minutes; a cost in dollars, 0.0200 USD; a cache share in percent, 28.0%; tokens, 180000 tokens; the rest a "
+                + "count, 2). A digit anywhere else in the impact is refused - but inside a word the report holds as an id, a "
+                + "row's id or a name it is made of, a section's or a member's name, or a citation writes as its path (c@1, a "
+                + "step named build2) - and so are a placeholder past its evidence and one whose citation holds no number the "
+                + "report measures. An analysis cannot invent a measurement: the only figures its impact says are the "
+                + "report's, written by the tool.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "analysis.json, the analysis - each impact as the tool wrote it, the template beside it as impactTemplate - or "
+                + "why it was refused, with what it cost;",
+            help,
             StringComparison.Ordinal);
     }
 

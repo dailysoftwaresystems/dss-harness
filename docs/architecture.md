@@ -3957,53 +3957,34 @@ cost the person's. The analyst's answer is held to the report by the structured-
 analyst's own conversation under the schema's one count of repairs - never a run asked anew: each citation names a
 section of the report (the schema's enum), the row by its `id`, the member by its path and the value the report holds
 there, read by its JSON kind - a number for its value, a text and a truth word for word - each step a point names is a
-row of the report's steps, and every number its impact says is one of its citations', read in the unit the report
-holds the cited member in. One owner holds the unit of every number the cited sections hold, beside the builder that
-writes them: `FlowRunReport.Units`, keyed by the member's path (`theRun.wallSeconds`, `theRun.budget.minutes`,
-`steps[].usd`, `totals.cacheSharePercent`; an entry of an object covering every number inside it, an entry of a text
-the unit of each number it writes bare, as a step's `ran` in seconds) and held to every number the builder writes by
-`FlowRunReportTests`. The impact is read as words by what the report and the citations say is an id, never by a guess at
-one: a word is an id only where the report holds it as one - a row's id, a name the id is made of as the row's own
-members hold it (a hotspot's item and path), a section's or a member's name - or a citation writes it as its path
-(`c@1.exit`), and an id is read whole, its `: + @ # /` and brackets included, never for a number (`c@1`,
-`slowestStep#2`, `hotspots:<item>:<class>:<path>`); an id that starts as a number is read as any word is, so no number
-goes unread. Every other word ends at every character but a letter, a digit, a mark, a hyphen, a point, an underscore,
-a comma, a colon or a slash between two digits and the signs a number is written with - space, `: + @ # / =`, a dash
-but the hyphen, a comparison, an arrow, a bracket, a quote, Markdown's marks - so `queue:3600s`, `T+3600s`,
-`wait=3600s` and `queue—3600s—before` each say a number, `b@2` says 2 where the report holds no such attempt, and
-`windows-2022`, `net10.0` or `claude-opus-4-5` stays whole and unread; a currency's sign or its ISO 4217 code in
-capitals that starts a number inside a word starts a word of its own, with the capitals before the sign that say whose
-currency it is (`cost$0.40`, `US$0.40`, `R$0.40`, `costUSD0.40`). A word is read once every character at its ends that is neither a letter nor a digit is read off it -
-Markdown's marks, a point, a sign - but where an amount starts: a digit, a sign or a point directly before one, the lead
-that names its unit directly before those (a currency's sign, with its capitals before or after it, `US$`, `$US`; its
-code glued to a digit, `USD0.40`; a multiple's sign) and a sign before the lead, the number's own (`-$0.02` is minus two
-cents) - for its numeric head (thousands grouped in threes) and its unit (`FlowUnit`: its kind and how many of the
-kind's base one of it is; a currency by its sign, its ISO 4217 code in capitals or its name, `US$`, `USD`, `$` and
-`dollars` the report's dollars, a dollar's name after another country's of a closed list - `Canadian dollars`,
-`New Zealand dollars` - a currency of its own, a name that is an ordinary English word - `won`, `real` - read only
-after a country's name and else by its code or its sign; `per cent` a share in percent), the words beside it naming the
-unit of a number written with none - a scale and a unit after it, of one word or two - beside meaning with nothing
-between them but space and Markdown's emphasis and code marks (`**1.5** hours`), a line's end space but where a list's
-item opens the next line (`60` ending a line and `hours` starting the next are 60 hours, `* 1h` and `* 30m` on two
-lines two values), so a sentence's punctuation sets them apart. A currency is a number's only by the number's own
-phrase, a closed grammar: a currency's name, code or sign, behind a country's name of the list or not (the longest the
-list holds), directly before it with a colon between allowed (`EUR 0.02`, `EUR: 0.02`, `Euros: 0.02`,
-`Canadian dollars: 0.02`) and no word farther before it read, or after it - beside it, after `in`, or in brackets that
-close on it (`0.02 EUR`, `0.02 in euros`, `0.02 (EUR)`, `0.02 Canadian dollars`, `0.02 U.S. dollars`); never a
-currency's word farther from it in its sentence, so in `c@1 exited 20 and cost time and dollars` 20 is bare and
-`Wasted dollars: 0.02` is the report's dollars, and two currencies in a number's phrase read as no one number
-(`$0.02 CAD`, `CAD $0.02`). A number written bare is the cited value as written, a number joined to its unit (`3600s`,
-`1.5h`, `12k tokens`, `$0.02`, `28%`) is held where a cited member of its unit's kind holds it, converted exactly into
-that member's unit - `1.5h` is a budget's 90 minutes, and `60 hours` no wait's 60 seconds - numbers joined to units of
-one kind from the largest to the smallest, glued or beside each other (`1h30m`, `1h 30m`, `2 min 5 s`), are one
-value held as their sum, one of a kind no member is (`2x`, a size, another currency: `€0.02`, `0.02 EUR`,
-`0.02 euros`) is refused, and a word that starts as a number and reads as no one number (a date, a time of day, a
-ratio, a range: `2026-11-24`, `10:30`, `1/2`, `3-5`) is refused as such.
+row of the report's steps, and its impact - the time and dollars it cost - states no number of its own. An impact is
+a template: every figure it states is a placeholder naming one of its pain point's citations by its place in the
+evidence, `{1}` the first, and once the gate holds the answer the tool writes each as the cited value in the unit the
+report holds that member in, as the report itself writes it (`FlowAnalysisEvidence.Rendered`, `FlowRunReport.SaidIn`,
+which says a value by the report's own forms: `412.3 s`, `90.0 minutes`, `0.0200 USD`, `28.0%`, `180000 tokens`, a
+count as written). One owner holds the unit of every number the cited sections hold, beside the builder that writes
+them: `FlowRunReport.Units`, keyed by the member's path (`theRun.wallSeconds`, `theRun.budget.minutes`, `steps[].usd`,
+`totals.cacheSharePercent`, `steps[].tokens`; an entry of an object covering every number inside it but where one of
+its own says otherwise, an entry of a text the unit of the one number it holds whole, as a step's `ran` in seconds)
+and held to every number the builder writes by `FlowRunReportTests`. A placeholder names a citation that holds a number
+the report measures - a number, or a text that is one number whole, of a member the table gives a unit - so one past
+its evidence (`{3}` beside two citations), `{0}`, and one that names a text of words are refused. A digit anywhere
+else in the impact is a number of its own and refused, once for each word it stands in, whatever wraps it or joins it
+(`60`, `3600s`, `q1:3600s`, `(20)`, `$0.02`, `½`, `{1}0`) - but inside a word the report holds as an id: a row's id, a
+name the id is made of as the row's own members hold it (a hotspot's item and path), a section's or a member's name,
+or a path a citation writes (`c@1.exit`), each read whole where no letter, digit, mark or underscore joins it - nor a
+hyphen, a point or a comma with a letter or a digit beyond - and kept as an id only where it holds a digit and starts
+with a letter, so `c@1`, `slowestStep#2` and a step named `build2` or `windows-2022` are written as the report names
+them while `c@2`, `build3` or `build2-fast` the report holds as no id are refused. No word of the impact is read for a
+unit or a currency: the figure and its unit are the tool's, so an analysis cannot invent a measurement by how it writes
+one. `analysis.json` keeps each impact as the tool wrote it and, beside it, its template (`impactTemplate`);
+`analysis.md`, the text and `--json` say the written one, and an answer the report does not hold is no analysis - the
+run's spend still said and kept.
 Every rule a text must keep is the schema's (a pattern for every text, an enum for every closed list), and a run with
 nothing to change is analysed as one, no pain point named. What a run of the analyst leaves is kept under
 `analysis/<stamp>/` whatever it answered -
-`report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis or why it was refused
-and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
+`report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis - each impact as the tool
+wrote it, its template beside it - or why it was refused and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
 it cost, the `--json` document's `record` the same directory the text's lines name wherever any record is; where no
 analyst ran, the command says nothing was written. What a run that was begun spent is said however it ended - a client
 that throws after paid turns, or an interrupt that stops it (130), is why no analysis holds, its spend and the model its

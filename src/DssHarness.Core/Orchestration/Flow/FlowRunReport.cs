@@ -275,7 +275,7 @@ public static partial class FlowRunReport
 
                 case JsonObject dollars when key == "dollarsBy":
                     totalsSaid.Add($"dollars by {dollars["key"]!.GetValue<string>()}:");
-                    totalsSaid.AddRange(dollars["groups"]!.AsArray().Select(group => $"  {group!["group"]!.GetValue<string>()}: {UsdOf(group["usd"]!.GetValue<double>())}, {Said(group["tokens"])} tokens"));
+                    totalsSaid.AddRange(dollars["groups"]!.AsArray().Select(group => $"  {group!["group"]!.GetValue<string>()}: {UsdOf(group["usd"]!.GetValue<double>())}, {TokensOf(group["tokens"]!.AsValue())}"));
                     break;
 
                 default:
@@ -291,7 +291,7 @@ public static partial class FlowRunReport
 
         if (report["criticalPath"] is JsonArray { Count: > 0 } critical)
         {
-            yield return new("critical path (what a faster run must shorten)", [.. critical.Select(link => $"{link!["step"]!.GetValue<string>()}: {SecondsOf(link["seconds"]!.GetValue<double>())} s" + (link["waited"] is { } waited ? $", waited {waited.GetValue<string>()}" : string.Empty))]);
+            yield return new("critical path (what a faster run must shorten)", [.. critical.Select(link => $"{link!["step"]!.GetValue<string>()}: {SecondsSaid(link["seconds"]!.GetValue<double>())}" + (link["waited"] is { } waited ? $", waited {waited.GetValue<string>()}" : string.Empty))]);
         }
 
         if (report["errors"] is JsonArray { Count: > 0 } errors)
@@ -361,7 +361,7 @@ public static partial class FlowRunReport
     private static string SaidAs(string key, JsonNode? node)
         => node is JsonValue value && value.TryGetValue<double>(out var number)
             ? key == "usd" ? UsdOf(number)
-                : key.EndsWith("Seconds", StringComparison.Ordinal) ? $"{SecondsOf(number)} s"
+                : key.EndsWith("Seconds", StringComparison.Ordinal) ? SecondsSaid(number)
                 : Said(node)
             : Said(node);
 
@@ -388,7 +388,7 @@ public static partial class FlowRunReport
         => (budget["uncounted"] is { } uncounted
                 ? $"at least {UsdOf(budget["usd"]!.GetValue<double>())} (the rest is not known: {uncounted.GetValue<string>()})"
                 : UsdOf(budget["usd"]!.GetValue<double>()))
-            + $", {budget["tokens"]!.GetValue<long>().ToString(CultureInfo.InvariantCulture)} tokens, {budget["minutes"]!.GetValue<double>().ToString("0.0", CultureInfo.InvariantCulture)} minutes of reasoning";
+            + $", {TokensOf(budget["tokens"]!.AsValue())}, {MinutesOf(budget["minutes"]!.GetValue<double>())} of reasoning";
 
     /// <summary>When the run's records were last written: its last event's time, else its newest step's end, else its start.</summary>
     private static DateTimeOffset? LastRecordOf(FlowRunReportSource source)
@@ -1129,7 +1129,7 @@ public static partial class FlowRunReport
 
         foreach (var slow in whole.OrderByDescending(step => step.Whole).ThenBy(step => step.Step.Instance, StringComparer.Ordinal).Take(thresholds.Top).Where(step => step.Whole > 0))
         {
-            yield return new("slowestStep", [slow.Step.Instance], $"{slow.Step.Instance} took {SecondsOf(slow.Whole)} s of run time");
+            yield return new("slowestStep", [slow.Step.Instance], $"{slow.Step.Instance} took {SecondsSaid(slow.Whole)} of run time");
         }
 
         foreach (var dear in steps.OrderByDescending(CostOf).ThenBy(step => step.Instance, StringComparer.Ordinal).Take(thresholds.Top).Where(step => CostOf(step) > 0))
@@ -1156,13 +1156,13 @@ public static partial class FlowRunReport
 
         if (longestPerson.question is { } person)
         {
-            yield return new("longestWaitForAPerson", [person.Id], $"{person.Id} waited {SecondsOf(longestPerson.Waited!.Value.TotalSeconds)} s for its answer");
+            yield return new("longestWaitForAPerson", [person.Id], $"{person.Id} waited {SecondsSaid(longestPerson.Waited!.Value.TotalSeconds)} for its answer");
         }
 
         foreach (var queued in whole.Where(step => step.Whole > 0 && (step.Step.Measure?.Waited ?? []).Any(wait => FlowWaits.ForRoom(wait.Cause) && wait.Seconds / step.Whole * 100 > thresholds.QueueSharePercent)).OrderBy(step => step.Step.Instance, StringComparer.Ordinal))
         {
             var waits = string.Join(", ", queued.Step.Measure!.Waited!.Where(wait => FlowWaits.ForRoom(wait.Cause)).Select(WaitSaid));
-            yield return new("queueWait", [queued.Step.Instance], $"{queued.Step.Instance} waited {waits}, over {thresholds.QueueSharePercent.ToString(CultureInfo.InvariantCulture)}% of its {SecondsOf(queued.Whole)} s");
+            yield return new("queueWait", [queued.Step.Instance], $"{queued.Step.Instance} waited {waits}, over {thresholds.QueueSharePercent.ToString(CultureInfo.InvariantCulture)}% of its {SecondsSaid(queued.Whole)}");
         }
 
         foreach (var cold in steps.SelectMany(step => (step.Measure?.Attempts ?? []).Select(attempt => (step, attempt)))
@@ -1171,7 +1171,7 @@ public static partial class FlowRunReport
                      .ThenBy(attempt => attempt.attempt.N))
         {
             var tokens = cold.attempt.Tokens!;
-            yield return new("cacheShare", [cold.step.Instance], $"{cold.step.Instance} attempt {cold.attempt.N.ToString(CultureInfo.InvariantCulture)} read {ShareOf(tokens.CacheReadTokens, tokens.InputTokens + tokens.CacheReadTokens).ToString("0.0", CultureInfo.InvariantCulture)}% of its input from the cache ({tokens.CacheReadTokens.ToString(CultureInfo.InvariantCulture)} of {(tokens.InputTokens + tokens.CacheReadTokens).ToString(CultureInfo.InvariantCulture)} tokens)");
+            yield return new("cacheShare", [cold.step.Instance], $"{cold.step.Instance} attempt {cold.attempt.N.ToString(CultureInfo.InvariantCulture)} read {PercentOf(ShareOf(tokens.CacheReadTokens, tokens.InputTokens + tokens.CacheReadTokens))} of its input from the cache ({tokens.CacheReadTokens.ToString(CultureInfo.InvariantCulture)} of {(tokens.InputTokens + tokens.CacheReadTokens).ToString(CultureInfo.InvariantCulture)} tokens)");
         }
 
         // A step that read past the depth of one graph answer: its query was too wide, the pages it walked saying so.
@@ -1242,13 +1242,29 @@ public static partial class FlowRunReport
     private static string SecondsOf(double seconds)
         => seconds.ToString("0.0", CultureInfo.InvariantCulture);
 
+    /// <summary>Seconds said with one decimal and their unit, as every duration in a report's sentences is: <c>412.3 s</c>.</summary>
+    private static string SecondsSaid(double seconds)
+        => $"{SecondsOf(seconds)} s";
+
+    /// <summary>Minutes said with one decimal and their unit, as the budget's reasoning is: <c>90.0 minutes</c>.</summary>
+    private static string MinutesOf(double minutes)
+        => $"{minutes.ToString("0.0", CultureInfo.InvariantCulture)} minutes";
+
+    /// <summary>A share said with one decimal and its sign, as a cache share is: <c>28.0%</c>.</summary>
+    private static string PercentOf(double share)
+        => $"{share.ToString("0.0", CultureInfo.InvariantCulture)}%";
+
+    /// <summary>A count of tokens said as the count is and the word, as the budget's and a dollars group's are: <c>180000 tokens</c>.</summary>
+    private static string TokensOf(JsonValue tokens)
+        => $"{Said(tokens)} tokens";
+
     /// <summary>
     /// One wait as every row says it: its seconds on its cause and - where the cause is the machine's queue - the class
     /// of the queue and each tenant it waited behind, so a reader can tell its own run's units from another
     /// repository's.
     /// </summary>
     private static string WaitSaid(FlowStepWait wait)
-        => $"{SecondsOf(wait.Seconds)} s on {wait.Cause}"
+        => $"{SecondsSaid(wait.Seconds)} on {wait.Cause}"
             + (wait.Ahead is { Count: > 0 } ahead
                 ? $" ({string.Join(", ", ahead.Select(standing => $"{QueueReports.NameOf(standing.Class)}, behind {string.Join(", ", standing.Tenants.Select(tenant => $"'{tenant}'"))}"))})"
                 : string.Empty);

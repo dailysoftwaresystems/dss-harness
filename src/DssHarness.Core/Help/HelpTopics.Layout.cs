@@ -112,8 +112,8 @@ public static partial class HelpTopics
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AnalysisDirectoryName}/",
             "ignored; one directory for each call of analyze-orchestrator-report whose analyst ran: the report it read "
             + $"({OrchestratorLayout.AnalysisReportFileName}, the bytes its hash names), the files of its analyst's attempt (its stream), "
-            + $"the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/), {OrchestratorLayout.AnalysisFileName} - the analysis, or why it was refused, "
-            + $"with the report's hash and what it cost - and {OrchestratorLayout.AnalysisMarkdownFileName} where an analysis was given; the engine never reads it"),
+            + $"the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/), {OrchestratorLayout.AnalysisFileName} - the analysis, each impact as the tool "
+            + $"wrote it with its template beside it, or why it was refused, with the report's hash and what it cost - and {OrchestratorLayout.AnalysisMarkdownFileName} where an analysis was given; the engine never reads it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}",
             "ignored; a run's web search: what each source found once for the run, and each query it answered, which the "
             + "same query again is answered from; written by every client whose step searches"),

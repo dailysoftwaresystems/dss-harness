@@ -592,10 +592,11 @@ public sealed class FlowRunReportTests
 
     /// <summary>
     /// Every number the sections an analysis may cite hold has its unit in the report's one table of units, and every
-    /// entry of the table is a member the report writes: a number the builder writes with no unit would be held to a
-    /// citation as written alone, never converted, and an entry no member is names a unit for nothing - so a member added,
-    /// renamed or moved without its unit is caught here. A duration is in seconds but the budget's reasoning in minutes,
-    /// a cost in dollars, a cache share in percent, a text's bare numbers in its member's unit, and the rest a count.
+    /// entry of the table is a member the report writes: a number the builder writes with no unit is one no placeholder of
+    /// an impact could write, and an entry no member is names a unit for nothing - so a member added, renamed or moved
+    /// without its unit is caught here. A duration is in seconds but the budget's reasoning in minutes, a cost in dollars,
+    /// a cache share in percent, tokens in tokens - a graph's among them, but its calls and the searches counts - a text
+    /// that is one number whole in its member's unit, and the rest a count.
     /// </summary>
     [Fact]
     public void EveryNumberACitedSectionHolds_HasItsUnitInTheReportsOneTable()
@@ -621,7 +622,7 @@ public sealed class FlowRunReportTests
                 [
                     steps[0] with
                     {
-                        Graph = JsonNode.Parse("""{"mode":"tools","calls":3,"servedTokens":1200,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3}}"""),
+                        Graph = JsonNode.Parse("""{"mode":"tools","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"calls":3,"servedTokens":1200,"wholeFileReads":{"count":1,"tokens":90},"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
                         Measure = steps[0].Measure! with { Ran = 10 },
                     },
                     steps[1],
@@ -685,11 +686,11 @@ public sealed class FlowRunReportTests
         Assert.DoesNotContain(numbers, path => FlowRunReport.UnitOf(path) is null);
         Assert.All(FlowRunReport.Units.Keys, entry => Assert.Contains(numbers.Concat(texts), path => Under(path, entry)));
 
-        string[] pinned = ["theRun.pausedSeconds", "theRun.budget.minutes", "totals.dollarsBy.groups[].usd", "totals.cacheSharePercent", "steps[].graph.pack.tokens", "steps[].ran", "errors[].exception.stack[].line", "convergence.items[].classes[].cellsPinned"];
+        string[] pinned = ["theRun.pausedSeconds", "theRun.budget.minutes", "totals.dollarsBy.groups[].usd", "totals.cacheSharePercent", "steps[].graph.pack.tokens", "steps[].graph.calls", "totals.tokens.cacheRead", "totals.tokens.searches", "steps[].ran", "convergence.hotspots[].touches", "errors[].exception.stack[].line", "convergence.items[].classes[].cellsPinned"];
 
         Assert.All(pinned, path => Assert.Contains(path, numbers.Concat(texts)));
         Assert.Equal(
-            [FlowUnit.Seconds, FlowUnit.Minutes, FlowUnit.Dollars, FlowUnit.Percent, FlowUnit.Count, FlowUnit.Seconds, FlowUnit.Count, FlowUnit.Count],
+            [FlowUnit.Seconds, FlowUnit.Minutes, FlowUnit.Dollars, FlowUnit.Percent, FlowUnit.Tokens, FlowUnit.Count, FlowUnit.Tokens, FlowUnit.Count, FlowUnit.Seconds, FlowUnit.Count, FlowUnit.Count, FlowUnit.Count],
             pinned.Select(FlowRunReport.UnitOf));
     }
 
