@@ -3973,29 +3973,33 @@ one of its own says otherwise, an entry of a text the unit of the one number it 
 seconds), its every count's noun and every label pinned, and held to every number the builder writes by
 `FlowRunReportTests`. A placeholder names a citation that holds a number the report measures - a number, or a text
 that is one number whole, of a member the table gives a unit - so one past its evidence (`{3}` beside two citations),
-`{0}`, and one that names a text of words are refused; and it stands apart: a letter, a number, a currency's sign,
-`%` or another placeholder - whose figure would run into its own - touching it on either side, or a sign before it
-(`${1}`, `{1}h`, `{1}k`, `{1}%`, `{1}{2}`, `-{1}`), is refused, only what touches it read. A digit anywhere else is a number of its own and refused, once for each word it stands
-in, whatever wraps it or joins it (`60`, `3600s`, `q1:3600s`, `(20)`, `$0.02`, `½`, `{1}0`), in the impact and as much
-in the summary, each pain point's title and cause, and each thing noted and why, which hold no placeholder - but inside
-an id. The ids are built once for each check, by one owner (`FlowAnalysisEvidence`'s `Names`): a row's id, a name the id
-is made of as the row's own members hold it (a hotspot's item and path), a section's or a member's name, every word the
-report's texts hold - each text parted at what no id is written with (white space, a quote, a parenthesis, a colon,
-a slash, a comma) and read from its first letter or digit to its last, or to a `]` closing a `[` it holds, so a failed
-attempt's `src/Parser2.cs(12,5): error CS0246` holds `Parser2.cs` and `CS0246`, a signal's `leg 'win-arm64'` and
-`[win-arm64]` hold `win-arm64` and a fallback's `moved from glm-4.6.` holds `glm-4.6`; the report's texts are parted
-so, never the analyst's - and the paths the citations write
-(`c@1.exit`): any citation's in the summary and the noted, which belong to no pain point, and the pain point's own in
-its title, cause and impact. A name of the analysis is read whole where no letter, digit, mark or underscore joins it -
-nor a hyphen, a point or a comma with a letter or a digit beyond - and is an id only where it holds a digit and starts
-with a letter, so `c@1`, `slowestStep#2` and a step named `build2` or `windows-2022` are written as the report names
-them while `c@2`, `build3` or `build2-fast` the report holds nowhere are refused, and a word that starts with a digit -
-a time, a date, a version, whatever text of the report holds it - is never one. The recommendation is not read: it
-states the values it proposes - a configuration key's or a workflow key's exact text - and is never a measurement. No
-word of the analysis is read for a unit or a currency: the figure and its unit are the tool's, so its checked members
-cannot invent a measurement by how they write one. `analysis.json` keeps each impact as the tool wrote it and, beside it, its template
-(`impactTemplate`); `analysis.md`, the text and `--json` say the written one, and an answer the report does not hold is
-no analysis - the run's spend still said and kept.
+`{0}`, and one that names a text of words are refused; and it stands apart: a letter, a number, a currency's sign, `%`
+or another placeholder - whose figure would run into its own - touching it on either side, or a sign before it
+(`${1}`, `{1}h`, `{1}k`, `{1}%`, `{1}{2}`, `-{1}`), is refused, only what touches it read. A digit anywhere else is a
+number of its own and refused, once for each word it stands in, whatever wraps it or joins it (`60`, `3600s`,
+`q1:3600s`, `(20)`, `$0.02`, `½`, `{1}0`), in the impact and as much in the summary, each pain point's title and
+cause, and each thing noted and why, which hold no placeholder - but inside an id. The ids are built once for each
+check, by one owner (`FlowAnalysisEvidence`'s `Names`), and are the words that start with a letter and hold a digit
+among: a row's id, a name the id is made of as the row's own members hold it (a hotspot's item and path), a section's
+or a member's name; every word of the report's texts (`WordsIn`) - each run of a text between white space, whole
+(`Sizes/ParserTest.ReadsItsForm/1`, `src/3rdparty/zlib/inflate.c`, `C++20`), and each piece of such a run between the
+characters no id is written with, all but a letter, a digit, a mark, `_`, `-`, `.`, `@`, `#`, `[` and `]` (a quote, a
+parenthesis, a colon, a slash, a backslash, a plus, a comma), each read from its first letter or digit to its last, or
+to a `]` closing a `[` it holds (`Inner`), so a failed attempt's `src/Parser2.cs(12,5): error CS0246` holds
+`Parser2.cs` and `CS0246`, a signal's `leg 'win-arm64'` and `[win-arm64]` hold `win-arm64` and a fallback's
+`moved from glm-4.6.` holds `glm-4.6`; and the paths the citations write (`c@1.exit`): any citation's in the summary
+and the noted, which belong to no pain point, and the pain point's own in its title, cause and impact. A word of the
+analysis - its run between white space - is read whole first, its ends read off the same way, and is an id where one
+is it whole, written as the report wrote it (`_C++20_`, `**C++20**`); else it is read through, a name in it an id
+where it stands whole - no letter, digit, mark or underscore joining it, nor a hyphen, a point or a comma with a
+letter or a digit beyond - so `c@1`, `slowestStep#2` and a step named `build2` or `windows-2022` are written as the
+report names them while `c@2`, `build3` or `build2-fast` the report holds nowhere are refused, and a word that starts
+with a digit - a time, a date, a version, whatever text of the report holds it - is never one. The recommendation is
+not read: it states the values it proposes - a configuration key's or a workflow key's exact text - and is never a
+measurement. No word of the analysis is read for a unit or a currency: the figure and its unit are the tool's, so its
+checked members cannot invent a measurement by how they write one. `analysis.json` keeps each impact as the tool wrote
+it and, beside it, its template (`impactTemplate`); `analysis.md`, the text and `--json` say the written one, and an
+answer the report does not hold is no analysis - the run's spend still said and kept.
 Every rule a text must keep is the schema's (a pattern for every text, an enum for every closed list), and a run with
 nothing to change is analysed as one, no pain point named. What a run of the analyst leaves is kept under
 `analysis/<stamp>/` whatever it answered -

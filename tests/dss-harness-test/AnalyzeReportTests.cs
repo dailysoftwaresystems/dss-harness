@@ -803,6 +803,72 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
+    /// A word of the report's texts is held whole between white space as well as in its pieces, and a word of the
+    /// analysis is read whole first: a parameterized test's id, a first error's file under a directory that starts with a
+    /// digit, an SDK's header path and a compiler's C++20 - each a word whose pieces after a slash, a backslash or a plus
+    /// start with a digit - are written as the report holds them in a title, a cause, the summary and a thing noted, in
+    /// Markdown's marks too, while a number of the analysis's own, a word the report holds nowhere and a figure glued to a
+    /// placeholder are still refused.
+    /// </summary>
+    [Fact]
+    public void AWordOfTheReportsTexts_IsHeldWhole_AndTheAnalysissWordIsReadWholeFirst()
+    {
+        const string Parameterized = "Sizes/ParserTest.ReadsItsForm/1";
+        const string Inflate = "src/3rdparty/zlib/inflate.c";
+        const string Sdk = @"C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\winnt.h";
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with
+        {
+            Flow = source.Flow with
+            {
+                Steps = [.. source.Flow.Steps.Select(step => step.Instance switch
+                {
+                    "b" => step with { Measure = step.Measure! with { Attempts = [step.Measure.Attempts![0] with { FirstError = new JsonObject { ["file"] = Sdk, ["line"] = 3 } }, step.Measure.Attempts[1]] } },
+                    "c" => step with
+                    {
+                        Measure = step.Measure! with
+                        {
+                            Attempts = [step.Measure.Attempts![0] with { FirstError = new JsonObject { ["id"] = Parameterized, ["file"] = Inflate, ["line"] = 42, ["message"] = "designated initializers are a C++20 extension" } }],
+                        },
+                    },
+                    _ => step,
+                })],
+            },
+        });
+        var summary = $"Most of the run went to c, whose test {Parameterized} fails on a **C++20** feature.";
+        JsonNode Analysis(string summary, string impact, string cause)
+            => new JsonObject
+            {
+                ["summary"] = summary,
+                ["painPoints"] = new JsonArray(new JsonObject
+                {
+                    ["title"] = $"Fix {Parameterized} and its _C++20_ use",
+                    ["severity"] = "high",
+                    ["where"] = new JsonArray("c", "b"),
+                    ["evidence"] = JsonNode.Parse($"[{Cited("criticalPath", "b", "seconds", "30.0")}]"),
+                    ["impact"] = impact,
+                    ["cause"] = cause,
+                    ["recommendation"] = "r",
+                }),
+                ["noted"] = new JsonArray(new JsonObject { ["what"] = $"c@1 stops in `{Inflate}`.", ["why"] = $"the records say only that the code uses a C++20 extension, read from {Sdk}" }),
+            };
+
+        // Each is a text of the report alone: no row, section or member of it is named so.
+        Assert.Equal(
+            [Sdk, Parameterized, Inflate, "designated initializers are a C++20 extension"],
+            [report["errors"]![0]!["firstError"]!["file"]!.GetValue<string>(), .. new[] { "id", "file", "message" }.Select(member => report["errors"]![1]!["firstError"]![member]!.GetValue<string>())]);
+        Assert.Empty(FlowAnalysisEvidence.Problems(Analysis(summary, "c@1 failed after b waited {1}.", $"c@1 stops in {Inflate} and b@1 in {Sdk}."), report));
+        Assert.Equal(
+            [
+                $"summary: writes '3600', {Free}",
+                $"painPoints[0].impact: {{1}} touches '0' after it - {Touches}",
+                $"painPoints[0].impact: writes '{{1}}0.', {OfItsOwn}",
+                $"painPoints[0].cause: writes 't+3600', {Free}",
+            ],
+            FlowAnalysisEvidence.Problems(Analysis($"{summary} It lost 3600 s.", "c@1 failed after b waited {1}0.", $"c@1 stops in {Inflate} and b@1 in {Sdk} at t+3600 s."), report));
+    }
+
+    /// <summary>
     /// The paths the citations write are ids of the members they stand for: the summary and what was noted, which belong
     /// to no pain point, are read with every citation's, and a pain point's title and cause with its own - so c@1.exit,
     /// which the first point cites, is written whole in the summary, a thing noted and why, and the first point's title and

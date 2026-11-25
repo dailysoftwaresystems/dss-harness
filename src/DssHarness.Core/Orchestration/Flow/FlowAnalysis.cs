@@ -180,8 +180,9 @@ public sealed record FlowNoted(string What, string Why);
 /// which the tool writes as the cited value with the unit the report holds that member in, as the report writes it - a
 /// count with what it counts, a number that is no amount after its label (<see cref="FlowRunReport.SaidIn"/>, its unit
 /// the one <see cref="FlowRunReport.Units"/> holds). A digit anywhere else in it is a number of its own and refused, but
-/// inside an id - a word the report holds anywhere, its texts included, that starts with a letter and holds a digit, or
-/// a path a citation writes (<see cref="Names"/>); and so are a placeholder past its evidence, one whose citation holds
+/// inside an id - a word the report holds anywhere that starts with a letter and holds a digit, a name of its rows,
+/// sections and members or a word of its texts, whole between white space or a piece of one, or a path a citation
+/// writes (<see cref="Names"/>), the analysis's own word read whole first; and so are a placeholder past its evidence, one whose citation holds
 /// no number of the report's, and one a letter, a number, a currency's sign, <c>%</c> or another placeholder touches, or
 /// a sign before it. The summary, each pain point's title and cause, and each thing noted hold no number of their own
 /// either, but in an id; the recommendation is not read - it states the values it proposes, a key's exact text, and is
@@ -304,11 +305,14 @@ public static class FlowAnalysisEvidence
     /// <summary>
     /// <paramref name="text"/> as the tool writes it, where it is an impact: its text as the analyst wrote it, and each
     /// placeholder the value of the citation it names, said with that value's unit (<see cref="FlowRunReport.SaidIn"/>).
-    /// Every numeral it writes of its own - outside a placeholder of an impact, and outside an id <paramref name="names"/>
-    /// holds - is a problem, once for the word it stands in, for an analysis's figures are its impacts' placeholders and
-    /// its citations; so is, in an impact, a placeholder that names no citation of <paramref name="cited"/>, one whose
-    /// citation holds no number of the report's, and one a letter, a number, a currency's sign or <c>%</c> touches - or a
-    /// sign before it - which would make the figure another measure than the one the tool writes. A placeholder whose
+    /// Each of its words is read whole first - its run between white space, from its first letter or digit to its last
+    /// (<see cref="Inner"/>) - and is an id where <paramref name="names"/> holds it so, as the report wrote it
+    /// (<c>_C++20_</c>, <c>`src/3rdparty/zlib/inflate.c`.</c>); else it is read through, each name that stands whole in
+    /// it an id. Every numeral it writes of its own - outside a placeholder of an impact, and outside an id - is a
+    /// problem, once for the word it stands in, for an analysis's figures are its impacts' placeholders and its citations;
+    /// so is, in an impact, a placeholder that names no citation of <paramref name="cited"/>, one whose citation holds no
+    /// number of the report's, and one a letter, a number, a currency's sign, <c>%</c> or another placeholder touches - or
+    /// a sign before it - which would make the figure another measure than the one the tool writes. A placeholder whose
     /// citation the report does not hold says nothing more: its citation's own problem is said at its path.
     /// </summary>
     /// <param name="text">The member as the analyst wrote it.</param>
@@ -320,9 +324,29 @@ public static class FlowAnalysisEvidence
     {
         var written = new StringBuilder(text.Length);
         var said = 0;
+        var whole = (Start: -1, End: -1);
 
         for (var at = 0; at < text.Length;)
         {
+            if (!char.IsWhiteSpace(text[at]) && (at == 0 || char.IsWhiteSpace(text[at - 1])))
+            {
+                var end = at;
+
+                while (end < text.Length && !char.IsWhiteSpace(text[end]))
+                {
+                    end++;
+                }
+
+                whole = Inner(text, at, end) is var inner && inner.End > inner.Start && names.Holds(text, inner.Start, inner.End) ? inner : (-1, -1);
+            }
+
+            if (at == whole.Start)
+            {
+                written.Append(text, at, whole.End - at);
+                at = whole.End;
+                continue;
+            }
+
             if (names.At(text, at) is > 0 and var name)
             {
                 written.Append(text, at, name);
@@ -592,6 +616,29 @@ public static class FlowAnalysisEvidence
             _ => [],
         };
 
+    /// <summary>
+    /// Where the word of <paramref name="text"/> from <paramref name="start"/> to <paramref name="end"/> starts and ends
+    /// once what is neither a letter nor a digit is read off its start and its end - but a <c>]</c> that closes a <c>[</c>
+    /// it holds: <c>(CS0246:</c> is <c>CS0246</c>, <c>[win-arm64]</c> is <c>win-arm64</c>, <c>_C++20_</c> is
+    /// <c>C++20</c> and <c>items[1]</c> itself; it starts where it ends where it holds no letter or digit.
+    /// </summary>
+    private static (int Start, int End) Inner(string text, int start, int end)
+    {
+        while (start < end && !char.IsLetterOrDigit(text[start]))
+        {
+            start++;
+        }
+
+        var opened = start < end ? text.IndexOf('[', start, end - start) : -1;
+
+        while (end > start && !(char.IsLetterOrDigit(text[end - 1]) || (text[end - 1] == ']' && opened >= 0 && opened < end - 1)))
+        {
+            end--;
+        }
+
+        return (start, end);
+    }
+
     /// <summary>Whether <paramref name="character"/> is one a word keeps whatever stands around it: a letter, a digit, a mark, or an underscore or another joining punctuation.</summary>
     private static bool Whole(char character)
         => char.IsLetterOrDigit(character)
@@ -609,11 +656,12 @@ public static class FlowAnalysisEvidence
     /// <summary>
     /// The words every member the analysis is checked in is read with as ids, their digits never a number of its own:
     /// what the report holds as a name - each row's id and each name it is made of, as the row's own members hold them (a
-    /// hotspot's item, class and path), every section's and member's name, and every word its texts hold (a diagnostic's
-    /// <c>CS0246</c> and <c>Parser2.cs</c>, a leg's <c>win-arm64</c>, a model's <c>glm-4.6</c>) - and the paths the
-    /// citations write (<see cref="PathsOf"/>). A name is kept where it holds a numeral and starts with a letter, once what
-    /// is neither a letter nor a digit is read off its start: a name that starts as a number is no id, so no number - a
-    /// duration, a date, a version - passes as one.
+    /// hotspot's item, class and path), every section's and member's name, and every word its texts hold, whole between
+    /// white space and in its pieces (<see cref="WordsIn"/>: a test's <c>Sizes/ParserTest.ReadsItsForm/1</c>, a file's
+    /// <c>src/3rdparty/zlib/inflate.c</c>, a diagnostic's <c>CS0246</c> and <c>Parser2.cs</c>, a leg's <c>win-arm64</c>, a
+    /// model's <c>glm-4.6</c>) - and the paths the citations write (<see cref="PathsOf"/>). A name is kept where it holds a
+    /// numeral and starts with a letter, once what is neither a letter nor a digit is read off its start: a name that
+    /// starts as a number is no id, so no number - a duration, a date, a version - passes as one.
     /// </summary>
     private sealed class Names
     {
@@ -625,8 +673,8 @@ public static class FlowAnalysisEvidence
 
         /// <summary>
         /// What <paramref name="report"/> holds as names: each row's id and the names it is made of, every section's and
-        /// member's name, and every word its texts hold (<see cref="WordsIn"/>) - a diagnostic's code and file, a leg a
-        /// signal names, a model a fallback left.
+        /// member's name, and every word its texts hold, whole and in its pieces (<see cref="WordsIn"/>) - a test's id, a
+        /// diagnostic's code and file, a leg a signal names, a model a fallback left.
         /// </summary>
         public static Names Of(JsonNode report)
         {
@@ -717,43 +765,78 @@ public static class FlowAnalysisEvidence
                 || !(Whole(text[end]) || (text[end] is '-' or '.' or ',' && end + 1 < text.Length && char.IsLetterOrDigit(text[end + 1])));
 
         /// <summary>
-        /// The words <paramref name="text"/> holds: its runs of what an id is written with - a letter, a digit, a mark, an
-        /// underscore, and <c>-</c>, <c>.</c>, <c>@</c>, <c>#</c>, <c>[</c> and <c>]</c> - parted at everything else (white
-        /// space, a quote, a parenthesis, a colon, a slash, a comma), each with what is neither a letter nor a digit read off
-        /// its start and off its end, but a <c>]</c> that closes a <c>[</c> it holds: <c>src/Parser2.cs(12,5): error
-        /// CS0246:</c> holds <c>Parser2.cs</c> and <c>CS0246</c>, <c>leg 'win-arm64'.</c> and <c>[win-arm64]</c> hold
-        /// <c>win-arm64</c>, and <c>items[1]</c> holds itself. Only the report's texts are read so, never the analyst's.
+        /// Whether one of these names is <paramref name="text"/> from <paramref name="start"/> to <paramref name="end"/>,
+        /// exactly.
+        /// </summary>
+        public bool Holds(string text, int start, int end)
+        {
+            foreach (var tree in _trees)
+            {
+                var node = tree;
+
+                for (var at = start; at < end && node is not null; at++)
+                {
+                    node = node.Next.GetValueOrDefault(text[at]);
+                }
+
+                if (node?.Ends == true)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// The words <paramref name="text"/> holds: each run of it between white space, whole - <c>Sizes/ParserTest.ReadsItsForm/1</c>,
+        /// <c>src/3rdparty/zlib/inflate.c</c>, <c>C++20</c> - and each piece of such a run between what no id is written with,
+        /// a piece being a run of a letter, a digit, a mark, an underscore, <c>-</c>, <c>.</c>, <c>@</c>, <c>#</c>,
+        /// <c>[</c> and <c>]</c>, parted at everything else (a quote, a parenthesis, a colon, a slash, a plus, a comma);
+        /// each read from its first letter or digit to its last (<see cref="Inner"/>). So
+        /// <c>src/Parser2.cs(12,5): error CS0246:</c> holds <c>Parser2.cs</c> and <c>CS0246</c> among its words,
+        /// <c>leg 'win-arm64'.</c> and <c>[win-arm64]</c> hold <c>win-arm64</c>, and <c>items[1]</c> holds itself. Only the report's texts are parted so; an analyst's word is read whole first and parted only where no
+        /// name is it whole (<see cref="Written"/>).
         /// </summary>
         private static IEnumerable<string> WordsIn(string text)
         {
-            for (var at = 0; at < text.Length;)
+            for (var at = 0; at < text.Length; at++)
             {
+                if (char.IsWhiteSpace(text[at]))
+                {
+                    continue;
+                }
+
                 var end = at;
 
-                while (end < text.Length && (Whole(text[end]) || text[end] is '-' or '.' or '@' or '#' or '[' or ']'))
+                while (end < text.Length && !char.IsWhiteSpace(text[end]))
                 {
                     end++;
                 }
 
-                var start = at;
-                var last = end;
-
-                while (start < last && !char.IsLetterOrDigit(text[start]))
-                {
-                    start++;
-                }
-
-                while (last > start && !(char.IsLetterOrDigit(text[last - 1]) || (text[last - 1] == ']' && text.AsSpan(start, last - 1 - start).Contains('['))))
-                {
-                    last--;
-                }
-
-                if (last > start)
+                if (Inner(text, at, end) is var (start, last) && last > start)
                 {
                     yield return text[start..last];
                 }
 
-                at = Math.Max(end, at + 1);
+                for (var piece = at; piece < end;)
+                {
+                    var stop = piece;
+
+                    while (stop < end && (Whole(text[stop]) || text[stop] is '-' or '.' or '@' or '#' or '[' or ']'))
+                    {
+                        stop++;
+                    }
+
+                    if (stop > piece && Inner(text, piece, stop) is var (from, to) && to > from)
+                    {
+                        yield return text[from..to];
+                    }
+
+                    piece = Math.Max(stop, piece + 1);
+                }
+
+                at = end;
             }
         }
 

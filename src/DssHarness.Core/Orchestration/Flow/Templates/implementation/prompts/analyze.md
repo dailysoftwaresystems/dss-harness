@@ -28,9 +28,10 @@ correct it, and add no number it does not hold.
    in the evidence, `{{1}}` the first, standing apart from any letter, number, currency's sign, `%` or other
    placeholder and from a sign before it, which the tool writes as the cited value with the report's unit - a count with
    what it counts. Its title and cause, and what you note, hold no number of your own. A citation the report does not
-   hold, or a number of your own in the summary, a title, a cause, an impact or what you note - outside an id the report
-   or a citation holds - is refused and you are asked again. Where the report shows nothing a change would have paid for,
-   name no pain point.
+   hold, or a number of your own in the summary, a title, a cause, an impact or what you note - outside an id: a word
+   that starts with a letter, holds a digit and the report holds, a name of it or a word of its texts whole or a piece
+   of one, written as the report writes it, or a path a citation writes - is refused and you are asked again. Where
+   the report shows nothing a change would have paid for, name no pain point.
 5. Recommend the change, exactly: a configuration key as `config.json` spells it, a workflow key as the yml spells
    it, a prompt's line by its file, a repository fix by what it changes - the values it proposes, never a
    measurement; it is not read. Where the cause is not the repository's but the request's or the person's waiting, say

@@ -388,10 +388,11 @@ public sealed partial class HelpTests
     /// impact a template, every figure a placeholder of one of its citations the tool writes with the cited value's unit -
     /// a count with what it counts, a number that is no amount after its label - a placeholder standing apart from what
     /// would make it another measure, another placeholder among them, a digit anywhere else in the impact, the summary, a
-    /// title, a cause or a thing noted refused but inside an id - any word the report holds, its texts included, that
-    /// starts with a letter and holds a digit, or a path a citation writes - and the recommendation not read, stating
-    /// proposed values, never a measurement; and analysis.json keeping the written impact with its template beside it - as
-    /// the evidence check and the analysis's document hold them.
+    /// title, a cause or a thing noted refused but inside an id - a word that starts with a letter, holds a digit and the
+    /// report holds, a name of it or a word of its texts whole or in a piece, or a path a citation writes, the analysis's
+    /// own word read whole first - and the recommendation not read, stating proposed values, never a measurement; and
+    /// analysis.json keeping the written impact with its template beside it - as the evidence check and the analysis's
+    /// document hold them.
     /// </summary>
     [Fact]
     public void OrchestratorsTopic_SaysAnImpactIsATemplate_WhoseFiguresTheToolWrites()
@@ -408,15 +409,20 @@ public sealed partial class HelpTests
                 + "that is no amount after its label, exit 20). A placeholder stands apart: one a letter, a number, a "
                 + "currency's sign, % or another placeholder touches, or a sign before it (${1}, {1}h, {1}%, {1}{2}, -{1}), "
                 + "is refused, and so are one past its evidence and one whose citation holds no number the report measures. "
-                + "A digit anywhere else - in the impact, the summary, a pain point's title or cause, or what was noted and "
-                + "why - is refused but inside an id: a word the report holds anywhere, its texts included, that starts with "
-                + "a letter and holds a digit (c@1, a step named build2, a first error's CS0246 and Parser2.cs, a leg "
-                + "win-arm64 only a signal names), or a path a citation writes (c@1.exit) - any citation's in the summary "
-                + "and what was noted, its own pain point's in a title, a cause and an impact; a word that starts with a "
-                + "digit - a time, a date, a version - is never one. The recommendation is not read: it states the values it "
-                + "proposes - a key's exact text - and is never a measurement. So the summary, the titles, the causes, the "
-                + "impacts and what was noted cannot invent a measurement: their only figures are the citations, the "
-                + "report's own, and the impacts', written by the tool.",
+                + "A digit anywhere else - in the impact, the summary, a pain point's title or cause, or what was "
+                + "noted and why - is refused but inside an id: a word that starts with a letter, holds a digit and "
+                + "the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word "
+                + "of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, "
+                + "src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, "
+                + "a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of "
+                + "src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last - or a "
+                + "path a citation writes (c@1.exit), any citation's in the summary and what was noted, its own pain "
+                + "point's in a title, a cause and an impact. A word of the analysis is read whole first, its ends "
+                + "read off the same way, and where no id is it whole, each id standing whole inside it is read as "
+                + "one; a word that starts with a digit - a time, a date, a version - is never one. The recommendation "
+                + "is not read: it states the values it proposes - a key's exact text - and is never a measurement. So "
+                + "the summary, the titles, the causes, the impacts and what was noted cannot invent a measurement: "
+                + "their only figures are the citations, the report's own, and the impacts', written by the tool.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
