@@ -778,7 +778,7 @@ public sealed class ContainExecTests
 
         var cancellationToken = TestContext.Current.CancellationToken;
         using var temp = new TempDirectory();
-        var asked = temp.Combine("asked.txt");
+        var (asked, up) = (temp.Combine("asked.txt"), temp.Combine("up.txt"));
         var ends = new SlowEnds();
         var learnedLate = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
         var (holder, late) = (LearnedProcess.None, LearnedProcess.None);
@@ -793,7 +793,7 @@ public sealed class ContainExecTests
         try
         {
             var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = ends }.RunAsync(
-                Child("spawn-holder", "exit", "0", "spawn-late-holder", asked, "300000") with
+                Child("spawn-holder", "exit", "0", "spawn-late-holder", asked, up, "300000") with
                 {
                     Contained = true,
                     OnOutputLine = line =>

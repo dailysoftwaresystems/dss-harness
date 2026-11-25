@@ -547,13 +547,17 @@ internal static class TestChild
 
         // A holder that leaves this group or session is named once it has, so a test acting on
         // its id acts on a process that stands apart; one that refuses to be asked to end, once it
-        // has said it refuses, so this process's end never asks it first.
+        // has said it refuses, so this process's end never asks it first; and one that makes a late
+        // process, once it runs its own code, so a stop made as soon as it is named finds it waiting
+        // to be asked - never still starting, when a stop's end of the console it was started into,
+        // this process's, ends it before it can make anything (on Windows).
         var apart = Until(() => arguments[2] switch
         {
             "own-group-and-sleep" or "own-group-note-term-and-sleep" => getpgid(holder.Id) == holder.Id,
             "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
             "ignore-term-and-sleep" => File.Exists(arguments[4]),
             "deny-terminate" or "deny-everything" => File.Exists(arguments[4]),
+            "spawn-late-holder" => File.Exists(arguments[4]),
             _ => true,
         });
 
@@ -592,11 +596,12 @@ internal static class TestChild
     }
 
     /// <summary>
-    /// Waits until the file <c>arguments[0]</c> names is there, then starts a holder of this process's own streams - a late
-    /// one, made only once a test asks for it, doing what the behaviour <c>arguments[2]</c> names with the arguments after
-    /// it, or sleeping for the milliseconds <c>arguments[1]</c> gives where none is named - writes <c>late=</c> and its id,
-    /// and sleeps for those milliseconds, as it does where it is never asked: a process that makes another once the walk of
-    /// its tree has last looked, as one being ended may.
+    /// Writes the file <c>arguments[1]</c> names once it runs its own code - which a holder's starter waits for before it
+    /// names it - then waits until the file <c>arguments[0]</c> names is there, then starts a holder of this process's own
+    /// streams - a late one, made only once a test asks for it, doing what the behaviour <c>arguments[3]</c> names with the
+    /// arguments after it, or sleeping for the milliseconds <c>arguments[2]</c> gives where none is named - writes
+    /// <c>late=</c> and its id, and sleeps for those milliseconds, as it does where it is never asked: a process that makes
+    /// another once the walk of its tree has last looked, as one being ended may.
     /// </summary>
     /// <remarks>
     /// The holder is given a console of its own on Windows - without a window, as the process runner gives its children -
@@ -606,7 +611,9 @@ internal static class TestChild
     /// </remarks>
     private static int SpawnLateHolder(TextWriter output, string[] arguments)
     {
-        var milliseconds = int.Parse(arguments[1], CultureInfo.InvariantCulture);
+        var milliseconds = int.Parse(arguments[2], CultureInfo.InvariantCulture);
+
+        File.WriteAllText(arguments[1], "up");
 
         for (var waited = Stopwatch.StartNew(); !File.Exists(arguments[0]); Thread.Sleep(20))
         {
@@ -621,12 +628,12 @@ internal static class TestChild
         start.ArgumentList.Add("exec");
         start.ArgumentList.Add(TestHost.AssemblyPath);
 
-        foreach (var argument in arguments.Length > 2 ? arguments[3..] : [arguments[1]])
+        foreach (var argument in arguments.Length > 3 ? arguments[4..] : [arguments[2]])
         {
             start.ArgumentList.Add(argument);
         }
 
-        start.Environment[TestHost.ChildModeVariable] = arguments.Length > 2 ? arguments[2] : "sleep";
+        start.Environment[TestHost.ChildModeVariable] = arguments.Length > 3 ? arguments[3] : "sleep";
 
         using var late = Process.Start(start) ?? throw new InvalidOperationException("The late holder did not start.");
 

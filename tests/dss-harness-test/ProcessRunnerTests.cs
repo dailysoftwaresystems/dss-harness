@@ -554,7 +554,7 @@ public sealed class ProcessRunnerTests
 
         var cancellationToken = TestContext.Current.CancellationToken;
         using var temp = new TempDirectory();
-        var asked = temp.Combine("asked.txt");
+        var (asked, up) = (temp.Combine("asked.txt"), temp.Combine("up.txt"));
         var clock = new TimerClock();
         var ends = new SlowEnds();
         var learnedHolder = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -571,7 +571,7 @@ public sealed class ProcessRunnerTests
         try
         {
             var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
-                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, "300000") with
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, up, "300000") with
                 {
                     Timeout = limit,
                     OnOutputLine = line =>
@@ -639,7 +639,7 @@ public sealed class ProcessRunnerTests
     private static async Task<string> ALateRefusingProcessOfAStoppedTreeAsync()
     {
         using var temp = new TempDirectory();
-        var (asked, go, refused) = (temp.Combine("asked.txt"), temp.Combine("go.txt"), temp.Combine("refused.txt"));
+        var (asked, up, go, refused) = (temp.Combine("asked.txt"), temp.Combine("up.txt"), temp.Combine("go.txt"), temp.Combine("refused.txt"));
         var clock = new TimerClock();
         var ends = new SlowEnds();
         var learnedHolder = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -668,7 +668,7 @@ public sealed class ProcessRunnerTests
         try
         {
             var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
-                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, "300000", "deny-terminate", go, refused, "sleep", "300000") with
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, up, "300000", "deny-terminate", go, refused, "sleep", "300000") with
                 {
                     Timeout = limit,
                     OnOutputLine = line =>
