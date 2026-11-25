@@ -71,7 +71,16 @@ public interface IProcessTable
 /// where the query is blocked reports "no contender" for every leg, for ever, without a word.
 /// "Nobody looked" and "nothing was found" are different facts.
 /// </remarks>
-public sealed record ProcessTableReading(IReadOnlyList<SampledProcess> Processes, string? Degraded);
+public sealed record ProcessTableReading(IReadOnlyList<SampledProcess> Processes, string? Degraded)
+{
+    /// <summary>
+    /// The program the reading was read through, by its id - PowerShell on Windows, the <c>ps</c> whose listing it is on
+    /// macOS - which lists itself among the processes this one started; <see langword="null"/> where the reading ran none
+    /// (Linux reads <c>/proc</c> in place) or its runner named no id. The table started it and is its one owner, so a
+    /// reader of the reading never counts it as anything this process started for anything else.
+    /// </summary>
+    public int? Reader { get; init; }
+}
 
 /// <summary>Builds the reader for the machine this is running on.</summary>
 /// <remarks>
@@ -138,7 +147,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     /// <inheritdoc/>
     public async Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
     {
-        var (table, problem) = _platform.Current switch
+        var (table, problem, reader) = _platform.Current switch
         {
             PlatformId.Windows => await WindowsTableAsync(cancellationToken).ConfigureAwait(false),
             PlatformId.Linux => LinuxTable(),
@@ -147,7 +156,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
 
         if (table.Count > 0)
         {
-            return new ProcessTableReading(table, null);
+            return new ProcessTableReading(table, null) { Reader = reader };
         }
 
         // The fallback still places a tool on the machine by name, which is worth keeping; what it
@@ -155,7 +164,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
         // is returned with the reason attached rather than in place of one.
         return new ProcessTableReading(
             FromDiagnostics(),
-            problem ?? "the process table came back empty, which no running machine's is");
+            problem ?? "the process table came back empty, which no running machine's is") { Reader = reader };
     }
 
 
@@ -164,7 +173,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     /// through PowerShell because reading WMI in process would add a dependency the tool does not
     /// otherwise need, and the query is sent base64-encoded so no layer of quoting can change it.
     /// </summary>
-    private async Task<(IReadOnlyList<SampledProcess> Table, string? Problem)> WindowsTableAsync(CancellationToken cancellationToken)
+    private async Task<(IReadOnlyList<SampledProcess> Table, string? Problem, int? Reader)> WindowsTableAsync(CancellationToken cancellationToken)
     {
         const string script = """
             $s = [char]31
@@ -193,7 +202,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
 
         if (!result.Succeeded)
         {
-            return ([], HostFailure("the process table could not be read from WMI through PowerShell", result));
+            return ([], HostFailure("the process table could not be read from WMI through PowerShell", result), result.ProcessId);
         }
 
         var processes = new List<SampledProcess>();
@@ -216,7 +225,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                 fields.Length > 5 && fields[5].Length > 0 ? fields[5] : null));
         }
 
-        return (WithTheirCreators(processes), null);
+        return (WithTheirCreators(processes), null, result.ProcessId);
     }
 
     /// <summary>
@@ -256,7 +265,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     /// The table from <c>/proc</c>, read in place through the kernel's seam: the kernel already publishes every field
     /// needed, so no other program has to be installed for a leg to know what else is running.
     /// </summary>
-    private (IReadOnlyList<SampledProcess> Table, string? Problem) LinuxTable()
+    private (IReadOnlyList<SampledProcess> Table, string? Problem, int? Reader) LinuxTable()
     {
         var processes = new List<SampledProcess>();
 
@@ -294,7 +303,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
             }
         }
 
-        return (processes, null);
+        return (processes, null, null);
     }
 
     /// <summary>
@@ -315,7 +324,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     /// read from ps's name, every claude a shell started was one whose program could not be read.
     /// </para>
     /// </remarks>
-    private async Task<(IReadOnlyList<SampledProcess> Table, string? Problem)> MacTableAsync(CancellationToken cancellationToken)
+    private async Task<(IReadOnlyList<SampledProcess> Table, string? Problem, int? Reader)> MacTableAsync(CancellationToken cancellationToken)
     {
         // C, so the day and month names are the ones the format below reads. A machine set to another language
         // would otherwise leave every start time unknown.
@@ -327,7 +336,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
 
         if (!named.Succeeded)
         {
-            return ([], HostFailure("the process table could not be read from ps", named));
+            return ([], HostFailure("the process table could not be read from ps", named), null);
         }
 
         var names = new Dictionary<int, string>();
@@ -348,7 +357,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
 
         if (!result.Succeeded)
         {
-            return ([], HostFailure("the process table could not be read from ps", result));
+            return ([], HostFailure("the process table could not be read from ps", result), result.ProcessId);
         }
 
         var processes = new List<SampledProcess>();
@@ -384,7 +393,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                 _kernel.Program(id)));
         }
 
-        return (processes, null);
+        return (processes, null, result.ProcessId);
     }
 
     /// <summary>

@@ -605,6 +605,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             BeatLost = beatLost,
             Uncontained = uncontained,
+            ProcessId = process.Id,
             OutputLog = request.OutputLog,
             ErrorLog = request.ErrorLog,
             OutputHeld = held,
@@ -631,7 +632,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// What says a process the child left - or one its end could not reach or end - holds its output, where one does;
     /// <see langword="null"/> where both streams ended, or the caller gave up first.
     /// </returns>
-    private async Task<string?> DrainedAsync(string resolved, StreamCapture output, StreamCapture error, bool unreached, CancellationToken cancellationToken)
+    internal async Task<string?> DrainedAsync(string resolved, StreamCapture output, StreamCapture error, bool unreached, CancellationToken cancellationToken)
     {
         var ended = Task.WhenAll(output.Reading, error.Reading);
 

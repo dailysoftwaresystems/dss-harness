@@ -37,8 +37,9 @@ public interface IHostAgentLastResort
     Task<string> EndStartedAsync();
 
     /// <summary>
-    /// Whether anything this process started still runs, as the process table says; <see langword="false"/> where the
-    /// table cannot say, since nothing is then known to run - and <see cref="EndStartedAsync"/> says why it listed none.
+    /// Whether anything this process started still runs, as the process table says - never the program the table was read
+    /// through (<see cref="ProcessTableReading.Reader"/>); <see langword="false"/> where the table cannot say, since nothing
+    /// is then known to run - and <see cref="EndStartedAsync"/> says why it listed none.
     /// </summary>
     /// <param name="cancellationToken">Stops the reading.</param>
     Task<bool> AnyStartedRunsAsync(CancellationToken cancellationToken);
@@ -156,8 +157,10 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
     /// it got to them first. One started for what the agent started is that process's child, and goes with it.
     /// </para>
     /// <para>
-    /// A child that has ended since the table listed it is passed over, not counted: the program the table is read
-    /// through is one, on Windows, in every reading.
+    /// Nor is the program the table was read through (<see cref="ProcessTableReading.Reader"/>), on any system: PowerShell
+    /// on Windows and <c>ps</c> on macOS list themselves among the processes this one started, so every reading named one,
+    /// and whether anything it started still runs was answered yes for as long as the agent ran. A child that has ended
+    /// since the table listed it is passed over, not counted.
     /// </para>
     /// </remarks>
     internal static async Task<LastResortOutcome> EndStartedByAsync(IProcessTable processes, IHostPlatform platform, int parent, CancellationToken cancellationToken)
@@ -201,15 +204,15 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
 
     /// <summary>
     /// The processes <paramref name="reading"/> lists as started by <paramref name="parent"/>, by its own relation of which
-    /// started which (<see cref="SampledProcess.ParentId"/>), in the order of their ids: never the console it runs in (see
-    /// <see cref="EndStartedByAsync"/>).
+    /// started which (<see cref="SampledProcess.ParentId"/>), in the order of their ids: never the console it runs in, nor
+    /// the program the reading was read through (see <see cref="EndStartedByAsync"/>).
     /// </summary>
     private static IEnumerable<SampledProcess> StartedBy(ProcessTableReading reading, IHostPlatform platform, int parent)
     {
         var itsConsole = platform.Current == PlatformId.Windows;
 
         return reading.Processes
-            .Where(process => process.ParentId == parent && process.Id != parent)
+            .Where(process => process.ParentId == parent && process.Id != parent && process.Id != reading.Reader)
             .Where(process => !(itsConsole && string.Equals(process.Name, ConsoleHost, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(process => process.Id);
     }

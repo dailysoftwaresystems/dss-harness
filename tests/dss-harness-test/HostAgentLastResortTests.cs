@@ -11,6 +11,60 @@ public sealed class HostAgentLastResortTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// The program a table was read through, which the reading names (<see cref="ProcessTableReading.Reader"/>), is never
+    /// counted as a process this one started, on any system: listed among its children, it is neither ended nor taken for
+    /// something still running - and the same process the reading does not name is.
+    /// </summary>
+    [Theory]
+    [InlineData(PlatformId.Windows)]
+    [InlineData(PlatformId.MacOs)]
+    [InlineData(PlatformId.Linux)]
+    public async Task TheProgramATableWasReadThrough_IsNeverCountedAsStarted(PlatformId system)
+    {
+        using var reader = Sleeping();
+
+        try
+        {
+            var self = Environment.ProcessId;
+            var platform = HostDoubles.Platform(system, "x64");
+            var listed = new SampledProcess(reader.Id, self, "reader", DateTimeOffset.UtcNow, null);
+            var named = new ListedProcesses(listed) { Reader = reader.Id };
+
+            var outcome = await HostAgentLastResort.EndStartedByAsync(named, platform, self, Token);
+
+            Assert.Empty(outcome.Ended);
+            Assert.False(reader.HasExited, "The program the table was read through was ended.");
+            Assert.False(await new HostAgentLastResort(named, platform).AnyStartedRunsAsync(Token));
+            Assert.True(await new HostAgentLastResort(new ListedProcesses(listed), platform).AnyStartedRunsAsync(Token));
+        }
+        finally
+        {
+            if (!reader.HasExited)
+            {
+                reader.Kill(entireProcessTree: true);
+                reader.WaitForExit();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Asked of this machine's own table whether anything it started still runs, a process that has started nothing
+    /// answers no, and one that has started a child answers yes: the program the table is read through - PowerShell on
+    /// Windows, <c>ps</c> on macOS, each listed as its child - is never counted. Asked from a child of the test, whose only
+    /// children are what it starts.
+    /// </summary>
+    [Fact]
+    public async Task WhetherAnythingStartedRuns_OnThisMachinesOwnTable_CountsWhatItStartedAndNothingElse()
+    {
+        var result = await new HarnessFactory().ProcessRunner.RunAsync(
+            TestHost.ChildRequest("any-started") with { Timeout = TimeSpan.FromMinutes(8) },
+            Token);
+
+        Assert.False(result.TimedOut, "The process that asked never ended.");
+        Assert.Equal((0, "none\nsome\n"), (result.ExitCode, result.StandardOutput.ReplaceLineEndings("\n")));
+    }
+
+    /// <summary>
     /// The agent's last resort ends every process the table names as started by the one named - the table's own relation
     /// of which process started which (<see cref="SampledProcess.ParentId"/>) - and no other, never deciding it again by a
     /// clock: one the table names as its child is ended though a clock that stepped between their starts dates it before
@@ -249,7 +303,10 @@ public sealed class HostAgentLastResortTests
         /// <summary>Why the reading is less than it should be, where a test says it is.</summary>
         public string? Degraded { get; init; }
 
+        /// <summary>The program the reading names itself read through, where a test says it does.</summary>
+        public int? Reader { get; init; }
+
         public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(new ProcessTableReading(processes, Degraded));
+            => Task.FromResult(new ProcessTableReading(processes, Degraded) { Reader = Reader });
     }
 }

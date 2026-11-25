@@ -78,6 +78,7 @@ internal static class TestChild
             "print-bytes" => PrintBytes(arguments),
             "spawn-grandchild" => SpawnGrandchild(arguments),
             "last-resort" => LastResort(standardOutput, arguments),
+            "any-started" => AnyStarted(standardOutput),
             "print-env" => PrintEnvironment(standardOutput, arguments),
             "write-file" => WriteFile(arguments),
             "watch-process" => WatchProcess(arguments),
@@ -1348,6 +1349,52 @@ internal static class TestChild
         resort.End(int.Parse(arguments[0], CultureInfo.InvariantCulture));
 
         return 99;
+    }
+
+    /// <summary>
+    /// Whether anything this process started still runs, by this machine's own table, before it has started anything and
+    /// once it has started a sleeping child: <c>none</c> or <c>some</c>, a line each. The child is ended before it returns.
+    /// </summary>
+    private static int AnyStarted(TextWriter output)
+    {
+        var platform = new DssHarness.Core.Platform.HostPlatform();
+        var resort = new DssHarness.Core.Hosts.HostAgentLastResort(
+            DssHarness.Core.Platform.ProcessTableFactory.Create(
+                platform,
+                new DssHarness.Core.Processes.ProcessRunner(platform, DssHarness.Core.Platform.FilePermissionsFactory.Create())),
+            platform);
+
+        output.Write(Running(resort) + "\n");
+
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add("120000");
+        start.Environment[TestHost.ChildModeVariable] = "sleep";
+
+        using var sleeper = Process.Start(start)
+            ?? throw new InvalidOperationException("The sleeping child did not start.");
+
+        try
+        {
+            output.Write(Running(resort) + "\n");
+        }
+        finally
+        {
+            sleeper.Kill(entireProcessTree: true);
+            sleeper.WaitForExit();
+        }
+
+        return 0;
+
+        static string Running(DssHarness.Core.Hosts.HostAgentLastResort resort)
+            => resort.AnyStartedRunsAsync(CancellationToken.None).GetAwaiter().GetResult() ? "some" : "none";
     }
 
     private static int PrintEnvironment(TextWriter output, string[] arguments)

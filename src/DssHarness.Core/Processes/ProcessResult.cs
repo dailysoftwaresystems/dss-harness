@@ -34,6 +34,14 @@ public sealed record ProcessResult(
     /// </summary>
     public string? Uncontained { get; init; }
 
+    /// <summary>
+    /// The id of the process the runner started for the request - the program itself, or, for a contained, bound or
+    /// isolated child, <c>contain-exec</c>, which runs it - or <see langword="null"/> where the runner names none: what a
+    /// caller that started a program to read the machine's processes knows it by among them
+    /// (<see cref="Platform.ProcessTableReading.Reader"/>).
+    /// </summary>
+    public int? ProcessId { get; init; }
+
     /// <summary>The file stdout was written whole to, as the request named it (<see cref="ProcessRequest.OutputLog"/>).</summary>
     public string? OutputLog { get; init; }
 

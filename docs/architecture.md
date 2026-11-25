@@ -6819,9 +6819,13 @@ lists them, then the agent itself, exit 130, whatever the ending of them came to
 those are is the table's own relation of which process started which (`SampledProcess.ParentId`,
 below), read as it is and never decided again by a clock - one that counts from the machine's start,
 held against the agent's own start as the runtime tells it, once read every child as older than its
-parent and ended none - and never the
+parent and ended none - never the
 console the agent runs in, which Windows lists as its child (`conhost`) and ends everything in the
-console with. The agent's last line says what that came to: each process ended, by its id, each it
+console with, and never the program the table was read through, which lists itself as the agent's
+child - PowerShell on Windows, `ps` on macOS - and which the reading names by the id its runner
+started it under (`ProcessTableReading.Reader`, from `ProcessResult.ProcessId`; Linux reads `/proc`
+in place and names none): counted, every reading named one, and whether anything the agent started
+still runs was answered yes for as long as it ran. The agent's last line says what that came to: each process ended, by its id, each it
 could not end, or why none could be listed. That line and the request's completion line are handed
 to the stream as one write (`Gone.SayingAsync`), and where the agent itself was stopped meanwhile
 the end stands behind that write: it is awaited, so a machine slow to take it is waited for as long

@@ -20,6 +20,56 @@ public sealed class ProcessRunnerTests
 {
     private static ProcessRunner CreateRunner() => new(new HostPlatform(), FilePermissionsFactory.Create());
 
+    /// <summary>
+    /// The wait for a child's output held open once it has ended is told every five minutes naming what holds it: what the
+    /// child left running, or - where its end could not reach or end a process it was to - such a process or one the child
+    /// left running, never the child's leftover alone.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "has waited 5m00s for the output of 'tool' to end, held open by what it left running")]
+    [InlineData(true, "has waited 5m00s for the output of 'tool' to end, held open by a process its end could not reach or end, or one it left running")]
+    public async Task TheWaitForAnOutputHeldOpen_IsToldNamingWhatHoldsIt(bool unreached, string told)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new TimerClock();
+        var runner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock };
+        var gate = new Lock();
+        using var held = new UnendedRead();
+        var output = new ProcessRunner.StreamCapture(held, pipe: null, ProcessRunner.AsDotNetReadsIt, gate, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        var error = new ProcessRunner.StreamCapture(new MemoryStream(), pipe: null, ProcessRunner.AsDotNetReadsIt, gate, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<string?> drained;
+
+        using (DssHarness.Core.Waiting.Waits.TellingTo(wait => lines.Enqueue(wait.Line())))
+        {
+            drained = runner.DrainedAsync("tool", output, error, unreached, stop.Token);
+        }
+
+        try
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+
+            var toldBy = Stopwatch.StartNew();
+
+            while (lines.IsEmpty)
+            {
+                Assert.True(toldBy.Elapsed < TimeSpan.FromSeconds(30), "the wait for the output held open was never told");
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+            }
+
+            Assert.Equal([told], lines);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            held.End();
+        }
+
+        Assert.Null(await drained.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+    }
+
     [Fact]
     public async Task RunAsync_PassesEveryArgumentThroughUnchanged()
     {
@@ -1964,6 +2014,46 @@ public sealed class ProcessRunnerTests
 
             return await pipe.ReadAsync(buffer, cancellationToken);
         }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A child's stream held open with nothing in it, under no pipe a look can ask: every read waits until the test ends
+    /// it, as an output a process the child left holds open waits - read to its end, for a look ends nothing here.
+    /// </summary>
+    private sealed class UnendedRead : Stream
+    {
+        private readonly TaskCompletionSource<int> _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        /// <summary>Ends every read: the stream is at its end.</summary>
+        public void End() => _ended.TrySetResult(0);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => new(_ended.Task.WaitAsync(cancellationToken));
 
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
