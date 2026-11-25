@@ -321,11 +321,6 @@ public sealed class FlowService(
             return new CommandOutcome(ex.ExitCode, ex.Message);
         }
 
-        // This process becomes the new run's engine: every run of the repository is swept first, as list-orchestrator
-        // sweeps them, and a record of any of them kept because its session holds this process refuses the start
-        // (FlowSessions.CreateAsync), for the next command run from outside would end the engine with what it records.
-        var swept = await _children.SweepAsync(_store.Orchestrators(context.Layout), RunCommand).ConfigureAwait(false);
-
         // Inside the repository's one section: the test for another unfinished run, the name, the path budget its
         // worktrees would need, the record, the first status and the owner. Two starts cannot both pass the test, and
         // two cannot take one name.
@@ -338,7 +333,7 @@ public sealed class FlowService(
             (layout, runContext) = await _sessions.CreateAsync(
                 context.Layout,
                 workflow,
-                swept,
+                EveryRun(context, RunCommand),
                 RunCommand,
                 run,
                 given,
@@ -386,7 +381,7 @@ public sealed class FlowService(
     /// <inheritdoc/>
     public async Task<CommandOutcome> ResumeAsync(string startDirectory, string run, bool json, FlowInterrupts? interrupts = null, CancellationToken cancellationToken = default)
     {
-        var (refused, context, layout, swept) = await LoadAsync(startDirectory, run, ResumeCommand, everyRun: true, cancellationToken).ConfigureAwait(false);
+        var (refused, context, layout) = await LoadAsync(startDirectory, run, ResumeCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -404,7 +399,7 @@ public sealed class FlowService(
 
         try
         {
-            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, swept, ResumeCommand, cancellationToken).ConfigureAwait(false);
+            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, EveryRun(context, ResumeCommand), ResumeCommand, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -453,7 +448,7 @@ public sealed class FlowService(
             text = read;
         }
 
-        var (refused, context, layout, swept) = await LoadAsync(startDirectory, run, AnswerCommand, everyRun: true, cancellationToken).ConfigureAwait(false);
+        var (refused, context, layout) = await LoadAsync(startDirectory, run, AnswerCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -525,7 +520,7 @@ public sealed class FlowService(
 
             try
             {
-                reclaimedChange = await _sessions.ClaimAsync(context.Layout, layout, swept, AnswerCommand, cancellationToken).ConfigureAwait(false);
+                reclaimedChange = await _sessions.ClaimAsync(context.Layout, layout, EveryRun(context, AnswerCommand), AnswerCommand, cancellationToken).ConfigureAwait(false);
             }
             catch (HarnessException ex)
             {
@@ -643,7 +638,7 @@ public sealed class FlowService(
                     return NotBegun(changed);
                 }
 
-                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, swept, AnswerCommand, cancellationToken).ConfigureAwait(false);
+                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, EveryRun(context, AnswerCommand), AnswerCommand, cancellationToken).ConfigureAwait(false);
                 break;
             }
             catch (HarnessException ex)
@@ -820,7 +815,7 @@ public sealed class FlowService(
             return CommandOutcome.Usage("the amendment is empty; give one, as the command's own argument or in a file named by --file");
         }
 
-        var (refused, context, layout, _) = await LoadAsync(startDirectory, run, AmendCommand, everyRun: false, cancellationToken).ConfigureAwait(false);
+        var (refused, context, layout) = await LoadAsync(startDirectory, run, AmendCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -892,7 +887,7 @@ public sealed class FlowService(
     /// <inheritdoc/>
     public async Task<CommandOutcome> PauseAsync(string startDirectory, string run, bool all, bool json, CancellationToken cancellationToken = default)
     {
-        var (refused, _, layout, _) = await LoadAsync(startDirectory, run, PauseCommand, everyRun: false, cancellationToken).ConfigureAwait(false);
+        var (refused, _, layout) = await LoadAsync(startDirectory, run, PauseCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -944,7 +939,7 @@ public sealed class FlowService(
     /// <inheritdoc/>
     public async Task<CommandOutcome> StopAsync(string startDirectory, string run, bool now, bool json, CancellationToken cancellationToken = default)
     {
-        var (refused, _, layout, _) = await LoadAsync(startDirectory, run, StopCommand, everyRun: false, cancellationToken).ConfigureAwait(false);
+        var (refused, _, layout) = await LoadAsync(startDirectory, run, StopCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -989,7 +984,7 @@ public sealed class FlowService(
     public async Task<CommandOutcome> QuestionsAsync(string startDirectory, string run, bool json, CancellationToken cancellationToken = default)
     {
         const string command = "list-orchestrator";
-        var (refused, _, layout, _) = await LoadAsync(startDirectory, run, command, everyRun: false, cancellationToken).ConfigureAwait(false);
+        var (refused, _, layout) = await LoadAsync(startDirectory, run, command, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -1551,22 +1546,14 @@ public sealed class FlowService(
 
     /// <summary>
     /// Loads the run's context and layout, and sweeps what a killed engine's steps left running before anything else of
-    /// the run is read - where <paramref name="everyRun"/>, every run of the repository's, as <c>list-orchestrator</c>
-    /// sweeps them, for a command that may make this process the run's engine - what the sweep did answered beside them, for
-    /// a session of the run to refuse over a record of any run kept because its session holds this process
-    /// (<see cref="FlowSessions.ClaimAsync"/>) - or the refusal that answers for the command: a bad name (10), or no such
-    /// run (13, with nothing written, for a run that is not there has no directory to log in).
+    /// the run is read - or the refusal that answers for the command: a bad name (10), or no such run (13, with nothing
+    /// written, for a run that is not there has no directory to log in).
     /// </summary>
-    private async Task<(CommandOutcome? Refused, HarnessContext Context, OrchestratorLayout Layout, ChildSweep Swept)> LoadAsync(
-        string startDirectory,
-        string run,
-        string command,
-        bool everyRun,
-        CancellationToken cancellationToken)
+    private async Task<(CommandOutcome? Refused, HarnessContext Context, OrchestratorLayout Layout)> LoadAsync(string startDirectory, string run, string command, CancellationToken cancellationToken)
     {
         if (OrchestrationRules.NameProblem(run) is { } shape)
         {
-            return (CommandOutcome.Usage(shape), null!, null!, ChildSweep.None);
+            return (CommandOutcome.Usage(shape), null!, null!);
         }
 
         var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
@@ -1574,15 +1561,24 @@ public sealed class FlowService(
 
         if (_store.ReadOrchestrator(layout) is null)
         {
-            return (CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run)), context, layout, ChildSweep.None);
+            return (CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run)), context, layout);
         }
 
-        var swept = everyRun
-            ? await _children.SweepAsync(_store.Orchestrators(context.Layout), command).ConfigureAwait(false)
-            : await _children.SweepAsync(layout, command).ConfigureAwait(false);
-
-        return (null, context, layout, swept);
+        await _children.SweepAsync(layout, command).ConfigureAwait(false);
+        return (null, context, layout);
     }
+
+    /// <summary>
+    /// The sweep of every run of the repository, as <c>list-orchestrator</c> sweeps them, that each act making this process a
+    /// run's engine reads at the act itself - a new run's start (<see cref="FlowSessions.CreateAsync"/>) and a session's claim
+    /// of a run already made (<see cref="FlowSessions.ClaimAsync"/>), inside the section that decides the run's owner, after
+    /// its last look at a live owner - so a record kept because its session holds this process refuses the engine whatever
+    /// owner stood when the command began: one an answer was handed to and waited on among them.
+    /// </summary>
+    /// <param name="context">The repository.</param>
+    /// <param name="command">The command sweeping, which its lines name.</param>
+    private Func<ChildSweep> EveryRun(HarnessContext context, string command)
+        => () => _children.SweepAsync(_store.Orchestrators(context.Layout), command).GetAwaiter().GetResult();
 
     /// <summary>
     /// The digest of the repository's entry for the workflow the run began with, as it reads now in the definition tree

@@ -499,8 +499,10 @@ public sealed partial class HelpTests
             + "itself - it runs in it, or descends from its leader - is said and left with its record, nothing in it signalled, for "
             + "a command run from outside it to end, and delete-orchestrator, which would take that record with the orchestrator, "
             + "and run-orchestrator, resume-orchestrator and answer-orchestrator, which would make the command a run's engine "
-            + "inside it - each sweeps every run of the repository first, as list-orchestrator does, so a record of any run "
-            + "refuses it - are refused (13), naming the record, nothing changed; one whose id a later process "
+            + "inside it, are refused (13), naming the record, nothing changed - each over a sweep taken at the act itself: "
+            + "delete-orchestrator its orchestrator's right before the removal, the others every run of the repository's, as "
+            + "list-orchestrator sweeps them, once their last look at the run's owner is made, so an owner gone since the "
+            + "command began - one an answer was handed to among them - is swept with the rest; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
             + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
             + "that started it.",

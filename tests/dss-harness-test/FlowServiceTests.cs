@@ -2376,45 +2376,141 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// A resume run from inside a session a sweep kept - a step's own script in the session a contained child of a killed
-    /// engine leads - is refused (13) before it claims the run, naming the record and saying to run it from outside: no
-    /// owner is written, so this process never becomes the run's engine inside what the next command from outside ends -
-    /// whether the record is the run's own or another run's of the repository, which the resume sweeps first as
-    /// list-orchestrator does. Run where it would act on itself: the resume runs in a child the session's leader starts
-    /// (<see cref="EngineFromInside"/>), every process the test's own, bounded, and ended on every path.
+    /// A session of a run already made begun from inside a session a sweep keeps - a step's own script in the session a
+    /// contained child of a killed engine leads - is refused (13) at its claim of the run, naming the record and saying to
+    /// run the command from outside: no owner is left written, nothing of the run is answered, and this process never
+    /// becomes the run's engine inside what the next command from outside ends - whether the record is the run's own or
+    /// another orchestrator's of the repository, which the claim sweeps as list-orchestrator does: a resume, a new answer
+    /// to the run's open question, and a changed answer (<c>--again</c>) alike. Run where it would act on itself: the
+    /// command runs in a child the session's leader starts (<see cref="EngineFromInside"/>), every process the test's own,
+    /// bounded, and ended on every path.
     /// </summary>
     [Theory]
-    [InlineData("r1")]
-    [InlineData("o0")]
-    public async Task AResumeFromInsideASessionASweepKept_IsRefused_NoOwnerWritten(string recordedIn)
+    [InlineData("resume", "r1")]
+    [InlineData("resume", "o0")]
+    [InlineData("answer", "r1")]
+    [InlineData("answer", "o0")]
+    [InlineData("again", "r1")]
+    [InlineData("again", "o0")]
+    public async Task ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_NoOwnerWritten_NothingAnswered(string command, string recordedIn)
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
 
-        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        var (repository, service, runner) = command == "again" ? await AmendedAsync() : await ServiceAsync(HoldingFlow);
         using var disposed = repository;
 
         Script(runner);
-        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: command == "again" ? ["request=build the thing"] : null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        // A changed answer is asked of the set a person answered last: the intake's, answered here before.
+        if (command == "again")
+        {
+            _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        }
 
         var run = RunOf(repository);
+        var questions = File.ReadAllText(run.QuestionsFile);
         var holding = AnotherOrchestrator(repository, recordedIn);
-        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, recordedIn, "resume"));
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, recordedIn, command));
         var record = OrchestratorLayout.ChildFile(holding.StepDirectory("s1"), leader);
 
         Assert.Equal(
             [
                 "after=0",
                 $"caller={caller}",
+                $"detail=log {run.LogFile("r1")}",
                 $"exit={HarnessExit.Refused}",
                 $"holder={caller}",
                 "kept=True",
                 "owner=none",
                 $"runs={string.Join(",", new[] { "o0", "r1" }.Where(name => name == "r1" || recordedIn == "o0"))}",
                 $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
-                    + $"inside it would be ended with it by the next command run from outside. Run {FlowService.ResumeCommand} from outside it. Nothing was changed.",
+                    + $"inside it would be ended with it by the next command run from outside. Run {(command == "resume" ? FlowService.ResumeCommand : FlowService.AnswerCommand)} "
+                    + "from outside it. Nothing was changed.",
             ],
             lines);
         Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+        Assert.Equal(questions, File.ReadAllText(run.QuestionsFile));
+    }
+
+    /// <summary>
+    /// An answer handed to the engine running the run, from inside a session a step of that engine's leads - the step's own
+    /// script answering the run's question - whose engine dies while the answer waits on it, is refused (13) at the claim
+    /// the answer then makes as the run's next session: the claim sweeps every run there, after its own look at the owner,
+    /// so the record the dead engine left of that session - kept, for it holds this very process - refuses it, though the
+    /// command's first sweep, made while the engine stood, left that record as its live owner's. No owner is left written,
+    /// the record is kept, and the answer is said to stay in the inbox for the next session of the run. Run where it would
+    /// act on itself: the answer runs in a child the session's leader starts (<see cref="EngineFromInside"/>), the engine
+    /// is a process of the test's own, ended once the answer is in the inbox, and every process is ended on every path.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWaitingOnAnEngineThatDies_IsRefusedAtItsClaim_FromInsideASessionThatEnginesRecordKeeps()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
+
+        var (repository, service, runner) = await ServiceAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+        using var engine = Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
+
+        try
+        {
+            var stamp = identity.StampOf(engine.Id) ?? throw new InvalidOperationException($"the start of the engine {engine.Id} could not be read");
+
+            store.WriteOwner(run, new RunOwner(identity.CurrentMachine, engine.Id, DateTimeOffset.UtcNow, stamp));
+
+            // The engine dies once the answer is handed to it, while the answer waits on it.
+            var dying = Task.Run(async () =>
+            {
+                while (store.ReadInbox(run) is not { Answers.Count: > 0 })
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), Token);
+                }
+
+                engine.Kill();
+                await engine.WaitForExitAsync(Token);
+            }, Token).WaitAsync(Bound, Token);
+
+            var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(
+                TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, "r1", "answer", engine.Id.ToString(CultureInfo.InvariantCulture), stamp));
+
+            await dying;
+
+            var record = OrchestratorLayout.ChildFile(run.StepDirectory("s1"), leader);
+
+            Assert.Equal(
+                [
+                    "after=0",
+                    $"caller={caller}",
+                    $"detail=inbox: {run.InboxFile}",
+                    $"detail=log {run.LogFile("r1")}",
+                    $"detail={StaysHandedOverLine(run)}",
+                    $"exit={HarnessExit.Refused}",
+                    $"holder={caller}",
+                    "kept=True",
+                    "owner=none",
+                    "runs=r1",
+                    $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
+                        + $"inside it would be ended with it by the next command run from outside. Run {FlowService.AnswerCommand} from outside it. Nothing was changed.",
+                ],
+                lines);
+            Assert.Null(store.ReadOwner(run));
+            Assert.Equal(("q1", "go"), (Assert.Single(store.ReadInbox(run)!.Answers).Question, Assert.Single(store.ReadInbox(run)!.Answers).Answer));
+        }
+        finally
+        {
+            if (!engine.HasExited)
+            {
+                engine.Kill();
+                engine.WaitForExit();
+            }
+        }
     }
 
     /// <summary>
@@ -2472,13 +2568,16 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// The child's side of <see cref="AResumeFromInsideASessionASweepKept_IsRefused_NoOwnerWritten"/> and
+    /// The child's side of <see cref="ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_NoOwnerWritten_NothingAnswered"/>,
+    /// <see cref="AnAnswerWaitingOnAnEngineThatDies_IsRefusedAtItsClaim_FromInsideASessionThatEnginesRecordKeeps"/> and
     /// <see cref="ARunStartedFromInsideASessionASweepKept_IsRefused_NothingOfItMade"/>: records the session the process that
-    /// started it leads in step <c>s1</c> of the orchestrator <c>arguments[1]</c> of the repository at <c>arguments[0]</c>,
-    /// as a process that has gone since left it, then - as <c>arguments[2]</c> says - resumes run <c>r1</c>, or starts a new
-    /// run, from inside the session, and writes its own id as <c>caller</c>, how the command ended as <c>exit</c> and
-    /// <c>said</c>, whether the record is still there as <c>kept</c>, run <c>r1</c>'s owner once it ended as <c>owner</c>,
-    /// and the repository's orchestrators then as <c>runs</c>.
+    /// started it leads in step <c>s1</c> of the orchestrator <c>arguments[1]</c> of the repository at <c>arguments[0]</c> -
+    /// as a process that has gone since left it, or, where <c>arguments[3]</c> and <c>arguments[4]</c> name one by its id and
+    /// start, as that process placed it - then, as <c>arguments[2]</c> says, resumes run <c>r1</c>, answers its open
+    /// question <c>go</c>, changes its last answer to <c>stay</c> (<c>again</c>), or starts a new run, from inside the
+    /// session, and writes its own id as <c>caller</c>, how the command ended as <c>exit</c>, <c>said</c> and each
+    /// <c>detail</c>, whether the record is still there as <c>kept</c>, run <c>r1</c>'s owner once it ended as
+    /// <c>owner</c>, and the repository's orchestrators then as <c>runs</c>.
     /// </summary>
     internal static int EngineFromInside(TextWriter output, string[] arguments)
     {
@@ -2491,21 +2590,32 @@ public sealed class FlowServiceTests
 
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(arguments[0], arguments[0]);
-        var record = ChildSessionsTests.RecordParentsSession(OrchestratorLayout.Of(layout, arguments[1]));
+        var placed = arguments.Length > 4 ? (int.Parse(arguments[3], CultureInfo.InvariantCulture), arguments[4]) : ((int, string)?)null;
+        var record = ChildSessionsTests.RecordParentsSession(OrchestratorLayout.Of(layout, arguments[1]), placed);
         var runner = new SteppedRunner();
 
         Script(runner);
 
         var service = Service(harness, runner);
-        var ended = (arguments[2] == "run"
-                ? service.RunAsync(arguments[0], Workflow, run: null, inputs: null, json: false, cancellationToken: CancellationToken.None)
-                : service.ResumeAsync(arguments[0], "r1", json: false, cancellationToken: CancellationToken.None))
+        var ended = (arguments[2] switch
+            {
+                "run" => service.RunAsync(arguments[0], Workflow, run: null, inputs: null, json: false, cancellationToken: CancellationToken.None),
+                "answer" => service.AnswerAsync(arguments[0], "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: CancellationToken.None),
+                "again" => service.AnswerAsync(arguments[0], "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: CancellationToken.None),
+                _ => service.ResumeAsync(arguments[0], "r1", json: false, cancellationToken: CancellationToken.None),
+            })
             .GetAwaiter()
             .GetResult();
         var owner = harness.OrchestrationStore.ReadOwner(OrchestratorLayout.Of(layout, "r1"));
 
         output.Write($"exit={ended.ExitCode}\n");
         output.Write($"said={ended.Message}\n");
+
+        foreach (var detail in ended.Details ?? [])
+        {
+            output.Write($"detail={detail}\n");
+        }
+
         output.Write($"kept={File.Exists(record)}\n");
         output.Write($"owner={(owner is null ? "none" : owner.ProcessId.ToString(CultureInfo.InvariantCulture))}\n");
         output.Write($"runs={string.Join(",", harness.OrchestrationStore.Orchestrators(layout).Select(orchestrator => orchestrator.Name))}\n");
@@ -4416,7 +4526,7 @@ public sealed class FlowServiceTests
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
-        var (run, context) = await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
+        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {
@@ -4541,7 +4651,7 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Success, deleted.ExitCode);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, ChildSweep.None, FlowService.ResumeCommand, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, () => ChildSweep.None, FlowService.ResumeCommand, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(OrchestrationReports.NoOrchestrator("r1"), refused.Message);

@@ -849,7 +849,7 @@ public sealed class FoldLedgerTests
         var layout = new HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
         var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
-        var (other, _) = await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
+        var (other, _) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
         // The run's own state says Stopped - written by hand, for the test is of the scan, not of the stop.
         harness.OrchestrationStore.WriteFlow(other, new FlowFile(1, other.Name, "flow", Digest, new Dictionary<string, string>(), "Stopped", new FlowBudgetRecord(0, 0, 0), 0, [], [], At));
@@ -859,26 +859,26 @@ public sealed class FoldLedgerTests
         await OrchestrationKit.WrittenAsync(ledger, other, temp.Path, id);
         ledger.Settle(other, id, HarnessExit.Success);
 
-        var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token));
+        var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token));
 
         Assert.Contains("run 'r1' of this repository is unfinished (stopped; 1 fold in its ledger not yet committed)", held.Message, StringComparison.Ordinal);
 
         // A ledger that does not read as one cannot say what it holds, and the run is unfinished all the same.
         var written = File.ReadAllText(other.FoldsFile);
         File.WriteAllText(other.FoldsFile, "{");
-        var unread = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token));
+        var unread = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token));
         File.WriteAllText(other.FoldsFile, written);
 
         Assert.Contains("run 'r1' of this repository is unfinished (stopped, and whether its ledger holds a fold not yet committed cannot be told: ", unread.Message, StringComparison.Ordinal);
 
         _ = await harness.RunGitAsync(temp.Path, ["add", "--", "a.txt"], Token);
-        var staged = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token));
+        var staged = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token));
 
         Assert.Contains("(stopped; 1 fold in its ledger not yet committed)", staged.Message, StringComparison.Ordinal);
 
         _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "the fold, committed by hand"], Token);
 
-        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token)).Run.Name);
+        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token)).Run.Name);
     }
 
     /// <summary>
@@ -899,7 +899,7 @@ public sealed class FoldLedgerTests
         var layout = new HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
         var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
-        var (other, _) = await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
+        var (other, _) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
         harness.OrchestrationStore.WriteFlow(other, new FlowFile(1, other.Name, "flow", Digest, new Dictionary<string, string>(), "Stopped", new FlowBudgetRecord(0, 0, 0), 0, [], [], At));
         var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
@@ -908,7 +908,7 @@ public sealed class FoldLedgerTests
         await OrchestrationKit.WrittenAsync(ledger, other, temp.Path, id);
         ledger.Settle(other, id, HarnessExit.Success);
 
-        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token)).Run.Name);
+        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token)).Run.Name);
 
         new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(OrchestratorLayout.Of(layout, "second"));
         Directory.Delete(OrchestratorLayout.Of(layout, "second").Directory, recursive: true);
@@ -918,7 +918,7 @@ public sealed class FoldLedgerTests
         ledger.Settle(other, id, HarnessExit.Success);
         _ = await harness.RunGitAsync(temp.Path, ["update-index", "--assume-unchanged", "--", "a.txt"], Token);
 
-        var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, wantedName: "third", cancellationToken: Token));
+        var held = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "third", cancellationToken: Token));
 
         Assert.Contains("run 'r1' of this repository is unfinished (stopped; 1 fold in its ledger not yet committed)", held.Message, StringComparison.Ordinal);
     }
@@ -971,7 +971,7 @@ public sealed class FoldLedgerTests
         var layout = new HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
         var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
-        var (other, _) = await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
+        var (other, _) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
         harness.OrchestrationStore.WriteFlow(other, new FlowFile(1, other.Name, "flow", Digest, new Dictionary<string, string>(), "Stopped", new FlowBudgetRecord(0, 0, 0), 0, [], [], At));
         var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
@@ -982,7 +982,7 @@ public sealed class FoldLedgerTests
         _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "the fold, by hand", "--", "a.txt"], Token);
 
         Assert.Equal("folded\r\n", (await harness.RunGitAsync(temp.Path, ["show", "HEAD:a.txt"], Token)).StandardOutput);
-        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token)).Run.Name);
+        Assert.Equal("second", (await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token)).Run.Name);
     }
 
     private const string Head = "1111111111111111111111111111111111111111";

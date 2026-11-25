@@ -73,13 +73,15 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// record and the way on with that one), one whose directory is there holding no run's record refused as well, else
     /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
     /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
-    /// process. Before any of it, a start where the sweep of every run of the repository kept a record because its session
-    /// holds this very process is refused: the run's engine, this process, would be ended with it by the next command run
-    /// from outside, which ends what the record names.
+    /// process. Once the test for another unfinished run - the last look at a live owner - has passed, and before anything of
+    /// the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
+    /// record because its session holds this very process is refused: the run's engine, this process, would be ended with it
+    /// by the next command run from outside, which ends what the record names. Swept there, what it keeps is never older
+    /// than the start: an owner seen standing before the section and gone since is swept with the rest.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="definition">The workflow, as it was read.</param>
-    /// <param name="swept">What the sweep of every run of the repository did, as the start read it.</param>
+    /// <param name="sweep">Sweeps every run of the repository, as <c>list-orchestrator</c> does, inside the section.</param>
     /// <param name="command">The command starting the run, which a refusal says to run from outside.</param>
     /// <param name="wantedName">The name <c>--run</c> gave, or null for the next r&lt;N&gt;.</param>
     /// <param name="inputs">The values the run is started with, by input name.</param>
@@ -92,13 +94,13 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">
-    /// The sweep kept a record whose session holds this very process, another run of the repository is unfinished, the name
+    /// Another run of the repository is unfinished, the sweep keeps a record whose session holds this very process, the name
     /// is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
         HarnessLayout layout,
         WorkflowDefinition definition,
-        ChildSweep swept,
+        Func<ChildSweep> sweep,
         string command,
         string? wantedName = null,
         IReadOnlyDictionary<string, string>? inputs = null,
@@ -109,19 +111,19 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(swept);
+        ArgumentNullException.ThrowIfNull(sweep);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
-
-        if (swept.Refusal($"no run of workflow '{definition.Name}' was started", "a run started inside it would be ended with it by the next command run from outside", command) is { } holding)
-        {
-            throw new HarnessException(HarnessExit.Refused, holding);
-        }
 
         var differing = await DifferingAsync(layout, leavingOut: null, cancellationToken).ConfigureAwait(false);
 
         return AcrossRuns(layout, () =>
         {
             RefuseAnotherUnfinished(layout, leavingOut: null, differing);
+
+            if (sweep().Refusal($"no run of workflow '{definition.Name}' was started", "a run started inside it would be ended with it by the next command run from outside", command) is { } holding)
+            {
+                throw new HarnessException(HarnessExit.Refused, holding);
+            }
 
             var name = wantedName is { } given ? New(layout, given) : NextName(layout);
 
@@ -174,33 +176,30 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// refused by name, with no owner written beside it - the test for another unfinished run, leaving out
     /// <paramref name="run"/>, the run's owner claimed - refused where a live one holds it, a dead one reclaimed and said -
     /// and a request no engine took removed, so it never reaches this session - where it cannot be taken, the claim just
-    /// made is let go before the refusal, so no owner is left behind by a session that never began. Before any of it, a
-    /// session where the sweep of every run of the repository kept a record because its session holds this very process
-    /// is refused: a session of the run inside it would be ended with it by the next command run from outside, which ends
-    /// what the record names.
+    /// made is let go before the refusal, so no owner is left behind by a session that never began. Once the claim - the last
+    /// look at a live owner - is made, every run of the repository is swept (<paramref name="sweep"/>), which ends what a dead
+    /// engine left before this session runs beside it, and a session where it keeps a record because its session holds this
+    /// very process is refused, the claim let go: a session of the run inside it would be ended with it by the next command
+    /// run from outside, which ends what the record names. Swept there, what it keeps is never older than the claim: an
+    /// owner the command saw standing - one an answer was handed to and waited on - and gone since is swept with the rest.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
-    /// <param name="swept">What the sweep of every run of the repository did, as the command that loaded the run read it.</param>
+    /// <param name="sweep">Sweeps every run of the repository, as <c>list-orchestrator</c> does, inside the section.</param>
     /// <param name="command">The command beginning the session, which a refusal says to run from outside.</param>
     /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
     /// <exception cref="HarnessException">
-    /// The sweep kept a record whose session holds this very process, the run is gone, another run of the repository is
-    /// unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>); or a request left for an engine that
-    /// ended cannot be taken, the claim this process made let go first.
+    /// The run is gone, another run of the repository is unfinished, a live engine owns the run, or the sweep keeps a record
+    /// whose session holds this very process (<see cref="HarnessExit.Refused"/>); or a request left for an engine that ended
+    /// cannot be taken. A refusal after the claim - the sweep's, or the request's - lets the claim this process made go first.
     /// </exception>
-    public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, ChildSweep swept, string command, CancellationToken cancellationToken = default)
+    public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, Func<ChildSweep> sweep, string command, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(run);
-        ArgumentNullException.ThrowIfNull(swept);
+        ArgumentNullException.ThrowIfNull(sweep);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
-
-        if (swept.Refusal($"run '{run.Name}' was not taken", "a session of the run inside it would be ended with it by the next command run from outside", command) is { } holding)
-        {
-            throw new HarnessException(HarnessExit.Refused, holding);
-        }
 
         var differing = await DifferingAsync(layout, run.Name, cancellationToken).ConfigureAwait(false);
 
@@ -218,6 +217,11 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             try
             {
+                if (sweep().Refusal($"run '{run.Name}' was not taken", "a session of the run inside it would be ended with it by the next command run from outside", command) is { } holding)
+                {
+                    throw new HarnessException(HarnessExit.Refused, holding);
+                }
+
                 // A pause or a stop asked of an engine that ended before it took it was asked of that engine, and of no
                 // session after it.
                 _ = _store.TakeStopFile(run);

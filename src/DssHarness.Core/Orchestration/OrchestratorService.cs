@@ -254,15 +254,8 @@ public sealed class OrchestratorService(
         var orchestrator = OrchestratorLayout.Of(layout, name);
 
         // Before anything else of it is read, and before its records can go with it: what its steps left running once
-        // their starter has gone. A record kept because its session holds this very process would go with the
-        // orchestrator's directory, and what it holds run on with nothing left to end it: the deletion is refused, for one
-        // run from outside it.
-        var swept = await _sessions.SweepAsync(orchestrator, DeleteCommand).ConfigureAwait(false);
-
-        if (swept.Refusal($"Orchestrator '{name}' was not deleted", "its record would go with the orchestrator, leaving what it holds running with nothing left to end it", DeleteCommand) is { } holding)
-        {
-            return CommandOutcome.Refused(holding);
-        }
+        // their starter has gone.
+        await _sessions.SweepAsync(orchestrator, DeleteCommand).ConfigureAwait(false);
 
         var worktreesDirectory = layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
         var group = WorktreeAddress.Plain(name).PathUnder(worktreesDirectory);
@@ -369,6 +362,16 @@ public sealed class OrchestratorService(
                 return CommandOutcome.Refused(
                     $"Orchestrator '{name}' was not deleted, because it keeps {KeptOf.Said(kept)} of its agents {string.Join(", ", kept.Select(agent => $"'{agent.Name}'"))}. "
                     + "Copy out what you need, or pass --delete-evidence to delete them with it. Nothing was changed.");
+            }
+
+            // Swept again right before the removal, inside the section: a record whose owner stood as the command began and
+            // has gone since is swept with the rest, and one kept because its session holds this very process would go with
+            // the orchestrator's directory, and what it holds run on with nothing left to end it - the deletion is refused,
+            // for one run from outside it.
+            if (_sessions.SweepAsync(orchestrator, DeleteCommand).GetAwaiter().GetResult()
+                .Refusal($"Orchestrator '{name}' was not deleted", "its record would go with the orchestrator, leaving what it holds running with nothing left to end it", DeleteCommand) is { } holding)
+            {
+                return CommandOutcome.Refused(holding);
             }
 
             if (Remove(orchestrator) is { } stopped)

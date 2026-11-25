@@ -353,9 +353,14 @@ changing nothing - `delete-orchestrator`, whose deletion would take the record w
 directory, and every command that makes this process a run's engine, whose engine would run inside
 what the next command from outside ends: a new run's start (`run-orchestrator`,
 `FlowSessions.CreateAsync`) and a session of a run already made (`resume-orchestrator`,
-`answer-orchestrator`, each claiming the run's owner, `FlowSessions.ClaimAsync`), each of which
-sweeps every run of the repository first, as `list-orchestrator` does, so a record any run keeps
-refuses it; every other command goes on with the warning.
+`answer-orchestrator`, each claiming the run's owner, `FlowSessions.ClaimAsync`). Each refuses over
+a sweep taken at the act itself, so the record it refuses over is never older than the act: the
+start and the claim sweep every run of the repository, as `list-orchestrator` does, inside the
+section that decides the run's owner, after the last look at a live owner, and `delete-orchestrator`
+sweeps its orchestrator again inside its section right before the removal - an owner seen standing
+as the command began and gone since, one an answer was handed to and waited on among them, is
+swept with the rest, what it left ended before the new session runs, and a record kept refuses
+the act; every other command goes on with the warning.
 `stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
 ended: what outlived that end. A tree is ended by holding each process of it still before any is
 killed (`Containment.EndTree`, below), and the system hangs up a group that loses its last parent in

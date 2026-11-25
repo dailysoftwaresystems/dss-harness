@@ -144,7 +144,8 @@ public sealed record ChildSweep(IReadOnlyList<EndedChildSession> Ended, IReadOnl
 /// and left with its record, for a command run from outside it to end, and the sweep answers it kept so
 /// (<see cref="ChildSweep.HeldHere"/>): a command that would lose that record - the orchestrator's deletion - or make this
 /// process a run's engine inside it - a new run's start, or a session of a run already made, claiming its owner, each
-/// reading the sweep of every run of the repository - refuses over it, changing nothing. An
+/// sweeping every run of the repository at the act itself, inside the section that decides the owner - refuses over it,
+/// changing nothing. An
 /// owner on another machine is never taken to have gone, since nothing here can ask that machine. Windows records
 /// nothing: a child there is held in a job that ends with the process holding it.
 /// </para>
@@ -172,6 +173,14 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
     private readonly IHarnessOutput _output = output ?? throw new ArgumentNullException(nameof(output));
 
     private readonly EndedChildSessions _ended = ended ?? throw new ArgumentNullException(nameof(ended));
+
+    private readonly Lock _gate = new();
+
+    /// <summary>
+    /// The records this operation's sweeps kept because their sessions hold this very process, each said once: a sweep
+    /// made again at an act - a claim, a start, a deletion - answers it kept still, and says nothing more of it.
+    /// </summary>
+    private readonly HashSet<string> _keptSaid = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Where a child of the step kept at <paramref name="stepDirectory"/> records its session or its group, as its request
@@ -234,10 +243,22 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
             }
 
             // One that holds this very process - the command runs in it, or descends from its leader - is never ended from
-            // inside: it is said and left with its record, for a command run from outside it to end.
+            // inside: it is said and left with its record, for a command run from outside it to end - said once in the
+            // operation, however many of its sweeps keep it.
             if (ending.HoldsThisProcess)
             {
-                _output.Warn(command, $"'{file}' is {RecordKind}, and {ending.Unreached}. It was left as it is, for a command run from outside it to end.");
+                bool first;
+
+                lock (_gate)
+                {
+                    first = _keptSaid.Add(file);
+                }
+
+                if (first)
+                {
+                    _output.Warn(command, $"'{file}' is {RecordKind}, and {ending.Unreached}. It was left as it is, for a command run from outside it to end.");
+                }
+
                 heldHere.Add(new HeldChildSession(file, record.Session, record.Group, _identity.CurrentId));
                 continue;
             }

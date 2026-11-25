@@ -1049,17 +1049,22 @@ public sealed class ChildSessionsTests
     }
 
     /// <summary>
-    /// Records the session the process that started this one leads in step <c>s1</c> of <paramref name="orchestrator"/>, as
-    /// a process that has gone since left it - its owner this process under a start it does not have: the record a killed
-    /// engine leaves of a step's contained child, for a test run inside that child's session. Linux's and macOS's.
+    /// Records the session the process that started this one leads in step <c>s1</c> of <paramref name="orchestrator"/>: as
+    /// a process that has gone since left it - its owner this process under a start it does not have - the record a killed
+    /// engine leaves of a step's contained child; or, where <paramref name="owner"/> names one, as that process placed it,
+    /// the record a live engine keeps. For a test run inside that child's session; Linux's and macOS's.
     /// </summary>
+    /// <param name="orchestrator">The orchestrator whose step records it.</param>
+    /// <param name="owner">The process that placed it, by its id and its start; <see langword="null"/> for one that has gone.</param>
     /// <returns>The record's path.</returns>
-    internal static string RecordParentsSession(OrchestratorLayout orchestrator)
+    internal static string RecordParentsSession(OrchestratorLayout orchestrator, (int Id, string Stamp)? owner = null)
     {
         var leader = TestChild.ParentId() ?? throw new InvalidOperationException("this process's parent could not be read");
         var step = orchestrator.StepDirectory("s1");
+        var identity = new ProcessIdentity(new HostPlatform());
+        IProcessIdentity placer = owner is { } placed ? new PlacedBy(identity, placed.Id, placed.Stamp) : new Gone(identity, laterStart: false);
 
-        LeftBehind(TextWriter.Null).For(step).Placed(leader, started: null, TestHost.AssemblyProgram, group: false);
+        Records(placer, TextWriter.Null).For(step).Placed(leader, started: null, TestHost.AssemblyProgram, group: false);
         return OrchestratorLayout.ChildFile(step, leader);
     }
 
@@ -1067,17 +1072,39 @@ public sealed class ChildSessionsTests
     /// The machine's records of a step's children, as a process that has gone wrote them (<see cref="Gone"/>), its lines
     /// written to <paramref name="said"/>: what a child of a test reads and writes them by.
     /// </summary>
-    private static ChildSessions LeftBehind(TextWriter said)
+    private static ChildSessions LeftBehind(TextWriter said) => Records(new Gone(new ProcessIdentity(new HostPlatform()), laterStart: false), said);
+
+    /// <summary>The machine's records of a step's children, as <paramref name="identity"/> writes and reads them, its lines written to <paramref name="said"/>.</summary>
+    private static ChildSessions Records(IProcessIdentity identity, TextWriter said)
     {
         var platform = new HostPlatform();
         var permissions = FilePermissionsFactory.Create();
 
         return new ChildSessions(
             new Core.FileSystem.PhysicalFileSystem(permissions),
-            new Gone(new ProcessIdentity(platform), laterStart: false),
+            identity,
             new LeftSessions(platform, ProcessTableFactory.Create(platform, new ProcessRunner(platform, permissions))),
             new ConsoleHarnessOutput(TextWriter.Null, said, verbose: false),
             new EndedChildSessions());
+    }
+
+    /// <summary>
+    /// This process's identity, but for the process it says it is: <paramref name="id"/> under <paramref name="stamp"/> -
+    /// the owner a record that process placed names.
+    /// </summary>
+    private sealed class PlacedBy(IProcessIdentity real, int id, string stamp) : IProcessIdentity
+    {
+        public int CurrentId => id;
+
+        public string CurrentMachine => real.CurrentMachine;
+
+        public string? Current => stamp;
+
+        public bool IsAlive(int processId, string? stamp) => real.IsAlive(processId, stamp);
+
+        public string? StampOf(int processId) => real.StampOf(processId);
+
+        public bool IsSame(int processId, string stamp) => real.IsSame(processId, stamp);
     }
 
     /// <summary>What a sweep ended is counted by kind in one line - the sessions, then the process groups - naming only the kinds it ended.</summary>
