@@ -248,7 +248,10 @@ public sealed class CompilerVersionProbeTests
         using var temp = new TempDirectory();
         var program = temp.WriteFile("cc", "a compiler");
         var clock = new JumpingClock();
-        var answered = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Its continuations run as it is answered, so what the probe awaits over the answer - the reading of what a stop
+        // could not reach or end - has completed before the wait looks again: the jumping clock's every pause passes at
+        // once, and a work still completing on another thread would be told a third time.
+        var answered = new TaskCompletionSource<ProcessResult>();
         var runner = new SlowRunner(answered.Task);
         var told = new List<string>();
 
