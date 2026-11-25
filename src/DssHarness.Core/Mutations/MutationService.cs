@@ -223,7 +223,7 @@ public sealed class MutationService(
             request.SelfTest ? new FixtureMutationSource() : new TreeMutationSource(_syncService),
             new WorkerCopies(_syncService, _localTransport, _fileSystem, _output, _identity, CommandName),
             new WorkerSite(_fileSystem, _clock),
-            new ArmBuilder(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem, _output),
+            Builder(),
             new ArmTestRunner(_phaseRunner, _fileSystem, _clock),
             new CtestDescription(_processRunner, _fileSystem, _platform, _output, _clock),
             _pathBudget,
@@ -383,6 +383,13 @@ public sealed class MutationService(
     /// <param name="sweeps">Whether the arms must be sweepable as a sweep needs them, which a listing does not.</param>
     internal Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken, bool sweeps = true)
         => _listings.ReadAsync(context, armNames, CommandName, cancellationToken, sweeps);
+
+    /// <summary>
+    /// The builder of a sweep's arms, as every sweep makes it: over this service's build, process runner, guard of a build
+    /// directory and file system, and the sweep's own output, which says what a stop of ninja listing a worker's records
+    /// could not reach or end on the worker's line (<see cref="UnreachedSaying"/>). The one place it is made.
+    /// </summary>
+    internal ArmBuilder Builder() => new(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem, _output);
 
     /// <summary>
     /// Lists, without sweeping, each selected arm's last verdict on each selected leg its S row names, and whether anything

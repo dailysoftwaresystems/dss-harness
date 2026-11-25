@@ -104,10 +104,13 @@ public static class ServiceRegistration
         services.AddSingleton(origin);
 
         // The only registrations that observe the operating system: which system this is, how it
-        // expresses a file's permissions, and how it publishes its process table. Everything
-        // registered after them depends on these abstractions, never on the platform.
+        // expresses a file's permissions, how it publishes its process table, and how macOS's sandbox
+        // and Windows' container stand on it. Everything registered after them depends on these
+        // abstractions, never on the platform.
         services.AddSingleton<IHostPlatform, HostPlatform>();
         services.AddSingleton(_ => FilePermissionsFactory.Create());
+        services.AddSingleton(MacSandboxHost.ThisMachine);
+        services.AddSingleton(WindowsContainerHost.ThisMachine);
         services.AddSingleton(provider => ProcessTableFactory.Create(
             provider.GetRequiredService<IHostPlatform>(),
             provider.GetRequiredService<IProcessRunner>(),
@@ -251,6 +254,8 @@ public static class ServiceRegistration
         services.AddSingleton<IIsolationPlatform>(provider => new IsolationPlatform(
             provider.GetRequiredService<IHostPlatform>(),
             provider.GetRequiredService<IProcessRunner>(),
+            mac: provider.GetRequiredService<MacSandboxHost>(),
+            windows: provider.GetRequiredService<WindowsContainerHost>(),
             told: static told => Waits.Told(told),
             clock: provider.GetRequiredService<TimeProvider>(),
             output: provider.GetRequiredService<IHarnessOutput>()));

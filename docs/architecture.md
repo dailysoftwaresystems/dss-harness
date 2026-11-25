@@ -459,7 +459,9 @@ questions of the machine one seam a test answers anywhere (`MacSandboxHost`: the
 sandbox already, the version of macOS a record names, each path's real spelling from `realpath`);
 on Windows the container, where MXC's library says the machine has it and can deny a place
 outright - its question one seam a test answers anywhere too (`WindowsContainerHost`: the library's
-backends, and its version, which a record names). Each is proved once per process, on the tree's
+backends, and its version, which a record names). Both seams are the root's, registered beside the
+other registrations that observe the operating system, so a test answers them through the tool's
+own registrations too. Each is proved once per process, on the tree's
 own file system under its runs directory (`isolation-probe-<id>`, removed after), by a probe started
 exactly as every isolated child is - each of its programs - bubblewrap's version, each canary and
 start it tries - run to its end with no bound of the tool's own (`Waits`), told every five minutes
@@ -575,10 +577,10 @@ leftover (`ProcessResult.OutputHeld`). That is data of the run, worded once by t
 the caller that owns the operation's output - once, with its own context, from the result and from the
 stop alike (`UnreachedSaying`, read where the run is awaited, inside any wait over it that would end
 at the caller's token with a cancellation of its own) - and by no second teller of the process's, so
-nothing is said twice: a leg's phase on the leg's line (`PhaseRunner`); a leg run on its host, a
-sync's request, a hold and `host-exec`'s command under their command, naming the host
-(`RemoteLegRunner`, `RemoteSyncTransport`, `HoldAwakeRegistry`, `HostExecService`, with WSL naming its
-default distribution); a machine's `keepAwake` on the leg's line (`KeepAwake`); git and gh under
+nothing is said twice: a leg's phase on the leg's line (`PhaseRunner`); a leg run on its host on
+the leg's line, under the command running it (`RemoteLegRunner`); a sync's request, a hold and
+`host-exec`'s command under their command, naming the host (`RemoteSyncTransport`,
+`HoldAwakeRegistry`, `HostExecService`, with WSL naming its default distribution); a machine's `keepAwake` on the leg's line (`KeepAwake`); git and gh under
 their own names, by the command line asked (`GitClient`, `GhProcess`); the tool's probes under the
 tool or the command they serve, naming what ran - ssh's settings and shell probe, a program a
 connection, a lookup, an inspection or a provisioning runs on a host, a copy asked its version, an
@@ -588,12 +590,15 @@ set-up's line under its direction (`SetUpService`). A caller with no output of i
 operation is handed its caller's way of saying it and names what it ran: git's question of the
 variables it reads (`GitLocalVariables`), handed git's or gh's; the build's questions of a compiler
 and of ninja (`CompilerVersionProbe`, `NinjaDeadOutputCheck`, `NinjaDependencyCheck`,
-`NinjaRebuildGraph`), handed the build's or a mutation worker's line; npm's client and Claude
+`NinjaRebuildGraph`), handed the build's line or, through the arms' builder each sweep makes over its
+own output (`MutationService.Builder`), a mutation worker's; npm's client and Claude
 Code's installation (`NpmClient`, `ClaudeCodeInstall`), handed the command that asks Claude Code
 ready. A host's commands (`HostCommandRunner`) hand it on as it came, a pinned ssh call run again
 without its pin with what both attempts could not reach or end; an isolation probe's trial reports
 it as why no mechanism proved itself, since a container that leaves a process of the trial running
 proves nothing; Claude Code's launch says it as its end's notice and keeps it in the step's result. The
+root hands the operation's output to the process table and the isolation platform it builds
+(`ServiceRegistration`), which have no other. The
 walk keeps each process it ends in what its caller gives it (`EndedProcesses`), and each
 caller waits for what it needs: a stop waits until every process it ended has gone before the
 child's output's end is looked for (above), as a contained child's end does, so what is said to hold

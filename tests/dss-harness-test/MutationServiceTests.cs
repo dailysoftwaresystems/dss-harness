@@ -56,6 +56,48 @@ public sealed class MutationServiceTests
         ["depth.control-after"] = "int depth = 4",
     };
 
+    /// <summary>
+    /// The arms' builder a sweep makes is handed the sweep's own output: what a stop of ninja listing a worker's dependency
+    /// records could not reach or end is said under the sweep, on the worker's line, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheArmsBuilderASweepMakes_SaysThroughTheSweepsOutput_WhatAStopCouldNotReachOrEnd(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var build = Directory.CreateDirectory(temp.Combine("build")).FullName;
+
+        File.WriteAllText(Path.Combine(build, NinjaDependencyCheck.ManifestFileName), string.Empty);
+
+        var request = new BuildRequest(
+            "native/workers/1",
+            temp.Path,
+            new ProjectConfig { Name = "app", Type = "cmake" },
+            new VariantKey("x86_64", "gcc", "debug", null),
+            harness.Platform.PlatformKey,
+            2,
+            temp.Combine("runs"))
+        {
+            BuildDirectory = build,
+        };
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => Service(
+                    harness,
+                    temp,
+                    HostDoubles.Loader(new HarnessConfig(), temp.Path, temp.Path),
+                    new RecordingInspector(host => new HostReport { Host = host }),
+                    runs: UnreachingRunner.For(stop))
+                .Builder()
+                .ReadGraphAsync(new HarnessConfig(), request, token));
+
+        Assert.Equal([UnreachedSaid.Warned(MutationService.CommandName, "native/workers/1: 'ninja -t deps'")], said);
+    }
+
     /// <summary>A registry read whole and every text there: the arms selected, every one where --arms is left out, in the registry's order.</summary>
     [Fact]
     public async Task ARegistryReadWhole_SelectsEveryArm_OrThoseArmsNames()
@@ -2122,9 +2164,10 @@ public sealed class MutationServiceTests
         IGitClient? git = null,
         KnownTrees? trees = null,
         ISyncService? reading = null,
-        IMemoryGauge? gauge = null)
+        IMemoryGauge? gauge = null,
+        IProcessRunner? runs = null)
     {
-        var processes = Substitute.For<IProcessRunner>();
+        var processes = runs ?? Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
         var sync = SyncKit.ServiceDouble();
 
