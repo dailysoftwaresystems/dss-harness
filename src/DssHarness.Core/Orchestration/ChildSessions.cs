@@ -152,6 +152,9 @@ public sealed record ChildSweep(IReadOnlyList<EndedChildSession> Ended, IReadOnl
 /// <para>
 /// Each session or group a sweep ends with anything still in it is said as it is ended, and kept in the operation's
 /// <see cref="EndedChildSessions"/>, which every document the operation answers with says, however it goes on to end.
+/// A command sweeps more than once - as it begins, and again at the act that decides on what a sweep keeps - and says
+/// each thing its sweeps say of a record once: a line said of a record before, and an end kept before, are neither said
+/// nor kept again by a later sweep of the operation that finds the record as before (<see cref="SaidFirst"/>).
 /// </para>
 /// </remarks>
 /// <param name="fileSystem">Reads, writes and removes the records.</param>
@@ -177,10 +180,10 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
     private readonly Lock _gate = new();
 
     /// <summary>
-    /// The records this operation's sweeps kept because their sessions hold this very process, each said once: a sweep
-    /// made again at an act - a claim, a start, a deletion - answers it kept still, and says nothing more of it.
+    /// Each line this operation's sweeps said of a record, by the record's path: a sweep made again - at a claim, a start,
+    /// a deletion - that finds the record as before says nothing more of it, and keeps no end of it again.
     /// </summary>
-    private readonly HashSet<string> _keptSaid = new(StringComparer.Ordinal);
+    private readonly HashSet<(string Record, string Line)> _said = [];
 
     /// <summary>
     /// Where a child of the step kept at <paramref name="stepDirectory"/> records its session or its group, as its request
@@ -237,28 +240,16 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
                 }
                 catch (PlatformNotSupportedException ex)
                 {
-                    _output.Warn(command, $"'{file}' is {RecordKind}, which this system never writes: {ex.Message.TrimEnd('.')}. It was left as it is.");
+                    Warn(command, file, $"'{file}' is {RecordKind}, which this system never writes: {ex.Message.TrimEnd('.')}. It was left as it is.");
                     continue;
                 }
             }
 
             // One that holds this very process - the command runs in it, or descends from its leader - is never ended from
-            // inside: it is said and left with its record, for a command run from outside it to end - said once in the
-            // operation, however many of its sweeps keep it.
+            // inside: it is said and left with its record, for a command run from outside it to end.
             if (ending.HoldsThisProcess)
             {
-                bool first;
-
-                lock (_gate)
-                {
-                    first = _keptSaid.Add(file);
-                }
-
-                if (first)
-                {
-                    _output.Warn(command, $"'{file}' is {RecordKind}, and {ending.Unreached}. It was left as it is, for a command run from outside it to end.");
-                }
-
+                Warn(command, file, $"'{file}' is {RecordKind}, and {ending.Unreached}. It was left as it is, for a command run from outside it to end.");
                 heldHere.Add(new HeldChildSession(file, record.Session, record.Group, _identity.CurrentId));
                 continue;
             }
@@ -270,9 +261,15 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
             if (ending.Found)
             {
                 var session = new EndedChildSession(orchestrator.Name, agent, step, record.Session, record.Program, record.Owner.ProcessId, ending.Unreached, record.Group);
+                var line = Line(session);
 
-                _output.Info(command, Line(session));
-                _ended.Add(session);
+                // Said, and kept for the documents, once in the operation; each sweep answers what it ended itself.
+                if (SaidFirst(file, line))
+                {
+                    _output.Info(command, line);
+                    _ended.Add(session);
+                }
+
                 ended.Add(session);
             }
         }
@@ -306,6 +303,33 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
         }
 
         return new ChildSweep(ended, heldHere);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="line"/> is said of the record at <paramref name="record"/> for the first time in this
+    /// operation: the one guard over what its sweeps say and keep, so a command that sweeps more than once says each line,
+    /// and keeps each end, once.
+    /// </summary>
+    /// <param name="record">The record's path.</param>
+    /// <param name="line">What is said of it.</param>
+    private bool SaidFirst(string record, string line)
+    {
+        lock (_gate)
+        {
+            return _said.Add((record, line));
+        }
+    }
+
+    /// <summary>Warns, as a line of <paramref name="command"/>, what a sweep says of the record at <paramref name="record"/> - once in the operation (<see cref="SaidFirst"/>).</summary>
+    /// <param name="command">The command sweeping.</param>
+    /// <param name="record">The record's path.</param>
+    /// <param name="line">What is said of it.</param>
+    private void Warn(string command, string record, string line)
+    {
+        if (SaidFirst(record, line))
+        {
+            _output.Warn(command, line);
+        }
     }
 
     /// <summary>The line a command says a session or a group it ended with.</summary>
@@ -432,7 +456,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
             why = $"it could not be read: {ex.Message.TrimEnd('.')}";
         }
 
-        _output.Warn(command, $"'{file}' is {RecordKind}, and does not read as one: {why}. It was left as it is, and nothing it names was ended.");
+        Warn(command, file, $"'{file}' is {RecordKind}, and does not read as one: {why}. It was left as it is, and nothing it names was ended.");
         return null;
     }
 
@@ -445,7 +469,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            _output.Warn(command, $"'{file}', {RecordKind}, could not be removed: {ex.Message.TrimEnd('.')}. The next command over '{orchestrator}' removes it.");
+            Warn(command, file, $"'{file}', {RecordKind}, could not be removed: {ex.Message.TrimEnd('.')}. The next command over '{orchestrator}' removes it.");
         }
     }
 

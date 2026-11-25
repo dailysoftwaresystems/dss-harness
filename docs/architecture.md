@@ -362,7 +362,12 @@ there cannot come back, and a live one is never claimed - so a refusal leaves th
 was; and `delete-orchestrator` sweeps its orchestrator again inside its section right before the
 removal. An owner seen standing as the command began and gone since, one an answer was handed to
 and waited on among them, is swept with the rest, what it left ended before the new session runs,
-and a record kept refuses the act; every other command goes on with the warning.
+and a record kept refuses the act; every other command goes on with the warning. A command that
+sweeps more than once - as it begins, and again at the act - says each thing its sweeps say of a
+record once, and keeps each end once in its document's `ended`: one guard in `ChildSessions`
+(`SaidFirst`) over every line a sweep says - the record kept, one that does not read, one this
+system never writes, one that could not be removed, and the end - and over the end it keeps, so a
+later sweep that finds a record as before says and keeps nothing more of it.
 `stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
 ended: what outlived that end. A tree is ended by holding each process of it still before any is
 killed (`Containment.EndTree`, below), and the system hangs up a group that loses its last parent in

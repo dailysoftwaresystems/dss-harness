@@ -1160,7 +1160,8 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// Every verb over a run made sweeps what a killed engine's steps left running before it reads anything else of the
-    /// run, its own name on what the sweep says: here a record that does not read as one, said and left as it is.
+    /// run, its own name on what the sweep says: here a record that does not read as one, said and left as it is - and said
+    /// once, however many times the verb sweeps: a resume and an answer sweep again at their claim of the run.
     /// </summary>
     [Theory]
     [InlineData(FlowService.ResumeCommand)]
@@ -1194,7 +1195,9 @@ public sealed class FlowServiceTests
         var warning = $"{command}: WARN - '{record}' is the record of a step's child's session or process group, and does not read as one: "
             + "its session is 0, and a session is a process's id. It was left as it is, and nothing it names was ended.";
 
-        Assert.Equal(warning, repository.Harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).FirstOrDefault(line => line.StartsWith($"{command}: ", StringComparison.Ordinal)));
+        Assert.Equal(
+            [warning],
+            repository.Harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Contains($"'{record}'", StringComparison.Ordinal)));
         Assert.True(File.Exists(record));
     }
 
@@ -2382,8 +2385,9 @@ public sealed class FlowServiceTests
     /// it, nothing of the run is answered, and this process never becomes the run's engine inside what the next command
     /// from outside ends - whether the record is the run's own or another orchestrator's of the repository, which the claim
     /// sweeps as list-orchestrator does: a resume, a new answer to the run's open question, and a changed answer
-    /// (<c>--again</c>) alike. Run where it would act on itself: the command runs in a child the session's leader starts
-    /// (<see cref="EngineFromInside"/>), every process the test's own, bounded, and ended on every path.
+    /// (<c>--again</c>) alike - the record warned of once, though the command sweeps the run's own records as it begins and
+    /// every run's again at its claim. Run where it would act on itself: the command runs in a child the session's leader
+    /// starts (<see cref="EngineFromInside"/>), every process the test's own, bounded, and ended on every path.
     /// </summary>
     [Theory]
     [InlineData("resume", "r1")]
@@ -2428,6 +2432,7 @@ public sealed class FlowServiceTests
                 $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
                     + $"inside it would be ended with it by the next command run from outside. Run {(command == "resume" ? FlowService.ResumeCommand : FlowService.AnswerCommand)} "
                     + "from outside it. Nothing was changed.",
+                $"warned={ChildSessionsTests.HeldHereWarning(command == "resume" ? FlowService.ResumeCommand : FlowService.AnswerCommand, record, leader, caller.Id)}",
             ],
             lines);
         Assert.Equal(written, File.ReadAllText(run.OwnerFile));
@@ -2525,6 +2530,7 @@ public sealed class FlowServiceTests
                     "runs=r1",
                     $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
                         + $"inside it would be ended with it by the next command run from outside. Run {FlowService.AnswerCommand} from outside it. Nothing was changed.",
+                    $"warned={ChildSessionsTests.HeldHereWarning(FlowService.AnswerCommand, record, leader, caller.Id)}",
                 ],
                 lines);
             Assert.Equal(written, File.ReadAllText(run.OwnerFile));
@@ -2571,6 +2577,7 @@ public sealed class FlowServiceTests
                 "runs=o0",
                 $"said=no run of workflow '{Workflow}' was started: '{record}' records session {leader}, which holds this very process (pid {caller}), and a run "
                     + $"started inside it would be ended with it by the next command run from outside. Run {FlowService.RunCommand} from outside it. Nothing was changed.",
+                $"warned={ChildSessionsTests.HeldHereWarning(FlowService.RunCommand, record, leader, caller.Id)}",
             ],
             lines);
         Assert.False(Directory.Exists(RunOf(repository).Directory), $"a run was made at '{RunOf(repository).Directory}' from inside the session the sweep kept");
@@ -2604,7 +2611,8 @@ public sealed class FlowServiceTests
     /// question <c>go</c>, changes its last answer to <c>stay</c> (<c>again</c>), or starts a new run, from inside the
     /// session, and writes its own id as <c>caller</c>, how the command ended as <c>exit</c>, <c>said</c> and each
     /// <c>detail</c>, whether the record is still there as <c>kept</c>, run <c>r1</c>'s owner once it ended as
-    /// <c>owner</c>, and the repository's orchestrators then as <c>runs</c>.
+    /// <c>owner</c>, the repository's orchestrators then as <c>runs</c>, and each line the command said of the record as
+    /// <c>warned</c>.
     /// </summary>
     internal static int EngineFromInside(TextWriter output, string[] arguments)
     {
@@ -2646,6 +2654,7 @@ public sealed class FlowServiceTests
         output.Write($"kept={File.Exists(record)}\n");
         output.Write($"owner={(owner is null ? "none" : owner.ProcessId.ToString(CultureInfo.InvariantCulture))}\n");
         output.Write($"runs={string.Join(",", harness.OrchestrationStore.Orchestrators(layout).Select(orchestrator => orchestrator.Name))}\n");
+        ChildSessionsTests.WriteWarned(output, harness.StandardError, record);
         return 0;
     }
 
