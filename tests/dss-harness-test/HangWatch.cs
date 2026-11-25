@@ -58,31 +58,70 @@ internal static class HangWatch
 
                 var longest = standing.Count == 0 ? 0 : standing.Values.Max();
 
-                if (longest is 3 or 7)
+                if (longest == 3)
                 {
                     var said = new StringBuilder();
+                    var self = Environment.ProcessId;
 
                     ThreadPool.GetMinThreads(out var minWorkers, out _);
-                    said.AppendLine($"[hang-watch {DateTime.UtcNow:HH:mm:ss}] this pid {Environment.ProcessId}; pool threads {ThreadPool.ThreadCount} (min {minWorkers}), queued {ThreadPool.PendingWorkItemCount}; processes of uid {uid} (state 4 stopped, 5 zombie; flag 0x4 in exit):");
+                    said.AppendLine($"[hang-watch {DateTime.UtcNow:HH:mm:ss}] this pid {self}; pool threads {ThreadPool.ThreadCount} (min {minWorkers}), queued {ThreadPool.PendingWorkItemCount}; this process, its children and every process standing stopped (4), a zombie (5) or in its exit (flag 0x4):");
 
-                    foreach (var process in table)
+                    foreach (var process in table.Where(process => process.Id == self || process.Parent == self || process.State is Stopped or Zombie || (process.Flags & InExit) != 0))
                     {
                         said.AppendLine($"[hang-watch]   pid {process.Id} ppid {process.Parent} pgid {process.Group} state {process.State} flags 0x{process.Flags:x} {process.Name}");
                     }
 
                     Console.Error.Write(said.ToString());
 
-                    // The told waits of five minutes have been written by the second table: the run is ended, so its log is kept now.
-                    if (longest == 7)
+                    var stopped = string.Join(' ', standing.Keys.Select(key => key.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                    var output = Path.Combine(Path.GetTempPath(), $"hang-watch-{self}");
+
+                    Directory.CreateDirectory(output);
+                    Run($"export PATH=/usr/bin:/bin:/usr/sbin:/sbin; sample {self} 3 -mayDie -file {output}/sample.txt > {output}/sample-run.txt 2>&1; "
+                        + $"for id in {stopped}; do echo \"== lsof -p $id\"; lsof -p $id; done > {output}/lsof.txt 2>&1; "
+                        + $"echo \"== pipes of {self}\" >> {output}/lsof.txt; lsof -p {self} 2>&1 | grep -i -E 'pipe|PIPE' >> {output}/lsof.txt");
+
+                    foreach (var file in new[] { "sample-run.txt", "lsof.txt", "sample.txt" })
                     {
-                        Console.Error.Flush();
-                        Environment.FailFast("hang-watch: a process stood stopped, a zombie or in its exit for seven minutes");
+                        var path = Path.Combine(output, file);
+                        Console.Error.WriteLine($"[hang-watch] ===== {file} =====");
+                        Console.Error.WriteLine(File.Exists(path) ? File.ReadAllText(path) : "(none)");
                     }
+
+                    Console.Error.Flush();
+                }
+
+                // The told waits of five minutes have been written by now: the run is ended, so its log is kept at once.
+                if (longest == 7)
+                {
+                    Console.Error.Flush();
+                    Environment.FailFast("hang-watch: a process stood stopped, a zombie or in its exit for seven minutes");
                 }
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[hang-watch] {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>Runs <paramref name="script"/> under /bin/sh by posix_spawn - never through the runtime's own start - and waits for it.</summary>
+    private static void Run(string script)
+    {
+        var arguments = new[] { "/bin/sh", "-c", script }.Select(Marshal.StringToHGlobalAnsi).Append(IntPtr.Zero).ToArray();
+
+        try
+        {
+            if (posix_spawn(out var id, "/bin/sh", IntPtr.Zero, IntPtr.Zero, arguments, [IntPtr.Zero]) == 0)
+            {
+                _ = waitpid(id, out _, 0);
+            }
+        }
+        finally
+        {
+            foreach (var argument in arguments.Where(argument => argument != IntPtr.Zero))
+            {
+                Marshal.FreeHGlobal(argument);
             }
         }
     }
@@ -110,6 +149,12 @@ internal static class HangWatch
 
     [DllImport("libc")]
     private static extern uint getuid();
+
+    [DllImport("libc")]
+    private static extern int posix_spawn(out int id, string path, IntPtr fileActions, IntPtr attributes, IntPtr[] arguments, IntPtr[] environment);
+
+    [DllImport("libc")]
+    private static extern int waitpid(int id, out int status, int options);
 
     [DllImport("libc")]
     private static extern int proc_listpids(uint type, uint typeInfo, int[] buffer, int bufferSize);
