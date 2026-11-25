@@ -490,6 +490,42 @@ public sealed class ChildSessionsTests
     }
 
     /// <summary>
+    /// A bound child whose group cannot be recorded, whose stop cannot hold it still - the system refusing it, as it does
+    /// a process of another user's - is still ended with its group, and its start fails saying what its stop could not
+    /// end beside why it was not recorded: what a stop could not end is never dropped.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildWhoseGroupCannotBeRecorded_SaysWhatItsStopCouldNotEnd()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing is recorded there, which AContainedChild_IsRecordedOnlyWhereItsSessionWouldOutliveItsStarter holds.");
+
+        var refusing = new Refusing();
+        Task<ProcessResult> run;
+
+        using (ProcessScope.Enter(new ProcessScope(() => refusing)))
+        {
+            run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = new RefusedHold(refusing) }.RunAsync(
+                Sleeper("300000") with { Bound = true },
+                Token);
+        }
+
+        var raised = await Assert.ThrowsAsync<ProgramStartException>(() => run.WaitAsync(LongBound, Token));
+
+        try
+        {
+            Assert.Equal(
+                $"'{TestHost.AssemblyProgram}' could not be started: its process group could not be recorded: the disk is full; "
+                    + $"not every process of the tree of pid {refusing.Leader} could be ended: pid {refusing.Leader} could not be ended: {new Win32Exception(RefusedHold.NotPermitted).Message.TrimEnd('.')}",
+                raised.Message);
+            Assert.True(refusing.Leader.AwaitGone(), $"the child {refusing.Leader}, whose group was never recorded, was left running");
+        }
+        finally
+        {
+            refusing.Leader.TryEnding();
+        }
+    }
+
+    /// <summary>
     /// A contained child whose session cannot be recorded is not run - nor a bound one under a process scope whose group
     /// cannot be: it is ended, never said to have started, and its start fails saying why - a child no record names is one
     /// a killed tool would leave running unseen.
@@ -1300,6 +1336,19 @@ public sealed class ChildSessionsTests
     }
 
     /// <summary>A record that cannot be written - as a full disk refuses it, unless told otherwise - keeping the leader it was asked to name.</summary>
+    /// <summary>
+    /// How a stop ends what it ends, as the machine does - but for the leader a refusing record learned, whose hold the
+    /// system refuses as it does a process of another user's: what a stop cannot end, which no process of the test's own
+    /// user can be made to be.
+    /// </summary>
+    private sealed class RefusedHold(Refusing record) : ProcessEnds
+    {
+        /// <summary>EPERM: what the system answers a signal to a process of another user's.</summary>
+        public const int NotPermitted = 1;
+
+        public override int Hold(int id) => id == record.Leader.Id ? NotPermitted : base.Hold(id);
+    }
+
     private sealed class Refusing(Func<Exception>? fault = null) : IContainedSessionRecord
     {
         public LearnedProcess Leader { get; private set; }

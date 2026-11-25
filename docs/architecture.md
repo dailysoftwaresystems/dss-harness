@@ -294,7 +294,8 @@ it - its start read through its exit too, while it is still closing what it held
 take a reference to a process from the moment it enters its exit, before its descriptors are closed,
 so there the start is read from the kernel's own record of it, kept until it is reaped, and never
 from the runtime, whose reading refuses such a process. On Windows the job, and a stopped tree, are listed again once every process kept has gone, for a
-child one made while it was being ended. Then
+child one made while it was being ended - a process of the tree a look again passes over said once, with the first
+walk's, in what the stop could not end (`EndedProcesses.Refused`, read once the wait is over). Then
 the output is read until every character the child wrote has been, to its end or until a look finds
 the pipe holding nothing while something still holds it open (`ProcessRunner.StreamCapture`: each
 look, once the child has ended, ends the read that waits - a read ended so has taken nothing, the
@@ -329,7 +330,8 @@ started it with that process's machine and stamp (`ChildSessions`, the request's
 under a `ProcessScope`), taken back once the child has ended and nothing is left in its group. A
 record that cannot be
 written - one whose child's start nothing can read among them - is a start that failed: the child
-is ended, and never said to have started; a defect that keeps one from being written, a record that
+is ended as a stop ends it, and never said to have started, the failure saying what that end could
+not end beside why the record was not written; a defect that keeps one from being written, a record that
 would not read back among them, ends the child too, and is raised as it is. Every command
 over an orchestrator - `create-`, `list-` and `delete-orchestrator`, each agent verb, and each run
 verb over a run already made - first
@@ -477,7 +479,9 @@ system, its output is read, once it has ended - and at a stop once everything th
 gone - until every character it wrote has been - to its
 end, or until a look finds the pipe holding nothing with no read waiting on it - as a contained child's is
 once its container has: what still holds the output then is one of those leftovers, a server its
-phase started in the background, whose later output is its own and is said not read
+phase started in the background, or at a stop a process the stop could not end, said in
+`ProcessResult.Uncontained` - and the output's holder is then said, as its wait is told, to be such a
+process or one the child left running - whose later output is its own and is said not read
 (`ProcessResult.OutputHeld`), so the run is held neither for as long as it lives nor cut short of
 anything the child wrote; the child's own last
 line is handed on. Every phase of
@@ -557,7 +561,7 @@ as another user, one whose own security refuses the harness its end, or one gone
 is passed over, its refusal said once, and still has its children taken from the reading that found
 it, by its listed id and creation time alone, no right asked of it, as a root that could not be ended
 has its own from the first reading. What a stop could not end it says beside what a container could
-not reach (`ProcessResult.Uncontained`, which a leg's phase warns), and what then holds the child's
+not reach (`ProcessResult.Uncontained`, which a leg's phase warns, and warns from the `ProcessStoppedException` its caller's own stop throws, which carries it in place of a result), and what then holds the child's
 output is said to be such a process or one the child left running, never a refusal taken for a
 leftover (`ProcessResult.OutputHeld`). The
 walk keeps each process it ends in what its caller gives it (`EndedProcesses`), and each

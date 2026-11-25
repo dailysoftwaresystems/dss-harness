@@ -119,8 +119,9 @@ public sealed record PhaseResult(
 
     /// <summary>
     /// What the phase's end could not reach or end, and why (<see cref="Processes.ProcessResult.Uncontained"/>) - a contained
-    /// phase's container, a process of its tree a stop could not end - for what it started may still run, said as the phase
-    /// ends; null where its end reached and ended everything it was to.
+    /// phase's container, a process of its tree a stop could not end - for what it started may still run, warned as the
+    /// phase ends, as it is where the phase's caller stopped it and no result is made; null where its end reached and ended
+    /// everything it was to.
     /// </summary>
     public string? Uncontained { get; init; }
 

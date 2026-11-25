@@ -333,19 +333,33 @@ public sealed class PhaseRunner(
         };
 
         var startedUtc = _wallClock.GetUtcNow();
-        var (result, stopped) = await RunBoundedAsync(processRequest, request.StallSeconds, clock, cancellationToken).ConfigureAwait(false);
+        ProcessResult result;
+        PhaseStop stopped;
+
+        try
+        {
+            (result, stopped) = await RunBoundedAsync(processRequest, request.StallSeconds, clock, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ProcessStoppedException ex) when (ex.Uncontained is { } unreached)
+        {
+            // The caller's own stop - an interrupt, a stop of the run, the engine's end - hands no result: what it could not
+            // reach or end is said all the same, for it may still run, and the stop goes on.
+            Unreached(request, unreached);
+            throw;
+        }
+
         var wall = _wallClock.GetUtcNow() - startedUtc;
+
+        // What the child's end could not reach or end - a contained child's container, a process of its tree that refuses
+        // its end at a stop - is said, for it may still run.
+        if (result.Uncontained is { } left)
+        {
+            Unreached(request, left);
+        }
 
         // Every character the child wrote is in the log; what a process it left running - a server its build started,
         // kept for the next phase - writes from now on is that process's own, and is not read. Said, so a log that ends
         // where the child's output did is never taken for all that process went on to write.
-        // What the child's end could not reach or end - a contained child's container, a process of its tree that refuses
-        // its end at a stop - is said, for it may still run.
-        if (result.Uncontained is { } unreached)
-        {
-            _output.Warn(request.Phase, $"{request.Leg}: {unreached}");
-        }
-
         if (result.OutputHeld is { } held)
         {
             _output.Warn(request.Phase, $"{request.Leg}: {held}");
@@ -400,6 +414,13 @@ public sealed class PhaseRunner(
             WorkingDirectory = request.WorkingDirectory,
         };
     }
+
+    /// <summary>
+    /// Says what <paramref name="request"/>'s child's end could not reach or end (<see cref="ProcessResult.Uncontained"/>),
+    /// however the phase ended - at its own end, at its bound, or at its caller's stop, which hands no result - as a warning
+    /// of the phase's: the one place a phase says it.
+    /// </summary>
+    private void Unreached(PhaseRequest request, string unreached) => _output.Warn(request.Phase, $"{request.Leg}: {unreached}");
 
     /// <summary>
     /// Runs the child, stopping it when it goes <paramref name="stallSeconds"/> without a line on

@@ -363,7 +363,7 @@ internal static class Containment
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(ended);
 
-        if (HoldsTheCaller(root.Id))
+        if (HoldsTheCaller(root.Id, ended))
         {
             throw new InvalidOperationException(string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
@@ -383,6 +383,11 @@ internal static class Containment
 
         if (failed.Count > 0)
         {
+            foreach (var refusal in failed)
+            {
+                ended.Refuse(refusal);
+            }
+
             throw new AggregateException($"Not every process of the tree of pid {root.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could be ended.", failed);
         }
     }
@@ -394,11 +399,13 @@ internal static class Containment
     /// On Windows it is the list Windows keeps of every process, which never names another creator once one has gone,
     /// each parent made no later than the child it is read for, so a later holder of a parent's id is never taken for it,
     /// ordered as the walk orders a creator and its child (<see cref="CreationOrder"/>): by their sequence numbers where
-    /// each could be opened to read its own, by their creation times where one could not.
+    /// each could be opened to read its own, by their creation times where one could not - the list and each order read
+    /// as the walk reads them (<see cref="ProcessEnds.Listed"/>, <see cref="ProcessEnds.Made"/>).
     /// A parent that cannot be read ends the chain: what the walk cannot read it cannot walk through either.
     /// </summary>
     /// <param name="root">The id of the process whose tree would be ended.</param>
-    private static bool HoldsTheCaller(int root)
+    /// <param name="ended">What the walk reads Windows' list of every process and each process's order through.</param>
+    private static bool HoldsTheCaller(int root, EndedProcesses ended)
     {
         var self = Environment.ProcessId;
 
@@ -411,7 +418,7 @@ internal static class Containment
         {
             var listed = new Dictionary<int, ListedProcess>();
 
-            foreach (var process in SystemProcessList.Every() ?? [])
+            foreach (var process in ended.Listed() ?? [])
             {
                 _ = listed.TryAdd(process.Id, process);
             }
@@ -422,12 +429,12 @@ internal static class Containment
             }
 
             using var current = new SafeProcessHandle(Windows.GetCurrentProcess(), ownsHandle: false);
-            var made = new CreationOrder(child.Created, SequenceOf(current));
+            var made = new CreationOrder(child.Created, ended.Made(self, current).Sequence);
             var seen = new HashSet<int>();
 
             while (seen.Add(child.Id) && listed.TryGetValue(child.ParentId, out var parent))
             {
-                var parentMade = OrderOf(parent);
+                var parentMade = OrderOf(parent.Id, parent.Created, ended.Made);
 
                 // A process made after the child it is named the creator of holds an id the child's creator left.
                 if (made.MadeBefore(parentMade))
@@ -560,20 +567,21 @@ internal static class Containment
     {
         var tree = new WindowsTree(ended);
         var held = created.Select(handle => (Id: Windows.GetProcessId(handle), Handle: handle)).Where(process => process.Id != 0).ToList();
-        var took = tree.Took(root.Id, held.FirstOrDefault(process => process.Id == root.Id).Handle, failed);
+        var took = tree.Took(root.Id, held.FirstOrDefault(process => process.Id == root.Id).Handle, failed.Add);
 
         // Every other process the caller holds the handle it was created with for - the program the tool's own step created
         // for the root - kept by a copy of it, whatever its own security refuses another.
         foreach (var (id, handle) in held.Where(process => process.Id != root.Id))
         {
-            _ = tree.Took(id, handle, failed);
+            _ = tree.Took(id, handle, failed.Add);
         }
 
         // A root that cannot be ended still has its children ended, as every process of the tree that cannot be does
         // (WindowsTree.Walk): taken from the list's first reading by its listed id and creation time.
-        _ = tree.Walk(failed, took ? null : root.Id);
+        _ = tree.Walk(failed.Add, took ? null : root.Id);
 
-        ended.LookAgainWith(() => tree.Walk(failed: null));
+        // Every look again is the stop's as well: what it passes over is said where the first walk's refusals are.
+        ended.LookAgainWith(() => tree.Walk(ended.Refuse));
     }
 
     /// <summary>
@@ -587,9 +595,13 @@ internal static class Containment
 
         /// <summary>
         /// The processes of the tree that could not be opened - by id and when each was created, as the list named it - each
-        /// tried once, its refusal said once, and its children taken from the reading that found it and from no later one.
+        /// tried once, its refusal said once - in the first walk or in a look again - and its children taken from the reading
+        /// that found it and from no later one.
         /// </summary>
         private readonly HashSet<(int Id, long Created)> _passed = [];
+
+        /// <summary>Whether a reading of the list failed and was said: said once, however many readings fail.</summary>
+        private bool _unlisted;
 
         /// <summary>
         /// Keeps and ends a process of the tree - by a copy of <paramref name="handle"/>, the one it was created with, where
@@ -598,8 +610,8 @@ internal static class Containment
         /// </summary>
         /// <param name="id">The process's id, its own while its caller holds it.</param>
         /// <param name="handle">The handle it was created with, where its caller holds one; <see langword="null"/> where its id alone is known.</param>
-        /// <param name="failed">Where a process that could not be ended is said.</param>
-        public bool Took(int id, SafeProcessHandle? handle, List<Exception> failed)
+        /// <param name="said">Where a process that could not be ended is said.</param>
+        public bool Took(int id, SafeProcessHandle? handle, Action<Exception> said)
         {
             if (ended.Kept(id) is not { } kept)
             {
@@ -610,19 +622,19 @@ internal static class Containment
                 {
                     if (refused is not null)
                     {
-                        failed.Add(refused);
+                        said(refused);
                     }
 
                     return false;
                 }
 
-                kept = new KeptProcess(id, held, CreatedOf(held));
+                kept = new KeptProcess(id, held, ended.Made(id, held).Created);
 
                 _ = ended.Keep(kept);
                 ended.End(kept);
             }
 
-            _members[id] = OrderOf(kept);
+            _members[id] = ended.Made(id, kept.Handle!);
             return true;
         }
 
@@ -636,18 +648,26 @@ internal static class Containment
         /// its children from a later holder's of its id, and one that stands may go on starting others for as long as it
         /// stands.
         /// </summary>
-        /// <param name="failed">Where a process that could not be ended is said; <see langword="null"/> where nothing is said.</param>
+        /// <param name="said">
+        /// Where a process that could not be ended is said, each once: the stop's refusals, the first walk's and every look
+        /// again's alike - and a reading of the list that failed, once.
+        /// </param>
         /// <param name="root">A root that could not be ended, by its id: walked from in the first reading alone, as it names it.</param>
         /// <returns>How many it found.</returns>
-        public int Walk(List<Exception>? failed, int? root = null)
+        public int Walk(Action<Exception> said, int? root = null)
         {
             var found = 0;
 
             while (true)
             {
-                if (SystemProcessList.Every() is not { } listed)
+                if (ended.Listed() is not { } listed)
                 {
-                    failed?.Add(new InvalidOperationException("Windows' list of every process could not be read, so what the tree started was not reached"));
+                    if (!_unlisted)
+                    {
+                        _unlisted = true;
+                        said(new InvalidOperationException("Windows' list of every process could not be read, so what the tree started was not reached"));
+                    }
+
                     return found;
                 }
 
@@ -674,7 +694,7 @@ internal static class Containment
                             continue;
                         }
 
-                        if (Reached(child, creator.Made, failed) is not { } made)
+                        if (Reached(child, creator.Made, said) is not { } made)
                         {
                             continue;
                         }
@@ -703,12 +723,12 @@ internal static class Containment
         /// where it could not be opened, and how it was made, to walk on from; <see langword="null"/> where it is not the
         /// tree's: made before its named creator, by an earlier holder of that id, or not the process the list named.
         /// </summary>
-        private (CreationOrder Order, bool Kept)? Reached(ListedProcess child, CreationOrder creator, List<Exception>? failed)
+        private (CreationOrder Order, bool Kept)? Reached(ListedProcess child, CreationOrder creator, Action<Exception> said)
         {
             if (ended.Kept(child.Id) is { } already)
             {
                 // Kept by another of what the stop ended - a job's member - by a handle, which reads how it was made.
-                var order = OrderOf(already);
+                var order = ended.Made(child.Id, already.Handle!);
 
                 if (order.MadeBefore(creator))
                 {
@@ -733,16 +753,16 @@ internal static class Containment
 
                 if (refused is not null)
                 {
-                    failed?.Add(refused);
+                    said(refused);
                 }
 
                 return (listed, false);
             }
 
-            var made = new CreationOrder(child.Created, SequenceOf(handle));
+            var made = ended.Made(child.Id, handle);
 
             // Another process has the id since the list was read, or the one it names was made before its named creator.
-            if (CreatedOf(handle) != child.Created || made.MadeBefore(creator))
+            if (made.Created != child.Created || made.MadeBefore(creator))
             {
                 handle.Dispose();
                 return null;
@@ -842,12 +862,6 @@ internal static class Containment
     /// <param name="handle">The process, held with the right to ask when it was created.</param>
     internal static CreationOrder OrderOf(SafeProcessHandle handle) => new(CreatedOf(handle), SequenceOf(handle));
 
-    /// <summary>When the process <paramref name="kept"/> holds was made, as the walk orders it.</summary>
-    private static CreationOrder OrderOf(KeptProcess kept) => new(kept.Created, kept.Handle is { } handle ? SequenceOf(handle) : null);
-
-    /// <summary>When the process <paramref name="listed"/> names was made, as the walk orders it (<see cref="OrderOf(int, long)"/>).</summary>
-    private static CreationOrder OrderOf(ListedProcess listed) => OrderOf(listed.Id, listed.Created);
-
     /// <summary>
     /// When the process <paramref name="id"/> names was made, on Windows, as the walk orders a creator and its child, where
     /// it is the very process a reading listed as created at <paramref name="created"/>: its sequence number, read from a
@@ -858,11 +872,17 @@ internal static class Containment
     /// </summary>
     /// <param name="id">The process's id.</param>
     /// <param name="created">When the reading listed it created, as a file time.</param>
-    internal static CreationOrder OrderOf(int id, long created)
+    internal static CreationOrder OrderOf(int id, long created) => OrderOf(id, created, ProcessEnds.Machine.Made);
+
+    /// <summary>
+    /// <see cref="OrderOf(int, long)"/>, the opened process's own order read by <paramref name="made"/>: the machine's, or
+    /// a test's standing in for a clock that stepped (<see cref="ProcessEnds.Made"/>).
+    /// </summary>
+    private static CreationOrder OrderOf(int id, long created, Func<int, SafeProcessHandle, CreationOrder> made)
     {
         using var read = Opened(id, Windows.ReadCreation, out _);
 
-        return new CreationOrder(created, read is not null && CreatedOf(read) / FileTimeMicrosecond == created / FileTimeMicrosecond ? SequenceOf(read) : null);
+        return new CreationOrder(created, read is not null && made(id, read) is var order && order.Created / FileTimeMicrosecond == created / FileTimeMicrosecond ? order.Sequence : null);
     }
 
     /// <summary>A microsecond, in a file time's hundreds of nanoseconds.</summary>

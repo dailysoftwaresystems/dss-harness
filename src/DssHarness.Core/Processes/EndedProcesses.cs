@@ -27,6 +27,35 @@ internal sealed class EndedProcesses(ProcessEnds ends) : IDisposable
     /// <summary>What finds, and ends, what a source of these holds that is not kept yet, saying how many it found: Windows' trees and jobs.</summary>
     private readonly List<Func<int>> _looksAgain = [];
 
+    /// <summary>What the ends could not end, in the order met (<see cref="Refused"/>).</summary>
+    private readonly List<Exception> _refused = [];
+
+    /// <summary>
+    /// What the ends kept here could not end, and why, each said once in the order it was met: a process of a tree the
+    /// walk passed over (<see cref="Containment.EndTree"/>) - in its first reading and in every look again
+    /// (<see cref="GoneAsync"/>) - a reading of Windows' list that failed, a process of a group or a tree on Linux or macOS
+    /// that could not be held or killed. Whole once <see cref="GoneAsync"/> has returned: what a stop says it could not
+    /// end (<see cref="ProcessResult.Uncontained"/>).
+    /// </summary>
+    public IReadOnlyList<Exception> Refused => _refused;
+
+    /// <summary>Says <paramref name="refusal"/> among what the ends could not end (<see cref="Refused"/>).</summary>
+    /// <param name="refusal">What could not be ended, and why.</param>
+    public void Refuse(Exception refusal)
+    {
+        ArgumentNullException.ThrowIfNull(refusal);
+
+        _refused.Add(refusal);
+    }
+
+    /// <summary>Windows' list of every process, as the machine keeps it or as a test stands in for it (<see cref="ProcessEnds.Listed"/>).</summary>
+    public IReadOnlyList<Execution.ListedProcess>? Listed() => _ends.Listed();
+
+    /// <summary>When the process <paramref name="handle"/> holds was made, as the walk orders it (<see cref="ProcessEnds.Made"/>).</summary>
+    /// <param name="id">The process's id.</param>
+    /// <param name="handle">The process, held with the right to ask when it was created.</param>
+    public CreationOrder Made(int id, SafeProcessHandle handle) => _ends.Made(id, handle);
+
     /// <summary>The process kept under <paramref name="processId"/>, or <see langword="null"/> where none is.</summary>
     /// <param name="processId">The process's id.</param>
     public KeptProcess? Kept(int processId) => _byId.GetValueOrDefault(processId);
@@ -191,9 +220,11 @@ internal sealed class KeptProcess : IDisposable
 }
 
 /// <summary>
-/// How a process a stop keeps is held, ended, and seen to have gone, and a group listed and ended: the machine's own
-/// (<see cref="Machine"/>) - or a test's, standing in for a process whose end is slow, a listing that misses a member, or
-/// a process the system lists that no hold reaches yet, which no real process or listing can be made to be on demand.
+/// How a process a stop keeps is held, ended, and seen to have gone, a group listed and ended, and Windows' list of every
+/// process and each process's order read: the machine's own (<see cref="Machine"/>) - or a test's, standing in for a
+/// process whose end is slow, a listing that misses a member, a process the system lists that no hold reaches yet, or a
+/// clock that stepped between a creator's creation and its child's, which no real process, listing or clock can be made
+/// to be on demand.
 /// </summary>
 internal class ProcessEnds
 {
@@ -229,4 +260,20 @@ internal class ProcessEnds
     /// <summary>Whether <paramref name="process"/> has gone, asked of the system now and never waited on.</summary>
     /// <param name="process">The process, kept.</param>
     public virtual bool Gone(KeptProcess process) => Containment.Gone(process);
+
+    /// <summary>
+    /// Windows' list of every process, each with the id of its creator and when it was created, read now
+    /// (<see cref="Execution.SystemProcessList.Every()"/>), as the walk of a tree and the chain of this process's parents
+    /// read it; <see langword="null"/> where it could not be read.
+    /// </summary>
+    public virtual IReadOnlyList<Execution.ListedProcess>? Listed() => Execution.SystemProcessList.Every();
+
+    /// <summary>
+    /// When the process <paramref name="handle"/> holds - the one <paramref name="id"/> names - was made, on Windows, as
+    /// the walk of a tree orders a creator and its child: its creation time and its sequence number, read from the handle
+    /// (<see cref="Containment.OrderOf(SafeProcessHandle)"/>).
+    /// </summary>
+    /// <param name="id">The process's id.</param>
+    /// <param name="handle">The process, held with the right to ask when it was created.</param>
+    public virtual CreationOrder Made(int id, SafeProcessHandle handle) => Containment.OrderOf(handle);
 }

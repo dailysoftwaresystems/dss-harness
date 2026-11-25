@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
+using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
@@ -886,6 +887,104 @@ public sealed class ContainExecTests
         Assert.Equal(
             new ChildRunAnswer(0, "refused True, timed out True, output its id, output held by nothing, unended nothing, program gone True", ""),
             await ChildRun.UnprivilegedAsync(typeof(ContainExecTests), nameof(ABoundProgramRefusingItsEndAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A child of the tree that Windows' list dates before the process that made it - a clock stepped back between their
+    /// creations - is kept and ended by the walk all the same, as their sequence numbers order them: the walk reads the
+    /// list, and each process's order, as the machine gives them (<see cref="ProcessEnds.Listed"/>,
+    /// <see cref="ProcessEnds.Made"/>), and the step of the clock is stood in for there (<see cref="ClockStepped"/>).
+    /// Ordered by creation time, the child would be taken for an earlier holder's of its creator's id, and left running.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AChildListedAsMadeBeforeItsCreator_ByAClockThatStepped_IsKeptAndEndedByTheWalk_AsTheirSequenceNumbersOrderThem()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the list of every process the walk reads, and a process's sequence number, are Windows'; on Linux and macOS the walk follows the parent the system names now, with no start compared.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-holder", "sleep", "300000", "sleep", "300000"));
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+        var holder = LearnedProcess.None;
+
+        try
+        {
+            holder = LearnedProcess.In(await root.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken) ?? string.Empty, "holder=")
+                ?? throw new InvalidOperationException($"the root {root.Id} never named its child");
+
+            var listed = SystemProcessList.Every() ?? throw new InvalidOperationException("Windows' list of every process could not be read");
+            var (made, maker) = (listed.First(process => process.Id == holder.Id).Created, listed.First(process => process.Id == root.Id).Created);
+
+            using var ended = new EndedProcesses(new ClockStepped(holder.Id, made - maker + TimeSpan.TicksPerHour));
+
+            Containment.EndTree(root, group: false, ended, [root.SafeHandle]);
+            await ended.GoneAsync("what the walk ended to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal((true, false), (ended.Kept(holder.Id) is not null, holder.Running));
+        }
+        finally
+        {
+            holder.TryEnding();
+
+            if (!root.HasExited)
+            {
+                root.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A walk asked from inside the tree it would end is refused though a clock stepped back between this process's
+    /// creation and its parent's dates this process before it: the chain of this process's parents orders each child and
+    /// its parent as the walk does, by their sequence numbers, reading the list and each order through the walk's own
+    /// (<see cref="ProcessEnds.Listed"/>, <see cref="ProcessEnds.Made"/>), the step stood in for there
+    /// (<see cref="ClockStepped"/>). The root is a child of the suite, and the walk is asked from a child of its own: ordered
+    /// by creation time, the chain would end at the step, and the walk would end the root and the very process asking.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AWalkAskedFromInsideItsOwnTree_IsRefused_ThoughAClockThatSteppedDatesTheAskerBeforeItsParent()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the list of every process the chain reads, and a process's sequence number, are Windows'; on Linux and macOS the chain follows the parent the system names now, with no start compared.");
+
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        bound.CancelAfter(LongBound * 2);
+
+        Assert.Equal(new ChildRunAnswer(0, "refused", ""), await ChildRun.MethodAsync(typeof(ContainExecTests), nameof(AWalkAskedFromAChildAsync), bound.Token));
+    }
+
+    /// <summary>The root's side of <see cref="AWalkAskedFromInsideItsOwnTree_IsRefused_ThoughAClockThatSteppedDatesTheAskerBeforeItsParent"/>: a child of its own asks the walk.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> AWalkAskedFromAChildAsync()
+    {
+        using var bound = new CancellationTokenSource(LongBound);
+        var answer = await ChildRun.MethodAsync(typeof(ContainExecTests), nameof(TheTreeOfItsParentEnded), bound.Token);
+
+        return answer is { Exit: 0, Error.Length: 0 } ? answer.Output : $"exit {answer.Exit}: {answer.Output} {answer.Error}";
+    }
+
+    /// <summary>The asker's side: the walk of its own parent's tree, this process dated an hour before that parent.</summary>
+    [SupportedOSPlatform("windows")]
+    private static string TheTreeOfItsParentEnded()
+    {
+        var listed = SystemProcessList.Every() ?? throw new InvalidOperationException("Windows' list of every process could not be read");
+        var self = listed.First(process => process.Id == Environment.ProcessId);
+        var parent = listed.First(process => process.Id == self.ParentId);
+
+        using var root = Process.GetProcessById(parent.Id);
+        using var ended = new EndedProcesses(new ClockStepped(self.Id, self.Created - parent.Created + TimeSpan.TicksPerHour));
+
+        try
+        {
+            Containment.EndTree(root, group: false, ended);
+            return "ended";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("holds this very process", StringComparison.Ordinal))
+        {
+            return "refused";
+        }
     }
 
     /// <summary>

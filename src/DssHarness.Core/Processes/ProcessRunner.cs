@@ -470,7 +470,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
                 using (var ended = new EndedProcesses(Ends))
                 {
-                    unended = EndTree(process, grouped: false, ended, program: null);
+                    EndTree(process, grouped: false, ended, program: null);
+                    unended = Unended(process, ended);
                 }
 
                 throw new ProgramStartException(
@@ -622,7 +623,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <param name="error">The child's error output.</param>
     /// <param name="unreached">
     /// Whether the stop, or the child's container, could not reach or end a process it was to (<see cref="ProcessResult.Uncontained"/>):
-    /// what holds the output may then be that process, never one the child left running.
+    /// what holds the output is then said to be that process or one the child left running - in the wait told every five
+    /// minutes and in what is said once it is over alike - never the child's leftover alone.
     /// </param>
     /// <param name="cancellationToken">Gives the wait up.</param>
     /// <returns>
@@ -632,6 +634,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private async Task<string?> DrainedAsync(string resolved, StreamCapture output, StreamCapture error, bool unreached, CancellationToken cancellationToken)
     {
         var ended = Task.WhenAll(output.Reading, error.Reading);
+
+        // What holds the output, as the wait is told and as its end says it: never the child's leftover alone where its end
+        // could not reach or end a process.
+        var holding = unreached ? "a process its end could not reach or end, or one it left running" : "what it left running";
 
         if (!ended.IsCompleted)
         {
@@ -652,7 +658,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
                     return true;
                 },
-                new WaitWatch($"the output of '{resolved}' to end, held open by what it left running", Waits.Told, null, Clock),
+                new WaitWatch($"the output of '{resolved}' to end, held open by {holding}", Waits.Told, null, Clock),
                 cancellationToken).ConfigureAwait(false);
 
             if (drained.Kind != WaitEndKind.Done)
@@ -669,7 +675,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
 
         var holder = unreached
-            ? $"the output of '{resolved}' is held by a process its end could not reach or end, or one it left running"
+            ? $"the output of '{resolved}' is held by {holding}"
             : $"'{resolved}' left a process running that holds its output";
 
         return $"{holder}: every character it wrote was read, and what that process writes from now on is its own, and is not read";
@@ -702,7 +708,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     {
         using var ended = new EndedProcesses(Ends);
         string? unreached = null;
-        string? unended;
 
         try
         {
@@ -716,10 +721,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             // for what the tree handed on: walked first, while the child stands, the tree still
             // reaches what moved to a group of its own - a test under timeout - which the child's end
             // would have handed on, out of the tree's reach.
-            unended = EndTree(process, grouped, ended, program);
+            EndTree(process, grouped, ended, program);
 
             await ended.GoneAsync($"what the stop of '{resolved}' ended to go", Waits.Told, Clock).ConfigureAwait(false);
         }
+
+        // Read once the wait is over, which looked at the tree again: what a look again passed over is the stop's too.
+        var unended = Unended(process, ended);
 
         return unreached is null ? unended : unended is null ? unreached : $"{unreached}, and {unended}";
     }
@@ -728,29 +736,40 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// Ends <paramref name="process"/>'s tree, and the group it leads where <paramref name="grouped"/>, keeping what it
     /// ends in <paramref name="ended"/> (<see cref="Containment.EndTree"/>) - the child by a copy of the handle the runtime
     /// got as this process created it, and the program the tool's own step created for it by a copy of the handle the step
-    /// created it with, each ended so whatever its own security refuses another, so the wait for it ends - and says what it
-    /// could not end: a process of the tree running as another user, or one whose own security refuses another its end,
-    /// is passed over, every other ended.
+    /// created it with, each ended so whatever its own security refuses another, so the wait for it ends. A process of the
+    /// tree running as another user, or one whose own security refuses another its end, is passed over, every other ended,
+    /// and said in what <paramref name="ended"/> could not end (<see cref="EndedProcesses.Refused"/>), as every look again
+    /// at the tree says what it passes over (<see cref="Unended"/>).
     /// </summary>
     /// <param name="process">The child.</param>
     /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
     /// <param name="ended">What keeps each process ended.</param>
     /// <param name="program">The program the tool's own step created for the child, on Windows; <see langword="null"/> where there is none to hand on.</param>
-    /// <returns>What of the tree could not be ended, and why; <see langword="null"/> where every process of it was.</returns>
-    private static string? EndTree(Process process, bool grouped, EndedProcesses ended, SafeProcessHandle? program)
+    private static void EndTree(Process process, bool grouped, EndedProcesses ended, SafeProcessHandle? program)
     {
         try
         {
             Containment.EndTree(process, grouped, ended, program is null ? [process.SafeHandle] : [process.SafeHandle, program]);
-            return null;
         }
-        catch (AggregateException ex)
+        catch (AggregateException)
         {
-            return string.Create(
-                System.Globalization.CultureInfo.InvariantCulture,
-                $"not every process of the tree of pid {process.Id} could be ended: {string.Join("; ", ex.InnerExceptions.Select(failure => failure.Message.TrimEnd('.')))}");
+            // Said in what the end could not end, with what every look again at the tree passes over.
         }
     }
+
+    /// <summary>
+    /// What of <paramref name="process"/>'s tree could not be ended, and why, as a stop says it: every refusal the walk met
+    /// (<see cref="EndedProcesses.Refused"/>) - its first reading's and every look again's, read once the wait for what it
+    /// ended is over - each said once; <see langword="null"/> where every process of it was ended.
+    /// </summary>
+    /// <param name="process">The child.</param>
+    /// <param name="ended">What the stop ended, and could not.</param>
+    private static string? Unended(Process process, EndedProcesses ended)
+        => ended.Refused.Count == 0
+            ? null
+            : string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"not every process of the tree of pid {process.Id} could be ended: {string.Join("; ", ended.Refused.Select(failure => failure.Message.TrimEnd('.')))}");
 
     /// <summary>
     /// The program the tool's own step created for a child, on Windows: a copy of the handle the step created it with, held
@@ -808,7 +827,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <param name="job">The job holding the child, or <see langword="null"/>.</param>
     /// <param name="process">The child, which leads its session or its group under its own id.</param>
     /// <returns>The record written, to be taken back once the child has ended; <see langword="null"/> where none was.</returns>
-    /// <exception cref="ProgramStartException">The record could not be written: the child was ended, and never said to have started.</exception>
+    /// <exception cref="ProgramStartException">
+    /// The record could not be written: the child was ended, and never said to have started - what its stop could not end
+    /// said with it.
+    /// </exception>
     private async Task<IContainedSessionRecord?> RecordedAsync(
         ProcessRequest request,
         IContainedSessionRecord? record,
@@ -831,15 +853,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         catch (Exception ex)
         {
             // A child no record names is one a killed tool would leave running unseen: it is not run, stopped as a stop
-            // stops it, whatever kept the record from being written.
-            await StopAsync(request, resolved, grouped, job, process, request.Timeout, program: null).ConfigureAwait(false);
+            // stops it, whatever kept the record from being written, and what the stop could not end is said with it.
+            var unended = await StopAsync(request, resolved, grouped, job, process, request.Timeout, program: null).ConfigureAwait(false);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
 
             if (ex is IOException or UnauthorizedAccessException)
             {
                 throw new ProgramStartException(
                     request.FileName,
-                    $"'{resolved}' could not be started: its {LeftSessions.Noun(grouped)} could not be recorded: {ex.Message}",
+                    $"'{resolved}' could not be started: its {LeftSessions.Noun(grouped)} could not be recorded: {ex.Message}{(unended is null ? string.Empty : $"; {unended}")}",
                     ex);
             }
 

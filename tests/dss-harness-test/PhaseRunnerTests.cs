@@ -439,6 +439,50 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
+    /// A phase whose end could not reach or end a process it was to - a contained child's container, a process of its tree
+    /// that refuses its end at a stop - says so as a warning of the phase's, with what the runner said of it, ahead of what
+    /// it says of a process holding the output, which may be that very process: what it started may still run.
+    /// </summary>
+    [Fact]
+    public async Task APhaseWhoseEndCouldNotReachOrEndAProcess_SaysSo_AheadOfWhatHoldsItsOutput()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        const string Unreached = "not every process of the tree of pid 41 could be ended: pid 42 could not be ended: Access is denied";
+        const string Held = "the output of 'build' is held by a process its end could not reach or end, or one it left running: every character it wrote was read, and what that process writes from now on is its own, and is not read";
+
+        var result = await new PhaseRunner(new HeldRunner(Held) { Unreached = Unreached }, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("unreached.log")),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(Unreached, result.Uncontained);
+        Assert.Equal([$"build: WARN - win-msvc-release: {Unreached}", $"build: WARN - win-msvc-release: {Held}"], Lines(factory.StandardError.ToString()));
+    }
+
+    /// <summary>
+    /// A phase its caller stops - an interrupt, a stop of the run, the engine's end - is handed no result, and what the stop
+    /// could not reach or end comes in the stop itself (<see cref="ProcessStoppedException.Uncontained"/>): the phase says it
+    /// as it says a result's, bounded by its silence or not, and the stop goes on to its caller as it came.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(600)]
+    public async Task APhaseItsCallerStops_SaysWhatTheStopCouldNotReachOrEnd_AndTheStopGoesOn(int stallSeconds)
+    {
+        using var temp = new TempDirectory();
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var factory = new HarnessFactory();
+        const string Unreached = "not every process of the tree of pid 41 could be ended: pid 42 could not be ended: Access is denied";
+
+        var raised = await Assert.ThrowsAsync<ProcessStoppedException>(() => new PhaseRunner(new StoppedRunner(Unreached, caller), factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("stopped.log")) with { StallSeconds = stallSeconds },
+            caller.Token));
+
+        Assert.Equal((Unreached, $"The run was stopped, and {Unreached}."), (raised.Uncontained, raised.Message));
+        Assert.Equal([$"build: WARN - win-msvc-release: {Unreached}"], Lines(factory.StandardError.ToString()));
+    }
+
+    /// <summary>
     /// A timing pattern written in a form that backtracks is read in linear time against every line, its marks kept as
     /// any pattern's are, never left unmeasured for the time a match took, as once.
     /// </summary>
@@ -834,13 +878,35 @@ public sealed class PhaseRunnerTests
     /// <summary>A runner whose child exits 0 having said nothing, and left a process running that holds its output, as <paramref name="held"/> says.</summary>
     private sealed class HeldRunner(string held) : IProcessRunner
     {
+        /// <summary>What the child's end could not reach or end, as the result says it; none where it reached everything.</summary>
+        public string? Unreached { get; init; }
+
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(request);
 
             request.OnStarted?.Invoke();
 
-            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false) { OutputHeld = held });
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false) { OutputHeld = held, Uncontained = Unreached });
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>
+    /// A runner whose caller stops the child once it has started: the caller's own token cancelled, and the stop thrown
+    /// carrying what it could not reach or end, as the real runner throws it where its caller gave up.
+    /// </summary>
+    private sealed class StoppedRunner(string unreached, CancellationTokenSource caller) : IProcessRunner
+    {
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            request.OnStarted?.Invoke();
+            await caller.CancelAsync();
+
+            throw new ProcessStoppedException(unreached, caller.Token);
         }
 
         public string? FindExecutable(string command) => command;

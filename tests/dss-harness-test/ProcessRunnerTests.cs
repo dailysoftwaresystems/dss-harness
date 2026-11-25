@@ -559,6 +559,103 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A stop's look again at the child's tree is the stop's too: a process a kept descendant makes while the stop ends it,
+    /// and that refuses its end, is found once every process kept has gone, passed over, and said in what the stop could
+    /// not end (<see cref="ProcessResult.Uncontained"/>) with the first walk's refusals - never taken for a process the child
+    /// left running where it holds the output. The descendant's slow end is stood in for, and it makes the refusing process
+    /// at the first ask; the run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), which lifts the late process's refusal and ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AChildStopped_WhileADescendantItsStopEndsMakesAnotherThatRefusesItsEnd_SaysSo_NeverAsAProcessTheChildLeftRunning()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a stopped tree is walked again once what its walk ended has gone on Windows alone, and a process's own security is Windows'.");
+
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                $"timed out True, held back 1, refused True, unended not every process of the tree of pid {{child}} could be ended: pid {{late}} could not be ended: {new Win32Exception(5).Message.TrimEnd('.')}, "
+                    + "output held the output of '{program}' is held by a process its end could not reach or end, or one it left running: every character it wrote was read, and what that process writes from now on is its own, and is not read, "
+                    + "late stands True",
+                ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(ALateRefusingProcessOfAStoppedTreeAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child's side of <see cref="AChildStopped_WhileADescendantItsStopEndsMakesAnotherThatRefusesItsEnd_SaysSo_NeverAsAProcessTheChildLeftRunning"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> ALateRefusingProcessOfAStoppedTreeAsync()
+    {
+        using var temp = new TempDirectory();
+        var (asked, go, refused) = (temp.Combine("asked.txt"), temp.Combine("go.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learnedHolder = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var learnedLate = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (holder, late) = (LearnedProcess.None, LearnedProcess.None);
+        var limit = TimeSpan.FromMinutes(1);
+
+        // The late process needs no handle of this process's got before it refuses: its refusal is lifted by its owner's right.
+        File.WriteAllText(go, "go");
+
+        ends.AtFirstAsk(_ =>
+        {
+            File.WriteAllText(asked, "asked");
+            late = learnedLate.Task.WaitAsync(TimeSpan.FromMinutes(2)).GetAwaiter().GetResult();
+
+            // Its refusal stands before the end of what made it is made, and the tree looked at again.
+            for (var waited = Stopwatch.StartNew(); !File.Exists(refused); Thread.Sleep(20))
+            {
+                if (waited.Elapsed > TimeSpan.FromMinutes(2))
+                {
+                    throw new TimeoutException($"the late process {late} never refused its end");
+                }
+            }
+        });
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, "300000", "deny-terminate", go, refused, "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            learnedHolder.TrySetResult(found);
+                        }
+
+                        if (LearnedProcess.In(line, "late=") is { } made)
+                        {
+                            learnedLate.TrySetResult(made);
+                        }
+                    },
+                },
+                CancellationToken.None);
+
+            holder = await learnedHolder.Task.WaitAsync(TimeSpan.FromMinutes(2));
+            ends.Slow(holder.Id);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2));
+            var unended = result.Uncontained is null
+                ? "nothing"
+                : System.Text.RegularExpressions.Regex.Replace(result.Uncontained, @"tree of pid \d+", "tree of pid {child}").Replace($"pid {late} could", "pid {late} could", StringComparison.Ordinal);
+            var outputHeld = result.OutputHeld is null ? "by nothing" : System.Text.RegularExpressions.Regex.Replace(result.OutputHeld, "'[^']*'", "'{program}'");
+
+            return $"timed out {result.TimedOut}, held back {ends.HeldBack}, refused {!RefusedEnd.MayEnd(late.Id)}, unended {unended}, output held {outputHeld}, late stands {RefusedEnd.Stands(late)}";
+        }
+        finally
+        {
+            RefusedEnd.End(late);
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
     /// A child whose own security refuses its end to everyone, its owner included - as a program that guards itself against
     /// being ended by other software of the same user does - is ended at its time limit all the same, on Windows, and has
     /// gone when the run answers: the stop keeps it by a copy of the handle the runtime got as it created the child, granted

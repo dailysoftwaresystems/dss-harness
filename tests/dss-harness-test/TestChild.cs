@@ -592,9 +592,10 @@ internal static class TestChild
 
     /// <summary>
     /// Waits until the file <c>arguments[0]</c> names is there, then starts a holder of this process's own streams - a late
-    /// one, made only once a test asks for it - writes <c>late=</c> and its id, and sleeps for the milliseconds
-    /// <c>arguments[1]</c> gives, as it does where it is never asked: a process that makes another once the walk of its tree
-    /// has last looked, as one being ended may.
+    /// one, made only once a test asks for it, doing what the behaviour <c>arguments[2]</c> names with the arguments after
+    /// it, or sleeping for the milliseconds <c>arguments[1]</c> gives where none is named - writes <c>late=</c> and its id,
+    /// and sleeps for those milliseconds, as it does where it is never asked: a process that makes another once the walk of
+    /// its tree has last looked, as one being ended may.
     /// </summary>
     /// <remarks>
     /// The holder is given a console of its own on Windows - without a window, as the process runner gives its children -
@@ -618,8 +619,13 @@ internal static class TestChild
 
         start.ArgumentList.Add("exec");
         start.ArgumentList.Add(TestHost.AssemblyPath);
-        start.ArgumentList.Add(arguments[1]);
-        start.Environment[TestHost.ChildModeVariable] = "sleep";
+
+        foreach (var argument in arguments.Length > 2 ? arguments[3..] : [arguments[1]])
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        start.Environment[TestHost.ChildModeVariable] = arguments.Length > 2 ? arguments[2] : "sleep";
 
         using var late = Process.Start(start) ?? throw new InvalidOperationException("The late holder did not start.");
 
