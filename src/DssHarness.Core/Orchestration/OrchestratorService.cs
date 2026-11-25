@@ -543,10 +543,7 @@ public sealed class OrchestratorService(
         }
 
         // Before anything else of each is read: what its steps left running once their starter has gone.
-        foreach (var orchestrator in orchestrators)
-        {
-            await _sessions.SweepAsync(orchestrator, ListCommand).ConfigureAwait(false);
-        }
+        await _sessions.SweepAsync(orchestrators, ListCommand).ConfigureAwait(false);
 
         var listed = await _worktrees.ListAsync(layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
         var inventory = new List<OrchestratorInventory>();

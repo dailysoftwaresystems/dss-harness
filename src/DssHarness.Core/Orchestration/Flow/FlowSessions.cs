@@ -73,10 +73,14 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// record and the way on with that one), one whose directory is there holding no run's record refused as well, else
     /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
     /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
-    /// process.
+    /// process. Before any of it, a start where the sweep of every run of the repository kept a record because its session
+    /// holds this very process is refused: the run's engine, this process, would be ended with it by the next command run
+    /// from outside, which ends what the record names.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="definition">The workflow, as it was read.</param>
+    /// <param name="swept">What the sweep of every run of the repository did, as the start read it.</param>
+    /// <param name="command">The command starting the run, which a refusal says to run from outside.</param>
     /// <param name="wantedName">The name <c>--run</c> gave, or null for the next r&lt;N&gt;.</param>
     /// <param name="inputs">The values the run is started with, by input name.</param>
     /// <param name="startCommit">The commit the run starts from; null where it starts beside the tree's history.</param>
@@ -87,10 +91,15 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// </param>
     /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
-    /// <exception cref="HarnessException">Another run of the repository is unfinished, the name is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">
+    /// The sweep kept a record whose session holds this very process, another run of the repository is unfinished, the name
+    /// is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).
+    /// </exception>
     public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
         HarnessLayout layout,
         WorkflowDefinition definition,
+        ChildSweep swept,
+        string command,
         string? wantedName = null,
         IReadOnlyDictionary<string, string>? inputs = null,
         string? startCommit = null,
@@ -100,6 +109,13 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(swept);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+
+        if (swept.Refusal($"no run of workflow '{definition.Name}' was started", "a run started inside it would be ended with it by the next command run from outside", command) is { } holding)
+        {
+            throw new HarnessException(HarnessExit.Refused, holding);
+        }
 
         var differing = await DifferingAsync(layout, leavingOut: null, cancellationToken).ConfigureAwait(false);
 
@@ -159,12 +175,13 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <paramref name="run"/>, the run's owner claimed - refused where a live one holds it, a dead one reclaimed and said -
     /// and a request no engine took removed, so it never reaches this session - where it cannot be taken, the claim just
     /// made is let go before the refusal, so no owner is left behind by a session that never began. Before any of it, a
-    /// run whose sweep kept a record because its session holds this very process is refused: a session of the run inside
-    /// it would be ended with it by the next command run from outside, which ends what the record names.
+    /// session where the sweep of every run of the repository kept a record because its session holds this very process
+    /// is refused: a session of the run inside it would be ended with it by the next command run from outside, which ends
+    /// what the record names.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
-    /// <param name="swept">What the sweep of the run that loaded it did.</param>
+    /// <param name="swept">What the sweep of every run of the repository did, as the command that loaded the run read it.</param>
     /// <param name="command">The command beginning the session, which a refusal says to run from outside.</param>
     /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>

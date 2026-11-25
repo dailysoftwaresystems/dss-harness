@@ -68,7 +68,7 @@ internal static class TestChild
             "end-own-leader" => EndOwnLeader(standardOutput, arguments),
             "sweep-own-leader" => ChildSessionsTests.SweepFromInside(standardOutput, arguments),
             "delete-own-orchestrator" => ChildSessionsTests.DeleteFromInside(standardOutput, arguments),
-            "resume-own-run" => FlowServiceTests.ResumeFromInside(standardOutput, arguments),
+            "engine-from-inside" => FlowServiceTests.EngineFromInside(standardOutput, arguments),
             "spawn-zombie-and-sleep" => SpawnZombieAndSleep(standardOutput, arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),

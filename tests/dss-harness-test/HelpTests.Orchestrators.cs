@@ -498,8 +498,9 @@ public sealed partial class HelpTests
             + "tree, and says what it ended. A session or group whose starter still runs is left; one that holds the command "
             + "itself - it runs in it, or descends from its leader - is said and left with its record, nothing in it signalled, for "
             + "a command run from outside it to end, and delete-orchestrator, which would take that record with the orchestrator, "
-            + "and resume-orchestrator and answer-orchestrator, which would make the command the run's engine inside it, are "
-            + "refused (13), naming the record, nothing changed; one whose id a later process "
+            + "and run-orchestrator, resume-orchestrator and answer-orchestrator, which would make the command a run's engine "
+            + "inside it - each sweeps every run of the repository first, as list-orchestrator does, so a record of any run "
+            + "refuses it - are refused (13), naming the record, nothing changed; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
             + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
             + "that started it.",

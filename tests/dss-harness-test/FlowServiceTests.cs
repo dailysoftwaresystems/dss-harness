@@ -2376,14 +2376,17 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// A resume run from inside a session its sweep kept - a step's own script in the session a contained child of a
-    /// killed engine leads - is refused (13) before it claims the run, naming the record and saying to run it from
-    /// outside: no owner is written, so this process never becomes the run's engine inside what the next command from
-    /// outside ends. Run where it would act on itself: the resume runs in a child the session's leader starts
-    /// (<see cref="ResumeFromInside"/>), every process the test's own, bounded, and ended on every path.
+    /// A resume run from inside a session a sweep kept - a step's own script in the session a contained child of a killed
+    /// engine leads - is refused (13) before it claims the run, naming the record and saying to run it from outside: no
+    /// owner is written, so this process never becomes the run's engine inside what the next command from outside ends -
+    /// whether the record is the run's own or another run's of the repository, which the resume sweeps first as
+    /// list-orchestrator does. Run where it would act on itself: the resume runs in a child the session's leader starts
+    /// (<see cref="EngineFromInside"/>), every process the test's own, bounded, and ended on every path.
     /// </summary>
-    [Fact]
-    public async Task AResumeFromInsideASessionItsSweepKept_IsRefused_NoOwnerWritten()
+    [Theory]
+    [InlineData("r1")]
+    [InlineData("o0")]
+    public async Task AResumeFromInsideASessionASweepKept_IsRefused_NoOwnerWritten(string recordedIn)
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
 
@@ -2394,8 +2397,9 @@ public sealed class FlowServiceTests
         _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
-        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "resume-own-run", repository.Path));
-        var record = OrchestratorLayout.ChildFile(run.StepDirectory("s1"), leader);
+        var holding = AnotherOrchestrator(repository, recordedIn);
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, recordedIn, "resume"));
+        var record = OrchestratorLayout.ChildFile(holding.StepDirectory("s1"), leader);
 
         Assert.Equal(
             [
@@ -2405,6 +2409,7 @@ public sealed class FlowServiceTests
                 $"holder={caller}",
                 "kept=True",
                 "owner=none",
+                $"runs={string.Join(",", new[] { "o0", "r1" }.Where(name => name == "r1" || recordedIn == "o0"))}",
                 $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
                     + $"inside it would be ended with it by the next command run from outside. Run {FlowService.ResumeCommand} from outside it. Nothing was changed.",
             ],
@@ -2413,13 +2418,69 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// The child's side of <see cref="AResumeFromInsideASessionItsSweepKept_IsRefused_NoOwnerWritten"/>: records the
-    /// session the process that started it leads in step <c>s1</c> of run <c>r1</c> of the repository at
-    /// <c>arguments[0]</c>, as a process that has gone since left it, resumes that run from inside the session, and writes
-    /// its own id as <c>caller</c>, how the resume ended as <c>exit</c> and <c>said</c>, whether the record is still there
-    /// as <c>kept</c>, and the run's owner once it ended as <c>owner</c>.
+    /// A new run started from inside a session a sweep kept - a step's own script in the session a contained child of a
+    /// killed engine of another run leads - is refused (13) before anything of it is made, naming the record and saying to
+    /// run it from outside: the start sweeps every run of the repository first, as list-orchestrator does, so this process
+    /// never becomes a new run's engine inside what the next command from outside ends. Run where it would act on itself:
+    /// the start runs in a child the session's leader starts (<see cref="EngineFromInside"/>), every process the test's
+    /// own, bounded, and ended on every path.
     /// </summary>
-    internal static int ResumeFromInside(TextWriter output, string[] arguments)
+    [Fact]
+    public async Task ARunStartedFromInsideASessionASweepKept_IsRefused_NothingOfItMade()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
+
+        var (repository, _) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        var holding = AnotherOrchestrator(repository, "o0");
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, "o0", "run"));
+        var record = OrchestratorLayout.ChildFile(holding.StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"exit={HarnessExit.Refused}",
+                $"holder={caller}",
+                "kept=True",
+                "owner=none",
+                "runs=o0",
+                $"said=no run of workflow '{Workflow}' was started: '{record}' records session {leader}, which holds this very process (pid {caller}), and a run "
+                    + $"started inside it would be ended with it by the next command run from outside. Run {FlowService.RunCommand} from outside it. Nothing was changed.",
+            ],
+            lines);
+        Assert.False(Directory.Exists(RunOf(repository).Directory), $"a run was made at '{RunOf(repository).Directory}' from inside the session the sweep kept");
+    }
+
+    /// <summary>
+    /// The orchestrator a test's record is kept in: run <c>r1</c>, already made, where <paramref name="name"/> names it;
+    /// else an orchestrator of that name made here beside the run, holding no run of its own - another of the repository's.
+    /// </summary>
+    private static OrchestratorLayout AnotherOrchestrator(Repository repository, string name)
+    {
+        var layout = OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), name);
+
+        if (name != "r1")
+        {
+            repository.Harness.OrchestrationStore.WriteOrchestrator(
+                layout,
+                new OrchestratorRecord { Kind = OrchestratorRecord.KindName, Name = name, Model = "model-a", Parallel = 1, CreatedAt = DateTimeOffset.UtcNow });
+        }
+
+        return layout;
+    }
+
+    /// <summary>
+    /// The child's side of <see cref="AResumeFromInsideASessionASweepKept_IsRefused_NoOwnerWritten"/> and
+    /// <see cref="ARunStartedFromInsideASessionASweepKept_IsRefused_NothingOfItMade"/>: records the session the process that
+    /// started it leads in step <c>s1</c> of the orchestrator <c>arguments[1]</c> of the repository at <c>arguments[0]</c>,
+    /// as a process that has gone since left it, then - as <c>arguments[2]</c> says - resumes run <c>r1</c>, or starts a new
+    /// run, from inside the session, and writes its own id as <c>caller</c>, how the command ended as <c>exit</c> and
+    /// <c>said</c>, whether the record is still there as <c>kept</c>, run <c>r1</c>'s owner once it ended as <c>owner</c>,
+    /// and the repository's orchestrators then as <c>runs</c>.
+    /// </summary>
+    internal static int EngineFromInside(TextWriter output, string[] arguments)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -2429,19 +2490,25 @@ public sealed class FlowServiceTests
         output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
 
         var harness = new HarnessFactory();
-        var run = OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(arguments[0], arguments[0]), "r1");
-        var record = ChildSessionsTests.RecordParentsSession(run);
+        var layout = new DssHarness.Core.Repository.HarnessLayout(arguments[0], arguments[0]);
+        var record = ChildSessionsTests.RecordParentsSession(OrchestratorLayout.Of(layout, arguments[1]));
         var runner = new SteppedRunner();
 
         Script(runner);
 
-        var resumed = Service(harness, runner).ResumeAsync(arguments[0], "r1", json: false, cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
-        var owner = harness.OrchestrationStore.ReadOwner(run);
+        var service = Service(harness, runner);
+        var ended = (arguments[2] == "run"
+                ? service.RunAsync(arguments[0], Workflow, run: null, inputs: null, json: false, cancellationToken: CancellationToken.None)
+                : service.ResumeAsync(arguments[0], "r1", json: false, cancellationToken: CancellationToken.None))
+            .GetAwaiter()
+            .GetResult();
+        var owner = harness.OrchestrationStore.ReadOwner(OrchestratorLayout.Of(layout, "r1"));
 
-        output.Write($"exit={resumed.ExitCode}\n");
-        output.Write($"said={resumed.Message}\n");
+        output.Write($"exit={ended.ExitCode}\n");
+        output.Write($"said={ended.Message}\n");
         output.Write($"kept={File.Exists(record)}\n");
         output.Write($"owner={(owner is null ? "none" : owner.ProcessId.ToString(CultureInfo.InvariantCulture))}\n");
+        output.Write($"runs={string.Join(",", harness.OrchestrationStore.Orchestrators(layout).Select(orchestrator => orchestrator.Name))}\n");
         return 0;
     }
 
@@ -4349,7 +4416,7 @@ public sealed class FlowServiceTests
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
-        var (run, context) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
+        var (run, context) = await sessions.CreateAsync(layout, definition, ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {

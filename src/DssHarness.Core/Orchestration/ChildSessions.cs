@@ -81,7 +81,7 @@ public sealed record EndedChildSession(string Orchestrator, string? Agent, strin
 public sealed record HeldChildSession(string Record, int Session, bool Group, int Process);
 
 /// <summary>
-/// What a sweep did (<see cref="ChildSessions.SweepAsync"/>): each session or group it ended with anything still in it,
+/// What a sweep did (<see cref="ChildSessions.SweepAsync(OrchestratorLayout, string)"/>): each session or group it ended with anything still in it,
 /// and each it kept because it holds this very process - which a command that would lose its record, or take the run
 /// inside it, refuses over (<see cref="Refusal"/>).
 /// </summary>
@@ -134,7 +134,7 @@ public sealed record ChildSweep(IReadOnlyList<EndedChildSession> Ended, IReadOnl
 /// keeps its record. A record is never written by hand.
 /// </para>
 /// <para>
-/// Every command that works an orchestrator sweeps its records first (<see cref="SweepAsync"/>), before it reads anything
+/// Every command that works an orchestrator sweeps its records first (<see cref="SweepAsync(OrchestratorLayout, string)"/>), before it reads anything
 /// else of it: a session or a group whose owner still runs is its owner's to end and is left as it is; one whose owner has
 /// gone was left running by it - killed before it could end it, or a group holding what its child left at its own end -
 /// and is ended as a contained child's session is ended at its end -
@@ -142,8 +142,9 @@ public sealed record ChildSweep(IReadOnlyList<EndedChildSession> Ended, IReadOnl
 /// session or a group still carries, and never where another process has been given it - and its record removed. One
 /// that holds the command sweeping - it runs in it, or descends from its leader - is never ended from inside: it is said
 /// and left with its record, for a command run from outside it to end, and the sweep answers it kept so
-/// (<see cref="ChildSweep.HeldHere"/>): a command that would lose that record - the orchestrator's deletion - or take the
-/// run inside it - a session of the run, claiming its owner - refuses over it, changing nothing. An
+/// (<see cref="ChildSweep.HeldHere"/>): a command that would lose that record - the orchestrator's deletion - or make this
+/// process a run's engine inside it - a new run's start, or a session of a run already made, claiming its owner, each
+/// reading the sweep of every run of the repository - refuses over it, changing nothing. An
 /// owner on another machine is never taken to have gone, since nothing here can ask that machine. Windows records
 /// nothing: a child there is held in a job that ends with the process holding it.
 /// </para>
@@ -253,6 +254,34 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
                 _ended.Add(session);
                 ended.Add(session);
             }
+        }
+
+        return new ChildSweep(ended, heldHere);
+    }
+
+    /// <summary>
+    /// Sweeps each of <paramref name="orchestrators"/> in turn (<see cref="SweepAsync(OrchestratorLayout, string)"/>) as one
+    /// sweep: what <c>list-orchestrator</c> makes over every orchestrator of the repository, and what every command that
+    /// makes this process a run's engine reads first - a record of any run kept because its session holds this process
+    /// refuses the engine (<see cref="ChildSweep.Refusal"/>).
+    /// </summary>
+    /// <param name="orchestrators">The orchestrators, in the order each is swept.</param>
+    /// <param name="command">The command sweeping, which its lines name.</param>
+    /// <returns>What each sweep ended and kept, in the order of the orchestrators and of their records.</returns>
+    public async Task<ChildSweep> SweepAsync(IEnumerable<OrchestratorLayout> orchestrators, string command)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrators);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+
+        var ended = new List<EndedChildSession>();
+        var heldHere = new List<HeldChildSession>();
+
+        foreach (var orchestrator in orchestrators)
+        {
+            var swept = await SweepAsync(orchestrator, command).ConfigureAwait(false);
+
+            ended.AddRange(swept.Ended);
+            heldHere.AddRange(swept.HeldHere);
         }
 
         return new ChildSweep(ended, heldHere);

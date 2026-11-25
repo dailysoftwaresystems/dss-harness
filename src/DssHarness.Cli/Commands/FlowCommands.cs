@@ -65,7 +65,7 @@ internal static class RunOrchestratorCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Start a run of a workflow: validates it, makes the run's record and claims it for this engine, and drives it until nothing more can run - done, failed, paused on a question, or stopped on request.");
+        var command = new Command(Name, "Start a run of a workflow: validates it, makes the run's record and claims it for this engine, and drives it until nothing more can run - done, failed, paused on a question, or stopped on request. Refused, nothing made, when run from inside a session or group a step of any run of the repository left running, which the next command from outside ends.");
         command.Arguments.Add(DefinitionArgument);
         command.Options.Add(RunOption);
         command.Options.Add(InputOption);
@@ -102,7 +102,7 @@ internal static class ResumeOrchestratorCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Go on with a run from its records alone, where it stood: what a stop, a crash or an answer left - each stopped step from its own handoff, a failure that ended the run run again, what the run owed made first - under the definition it began with; refused while another run of the repository is unfinished with work in the tree, and when run from inside a session or group a step of the run left running, which the next command from outside ends.");
+        var command = new Command(Name, "Go on with a run from its records alone, where it stood: what a stop, a crash or an answer left - each stopped step from its own handoff, a failure that ended the run run again, what the run owed made first - under the definition it began with; refused while another run of the repository is unfinished with work in the tree, and when run from inside a session or group a step of any run of the repository left running, which the next command from outside ends.");
         command.Arguments.Add(RunArgument);
         command.Options.Add(OrchestrationArguments.Json);
         GlobalOptions.AddTo(command);

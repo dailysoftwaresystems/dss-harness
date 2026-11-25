@@ -348,9 +348,12 @@ nothing in it is signalled, the refusal is said, and its record kept for a comma
 it to end - kept for real: the sweep answers what it kept so beside what it ended (`ChildSweep`), and
 a command that would lose that record or take the run inside it refuses (13), naming the record and
 changing nothing - `delete-orchestrator`, whose deletion would take the record with the run's
-directory, and a session of the run - `resume-orchestrator`, `answer-orchestrator`, each claiming
-the run's owner (`FlowSessions.ClaimAsync`) - whose engine would run inside what the next command
-from outside ends; every other command goes on with the warning.
+directory, and every command that makes this process a run's engine, whose engine would run inside
+what the next command from outside ends: a new run's start (`run-orchestrator`,
+`FlowSessions.CreateAsync`) and a session of a run already made (`resume-orchestrator`,
+`answer-orchestrator`, each claiming the run's owner, `FlowSessions.ClaimAsync`), each of which
+sweeps every run of the repository first, as `list-orchestrator` does, so a record any run keeps
+refuses it; every other command goes on with the warning.
 `stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
 ended: what outlived that end. A tree is ended by holding each process of it still before any is
 killed (`Containment.EndTree`, below), and the system hangs up a group that loses its last parent in

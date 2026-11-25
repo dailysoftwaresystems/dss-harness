@@ -6,7 +6,7 @@ using DssHarness.Core.Processes;
 namespace DssHarness.Core.Orchestration;
 
 /// <summary>
-/// The sessions and groups one operation's sweeps ended (<see cref="ChildSessions.SweepAsync"/>), and the one writer of what its
+/// The sessions and groups one operation's sweeps ended (<see cref="ChildSessions.SweepAsync(OrchestratorLayout, string)"/>), and the one writer of what its
 /// documents say of them: <c>ended</c>, written into every document the operation answers with - its own, and the
 /// stopped form of it where it stopped or threw after a sweep - by its session, so no command over an orchestrator, one
 /// added later included, answers without it.
