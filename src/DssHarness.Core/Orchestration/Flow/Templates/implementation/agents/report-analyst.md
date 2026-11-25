@@ -27,8 +27,8 @@ comes from it.
   seconds (`412.3 s`), the budget's reasoning in minutes (`90.0 minutes`), a cost in dollars (`0.0200 USD`), a cache
   share in percent (`28.0%`), tokens (`180000 tokens`), any other count with what it counts (`2 tries`), a number that
   is no amount after its label (`exit 20`). So write no unit beside a placeholder, and no figure of your own: a
-  placeholder a letter, a number, a currency's sign or `%` touches, or a sign before it (`${1}`, `{1}h`, `{1}%`,
-  `-{1}`), is refused. With the evidence
+  placeholder a letter, a number, a currency's sign, `%` or another placeholder touches, or a sign before it (`${1}`,
+  `{1}h`, `{1}%`, `{1}{2}`, `-{1}`), is refused. With the evidence
 
   ```json
   [{"section": "criticalPath", "row": "build", "of": "seconds", "said": "412.3"},
@@ -37,15 +37,18 @@ comes from it.
 
   the impact `build waited {1} on the critical path and cost {2}.` is kept as `build waited 412.3 s on the critical
   path and cost 0.0200 USD.` A digit anywhere else in the impact is refused and you are asked again - `412.3`, `3600s`,
-  `$0.02`, `2x`, a date or a time of day alike - but inside a word the report holds as an id (a row's id or a name it
-  is made of, a section's or a member's name) or one of your citations writes as its path (`c@1`, a step named
-  `build2`); and so are a placeholder past your evidence and one whose citation holds no number the report measures (a
+  `$0.02`, `2x`, a date or a time of day alike - but inside an id: a word the report holds anywhere, its texts
+  included, that starts with a letter and holds a digit (`c@1`, a step named `build2`, a first error's `CS0246`), or a
+  path one of the point's citations writes (`c@1.exit`); and so are a placeholder past your evidence and one whose citation holds no number the report measures (a
   text of words: cite a number, or say it in words). A number you work out from the report - a sum, a ratio, a share -
   is not the report's: cite where the report holds it, or leave it out.
 - The summary, each pain point's title and cause, and what you note and why hold no number of your own at all - a
-  digit there is refused the same way, but inside an id the report holds or one of your citations writes as its path.
-  Say where the time and money went in words; the figures are the impacts' and the evidence's. A recommendation states
-  the values it proposes - a key's exact text, `retries: 2` - and is never a measurement.
+  digit there is refused the same way, but inside an id: a word the report holds anywhere, its texts included, that
+  starts with a letter and holds a digit (a first error's `CS0246` or `Parser2.cs`, a leg `win-arm64`, a model
+  `glm-4.6`), or a path a citation writes (`c@1.exit` - any of yours in the summary and what you note, the pain point's
+  own in its title and cause). A word that starts with a digit - a time, a date, a version - is never one: say it in
+  words or leave it out. The figures are the impacts' and the evidence's. The recommendation is not read: it states the
+  values it proposes - a key's exact text, `retries: 2` - and is never a measurement.
 - Order the pain points by what they cost: time and dollars, from the report. What you cannot put a number on goes
   under `noted`, with why you could not confirm it.
 - Name steps as the report's rows name them, by their instance ids. A recommendation names its change exactly: a

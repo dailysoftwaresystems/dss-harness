@@ -384,13 +384,14 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The orchestrators topic says an analysis states no number of its own: its impact a template, every figure a
-    /// placeholder of one of its citations the tool writes with the cited value's unit - a count with what it counts, a
-    /// number that is no amount after its label - a placeholder standing apart from what would make it another measure,
-    /// a digit anywhere else in the impact, the summary, a title, a cause or a thing noted refused but inside an id the
-    /// report or a citation holds, and a recommendation stating proposed values, never a measurement; and analysis.json
-    /// keeping the written impact with its template beside it - as the evidence check and the analysis's document hold
-    /// them.
+    /// The orchestrators topic says no member of an analysis but its recommendation states a number of its own: its
+    /// impact a template, every figure a placeholder of one of its citations the tool writes with the cited value's unit -
+    /// a count with what it counts, a number that is no amount after its label - a placeholder standing apart from what
+    /// would make it another measure, another placeholder among them, a digit anywhere else in the impact, the summary, a
+    /// title, a cause or a thing noted refused but inside an id - any word the report holds, its texts included, that
+    /// starts with a letter and holds a digit, or a path a citation writes - and the recommendation not read, stating
+    /// proposed values, never a measurement; and analysis.json keeping the written impact with its template beside it - as
+    /// the evidence check and the analysis's document hold them.
     /// </summary>
     [Fact]
     public void OrchestratorsTopic_SaysAnImpactIsATemplate_WhoseFiguresTheToolWrites()
@@ -398,20 +399,24 @@ public sealed partial class HelpTests
         var help = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
 
         Assert.Contains(
-            "each step it names is a row of the report's steps; and the analysis states no number of its own. Its impact - "
-                + "the time and dollars it cost - is a template whose every figure is a placeholder naming one of its "
-                + "citations by its place in the evidence, {1} the first, which the tool writes as the cited value with the "
-                + "unit the report holds that member in, as the report writes it (a time in seconds, 412.3 s; the budget's "
-                + "reasoning in minutes, 90.0 minutes; a cost in dollars, 0.0200 USD; a cache share in percent, 28.0%; "
-                + "tokens, 180000 tokens; any other count with what it counts, 2 tries; a number that is no amount after its "
-                + "label, exit 20). A placeholder stands apart: one a letter, a number, a currency's sign or % touches, or a "
-                + "sign before it (${1}, {1}h, {1}%, -{1}), is refused, and so are one past its evidence and one whose "
-                + "citation holds no number the report measures. A digit anywhere else - in the impact, the summary, a pain "
-                + "point's title or cause, or what was noted and why - is refused but inside a word the report holds as an "
-                + "id, a row's id or a name it is made of, a section's or a member's name, or a citation writes as its path "
-                + "(c@1, a step named build2); a recommendation states the values it proposes - a key's exact text - and is "
-                + "never a measurement. An analysis cannot invent a measurement: its only figures are its citations, the "
-                + "report's own, and its impacts', written by the tool.",
+            "each step it names is a row of the report's steps; and no member of the analysis but its recommendation states "
+                + "a number of its own. Its impact - the time and dollars it cost - is a template whose every figure is a "
+                + "placeholder naming one of its citations by its place in the evidence, {1} the first, which the tool writes "
+                + "as the cited value with the unit the report holds that member in, as the report writes it (a time in "
+                + "seconds, 412.3 s; the budget's reasoning in minutes, 90.0 minutes; a cost in dollars, 0.0200 USD; a cache "
+                + "share in percent, 28.0%; tokens, 180000 tokens; any other count with what it counts, 2 tries; a number "
+                + "that is no amount after its label, exit 20). A placeholder stands apart: one a letter, a number, a "
+                + "currency's sign, % or another placeholder touches, or a sign before it (${1}, {1}h, {1}%, {1}{2}, -{1}), "
+                + "is refused, and so are one past its evidence and one whose citation holds no number the report measures. "
+                + "A digit anywhere else - in the impact, the summary, a pain point's title or cause, or what was noted and "
+                + "why - is refused but inside an id: a word the report holds anywhere, its texts included, that starts with "
+                + "a letter and holds a digit (c@1, a step named build2, a first error's CS0246 and Parser2.cs, a leg "
+                + "win-arm64 only a signal names), or a path a citation writes (c@1.exit) - any citation's in the summary "
+                + "and what was noted, its own pain point's in a title, a cause and an impact; a word that starts with a "
+                + "digit - a time, a date, a version - is never one. The recommendation is not read: it states the values it "
+                + "proposes - a key's exact text - and is never a measurement. So the summary, the titles, the causes, the "
+                + "impacts and what was noted cannot invent a measurement: their only figures are the citations, the "
+                + "report's own, and the impacts', written by the tool.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(

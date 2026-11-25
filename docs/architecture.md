@@ -3957,8 +3957,9 @@ cost the person's. The analyst's answer is held to the report by the structured-
 analyst's own conversation under the schema's one count of repairs - never a run asked anew: each citation names a
 section of the report (the schema's enum), the row by its `id`, the member by its path and the value the report holds
 there, read by its JSON kind - a number for its value, a text and a truth word for word - each step a point names is a
-row of the report's steps, and the analysis states no number of its own: its figures are its citations, the report's
-own, and its impacts', written by the tool. An impact - the time and dollars it cost - is a template: every figure it
+row of the report's steps, and no member of the analysis but its recommendation states a number of its own: the
+figures of its summary, titles, causes, impacts and what it noted are its citations, the report's own, and its
+impacts', written by the tool. An impact - the time and dollars it cost - is a template: every figure it
 states is a placeholder naming one of its pain point's citations by its place in the evidence, `{1}` the first, and
 once the gate holds the answer the tool writes each as the cited value with the unit the report holds that member in,
 as the report itself writes it (`FlowAnalysisEvidence.Rendered`, `FlowRunReport.SaidIn`, which says a value by the
@@ -3972,20 +3973,27 @@ one of its own says otherwise, an entry of a text the unit of the one number it 
 seconds), its every count's noun and every label pinned, and held to every number the builder writes by
 `FlowRunReportTests`. A placeholder names a citation that holds a number the report measures - a number, or a text
 that is one number whole, of a member the table gives a unit - so one past its evidence (`{3}` beside two citations),
-`{0}`, and one that names a text of words are refused; and it stands apart: a letter, a number, a currency's sign or
-`%` touching it on either side, or a sign before it (`${1}`, `{1}h`, `{1}k`, `{1}%`, `-{1}`), is refused, only the
-characters that touch it read. A digit anywhere else is a number of its own and refused, once for each word it stands
+`{0}`, and one that names a text of words are refused; and it stands apart: a letter, a number, a currency's sign,
+`%` or another placeholder - whose figure would run into its own - touching it on either side, or a sign before it
+(`${1}`, `{1}h`, `{1}k`, `{1}%`, `{1}{2}`, `-{1}`), is refused, only what touches it read. A digit anywhere else is a number of its own and refused, once for each word it stands
 in, whatever wraps it or joins it (`60`, `3600s`, `q1:3600s`, `(20)`, `$0.02`, `½`, `{1}0`), in the impact and as much
 in the summary, each pain point's title and cause, and each thing noted and why, which hold no placeholder - but inside
-a word the report holds as an id: a row's id, a name the id is made of as the row's own members hold it (a hotspot's
-item and path), a section's or a member's name, or a path a citation writes (`c@1.exit`; the summary's and the noted's
-ids every citation's), each read whole where no letter, digit, mark or underscore joins it - nor a hyphen, a point or a
-comma with a letter or a digit beyond - and kept as an id only where it holds a digit and starts with a letter, so
-`c@1`, `slowestStep#2` and a step named `build2` or `windows-2022` are written as the report names them while `c@2`,
-`build3` or `build2-fast` the report holds as no id are refused. A recommendation states the values it proposes - a
-configuration key's or a workflow key's exact text - and is never a measurement, so it alone is not read. No word of
-the analysis is read for a unit or a currency: the figure and its unit are the tool's, so an analysis cannot invent a
-measurement by how it writes one. `analysis.json` keeps each impact as the tool wrote it and, beside it, its template
+an id. The ids are built once for each check, by one owner (`FlowAnalysisEvidence`'s `Names`): a row's id, a name the id
+is made of as the row's own members hold it (a hotspot's item and path), a section's or a member's name, every word the
+report's texts hold - each text parted at what no id is written with (white space, a quote, a parenthesis, a colon,
+a slash, a comma) and read from its first letter or digit to its last, or to a `]` closing a `[` it holds, so a failed
+attempt's `src/Parser2.cs(12,5): error CS0246` holds `Parser2.cs` and `CS0246`, a signal's `leg 'win-arm64'` and
+`[win-arm64]` hold `win-arm64` and a fallback's `moved from glm-4.6.` holds `glm-4.6`; the report's texts are parted
+so, never the analyst's - and the paths the citations write
+(`c@1.exit`): any citation's in the summary and the noted, which belong to no pain point, and the pain point's own in
+its title, cause and impact. A name of the analysis is read whole where no letter, digit, mark or underscore joins it -
+nor a hyphen, a point or a comma with a letter or a digit beyond - and is an id only where it holds a digit and starts
+with a letter, so `c@1`, `slowestStep#2` and a step named `build2` or `windows-2022` are written as the report names
+them while `c@2`, `build3` or `build2-fast` the report holds nowhere are refused, and a word that starts with a digit -
+a time, a date, a version, whatever text of the report holds it - is never one. The recommendation is not read: it
+states the values it proposes - a configuration key's or a workflow key's exact text - and is never a measurement. No
+word of the analysis is read for a unit or a currency: the figure and its unit are the tool's, so its checked members
+cannot invent a measurement by how they write one. `analysis.json` keeps each impact as the tool wrote it and, beside it, its template
 (`impactTemplate`); `analysis.md`, the text and `--json` say the written one, and an answer the report does not hold is
 no analysis - the run's spend still said and kept.
 Every rule a text must keep is the schema's (a pattern for every text, an enum for every closed list), and a run with

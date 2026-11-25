@@ -25,19 +25,20 @@ correct it, and add no number it does not hold.
    where the member sits in the section itself), the member (a path joined by `.` where it is inside one, as
    `tokens.input`), and the value exactly as the report holds it. Name its steps by their rows' ids, and write its
    impact as a template with no number of your own: each figure a placeholder naming one of its citations by its place
-   in the evidence, `{{1}}` the first, standing apart from any letter, number, currency's sign or `%` and from a sign
-   before it, which the tool writes as the cited value with the report's unit - a count with what it counts. Its title
-   and cause, and what you note, hold no number of your own. A citation the report does not hold, or a number of your own anywhere but in a recommendation's
-   proposed values, is refused and you are asked again. Where the report shows nothing a change would have paid for,
+   in the evidence, `{{1}}` the first, standing apart from any letter, number, currency's sign, `%` or other
+   placeholder and from a sign before it, which the tool writes as the cited value with the report's unit - a count with
+   what it counts. Its title and cause, and what you note, hold no number of your own. A citation the report does not
+   hold, or a number of your own in the summary, a title, a cause, an impact or what you note - outside an id the report
+   or a citation holds - is refused and you are asked again. Where the report shows nothing a change would have paid for,
    name no pain point.
 5. Recommend the change, exactly: a configuration key as `config.json` spells it, a workflow key as the yml spells
    it, a prompt's line by its file, a repository fix by what it changes - the values it proposes, never a
-   measurement. Where the cause is not the repository's but
-   the request's or the person's waiting, say that instead.
+   measurement; it is not read. Where the cause is not the repository's but the request's or the person's waiting, say
+   that instead.
 
 ## What to return
 
 The analysis as the schema asks: a summary of three sentences at most, the pain points ordered by what they cost,
 and what you noted but could not confirm. No number the report does not hold, no figure in an impact but a
-placeholder of one of its citations, no number of your own anywhere else but a recommendation's proposed values, and
-no step named that its rows do not name.
+placeholder of one of its citations, no number of your own in the summary, a title, a cause or what you noted, a
+recommendation's numbers only the values it proposes, and no step named that its rows do not name.

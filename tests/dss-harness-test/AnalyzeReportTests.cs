@@ -489,7 +489,7 @@ public sealed class AnalyzeReportTests
                 $"painPoints[0].impact: writes '(20)', {OfItsOwn}",
                 $"painPoints[0].impact: writes '$0.02,', {OfItsOwn}",
                 $"painPoints[0].impact: writes '½', {OfItsOwn}",
-                $"painPoints[0].impact: {{1}} touches '0' after it - a placeholder stands apart from every letter, number, currency's sign, % and sign before it, for the tool writes the figure with its own unit; leave the unit to it",
+                $"painPoints[0].impact: {{1}} touches '0' after it - {Touches}",
                 $"painPoints[0].impact: writes '{{1}}0', {OfItsOwn}",
                 $"painPoints[0].impact: writes 'b@2', {OfItsOwn}",
             ],
@@ -667,17 +667,17 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
-    /// A placeholder stands apart from what would make its figure another measure: a letter, a number, a currency's sign
-    /// or a percent touching it on either side, or a sign before it, is refused - a cited count of tries written after a
-    /// dollar's sign is no cost of two dollars, and a wait glued to an h no hours - while brackets, Markdown's marks and
-    /// punctuation leave it its own, and a cited count is written with what it counts.
+    /// A placeholder stands apart from what would make its figure another measure: a letter, a number, a currency's sign,
+    /// a percent or another placeholder touching it on either side, or a sign before it, is refused - a cited count of
+    /// tries written after a dollar's sign is no cost of two dollars, a wait glued to an h no hours, and two figures
+    /// written together no one figure - while brackets, Markdown's marks and punctuation leave it its own, and a cited
+    /// count is written with what it counts.
     /// </summary>
     [Fact]
     public void APlaceholderTouchingALetterANumberASignOrPercent_IsRefused()
     {
         var report = FlowRunReport.Of(FlowRunReportTests.Source());
         var evidence = string.Join(",", Cited("steps", "b", "tries", "2"), Cited("criticalPath", "b", "seconds", "30.0"));
-        const string Touches = "a placeholder stands apart from every letter, number, currency's sign, % and sign before it, for the tool writes the figure with its own unit; leave the unit to it";
 
         Assert.Equal(
             "b ran 2 tries (30.0 s), **2 tries**, `30.0 s`; 2 tries - 30.0 s.",
@@ -693,8 +693,10 @@ public sealed class AnalyzeReportTests
                 $"painPoints[0].impact: {{1}} touches '€' before it - {Touches}",
                 $"painPoints[0].impact: {{2}} touches '-' before it - {Touches}",
                 $"painPoints[0].impact: {{1}} touches 'z' before it and 'z' after it - {Touches}",
+                $"painPoints[0].impact: {{2}} touches '{{1}}' after it - {Touches}",
+                $"painPoints[0].impact: {{1}} touches '{{2}}' before it - {Touches}",
             ],
-            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "b's retries cost ${1}, took {2}h, {1}k, {1}%, US${2}, €{1}, -{2} and z{1}z."), report));
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "b's retries cost ${1}, took {2}h, {1}k, {1}%, US${2}, €{1}, -{2}, z{1}z and {2}{1}."), report));
     }
 
     /// <summary>
@@ -722,7 +724,6 @@ public sealed class AnalyzeReportTests
                 }),
                 ["noted"] = new JsonArray(new JsonObject { ["what"] = what, ["why"] = why }),
             };
-        const string Free = "a number of its own - an analysis's figures are its impacts', each a placeholder of a citation the tool writes, and its evidence's; say this without one, a digit standing only in an id the report holds";
 
         Assert.Empty(FlowAnalysisEvidence.Problems(
             Analysis("b's wait on the queue cost the run most, as q1's did.", "b waits on the machine's queue", "b@1 failed and c@1 failed after it, as b.seconds says.", "q1 waited on a person", "q2 is still open"),
@@ -738,6 +739,100 @@ public sealed class AnalyzeReportTests
             FlowAnalysisEvidence.Problems(
                 Analysis("The build alone wasted 3600 s on the queue, as q1 did.", "b retried 2 times", "b@1 failed and c@1 exited 20", "q1 waited {1}", "the 2nd answer is not in the records"),
                 report));
+    }
+
+    /// <summary>
+    /// Every word the report holds - in its texts too - that starts with a letter and holds a digit is an id every checked
+    /// member may repeat: a failed attempt's first error's code and file, a leg only a signal's text names, a model a
+    /// fallback moved off that spent nothing and so is no dollars group, and a zone and a model its reason names in
+    /// brackets and before a stop, each read without them; a word that starts with a digit is none, whatever text of the
+    /// report holds it, and a number of the analysis's own is refused beside them.
+    /// </summary>
+    [Fact]
+    public void AWordTheReportsTextsHold_StartingWithALetterAndHoldingADigit_IsAnIdOfEveryCheckedMember()
+    {
+        var source = FlowRunReportTests.Source();
+        var report = FlowRunReport.Of(source with
+        {
+            Flow = source.Flow with
+            {
+                Steps = [.. source.Flow.Steps.Select(step => step.Instance switch
+                {
+                    "b" => step with { Measure = step.Measure! with { Attempts = [step.Measure.Attempts![0], step.Measure.Attempts[1] with { FallbackFrom = "glm-4.6", FallbackReason = "zone [eu-west2] refused the key for model-y2." }] } },
+                    "c" => step with
+                    {
+                        Measure = step.Measure! with
+                        {
+                            Attempts = [step.Measure.Attempts![0] with { Legs = [new FlowStepLeg("win-arm64", "Failed", Unparsed: 4)], FirstError = JsonNode.Parse("""{"code":"CS0246","file":"src/Parser2.cs","line":12}""")!.AsObject() }],
+                        },
+                    },
+                    _ => step,
+                })],
+            },
+        });
+        string Said(string signal)
+            => report["signals"]!.AsArray().Single(row => row!["id"]!.GetValue<string>() == signal)!["said"]!.GetValue<string>();
+        var began = report["theRun"]!["beganAt"]!.GetValue<string>();
+
+        // The words are held by the report's texts alone: no row, section or member of it is named so.
+        Assert.Equal("c attempt 1: leg 'win-arm64' printed 4 line(s) that look like errors and no parser read", Said("unparsedOutput#1"));
+        Assert.Equal("b attempt 2 moved from glm-4.6 to model-y: zone [eu-west2] refused the key for model-y2.", Said("fallback#1"));
+        Assert.Equal("""{"code":"CS0246","file":"src/Parser2.cs","line":12}""", report["errors"]![1]!["firstError"]!.ToJsonString());
+
+        JsonNode Analysis(string summary, string why)
+            => new JsonObject
+            {
+                ["summary"] = summary,
+                ["painPoints"] = new JsonArray(new JsonObject
+                {
+                    ["title"] = "Fix CS0246 in Parser2.cs",
+                    ["severity"] = "high",
+                    ["where"] = new JsonArray("c", "b"),
+                    ["evidence"] = JsonNode.Parse($"[{string.Join(",", Cited("errors", "c@1", "firstError.code", "CS0246"), Cited("signals", "unparsedOutput#1", "said", Said("unparsedOutput#1")), Cited("signals", "fallback#1", "said", Said("fallback#1")), Cited("criticalPath", "b", "seconds", "30.0"))}]"),
+                    ["impact"] = "c@1 stopped on CS0246 in src/Parser2.cs, its win-arm64 leg unread, after b waited {4} - b's first try on glm-4.6 refused.",
+                    ["cause"] = "c@1 failed to compile on CS0246; b's first try on glm-4.6 was refused, so it moved to model-y.",
+                    ["recommendation"] = "r",
+                }),
+                ["noted"] = new JsonArray(new JsonObject { ["what"] = "b moved off glm-4.6 before any token", ["why"] = why }),
+            };
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(Analysis("Most of the run went to c, whose win-arm64 leg printed errors no parser read.", "the records hold no usage for glm-4.6, as eu-west2 refused model-y2"), report));
+        Assert.Equal(
+            [$"summary: writes '3600', {Free}", .. began.Split(' ').Select(word => $"noted[0].why: writes '{word}', {Free}")],
+            FlowAnalysisEvidence.Problems(Analysis("Most of the run went to c, whose win-arm64 leg printed errors no parser read, and 3600 s to the queue.", $"the stream ends at {began} with no result line"), report));
+    }
+
+    /// <summary>
+    /// The paths the citations write are ids of the members they stand for: the summary and what was noted, which belong
+    /// to no pain point, are read with every citation's, and a pain point's title and cause with its own - so c@1.exit,
+    /// which the first point cites, is written whole in the summary, a thing noted and why, and the first point's title and
+    /// cause, while the second point's title, whose evidence writes no such path, writes it as a number of its own.
+    /// </summary>
+    [Fact]
+    public void ACitationsPath_IsAnIdOfTheSummaryAndTheNoted_AndOfItsOwnPointsTitleAndCause()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        static JsonObject Point(string title, string cause, string evidence, string impact)
+            => new()
+            {
+                ["title"] = title,
+                ["severity"] = "high",
+                ["where"] = new JsonArray("c"),
+                ["evidence"] = JsonNode.Parse($"[{evidence}]"),
+                ["impact"] = impact,
+                ["cause"] = cause,
+                ["recommendation"] = "r",
+            };
+        var analysis = new JsonObject
+        {
+            ["summary"] = "c@1.exit says why the run failed.",
+            ["painPoints"] = new JsonArray(
+                Point("c@1.exit is the run's failure", "c@1.exit repeats in every attempt.", Cited("errors", "c@1", "exit", "20"), "c ended {1}."),
+                Point("c@1.exit again", "c waited on b.", Cited("criticalPath", "b", "seconds", "30.0"), "b waited {1}.")),
+            ["noted"] = new JsonArray(new JsonObject { ["what"] = "c@1.exit is the same in the records", ["why"] = "c@1.exit is all the records hold" }),
+        };
+
+        Assert.Equal([$"painPoints[1].title: writes 'c@1.exit', {Free}"], FlowAnalysisEvidence.Problems(analysis, report));
     }
 
     /// <summary>
@@ -768,6 +863,12 @@ public sealed class AnalyzeReportTests
         Assert.Contains($"\n- impact: {Written}\n", File.ReadAllText(Path.Combine(directory, "analysis.md")), StringComparison.Ordinal);
         Assert.Contains($"\n  impact: {Written}\n", outcome.Message, StringComparison.Ordinal);
     }
+
+    /// <summary>What every refusal of a number a member but an impact writes of its own says after the word it stands in.</summary>
+    private const string Free = "a number of its own - an analysis's figures are its impacts', each a placeholder of a citation the tool writes, and its evidence's; say this without one, a digit standing only in an id the report holds";
+
+    /// <summary>What every refusal of a placeholder something touches says after what touches it.</summary>
+    private const string Touches = "a placeholder stands apart from every letter, number, currency's sign, % and other placeholder, and from a sign before it, for the tool writes the figure with its own unit; leave the unit to it";
 
     /// <summary>What every refusal of a number an impact writes of its own says after the word it stands in.</summary>
     private const string OfItsOwn = "a number of its own - write each figure as the placeholder of the citation that holds it ({1} the first of its evidence), which the tool writes as the report does; a digit stands only in a placeholder or in an id the report holds";
