@@ -270,8 +270,10 @@ it, and each is waited for by a handle that only waits and asks when it was crea
 engine leaves behind ends with it there. On Linux and macOS the runner ends the child's session as
 the child ends or is stopped - every process still in it, and at a stop every one still in the
 child's tree, read before anything is signalled, asked to end with SIGTERM and waited for while
-any of it stands, a zombie - which nothing may ever reap - standing for none, and the group for none
-once every member it is listed to hold is one - told every five minutes, and killed at what is left of the child's time limit,
+any of it stands, a zombie - which nothing may ever reap - standing for none and a process still in
+its exit standing until it is one, one the harness may not signal - another user's - not waited for,
+and the group for none once every member it is listed to hold is one, never by a signal alone, which
+macOS passes a process in its exit over for - told every five minutes, and killed at what is left of the child's time limit,
 or at once where a sweep ends what a killed run left, that run's bound having passed with it.
 Whatever a stop or a container's end ends is waited for until it has gone before the output's end
 is looked for (`EndedProcesses`): the system answers a kill before the process's end has run - a
@@ -284,7 +286,10 @@ read while it is held still (SIGSTOP) before anything is killed - and waited for
 minutes and with no grace of any length: on Windows until its handle is signalled, which comes only
 once its handle table has run down, and on Linux and macOS until no process carries its id with its
 start or that process is a zombie, whose descriptors are closed, whether or not anything ever reaps
-it. On Windows the job, and a stopped tree, are listed again once every process kept has gone, for a
+it - its start read through its exit too, while it is still closing what it held: macOS lets nothing
+take a reference to a process from the moment it enters its exit, before its descriptors are closed,
+so there the start is read from the kernel's own record of it, kept until it is reaped, and never
+from the runtime, whose reading refuses such a process. On Windows the job, and a stopped tree, are listed again once every process kept has gone, for a
 child one made while it was being ended. Then
 the output is read until every character the child wrote has been, to its end or until a look finds
 the pipe holding nothing while something still holds it open (`ProcessRunner.StreamCapture`: each
@@ -497,12 +502,22 @@ console of its own that an interruption typed at the harness's never reaches. A 
 the terminal is stopped by its process tree, as any other, and on Linux and macOS by its group as
 well, at once, which reaches what its tree handed on; what it leaves at its own end is left. A
 tree, and the group beside it, is ended by one walk (`Containment.EndTree`) - for a stop, for
-`stop-run --now` and `stop-orchestrator --now`, and for a host agent's last resort alike. On Linux
-and macOS it holds each process still (SIGSTOP) before it takes that process's children - held, a
-process starts no other, and a child of it is never reaped and its id given out before the walk
-acts on it; Linux's table is read once a round however deep the tree, each child asked again once
-its parent is held, until a round takes none - then the group, as one before it is listed and each member by its own
-id, and only then kills it all: the group as one first, while it stands, so a member its listing did not show - one
+`stop-run --now` and `stop-orchestrator --now`, and for a host agent's last resort alike. It never
+acts on the process running it: a tree whose root is that process, or one it descends from - read
+up its own chain of parents, each the parent the walk itself reads and started no later than its
+child - is refused before anything is held or ended, which `--now` answers as could not be ended,
+its owner kept, and the last resort as left. On Linux
+and macOS it holds each process still (SIGSTOP) before it takes that process's children - once it
+has stopped, a process starts no other, and a child of it is never reaped and its id given out
+before the walk acts on it; the table of every process with its parent - Linux's `/proc`, macOS's
+listing of every process - is read once a round however deep the tree, each child asked again once
+its parent is held, until a round takes none, and a child the table names that no hold answers yet
+is asked again, paced and told every five minutes, until it is held or the table no longer names it.
+A process stops only once a call it is inside has returned, so a child whose creation was already
+under way when its parent was held may join the table after the round that took none: nothing an
+unprivileged process may ask closes that instant, and a contained child's session, or a group, is
+the end that reaches what its tree started in it. Then the group, as one before it is listed and each member by its own
+id, and only then it kills it all: the group as one first, while it stands, so a member its listing did not show - one
 `/proc` hides, or whose reading failed - goes with it and is never left held still, each member killed by the group
 alone, since its id may be given out again once the group is killed, and every other process by its own id, the child
 last (`Containment.HeldStill`, the one order a session's end kills in too). On Windows, where nothing is held still, it

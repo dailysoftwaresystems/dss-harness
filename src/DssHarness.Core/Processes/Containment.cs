@@ -149,9 +149,12 @@ internal static class Containment
     /// held, then killed - the group as one first, while it stands, so a member no reading showed goes
     /// with it, and every other by its own id (<see cref="HeldStill.Kill"/>) - and waited for
     /// (<see cref="EndedProcesses.GoneAsync"/>). A member is ended, for the wait before the bound, once
-    /// nothing answers to its id or what does is a zombie (<see cref="ProcessGoing.HasEnded"/>), which
-    /// nothing may ever reap, and the group once nothing in it can be signalled or every member it is
-    /// listed to hold is a zombie. A
+    /// the system lists nothing under its id or what it lists is a zombie (<see cref="ProcessGoing.HasEnded"/>),
+    /// which nothing may ever reap - a process still in its exit, closing what it held, is not - and the
+    /// group once every member it is listed to hold is, or on Linux once nothing in it can be signalled
+    /// (<see cref="ProcessGoing.GroupHasEnded(Func{IReadOnlyList{int}}, Func{bool}, Func{int, bool})"/>): never by a
+    /// signal alone, which macOS passes a process in its exit over for. One this process may not signal - another
+    /// user's - is not waited for: neither the asking nor the kill reaches it. A
     /// session with nothing in it is not read again, nor signalled. A process that left
     /// both the session and the tree - a daemon that made a session of its own and whose parent
     /// has gone - is reached by nothing here. A group is ended the same way, by its own members and
@@ -181,7 +184,18 @@ internal static class Containment
         var (first, unread) = await ReadAsync(read).ConfigureAwait(false);
         var members = first is null ? [] : Members(first, leader, In);
 
-        if (members.Count == 0 && !GroupHolds(leader))
+        // Ended as the system says a process has ended - gone, or a zombie, which nothing may ever reap - never by a signal
+        // with no number alone, which macOS answers for a zombie and one still in its exit as it does for a live process:
+        // a member once it has, or where this process may not signal it, which neither the asking nor the kill reaches;
+        // and the group once every member it is listed to hold has (ProcessGoing). Waited for while any of it stands, and
+        // made to at the bound.
+        bool MemberEnded(int process) => ProcessGoing.HasEnded(process) || calls.MayNotSignal(process);
+
+        bool GroupEnded() => ProcessGoing.GroupHasEnded(() => ends.Members(leader), () => calls.SignalGroup(leader, 0) != -1, MemberEnded);
+
+        // Nothing in it to end: nothing found, nothing in its group to signal - and, on macOS, which passes a process in its
+        // exit over for a signal, nothing listed in it still closing what it held.
+        if (members.Count == 0 && !GroupHolds(leader) && GroupEnded())
         {
             return unread is null ? new HeldEnding(Found: false, null) : new HeldEnding(Found: true, Unreached(unread, held, "its group had already ended"));
         }
@@ -192,15 +206,6 @@ internal static class Containment
         {
             calls.Signal(member.Id, Posix.AskToEnd);
         }
-
-        // The signal with no number asks nothing and reports everything: a group or a process it cannot signal is one that
-        // has ended, and one it can has ended all the same where it is a zombie, which nothing may ever reap - the group
-        // once every member it is listed to hold is one. Waited for while any of it stands, and made to at the bound.
-        bool MemberEnded(int process) => calls.Signal(process, 0) == -1 || ProcessGoing.HasEnded(process);
-
-        bool GroupEnded()
-            => calls.SignalGroup(leader, 0) == -1
-                || (ends.Members(leader).ToList() is { Count: > 0 } listed && listed.All(ProcessGoing.HasEnded));
 
         await Waits.ForAsync(
             async cancellationToken =>
@@ -293,8 +298,13 @@ internal static class Containment
     /// </summary>
     /// <remarks>
     /// <para>
-    /// On Linux and macOS each process is held still (SIGSTOP) before its children are taken: held, it starts no other,
-    /// and a child of it is never reaped and its id given out before the walk acts on it (<see cref="HoldDescendants"/>).
+    /// The walk never acts on the process running it: a root that is this very process, or one it descends from, is
+    /// refused before anything is held, opened or ended (<see cref="HoldsTheCaller"/>) - a stop asked from inside the tree
+    /// it ends would hold itself still, or end itself, part way.
+    /// </para>
+    /// <para>
+    /// On Linux and macOS each process is held still (SIGSTOP) before its children are taken: once it has stopped it starts
+    /// no other, and a child of it is never reaped and its id given out before the walk acts on it (<see cref="HoldDescendants"/>).
     /// Every process of the tree is held so, then the group - as one before it is listed, and each member by its own id -
     /// and only then each is kept by its id and start and killed (<see cref="HeldStill.Kill"/>): the group as one first,
     /// while it stands, so a member its listing did not show goes with it, and every other process by its own id, the root
@@ -321,11 +331,19 @@ internal static class Containment
     /// did: on Windows the root is kept by a copy of it. <see langword="null"/> where <paramref name="root"/> is known by its
     /// id alone, and opened by it.
     /// </param>
+    /// <exception cref="InvalidOperationException">The tree holds this very process: nothing was held or ended.</exception>
     /// <exception cref="AggregateException">A process of the tree or the group could not be ended: every other was.</exception>
     public static void EndTree(Process root, bool group, EndedProcesses ended, SafeProcessHandle? handle = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(ended);
+
+        if (HoldsTheCaller(root.Id))
+        {
+            throw new InvalidOperationException(string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"the tree of pid {root.Id} holds this very process (pid {Environment.ProcessId}), and no process ends a tree it runs in"));
+        }
 
         var failed = new List<Exception>();
 
@@ -342,6 +360,63 @@ internal static class Containment
         {
             throw new AggregateException($"Not every process of the tree of pid {root.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could be ended.", failed);
         }
+    }
+
+    /// <summary>
+    /// Whether the tree of <paramref name="root"/> holds this very process: it is the root, or the root is one this process
+    /// descends from, read once up this process's own chain of parents - each the parent the walk itself reads (Linux's
+    /// <c>/proc</c>, macOS's own record of a process, the list Windows keeps of every process), and each started no later
+    /// than the child it is read for, so a later holder of a parent's id that has gone is never taken for it. A parent
+    /// that cannot be read ends the chain: what the walk cannot read it cannot walk through either.
+    /// </summary>
+    /// <param name="root">The id of the process whose tree would be ended.</param>
+    private static bool HoldsTheCaller(int root)
+    {
+        var self = Environment.ProcessId;
+
+        if (root == self)
+        {
+            return true;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            var listed = new Dictionary<int, ListedProcess>();
+
+            foreach (var process in SystemProcessList.Every() ?? [])
+            {
+                _ = listed.TryAdd(process.Id, process);
+            }
+
+            var seen = new HashSet<int>();
+
+            for (var child = listed.GetValueOrDefault(self); seen.Add(child.Id) && listed.TryGetValue(child.ParentId, out var parent) && parent.Created <= child.Created; child = parent)
+            {
+                if (parent.Id == root)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        var walked = new HashSet<int>();
+
+        for (var child = self; walked.Add(child) && ParentOf(child) is { } parent && parent > 0; child = parent)
+        {
+            if (Started(parent) is { } parentStarted && Started(child) is { } childStarted && parentStarted > childStarted)
+            {
+                return false;
+            }
+
+            if (parent == root)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Ends a kept process at once, as the machine does: TerminateProcess on Windows, SIGKILL on Linux and macOS.</summary>
@@ -366,9 +441,18 @@ internal static class Containment
     public static void EndGroupNow(int group) => _ = Posix.Calls().SignalGroup(group, Posix.Kill);
 
     /// <summary>
+    /// Holds the process <paramref name="id"/> names still at once, on Linux and macOS - SIGSTOP, by its id - and says how it
+    /// went: 0 where it was signalled, else the error number, ESRCH where no process answered to the id.
+    /// </summary>
+    /// <param name="id">The process's id.</param>
+    public static int HoldNow(int id)
+        => Posix.Calls().Signal(id, Posix.HoldStill) == -1 ? Marshal.GetLastPInvokeError() : 0;
+
+    /// <summary>
     /// Whether a kept process has gone, asked now: on Windows its handle signalled, which comes only once its handle table
     /// has run down; on Linux and macOS no process carrying its id with its start, or that process a zombie
-    /// (<see cref="ProcessGoing.HasEnded"/>).
+    /// (<see cref="ProcessGoing.HasEnded"/>) - its start read through its exit on either system
+    /// (<see cref="ProcessIdentity.StampOf"/>), so one still closing what it held stands until it is a zombie.
     /// </summary>
     /// <param name="process">The process.</param>
     public static bool Gone(KeptProcess process)
@@ -634,9 +718,9 @@ internal static class Containment
 
         try
         {
-            if (!HasExited(root) && holding.Hold(root.Id))
+            if (!HasExited(root) && holding.Hold(root.Id) == HoldAnswer.Held)
             {
-                HoldDescendants(holding);
+                HoldDescendants(holding, root.Id, failed);
             }
 
             if (group)
@@ -667,36 +751,40 @@ internal static class Containment
         /// <summary>Every process held, in the order it was: the first - the root, the leader - killed last.</summary>
         public List<int> Processes { get; } = [];
 
-        /// <summary>Whether holding the process <paramref name="id"/> names was tried already, held or not.</summary>
+        /// <summary>Whether holding the process <paramref name="id"/> names was tried already, and answered: held, or refused.</summary>
         /// <param name="id">The process's id.</param>
         public bool Tried(int id) => _tried.Contains(id);
 
         /// <summary>
-        /// Holds the process <paramref name="id"/> names still (SIGSTOP); whether it was held now - one tried already, or
-        /// gone, is not, and one that may not be signalled is said in what fails.
+        /// Holds the process <paramref name="id"/> names still (SIGSTOP), and says how that went: held now; tried already;
+        /// answered by no process - which is not taken as tried, so one the system still lists is asked again; or refused,
+        /// which is said in what fails.
         /// </summary>
         /// <param name="id">The process's id.</param>
-        public bool Hold(int id)
+        public HoldAnswer Hold(int id)
         {
-            if (!_tried.Add(id))
+            if (_tried.Contains(id))
             {
-                return false;
+                return HoldAnswer.Tried;
             }
 
-            if (calls.Signal(id, Posix.HoldStill) == -1)
+            var refused = ended.Hold(id);
+
+            if (refused == Posix.NoSuchProcess)
             {
-                var error = Marshal.GetLastPInvokeError();
+                return HoldAnswer.NoneAnswered;
+            }
 
-                if (error != Posix.NoSuchProcess)
-                {
-                    failed?.Add(new Win32Exception(error, $"pid {id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could not be ended: {new Win32Exception(error).Message}"));
-                }
+            _ = _tried.Add(id);
 
-                return false;
+            if (refused != 0)
+            {
+                failed?.Add(new Win32Exception(refused, $"pid {id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could not be ended: {new Win32Exception(refused).Message}"));
+                return HoldAnswer.Refused;
             }
 
             Processes.Add(id);
-            return true;
+            return HoldAnswer.Held;
         }
 
         /// <summary>
@@ -714,7 +802,7 @@ internal static class Containment
 
             _group = group;
 
-            foreach (var member in ended.MembersOf(group).OrderBy(member => member != group))
+            foreach (var member in (ended.MembersOf(group) ?? []).OrderBy(member => member != group))
             {
                 _ = Hold(member);
             }
@@ -757,6 +845,22 @@ internal static class Containment
         }
     }
 
+    /// <summary>How holding a process still went (<see cref="HeldStill.Hold"/>).</summary>
+    private enum HoldAnswer
+    {
+        /// <summary>It was held now.</summary>
+        Held,
+
+        /// <summary>Holding it was tried already, and answered.</summary>
+        Tried,
+
+        /// <summary>No process answered to its id: gone, or one the system lists that cannot be signalled yet.</summary>
+        NoneAnswered,
+
+        /// <summary>It may not be signalled, which was said.</summary>
+        Refused,
+    }
+
     /// <summary>Whether the runtime has seen <paramref name="process"/> end, or holds no process at all.</summary>
     private static bool HasExited(Process process)
     {
@@ -776,71 +880,184 @@ internal static class Containment
     /// acts on it.
     /// </summary>
     /// <remarks>
-    /// macOS lists the children of one process at a time, asked once that process is held, so what it lists is that
-    /// process's own. Linux lists every process at once: read once a round, a child is taken where it is still the child of
-    /// the held process the reading named, as asked again now, and the table read again until a round takes none - a round
-    /// that takes none was read once every process held was, so it named every child any of them has. Each round is one
-    /// reading of the table, however deep the tree.
+    /// <para>
+    /// The system's table of every process is read once a round, each with its parent (<see cref="Parents"/>) - Linux's
+    /// <c>/proc</c>, macOS's listing of every process - and a child is taken where it is still the child of the held process
+    /// the reading named, as asked again now (<see cref="ParentOf"/>); the table is read again until a round takes none - a
+    /// round that takes none was read once every process held was, so it named every child any of them has. Each round is one
+    /// reading of the table, however deep the tree, on either system.
+    /// </para>
+    /// <para>
+    /// A child the reading names that no process answers the hold for - one the system lists while it cannot yet, or no
+    /// longer, be signalled, or one reaped since the reading - is never taken for gone on that answer alone: the next round
+    /// asks it again where the table still names it, at once the first time and then once every
+    /// <see cref="EndingLook"/>, told every five minutes and with no bound, until it is held or the table no longer names
+    /// it. A process stops only once a call it is inside - a fork among them - has returned, so a child whose creation was
+    /// under way when its parent was held may join the table after the round that took none; nothing an unprivileged
+    /// process may ask closes that instant, and a session's end, or a group's, is what reaches such a child.
+    /// </para>
     /// </remarks>
-    private static void HoldDescendants(HeldStill holding)
+    /// <param name="holding">What is held, the root among it.</param>
+    /// <param name="root">The root's id, which the wait is told by.</param>
+    /// <param name="failed">Where a table that cannot be read is said.</param>
+    private static void HoldDescendants(HeldStill holding, int root, List<Exception> failed)
     {
         var held = holding.Processes;
+        var askedAgain = false;
 
-        if (OperatingSystem.IsMacOS())
-        {
-            // The list grows as each child is held, and is walked to its end.
-            for (var index = 0; index < held.Count; index++)
+        // Done at once where every child answers its hold: only a child the table still names that no process answers for
+        // is waited on.
+        _ = Waits.ForAsync(
+            async stop =>
             {
-                foreach (var child in Posix.Listed(Posix.ByParent, held[index]))
+                while (true)
                 {
-                    _ = holding.Hold(child);
-                }
-            }
-
-            return;
-        }
-
-        while (true)
-        {
-            var before = held.Count;
-            var byParent = Proc(ProcStat.ParentField).ToLookup(process => (int)process.Value, process => process.Id);
-            var walking = new Queue<int>(held);
-
-            while (walking.TryDequeue(out var parent))
-            {
-                foreach (var child in byParent[parent])
-                {
-                    if (!holding.Tried(child) && FieldOf(child, ProcStat.ParentField) == parent && holding.Hold(child))
+                    if (Parents() is not { } listed)
                     {
-                        walking.Enqueue(child);
+                        failed.Add(new InvalidOperationException("the system's table of every process could not be read, so what the tree started was not reached"));
+                        return true;
                     }
-                }
-            }
 
-            if (held.Count == before)
-            {
-                return;
-            }
-        }
+                    var before = held.Count;
+                    var unanswered = false;
+                    var byParent = listed.ToLookup(process => process.Parent, process => process.Id);
+                    var walking = new Queue<int>(held);
+
+                    while (walking.TryDequeue(out var parent))
+                    {
+                        foreach (var child in byParent[parent])
+                        {
+                            if (holding.Tried(child) || ParentOf(child) != parent)
+                            {
+                                continue;
+                            }
+
+                            switch (holding.Hold(child))
+                            {
+                                case HoldAnswer.Held:
+                                    walking.Enqueue(child);
+                                    break;
+                                case HoldAnswer.NoneAnswered:
+                                    unanswered = true;
+                                    break;
+                            }
+                        }
+                    }
+
+                    if (held.Count > before)
+                    {
+                        askedAgain = false;
+                        continue;
+                    }
+
+                    if (!unanswered)
+                    {
+                        return true;
+                    }
+
+                    if (askedAgain)
+                    {
+                        await Task.Delay(EndingLook, stop).ConfigureAwait(false);
+                    }
+
+                    askedAgain = true;
+                }
+            },
+            new WaitWatch($"what the tree of pid {root.ToString(System.Globalization.CultureInfo.InvariantCulture)} started to be held still", Waits.Told, null, TimeProvider.System),
+            CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>
-    /// The ids of the processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, read now: one
-    /// Linux's <c>/proc</c> hides - a member of another user's under <c>hidepid</c> - or whose reading failed is not among
-    /// them, which the group's kill as one reaches all the same.
+    /// Every process the system's table lists, each with its parent, read now - one pass over Linux's <c>/proc</c>, or
+    /// macOS's listing of every process with each one's parent asked by its id (<see cref="ProcessGoing.MacRead"/>) - or
+    /// <see langword="null"/> where the table could not be read.
+    /// </summary>
+    private static List<(int Id, int Parent)>? Parents()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return Proc(ProcStat.ParentField)?.ConvertAll(process => (process.Id, (int)process.Value));
+        }
+
+        if (Posix.Listed(Posix.EveryProcess, 0) is not { } ids)
+        {
+            return null;
+        }
+
+        var found = new List<(int Id, int Parent)>(ids.Count);
+
+        foreach (var id in ids)
+        {
+            if (ProcessGoing.MacRead(id) is { Listed: true } read)
+            {
+                found.Add((id, read.Parent));
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The parent of the process <paramref name="id"/> names, read now - the process it was handed to where its own parent
+    /// went, on Linux and macOS alike - or <see langword="null"/> where it has gone or cannot be read: the one read of a
+    /// parent the walk and the refusal of a tree that holds this process both make.
+    /// </summary>
+    private static int? ParentOf(int id)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            return ProcessGoing.MacRead(id) is { Listed: true } read ? read.Parent : null;
+        }
+
+        return FieldOf(id, ProcStat.ParentField) is { } parent ? (int)parent : null;
+    }
+
+    /// <summary>
+    /// When the process <paramref name="id"/> names started, as a number that orders one start against another - Linux's
+    /// ticks since boot, macOS's microseconds since 1970 - or <see langword="null"/> where it cannot be read.
+    /// </summary>
+    private static long? Started(int id)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            return ProcessGoing.MacStarted(id) is var (seconds, microseconds) ? unchecked((long)((seconds * ProcessGoing.MicrosecondsInASecond) + microseconds)) : null;
+        }
+
+        return FieldOf(id, ProcStat.StartTicksField);
+    }
+
+    /// <summary>
+    /// The ids of the processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, read now - or
+    /// <see langword="null"/> where the system would not list them: one Linux's <c>/proc</c> hides - a member of another
+    /// user's under <c>hidepid</c> - or whose reading failed is not among them, which the group's kill as one reaches all
+    /// the same. macOS's listing hides none, a zombie and one in its exit among them.
     /// </summary>
     /// <param name="group">The group's id.</param>
-    internal static IEnumerable<int> MembersOf(int group)
+    internal static IReadOnlyList<int>? MembersOf(int group)
         => OperatingSystem.IsMacOS()
             ? Posix.Listed(Posix.ByGroup, group)
-            : Proc(ProcStat.GroupField).Where(process => process.Value == group).Select(process => process.Id);
+            : Proc(ProcStat.GroupField)?.Where(process => process.Value == group).Select(process => process.Id).ToList();
 
-    /// <summary>Every process Linux's <c>/proc</c> lists, with <paramref name="field"/> of its <c>stat</c>: one pass over the table.</summary>
-    private static List<(int Id, long Value)> Proc(int field)
+    /// <summary>
+    /// Every process Linux's <c>/proc</c> lists, with <paramref name="field"/> of its <c>stat</c>: one pass over the table;
+    /// <see langword="null"/> where <c>/proc</c> could not be listed.
+    /// </summary>
+    private static List<(int Id, long Value)>? Proc(int field)
     {
+        IReadOnlyList<int> ids;
+
+        try
+        {
+            ids = Kernel.Listed();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
         var found = new List<(int Id, long Value)>();
 
-        foreach (var id in Kernel.Listed())
+        foreach (var id in ids)
         {
             if (FieldOf(id, field) is { } value)
             {
@@ -1225,11 +1442,14 @@ internal static class Containment
         /// <summary>ESRCH: no process, or no group, carries the id signalled.</summary>
         public const int NoSuchProcess = 3;
 
+        /// <summary>EPERM: the process may not be signalled by this one - another user's.</summary>
+        public const int NotPermitted = 1;
+
+        /// <summary><c>PROC_ALL_PIDS</c>: libproc's listing of every process, a zombie and one in its exit among them.</summary>
+        public const uint EveryProcess = 1;
+
         /// <summary><c>PROC_PGRP_ONLY</c>: libproc's listing of the processes in one group.</summary>
         public const uint ByGroup = 2;
-
-        /// <summary><c>PROC_PPID_ONLY</c>: libproc's listing of the processes one process is the parent of.</summary>
-        public const uint ByParent = 6;
 
         /// <summary>
         /// SIGSTOP: the signal that holds a process still where it stands, which it cannot refuse - numbered 17 on macOS and
@@ -1239,23 +1459,32 @@ internal static class Containment
 
         /// <summary>
         /// The ids libproc lists as <paramref name="type"/> asks of <paramref name="of"/>, on macOS - every one of them, the
-        /// room it is read into doubled until the listing fits in it with room to spare.
+        /// room it is read into doubled until the listing fits in it with room to spare - or <see langword="null"/> where it
+        /// would not list them, which no empty listing is taken for.
         /// </summary>
-        /// <param name="type">What is listed: <see cref="ByParent"/> or <see cref="ByGroup"/>.</param>
-        /// <param name="of">The parent, or the group.</param>
-        public static List<int> Listed(uint type, int of)
+        /// <remarks>
+        /// xnu's <c>proc_listpids</c> walks the table of live processes and then that of zombies, a process in its exit among
+        /// them, taking no reference to any.
+        /// </remarks>
+        /// <param name="type">What is listed: <see cref="EveryProcess"/>, or <see cref="ByGroup"/>.</param>
+        /// <param name="of">The group, where one is asked.</param>
+        public static List<int>? Listed(uint type, int of)
         {
-            // Asked with no room, the listing says how many bytes it would take.
+            // Asked with no room, the listing says how many bytes it would take, which is never none where it answers.
             var bytes = ListPids(type, (uint)of, null, 0);
 
             while (bytes > 0)
             {
                 var room = new int[Math.Max(bytes / sizeof(int), 1) * 2];
+
+                // libproc answers no bytes for a listing that failed as for one that holds nothing: the error number tells them apart.
+                Marshal.SetLastSystemError(0);
+
                 var listed = ListPids(type, (uint)of, room, room.Length * sizeof(int));
 
-                if (listed <= 0)
+                if (listed < 0 || (listed == 0 && Marshal.GetLastPInvokeError() != 0))
                 {
-                    return [];
+                    return null;
                 }
 
                 if (listed < room.Length * sizeof(int))
@@ -1266,7 +1495,7 @@ internal static class Containment
                 bytes = listed;
             }
 
-            return [];
+            return null;
         }
 
         /// <summary><c>proc_listpids</c>: the ids of the processes of one kind, in bytes written; with no room, the bytes the listing would take.</summary>
@@ -1353,6 +1582,9 @@ internal static class Containment
 
         /// <summary>Signals one process; -1 where it could not be signalled.</summary>
         public int Signal(int process, int signal) => _signal(process, signal);
+
+        /// <summary>Whether a process carries the id that this one may not signal - another user's - asked by the signal with no number, which asks nothing of it.</summary>
+        public bool MayNotSignal(int process) => _signal(process, 0) == -1 && Marshal.GetLastPInvokeError() == NotPermitted;
 
         /// <summary>The session <paramref name="process"/> is in, by its leader's id; -1 where it cannot be told.</summary>
         public int SessionOf(int process) => _sessionOf(process);

@@ -204,8 +204,22 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
     /// as the same start. Kept in that form, rather than turned back into an instant, so a stamp an
     /// earlier build recorded is still this build's, and one this build records is still an earlier one's.
     /// </summary>
+    /// <remarks>
+    /// On macOS it is read from the kernel's own record of the process (<see cref="ProcessGoing.MacStarted"/>), which the
+    /// runtime's start is read from too, turned into ticks exactly as the runtime turns it: that record is read through the
+    /// process's exit and while it is a zombie, as Linux's is, where the runtime's own reading refuses a process once it has
+    /// entered its exit - while it is still closing what it held - and a process a stop ended would be taken for gone then.
+    /// </remarks>
     private string? StartTimeStamp(int processId)
     {
+        if (_platform.Current == PlatformId.MacOs)
+        {
+            // The runtime's own conversion (Process.StartTime on macOS), to the tick, so a stamp it gave is this one.
+            return ProcessGoing.MacStarted(processId) is var (seconds, microseconds)
+                ? (DateTime.UnixEpoch + TimeSpan.FromSeconds(seconds + (microseconds / (double)ProcessGoing.MicrosecondsInASecond))).ToLocalTime().Ticks.ToString(CultureInfo.InvariantCulture)
+                : null;
+        }
+
         try
         {
             using var process = Process.GetProcessById(processId);
@@ -219,13 +233,10 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
         }
         catch (Exception ex) when (ex is Win32Exception or NotSupportedException)
         {
-            // This user may not open it: a service's process, or one started elevated. On Windows its start is read
-            // from the list Windows keeps of every process instead, so an id a dead holder left, taken since by such a
-            // process, is never read as that holder. macOS keeps a process of another user's to itself, and its id is
-            // only given out again once every other has been.
-            return _platform.Current == PlatformId.Windows
-                ? SystemProcessList.StartTicks(processId)?.ToString(CultureInfo.InvariantCulture)
-                : null;
+            // This user may not open it: a service's process, or one started elevated. Its start is read from the list
+            // Windows keeps of every process instead, so an id a dead holder left, taken since by such a process, is never
+            // read as that holder.
+            return SystemProcessList.StartTicks(processId)?.ToString(CultureInfo.InvariantCulture);
         }
     }
 
@@ -377,7 +388,8 @@ public static class ProcessHolders
 
     /// <summary>
     /// Ends the process a record names where it stands, with all it started, without asking it - a stop's <c>--now</c>,
-    /// for a process that no longer answers: only one of this machine's, never this one, and only the process the record
+    /// for a process that no longer answers: only one of this machine's, never this one nor one whose tree holds this one -
+    /// that is said not ended, as the walk refuses it (<see cref="Containment.EndTree"/>) - and only the process the record
     /// names by its start - then waits for it to go, at most <paramref name="wait"/>. One place for what every such stop
     /// decides, so no two can come to end a process the other would leave.
     /// </summary>

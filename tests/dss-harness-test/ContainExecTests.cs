@@ -1094,10 +1094,158 @@ public sealed class ContainExecTests
         }
     }
 
+    /// <summary>
+    /// Whether a group asked to end has ended is the system's own word on each member it lists - gone, or a zombie - and on
+    /// macOS that word alone: a group whose member is still in its exit, which macOS's signal to a group passes over, has
+    /// not ended though nothing in it can be signalled, and an empty listing there is its end, the listing hiding none,
+    /// the signal deciding only where nothing could be listed. On Linux a group nothing in it can be signalled has ended,
+    /// and an empty listing of one that can be is no end, since <c>/proc</c> may hide a member. Asked of the rule itself,
+    /// the system named and each member's end stood in for - 1 still in its exit, 2 a zombie - since no process can be made
+    /// to stay in its exit on demand.
+    /// </summary>
+    [Theory]
+    [InlineData(PlatformId.MacOs, "1", false, false)]
+    [InlineData(PlatformId.MacOs, "1,2", true, false)]
+    [InlineData(PlatformId.MacOs, "2", false, true)]
+    [InlineData(PlatformId.MacOs, "", true, true)]
+    [InlineData(PlatformId.MacOs, null, false, true)]
+    [InlineData(PlatformId.MacOs, null, true, false)]
+    [InlineData(PlatformId.Linux, "", true, false)]
+    [InlineData(PlatformId.Linux, "1", true, false)]
+    [InlineData(PlatformId.Linux, "2", true, true)]
+    [InlineData(PlatformId.Linux, "1", false, true)]
+    [InlineData(PlatformId.Linux, null, true, false)]
+    public void AGroupAskedToEnd_HasEnded_AsTheSystemSaysEachMemberItListsHas(PlatformId system, string? listed, bool signalled, bool ended)
+    {
+        IReadOnlyList<int>? members = listed is null ? null : [.. listed.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(id => int.Parse(id, CultureInfo.InvariantCulture))];
+
+        Assert.Equal(ended, ProcessGoing.GroupHasEnded(system, () => members, () => signalled, member => member == 2));
+    }
+
+    /// <summary>
+    /// A process of a tree the system lists past its last reference - a zombie here, as on macOS is one still in its exit,
+    /// which nothing can take a reference to while it closes what it held - is held and kept as what the stop ended, on
+    /// Linux and macOS: its start is read all the same, so it is waited for until it has gone, never passed over as one
+    /// whose start cannot be read. The zombie is the child of the tree's root, which never reaps it.
+    /// </summary>
+    [Fact]
+    public async Task AProcessOfATreeTheSystemListsPastItsLastReference_IsKeptAsWhatTheStopEnded()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no zombie: a process's handle is signalled once it has run down.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-zombie-and-sleep", "300000"));
+
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+
+        try
+        {
+            var said = await root.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+
+            Assert.StartsWith("zombie=", said, StringComparison.Ordinal);
+
+            var zombie = int.Parse(said!["zombie=".Length..], CultureInfo.InvariantCulture);
+
+            using (var ended = new EndedProcesses(ProcessEnds.Machine))
+            {
+                Containment.EndTree(root, group: false, ended);
+
+                Assert.Equal(zombie, ended.Kept(zombie)?.Id);
+
+                await ended.GoneAsync("the tree to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+            }
+
+            Assert.True(root.WaitForExit(LongBound), $"the root {root.Id} outlived the end of its tree");
+        }
+        finally
+        {
+            if (!root.HasExited)
+            {
+                root.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A child the system lists that no process answers the hold for yet - one being created, or one in its exit, can be
+    /// listed while nothing answers to its id - is asked again, never dropped as gone on that answer alone, on Linux and
+    /// macOS: it is held, and ended with its tree. No real child can be made to answer so on demand: the hold of the child is
+    /// stood in for, answering three times that no process carries its id before it holds it.
+    /// </summary>
+    [Fact]
+    public async Task AChildTheSystemListsThatNoHoldAnswersYet_IsAskedAgain_UntilItIsHeldAndEnded()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a hold is SIGSTOP; on Windows each process is ended as it is found, by its handle.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-holder", "sleep", "300000", "sleep", "300000"));
+        var holder = LearnedProcess.None;
+
+        start.RedirectStandardOutput = true;
+
+        using var parent = Process.Start(start)!;
+
+        try
+        {
+            var said = await parent.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+
+            holder = LearnedProcess.In(said ?? string.Empty, "holder=") ?? LearnedProcess.None;
+
+            Assert.True(holder.Running, $"the child never named its holder: '{said}'");
+
+            var ends = new UnansweredAtFirst(holder.Id, times: 3);
+
+            using (var ended = new EndedProcesses(ends))
+            {
+                Containment.EndTree(parent, group: false, ended);
+                await ended.GoneAsync("the tree to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+            }
+
+            Assert.Equal(3, ends.Unanswered);
+            Assert.False(holder.Running, $"the child {holder} no hold answered at first was left running");
+            Assert.True(parent.WaitForExit(LongBound), $"the parent {parent.Id} outlived the end of its tree");
+        }
+        finally
+        {
+            holder.TryEnding();
+
+            if (!parent.HasExited)
+            {
+                parent.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The machine's ends, but for the hold of the process <c>unanswered</c> names, which answers that no process carries
+    /// its id the first <c>times</c> it is asked, and holds it after: a child the system lists that cannot be signalled yet.
+    /// </summary>
+    private sealed class UnansweredAtFirst(int unanswered, int times) : ProcessEnds
+    {
+        /// <summary>ESRCH: what a hold answers where no process carries the id.</summary>
+        private const int NoSuchProcess = 3;
+
+        /// <summary>How many holds of it were answered so.</summary>
+        public int Unanswered { get; private set; }
+
+        public override int Hold(int id)
+        {
+            if (id == unanswered && Unanswered < times)
+            {
+                Unanswered++;
+                return NoSuchProcess;
+            }
+
+            return base.Hold(id);
+        }
+    }
+
     /// <summary>The machine's ends, but for a listing of a group that leaves out the process <c>missed</c> names: a member <c>/proc</c> hides, or whose reading failed.</summary>
     private sealed class ListingMisses(int missed) : ProcessEnds
     {
-        public override IEnumerable<int> Members(int group) => base.Members(group).Where(member => member != missed);
+        public override IReadOnlyList<int>? Members(int group) => base.Members(group)?.Where(member => member != missed).ToList();
     }
 
     /// <summary>

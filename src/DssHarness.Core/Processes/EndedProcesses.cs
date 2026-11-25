@@ -60,9 +60,16 @@ internal sealed class EndedProcesses(ProcessEnds ends) : IDisposable
     /// <param name="group">The group's id.</param>
     public void EndGroup(int group) => _ends.EndGroup(group);
 
-    /// <summary>The processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, as the machine lists them, or as a test stands in for it.</summary>
+    /// <summary>
+    /// The processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, as the machine lists them, or
+    /// as a test stands in for it; <see langword="null"/> where they could not be listed.
+    /// </summary>
     /// <param name="group">The group's id.</param>
-    public IEnumerable<int> MembersOf(int group) => _ends.Members(group);
+    public IReadOnlyList<int>? MembersOf(int group) => _ends.Members(group);
+
+    /// <summary>Holds the process <paramref name="id"/> names still, on Linux and macOS, as the machine holds one, or as a test stands in for it: 0, or the error number.</summary>
+    /// <param name="id">The process's id.</param>
+    public int Hold(int id) => _ends.Hold(id);
 
     /// <summary>
     /// Has <paramref name="look"/> asked again once every process kept has gone: it finds, keeps and ends what its source
@@ -184,9 +191,9 @@ internal sealed class KeptProcess : IDisposable
 }
 
 /// <summary>
-/// How a process a stop keeps is ended, and seen to have gone, and a group listed and ended: the machine's own
-/// (<see cref="Machine"/>) - or a test's, standing in for a process whose end is slow, or a listing that misses a member,
-/// which no real process or listing can be made to be on demand.
+/// How a process a stop keeps is held, ended, and seen to have gone, and a group listed and ended: the machine's own
+/// (<see cref="Machine"/>) - or a test's, standing in for a process whose end is slow, a listing that misses a member, or
+/// a process the system lists that no hold reaches yet, which no real process or listing can be made to be on demand.
 /// </summary>
 internal class ProcessEnds
 {
@@ -205,9 +212,19 @@ internal class ProcessEnds
     /// <param name="group">The group's id.</param>
     public virtual void EndGroup(int group) => Containment.EndGroupNow(group);
 
-    /// <summary>The processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, read now (<see cref="Containment.MembersOf"/>).</summary>
+    /// <summary>
+    /// The processes the group <paramref name="group"/> is listed to hold, on Linux and macOS, read now
+    /// (<see cref="Containment.MembersOf"/>); <see langword="null"/> where the system would not list them.
+    /// </summary>
     /// <param name="group">The group's id.</param>
-    public virtual IEnumerable<int> Members(int group) => Containment.MembersOf(group);
+    public virtual IReadOnlyList<int>? Members(int group) => Containment.MembersOf(group);
+
+    /// <summary>
+    /// Holds the process <paramref name="id"/> names still at once, on Linux and macOS (<see cref="Containment.HoldNow"/>):
+    /// 0 where it was signalled, else the error number.
+    /// </summary>
+    /// <param name="id">The process's id.</param>
+    public virtual int Hold(int id) => Containment.HoldNow(id);
 
     /// <summary>Whether <paramref name="process"/> has gone, asked of the system now and never waited on.</summary>
     /// <param name="process">The process, kept.</param>

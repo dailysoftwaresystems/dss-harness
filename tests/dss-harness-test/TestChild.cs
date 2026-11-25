@@ -62,6 +62,8 @@ internal static class TestChild
             "interrupt-own-console" => InterruptOwnConsole(standardOutput),
             "print-code-page" => PrintCodePage(standardOutput),
             "print-parent" => PrintParent(standardOutput),
+            "end-own-parent" => EndOwnParent(standardOutput),
+            "spawn-zombie-and-sleep" => SpawnZombieAndSleep(standardOutput, arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
             "flood-error" => Flood(standardError, arguments),
@@ -527,8 +529,8 @@ internal static class TestChild
     /// <summary>
     /// Starts a holder - this assembly as the behaviour <c>arguments[2]</c> names, given every
     /// argument after it - that inherits this process's own streams, writes its process id once it
-    /// stands where it puts itself, and then exits or sleeps as <c>arguments[0]</c> says, for the
-    /// milliseconds <c>arguments[1]</c> gives: what a test of containment reads, since the holder
+    /// stands where it puts itself, and then exits, sleeps, or outlives the holder - waits for its end,
+    /// says it, and sleeps - as <c>arguments[0]</c> says, for the milliseconds <c>arguments[1]</c> gives: what a test of containment reads, since the holder
     /// keeps the pipes whoever started this process reads, and that reading ends only with it.
     /// </summary>
     private static int SpawnHolder(TextWriter output, string[] arguments)
@@ -557,6 +559,15 @@ internal static class TestChild
 
         if (string.Equals(arguments[0], "sleep", StringComparison.Ordinal))
         {
+            Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
+        }
+
+        // 'outlive' waits for the holder to end, says how it ended - which this process can say only where it still runs,
+        // never held still - and sleeps on, so it is seen standing after.
+        if (string.Equals(arguments[0], "outlive", StringComparison.Ordinal))
+        {
+            holder.WaitForExit();
+            output.Write($"after={holder.ExitCode.ToString(CultureInfo.InvariantCulture)}\n");
             Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
         }
 
@@ -993,21 +1004,72 @@ internal static class TestChild
     /// </summary>
     private static int PrintParent(TextWriter output)
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            output.Write($"parent={getppid()}\n");
-            return 0;
-        }
-
-        var information = default(BasicInformation);
-
-        if (NtQueryInformationProcess(GetCurrentProcess(), 0, ref information, System.Runtime.InteropServices.Marshal.SizeOf<BasicInformation>(), out _) != 0)
+        if (ParentId() is not { } parent)
         {
             return 97;
         }
 
-        output.Write($"parent={information.InheritedFromUniqueProcessId}\n");
+        output.Write($"parent={parent.ToString(CultureInfo.InvariantCulture)}\n");
         return 0;
+    }
+
+    /// <summary>
+    /// Writes its own id as <c>caller</c>, then ends the process that started it where it stands, as a stop's <c>--now</c>
+    /// does - the machine's own walk, by that process's id and start - and writes how that went as <c>ended</c>: what a stop
+    /// asked from inside the very tree it would end answers. Its parent is a process a test starts, and ends itself.
+    /// </summary>
+    private static int EndOwnParent(TextWriter output)
+    {
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        if (ParentId() is not { } parent)
+        {
+            return 97;
+        }
+
+        var identity = new Core.Execution.ProcessIdentity(new Core.Platform.HostPlatform());
+        var ending = Core.Execution.ProcessHolders
+            .EndWhereItStandsAsync(identity, identity.CurrentMachine, parent, identity.StampOf(parent), TimeSpan.FromSeconds(30))
+            .GetAwaiter()
+            .GetResult();
+
+        output.Write($"ended={ending.How}: {ending.Why}\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// Starts <c>/bin/sh -c "exit 0"</c> by the C library's own call, which nothing in this process reaps, so it stays a
+    /// zombie for as long as this process stands; writes its id as <c>zombie</c> once it is one, and sleeps for the
+    /// milliseconds <c>arguments[0]</c> gives: a tree one of whose processes the system lists past its last reference.
+    /// </summary>
+    private static int SpawnZombieAndSleep(TextWriter output, string[] arguments)
+    {
+        var zombie = Unreaped.Spawn("/bin/sh", group: null, "sh", "-c", "exit 0");
+
+        if (!Until(() => Core.Processes.ProcessGoing.HasEnded(zombie)))
+        {
+            return 96;
+        }
+
+        output.Write($"zombie={zombie.ToString(CultureInfo.InvariantCulture)}\n");
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+
+        return 0;
+    }
+
+    /// <summary>The id of the process that started this one, as the system records it; <see langword="null"/> where it would not say.</summary>
+    private static int? ParentId()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return getppid();
+        }
+
+        var information = default(BasicInformation);
+
+        return NtQueryInformationProcess(GetCurrentProcess(), 0, ref information, System.Runtime.InteropServices.Marshal.SizeOf<BasicInformation>(), out _) == 0
+            ? (int)information.InheritedFromUniqueProcessId
+            : null;
     }
 
     [System.Runtime.InteropServices.DllImport("libc")]

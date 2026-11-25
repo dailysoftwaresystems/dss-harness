@@ -2535,9 +2535,9 @@ public sealed class FlowService(
 
     /// <summary>
     /// <c>stop-orchestrator --now</c>: the engine's process ended without asking it - only one of this machine's, only
-    /// the process its owner names by its start, and never this one - then its owner is removed and what its steps left
-    /// running is ended: a contained child's session, a leg's process group. A process that could not be ended is a
-    /// failure, said; what is left is what a crash leaves, less those processes.
+    /// the process its owner names by its start, and never this one nor one whose tree holds this one - then its owner is
+    /// removed and what its steps left running is ended: a contained child's session, a leg's process group. A process that
+    /// could not be ended is a failure, said; what is left is what a crash leaves, less those processes.
     /// </summary>
     private async Task<CommandOutcome> EndNowAsync(OrchestratorLayout layout, RunOwner held, bool json, CancellationToken cancellationToken)
     {

@@ -1078,14 +1078,15 @@ public sealed class ProcessRunnerTests
 
     /// <summary>
     /// A process a stop ended that is a zombie nobody reaps - its parent alive and never asking - has gone, as a stop's wait
-    /// asks it, on Linux: its descriptors are closed, so it holds nothing the wait waits out, and a wait held for it would
-    /// never end. It is still the very process kept, its start read as it was - this test process, its parent, never reaps
-    /// it until the end - and that live parent has not gone.
+    /// asks it, on Linux and macOS: its descriptors are closed, so it holds nothing the wait waits out, and a wait held for
+    /// it would never end. It is still the very process kept, its start read as it was - read past its last reference, as
+    /// macOS reads one still in its exit, which nothing can take a reference to either; this test process, its parent,
+    /// never reaps it until the end - and that live parent has not gone.
     /// </summary>
     [Fact]
     public async Task AZombieNobodyReaps_HasGone_AsAStopsWaitAsksIt()
     {
-        Assert.SkipUnless(OperatingSystem.IsLinux(), "Linux keeps a zombie's start readable; on macOS a zombie's start reads as gone, and Windows keeps no zombie.");
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no zombie: a process's handle is signalled once it has run down.");
 
         var identity = new DssHarness.Core.Execution.ProcessIdentity(new HostPlatform());
         var zombie = Unreaped.Spawn("/bin/sh", group: null, "sh", "-c", "exit 0");
