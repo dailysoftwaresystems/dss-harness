@@ -462,9 +462,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // Both streams are read from the moment the child runs: a child that fills a pipe nobody is
         // reading blocks forever. Until the step has said the program started, nothing but the step
-        // writes them, and it writes nothing there.
-        var standardOutput = new StreamCapture(OutputOf(process, request), request.OnOutputLine, request.OutputKept, request.CutLine, request.OnLineInPieces, request.OutputLog);
-        var standardError = new StreamCapture(process.StandardError, request.OnErrorLine, request.ErrorKept, request.CutLine, request.OnLineInPieces, request.ErrorLog);
+        // writes them, and it writes nothing there. Each read of either is kept and handed on under
+        // the one gate the two share, so what one read of a stream returned is never parted by a line
+        // of the other's.
+        var streams = new Lock();
+        var standardOutput = new StreamCapture(OutputOf(process, request), streams, request.OnOutputLine, request.OutputKept, request.CutLine, request.OnLineInPieces, request.OutputLog);
+        var standardError = new StreamCapture(process.StandardError, streams, request.OnErrorLine, request.ErrorKept, request.CutLine, request.OnLineInPieces, request.ErrorLog);
 
         // Written while both output streams are being read, so a child that answers as it reads
         // can never block this on a full output pipe, nor this block it on a full input pipe.
@@ -1322,6 +1325,14 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// string .NET makes (<see cref="LongestLine"/>), in pieces past it, the request told.
     /// </para>
     /// <para>
+    /// What one read returned is kept, written and handed on line by line under a gate the child's other stream shares:
+    /// the lines a child wrote to one stream at once - as much as a pipe hands back in one read - reach whoever takes both
+    /// streams' lines, a phase's log among them, together, never parted by a line of the other stream, which each stream's
+    /// own reading would put wherever its thread happened to run. Which stream's read is handed on first is whichever took
+    /// the gate first: two pipes say nothing of the order their writes were made in. A .NET program's error heading and its
+    /// first frame, written in one write, are read as a thrown error only where nothing comes between them.
+    /// </para>
+    /// <para>
     /// A handler that fails is handed no more lines, and the stream is still read to its end: a child writing more than a
     /// pipe holds would otherwise block on a pipe nobody reads, and one whose input is held open - a host's agent, reading a
     /// file back - would never end. What it raised is kept for the caller to raise once the child has gone.
@@ -1339,7 +1350,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </summary>
     internal sealed class StreamCapture
     {
-        private readonly Lock _gate = new();
+        /// <summary>The gate a child's two streams share: what one read returned is kept and handed on whole under it.</summary>
+        private readonly Lock _gate;
         private readonly Action<string>? _onLine;
         private readonly StringBuilder? _whole;
         private readonly StreamTail? _end;
@@ -1371,16 +1383,18 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         /// <summary>Starts reading <paramref name="reader"/>.</summary>
         /// <param name="reader">The stream.</param>
+        /// <param name="gate">The gate the child's other stream is read under too.</param>
         /// <param name="onLine">Handed each line as it arrives, or <see langword="null"/>.</param>
         /// <param name="kept">How much of the text is kept.</param>
         /// <param name="cut">Where a line past the longest string is cut, or <see langword="null"/>.</param>
         /// <param name="pieced">Told of each line handed on in pieces, or <see langword="null"/>.</param>
         /// <param name="log">Where every character is written as it arrives, or <see langword="null"/>.</param>
-        public StreamCapture(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
+        public StreamCapture(StreamReader reader, Lock gate, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
         {
             var tail = kept != StreamKept.Whole;
             var cutting = kept == StreamKept.Tail;
 
+            _gate = gate;
             _onLine = onLine;
             _whole = tail ? null : new StringBuilder();
             _end = tail ? new StreamTail(TailLength) : null;

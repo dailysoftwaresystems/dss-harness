@@ -115,6 +115,57 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// The lines one read of a stream returned - what the child wrote to it at once - are handed on together, never parted
+    /// by a line of its other stream: a .NET program's error heading and the frame it wrote with it, parted by an empty
+    /// line of its error stream, are read as no error at all, and a red step's digest would hold nothing of the error it
+    /// died of. The error stream's line is written while the output's first line is being handed on, and waits for the
+    /// rest of the output's read.
+    /// </summary>
+    [Fact]
+    public async Task TheLinesOfOneRead_AreHandedOnTogether_NeverPartedByALineOfTheOtherStream()
+    {
+        using var temp = new TempDirectory();
+        var written = temp.Combine("written");
+        var handed = new List<string>();
+        using var errorHanded = new ManualResetEventSlim(false);
+        var heldOff = false;
+
+        var request = TestHost.ChildRequest("say-wait-say", "first\nsecond", written, "between") with
+        {
+            OnOutputLine = line =>
+            {
+                lock (handed)
+                {
+                    handed.Add(line);
+                }
+
+                if (line == "first")
+                {
+                    // The child writes its error stream's line now, while this read is still being handed on, and it is
+                    // held off for as long as this read is.
+                    File.WriteAllText(written, string.Empty);
+                    heldOff = !errorHanded.Wait(TimeSpan.FromMilliseconds(500));
+                }
+            },
+            OnErrorLine = line =>
+            {
+                lock (handed)
+                {
+                    handed.Add(line);
+                }
+
+                errorHanded.Set();
+            },
+        };
+
+        var result = await CreateRunner().RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(heldOff, "the error stream's line was handed on while the output's read still was");
+        Assert.Equal(["first", "second", "between"], handed);
+    }
+
+    /// <summary>
     /// A stream kept as a tail is kept as its last characters and no more, however much the child prints, while every line
     /// of it still reaches the caller as it comes; one kept whole - what git's answers and a probe's need - is kept whole.
     /// Each stream is kept as asked for it: standard error a tail beside standard output whole, as a relay of a host's
@@ -1233,7 +1284,7 @@ public sealed class ProcessRunnerTests
 
         var first = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var reader = new HeldRead(first.Task, first.Task, server);
-        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        var capture = new ProcessRunner.StreamCapture(reader, new Lock(), onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
 
         // The read waits - by its task alone, a quiet pipe, twice over - while the pipe holds the child's answer.
         Assert.False(capture.ReadAll());
@@ -1279,7 +1330,7 @@ public sealed class ProcessRunnerTests
             },
         };
 
-        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        var capture = new ProcessRunner.StreamCapture(reader, new Lock(), onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
 
         // The first read returns the child's answer; the capture's loop keeps it and comes for a second, and is held
         // where that second is being made - its task not yet given, the read itself out.

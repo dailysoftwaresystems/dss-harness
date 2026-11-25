@@ -7133,7 +7133,12 @@ running at once never interleave within a line. The log files keep each line as 
 the tag is for the terminal, so nothing that reads a log has to know about it. Only a line longer
 than the longest string .NET makes (1,073,741,791 characters) is kept otherwise, in pieces of at
 most that many, each a line of its own and said,
-since no line is held whole on its way there (see Reporting).
+since no line is held whole on its way there (see Reporting). A child's two streams reach its log
+under one gate (`ProcessRunner.StreamCapture`): the lines one read of a stream returns - what the
+child wrote to it at once, as much as a pipe hands back in one read - go in together, never parted
+by a line of the other stream, so a stack's heading and the frames written with it are read as one
+error. Which stream's read goes in first is whichever took the gate first: two pipes say nothing of
+the order their writes were made in.
 
 Within a leg the order is fixed:
 

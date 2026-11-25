@@ -84,8 +84,9 @@ public sealed record ProcessRequest
 
     /// <summary>
     /// Invoked for each stdout line as it arrives, in addition to capture.
-    /// Raised on background threads, so implementations must be thread safe. One that throws is handed no more lines,
-    /// and what it threw is raised once the child has gone.
+    /// Raised on background threads, so implementations must be thread safe, but never beside <see cref="OnErrorLine"/>:
+    /// the lines one read of a stream returned are handed on together, and no line of the other stream comes between them.
+    /// One that throws is handed no more lines, and what it threw is raised once the child has gone.
     /// </summary>
     public Action<string>? OnOutputLine { get; init; }
 

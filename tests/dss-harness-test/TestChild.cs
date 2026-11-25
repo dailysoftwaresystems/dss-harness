@@ -49,6 +49,7 @@ internal static class TestChild
             "ignore-hup-and-sleep" => IgnoreHupAndSleep(arguments),
             "note-term-and-sleep" => NoteTermAndSleep(standardOutput, arguments),
             "say-and-exit" => SayAndExit(standardOutput, standardError, arguments),
+            "say-wait-say" => SayWaitSay(standardOutput, standardError, arguments),
             "step-reaching-nothing" => StepReachingNothing(standardError),
             "say-pid-and-sleep" => SayPidAndSleep(standardOutput, arguments),
             "say-pid-then" => SayPidThen(standardOutput, arguments),
@@ -682,6 +683,28 @@ internal static class TestChild
         error.Write(arguments[1] + "\n");
 
         return int.Parse(arguments[2], CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Writes <c>arguments[0]</c> and a line break to standard output in one write, waits - a minute at most - for the
+    /// file <c>arguments[1]</c> to be there, then writes <c>arguments[2]</c> and a line break to standard error and ends
+    /// with 0: a line of the error stream written at the moment its reader says, while what the output's one write held
+    /// is being handed on.
+    /// </summary>
+    private static int SayWaitSay(TextWriter output, TextWriter error, string[] arguments)
+    {
+        output.Write(arguments[0] + "\n");
+
+        var waited = Stopwatch.StartNew();
+
+        while (!File.Exists(arguments[1]) && waited.Elapsed < TimeSpan.FromMinutes(1))
+        {
+            Thread.Sleep(5);
+        }
+
+        error.Write(arguments[2] + "\n");
+
+        return 0;
     }
 
     /// <summary>
