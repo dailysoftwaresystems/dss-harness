@@ -20,21 +20,21 @@ public sealed class AnchorCommandsCliTests
         var written = await CliRunner.RunAsync(
             ["write-anchor", One, "--priority", "P1", "--trigger", "breaks | when retried", "-C", temp.Path],
             cancellationToken);
-        Assert.Equal(HarnessExit.Success, written.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, written);
         Assert.Contains($"added {One} to the pending registry", written.StandardOutput, StringComparison.Ordinal);
 
         // The status is emoji: this also proves output reaches a pipe as UTF-8 on every platform.
         var read = await CliRunner.RunAsync(["read-anchor", One, "-C", temp.Path], cancellationToken);
-        Assert.Equal(HarnessExit.Success, read.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, read);
         Assert.Contains("status      : 🟠 OPEN   -> OPEN", read.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("breaks | when retried", read.StandardOutput, StringComparison.Ordinal);
 
         var closed = await CliRunner.RunAsync(["set-anchor", One, "--status", "closed", "-C", temp.Path], cancellationToken);
-        Assert.Equal(HarnessExit.Success, closed.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, closed);
         Assert.Contains($"moved {One} to the done registry", closed.StandardOutput, StringComparison.Ordinal);
 
         var listed = await CliRunner.RunAsync(["read-anchors", "--done", "-C", temp.Path], cancellationToken);
-        Assert.Equal(HarnessExit.Success, listed.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, listed);
         // The status column is padded to 13 visible characters, then one space separates the id.
         Assert.Contains($"P1  ✅ CLOSED      {One}", listed.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("1 row(s) in the done registry.", listed.StandardOutput, StringComparison.Ordinal);
@@ -52,7 +52,7 @@ public sealed class AnchorCommandsCliTests
             ["read-anchor", One, "D-AREA-TOPIC-MISSING", "--json", "-C", temp.Path],
             cancellationToken);
 
-        Assert.Equal(AnchorExit.Findings, result.ExitCode);
+        CliRunner.ExitedWith(AnchorExit.Findings, result);
         Assert.Contains("D-AREA-TOPIC-MISSING", result.StandardError, StringComparison.Ordinal);
 
         using var json = JsonDocument.Parse(result.StandardOutput);
@@ -72,7 +72,7 @@ public sealed class AnchorCommandsCliTests
 
         var result = await CliRunner.RunAsync(["read-anchors", "--json", "-C", temp.Path], cancellationToken);
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, result);
         using var json = JsonDocument.Parse(result.StandardOutput);
         var anchor = Assert.Single(json.RootElement.EnumerateArray());
         Assert.Equal("pending", anchor.GetProperty("registry").GetString());
@@ -89,7 +89,7 @@ public sealed class AnchorCommandsCliTests
             ["write-anchor", One, "--priority", "P1", "--trigger", "t", "--anchor-dry-run", "-C", temp.Path],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, result);
         Assert.Contains("dry run", result.StandardOutput, StringComparison.Ordinal);
         Assert.Equal(before, File.ReadAllText(temp.Combine(".plans", "_deferred-anchor-registry.md")));
     }
@@ -106,7 +106,7 @@ public sealed class AnchorCommandsCliTests
             ["write-anchor", One, option, value, "-C", temp.Path],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.UsageError, result);
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public sealed class AnchorCommandsCliTests
             ["write-anchor", One, "--priority", "P1", "--trigger", "t", "--status", "done", "-C", temp.Path],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.UsageError, result);
         Assert.Contains("open, gated, disclosed, closed", result.StandardError, StringComparison.Ordinal);
     }
 
@@ -133,7 +133,7 @@ public sealed class AnchorCommandsCliTests
             ["set-anchor", One, "--priority", "P0", "-C", temp.Path],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.Refused, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Refused, result);
     }
 
     [Theory]
@@ -149,7 +149,7 @@ public sealed class AnchorCommandsCliTests
             [.. command, "--pending", "--done", "-C", temp.Path],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.UsageError, result);
         Assert.Contains("--pending and --done cannot be combined", result.StandardError, StringComparison.Ordinal);
     }
 
@@ -162,7 +162,7 @@ public sealed class AnchorCommandsCliTests
 
         var result = await CliRunner.RunAsync(["read-anchors", "--lint", "-C", temp.Path], TestContext.Current.CancellationToken);
 
-        Assert.Equal(AnchorExit.Findings, result.ExitCode);
+        CliRunner.ExitedWith(AnchorExit.Findings, result);
         Assert.Contains($"closed anchor '{One}' is in the pending registry", result.StandardOutput, StringComparison.Ordinal);
     }
 
@@ -181,7 +181,7 @@ public sealed class AnchorCommandsCliTests
             ["read-anchors", "--lint", .. filter, "-C", temp.Path],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.UsageError, result);
         Assert.Contains(filter[0], result.StandardError, StringComparison.Ordinal);
     }
 
@@ -194,13 +194,13 @@ public sealed class AnchorCommandsCliTests
         await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
 
         var clean = await CliRunner.RunAsync(["check-anchor-balance", "-C", temp.Path], cancellationToken);
-        Assert.Equal(HarnessExit.Success, clean.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, clean);
         Assert.Contains("the balance holds", clean.StandardOutput, StringComparison.Ordinal);
 
         await WriteAsync(temp, One);
 
         var risen = await CliRunner.RunAsync(["check-anchor-balance", "--base", "HEAD", "--json", "-C", temp.Path], cancellationToken);
-        Assert.Equal(AnchorExit.Findings, risen.ExitCode);
+        CliRunner.ExitedWith(AnchorExit.Findings, risen);
 
         using var json = JsonDocument.Parse(risen.StandardOutput);
         Assert.Equal(1, json.RootElement.GetProperty("netNew").GetInt32());
@@ -225,10 +225,10 @@ public sealed class AnchorCommandsCliTests
         var closing = await CliRunner.RunAsync(
             ["set-anchor", One, "--status", "closed", "--trigger", "✅🧾 **CLOSED** 2026-10-01, mark repaired: the work predates the base", "-C", temp.Path],
             cancellationToken);
-        Assert.Equal(HarnessExit.Success, closing.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, closing);
 
         var text = await CliRunner.RunAsync(["check-anchor-balance", "-C", temp.Path], cancellationToken);
-        Assert.Equal(HarnessExit.Success, text.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.Success, text);
         Assert.Contains("open      1 at HEAD, 0 now", text.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("change    1 closed (1 bookkeeping), 0 opened (0 created, 0 disclosed); counted 0", text.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($"  - {One}   [bookkeeping: not credited]", text.StandardOutput, StringComparison.Ordinal);
@@ -249,7 +249,7 @@ public sealed class AnchorCommandsCliTests
 
         var result = await CliRunner.RunAsync(["read-anchors", "-C", temp.Path], TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.NotInitialized, result.ExitCode);
+        CliRunner.ExitedWith(HarnessExit.NotInitialized, result);
     }
 
     private static async Task<HarnessFactory> PrepareAsync(TempDirectory temp, HarnessConfig? config = null)

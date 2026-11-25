@@ -91,6 +91,22 @@ public static class CliRunner
         return result;
     }
 
+    /// <summary>
+    /// Holds <paramref name="result"/> to the exit code <paramref name="expected"/>, saying what the CLI wrote to its
+    /// standard error where it exited otherwise: a CI run keeps nothing of a failed test but its assertion, so an exit code
+    /// alone would leave the cause of a wrong one unread.
+    /// </summary>
+    /// <param name="expected">The exit code the command answers with.</param>
+    /// <param name="result">The CLI's run.</param>
+    public static void ExitedWith(int expected, ProcessResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        Assert.True(
+            result.ExitCode == expected,
+            $"The CLI exited {result.ExitCode}, not {expected}; its standard error said:{Environment.NewLine}{result.StandardError}");
+    }
+
     /// <summary>The names of the commands the root help lists, in its order.</summary>
     /// <param name="cancellationToken">Stops the run.</param>
     public static async Task<IReadOnlyList<string>> CommandsAsync(CancellationToken cancellationToken)

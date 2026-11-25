@@ -17,8 +17,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private const int ErrorFileNotFound = 2;
 
     /// <summary>
-    /// How often the end of what a child wrote is looked for once the child has ended and something it left running still
-    /// holds its output: a look's pace, never a bound.
+    /// How often the end of what a child wrote is looked for once the child has ended and its output has not - each look
+    /// ending the read that waits on it (<see cref="StreamCapture.Look"/>): a look's pace, never a bound.
     /// </summary>
     private static readonly TimeSpan DrainLook = TimeSpan.FromMilliseconds(20);
 
@@ -207,8 +207,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             WorkingDirectory = request.WorkingDirectory ?? string.Empty,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = request.StandardOutputEncoding ?? Utf8NoBom,
-            StandardErrorEncoding = Utf8NoBom,
+            StandardOutputEncoding = OutputDecoding(request).Encoding,
+            StandardErrorEncoding = AsDotNetReadsIt.Encoding,
 
             // Every child gets an input of its own, never this process's. A tool that reads its input would
             // otherwise consume what was meant for the harness. And on Windows a child that inherits an input
@@ -466,8 +466,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // the one gate the two share, so what one read of a stream returned is never parted by a line
         // of the other's.
         var streams = new Lock();
-        var standardOutput = new StreamCapture(OutputOf(process, request), streams, request.OnOutputLine, request.OutputKept, request.CutLine, request.OnLineInPieces, request.OutputLog);
-        var standardError = new StreamCapture(process.StandardError, streams, request.OnErrorLine, request.ErrorKept, request.CutLine, request.OnLineInPieces, request.ErrorLog);
+        var standardOutput = new StreamCapture(process.StandardOutput.BaseStream, OutputDecoding(request), streams, request.OnOutputLine, request.OutputKept, request.CutLine, request.OnLineInPieces, request.OutputLog);
+        var standardError = new StreamCapture(process.StandardError.BaseStream, AsDotNetReadsIt, streams, request.OnErrorLine, request.ErrorKept, request.CutLine, request.OnLineInPieces, request.ErrorLog);
 
         // Written while both output streams are being read, so a child that answers as it reads
         // can never block this on a full output pipe, nor this block it on a full input pipe.
@@ -523,11 +523,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // The process has exited, but what it wrote just before exiting can still be in the pipes: both streams are read
         // until every character the child wrote is - to their end, which comes as the child and all it left go, or, where
-        // something it left running still holds them, until each pipe holds nothing more and the reading waits on it. What
-        // that process writes from then on is its own - a server its build started, kept for the next phase by design - and
-        // is said not read; the child's own output is never cut at a number of seconds, nor a run held for as long as such
-        // a process lives. Told every five minutes while a busy leftover keeps the pipe from ever going quiet, and ended
-        // where the caller gives up.
+        // something it left running still holds them, until a look finds the pipe holding nothing with no read waiting on
+        // it. What that process writes from then on is its own - a server its build started, kept for the next phase by
+        // design - and is said not read; the child's own output is never cut at a number of seconds, nor a run held for as
+        // long as such a process lives. Told every five minutes while a busy leftover keeps the pipe from ever going quiet,
+        // and ended where the caller gives up.
         // A stopped child's rest is read whatever the caller does: the stop has been made, and what it said as it went is the
         // run's to keep.
         var held = await DrainedAsync(resolved, standardOutput, standardError, stopped ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
@@ -580,7 +580,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
     /// <summary>
     /// Waits, once the child has ended, until every character it wrote has been read from both of its streams: to their
-    /// end, or - where something it left running holds one - until each pipe holds nothing more and its reading waits on it.
+    /// end, or - where something it left running holds one - until a look at it finds its pipe holding nothing, no read
+    /// waiting on it (<see cref="StreamCapture.Look"/>), which ends its reading there.
     /// </summary>
     /// <returns>
     /// What says a process the child left holds its output, where one does; <see langword="null"/> where both streams
@@ -590,38 +591,37 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     {
         var ended = Task.WhenAll(output.Reading, error.Reading);
 
-        if (ended.IsCompleted)
+        if (!ended.IsCompleted)
         {
-            await ended.ConfigureAwait(false);
-            return null;
-        }
-
-        var drained = await Waits.ForAsync(
-            async stop =>
-            {
-                while (!ended.IsCompleted)
+            var drained = await Waits.ForAsync(
+                async stop =>
                 {
-                    // Each stream has ended, or holds nothing more and has been waited on across a look - one that cannot
-                    // be asked is read to its end, as every stream once was.
-                    var outputRead = output.ReadAll();
-                    var errorRead = error.ReadAll();
-
-                    if (outputRead && errorRead && !ended.IsCompleted)
+                    while (!ended.IsCompleted)
                     {
-                        return true;
+                        // Each look ends the read a stream waits on, which reads on where its pipe holds anything or every
+                        // writer has let it go, and ends where its pipe holds nothing while something the child left still
+                        // holds it - one that cannot be asked is read to its end.
+                        output.Look();
+                        error.Look();
+
+                        await Task.WhenAny(ended, Task.Delay(DrainLook, stop)).ConfigureAwait(false);
+                        stop.ThrowIfCancellationRequested();
                     }
 
-                    await Task.WhenAny(ended, Task.Delay(DrainLook, stop)).ConfigureAwait(false);
-                    stop.ThrowIfCancellationRequested();
-                }
+                    return true;
+                },
+                new WaitWatch($"the output of '{resolved}' to end, held open by what it left running", Waits.Told, null, Clock),
+                cancellationToken).ConfigureAwait(false);
 
-                await ended.ConfigureAwait(false);
-                return false;
-            },
-            new WaitWatch($"the output of '{resolved}' to end, held open by what it left running", Waits.Told, null, Clock),
-            cancellationToken).ConfigureAwait(false);
+            if (drained.Kind != WaitEndKind.Done)
+            {
+                return null;
+            }
+        }
 
-        return drained is { Kind: WaitEndKind.Done, Value: true }
+        await ended.ConfigureAwait(false);
+
+        return output.HeldOpen || error.HeldOpen
             ? $"'{resolved}' left a process running that holds its output: every character it wrote was read, and what that process writes from now on is its own, and is not read"
             : null;
     }
@@ -1339,14 +1339,24 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </para>
     /// <para>
     /// What was read is taken when the caller takes it - once the stream has ended, or once every character the child
-    /// wrote has been read and what a process it left running still holds is all that is left (<see cref="ReadAll"/>).
+    /// wrote has been read and what a process it left running still holds is all that is left (<see cref="Look"/>).
     /// From then on nothing more is kept or handed on: what that process writes is its own.
+    /// </para>
+    /// <para>
+    /// Every character the child wrote has been read, while something it left holds the pipe open, only where the pipe holds
+    /// nothing and no read waits on it to take what it holds: so a look, once the child has ended, ends the read that waits
+    /// and asks the pipe (<see cref="PipeBytes.HeldEmpty"/>). A read's task says nothing of it: on Windows a read of a
+    /// child's pipe waits for a pool thread to make it, its task unanswered while what the child wrote sits in the pipe, and
+    /// a busy machine holds that back for as long as it likes - a look that took a waiting task for a quiet pipe would read
+    /// it as a leftover's hold and give git's whole answer up with it, and a command asking git to name its repository
+    /// would fail.
     /// </para>
     /// </remarks>
     /// <summary>
     /// Reads a child's output from its first character: what the child wrote is kept, whole or as a tail, handed on
-    /// line by line, and written to a log; a read of it can be asked whether it has waited on a quiet pipe across two
-    /// looks, which is how a runner tells a child's own whole output from one a process it left running holds open.
+    /// line by line, and written to a log; a look at it, once the child has ended, ends its reading where a process the
+    /// child left running holds its pipe with nothing in it, which is how a runner tells a child's own whole output from
+    /// one such a process holds open.
     /// </summary>
     internal sealed class StreamCapture
     {
@@ -1357,40 +1367,43 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         private readonly StreamTail? _end;
         private readonly LineSplitter? _lines;
 
-        /// <summary>The pipe the stream is read from, asked whether it holds anything once the child has ended.</summary>
-        private readonly System.Runtime.InteropServices.SafeHandle? _pipe;
+        /// <summary>The pipe the stream is read through, each read of it one a look can end.</summary>
+        private readonly LookedPipe _pipe;
 
         private ExceptionDispatchInfo? _failed;
         private StreamWriter? _log;
         private bool _taken;
         private bool _linesEnded;
 
-        /// <summary>Whether a read of the pipe is under way, waiting for what the child writes next.</summary>
-        private volatile bool _waiting;
-
-        /// <summary>
-        /// The read now waiting on the pipe, as the task it answers: completed, the read has returned - what it read is
-        /// the child's own, kept already, whatever delay a busy machine puts between the read's return and the loop that
-        /// keeps it - so a waiting read is one whose task is still to end.
-        /// </summary>
-        private volatile Task<int>? _pending;
-
-        /// <summary>How many reads have returned: a reading that waits across two looks has had nothing in between.</summary>
-        private long _reads;
-
-        /// <summary>How many reads had returned at the last look that found the pipe quiet; -1 where the last did not.</summary>
-        private long _lookedAt = -1;
-
-        /// <summary>Starts reading <paramref name="reader"/>.</summary>
-        /// <param name="reader">The stream.</param>
+        /// <summary>Starts reading <paramref name="stream"/>.</summary>
+        /// <param name="stream">The child's stream, as the process gives it.</param>
+        /// <param name="decoding">How its bytes are read as text.</param>
         /// <param name="gate">The gate the child's other stream is read under too.</param>
         /// <param name="onLine">Handed each line as it arrives, or <see langword="null"/>.</param>
         /// <param name="kept">How much of the text is kept.</param>
         /// <param name="cut">Where a line past the longest string is cut, or <see langword="null"/>.</param>
         /// <param name="pieced">Told of each line handed on in pieces, or <see langword="null"/>.</param>
         /// <param name="log">Where every character is written as it arrives, or <see langword="null"/>.</param>
-        public StreamCapture(StreamReader reader, Lock gate, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
+        public StreamCapture(Stream stream, StreamDecoding decoding, Lock gate, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
+            : this(PipeBytes.Unbuffered(stream ?? throw new ArgumentNullException(nameof(stream))), PipeBytes.Handle(stream), decoding, gate, onLine, kept, cut, pieced, log)
         {
+        }
+
+        /// <summary>Starts reading <paramref name="read"/>, a look asking <paramref name="pipe"/>: a test's, where it stands in for the read.</summary>
+        /// <param name="read">What the stream's bytes are read through, holding none of its own between reads.</param>
+        /// <param name="pipe">The pipe under it, which a look asks; <see langword="null"/> where there is none, and the stream is read to its end.</param>
+        /// <param name="decoding">How its bytes are read as text.</param>
+        /// <param name="gate">The gate the child's other stream is read under too.</param>
+        /// <param name="onLine">Handed each line as it arrives, or <see langword="null"/>.</param>
+        /// <param name="kept">How much of the text is kept.</param>
+        /// <param name="cut">Where a line past the longest string is cut, or <see langword="null"/>.</param>
+        /// <param name="pieced">Told of each line handed on in pieces, or <see langword="null"/>.</param>
+        /// <param name="log">Where every character is written as it arrives, or <see langword="null"/>.</param>
+        internal StreamCapture(Stream read, System.Runtime.InteropServices.SafeHandle? pipe, StreamDecoding decoding, Lock gate, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
+        {
+            ArgumentNullException.ThrowIfNull(read);
+            ArgumentNullException.ThrowIfNull(decoding);
+
             var tail = kept != StreamKept.Whole;
             var cutting = kept == StreamKept.Tail;
 
@@ -1399,7 +1412,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             _whole = tail ? null : new StringBuilder();
             _end = tail ? new StreamTail(TailLength) : null;
             _lines = onLine is null ? null : new LineSplitter(Hand, cutting ? LongestLineHandedOn : null, cutting ? cut : null, pieced: cutting ? pieced : null);
-            _pipe = PipeBytes.Handle(reader.BaseStream);
+            _pipe = new LookedPipe(read, pipe);
 
             if (log is not null)
             {
@@ -1414,38 +1427,26 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 }
             }
 
-            Reading = ReadAsync(reader);
+            Reading = ReadAsync(new StreamReader(_pipe, decoding.Encoding, decoding.Marks, OutputBuffer, leaveOpen: true));
         }
 
         /// <summary>
-        /// Whether every character the child wrote to the stream has been read: the stream has ended; or a read of the
-        /// pipe has waited across two looks with none returning in between - the pipe holding nothing more, for
-        /// anything more would have ended the waiting read - what a process the child left running holds open, once
-        /// the child has ended. A read is waiting only where its own task has not completed: one whose task has
-        /// completed has returned, and what it returned is the child's own, kept, however long a busy machine holds
-        /// back the loop that keeps it. And where the pipe itself answers - Linux and macOS, where a read can wait
-        /// merely to be run, its task no answer while what the child wrote sits in the pipe - the pipe is asked, and
-        /// holds nothing only where it says so. The system is asked nothing on Windows, where the handle a synchronous
-        /// read pends on answers no other question - a peek on it waits for that read, which is what the child left
-        /// running holds - and a read there is submitted to the system as it is made, so its task alone tells whether
-        /// anything waits. A stream that is no pipe of a child's is read to its end.
+        /// Looks at the stream once the child has ended: ends the read that waits on its pipe, which reads on where the pipe
+        /// holds anything or every writer has let it go, and ends the reading where the pipe holds nothing while something
+        /// still holds it open - every character the child wrote read, what a process it left running holds all that is
+        /// left (<see cref="HeldOpen"/>). A read the look ends has taken nothing: the runtime ends a read that waits only
+        /// before it takes a byte, and one that took any returns them. Nothing where the stream is no pipe of a child's,
+        /// which is read to its end.
         /// </summary>
-        public bool ReadAll()
-        {
-            if (Reading.IsCompleted)
-            {
-                return true;
-            }
+        public void Look() => _pipe.Look();
 
-            var reads = Interlocked.Read(ref _reads);
-            var quiet = _waiting && _pipe is not null && _pending is { IsCompleted: false } && !PipeBytes.HoldsData(_pipe);
-            var settled = quiet && reads == _lookedAt;
+        /// <summary>
+        /// Whether the reading ended at a look that found the pipe holding nothing while something the child left running
+        /// still held it open: every character the child wrote was read, and what that process writes is not.
+        /// </summary>
+        public bool HeldOpen => _pipe.Settled;
 
-            _lookedAt = quiet ? reads : -1;
-            return settled;
-        }
-
-        /// <summary>Ends when the stream does.</summary>
+        /// <summary>Ends when the stream does, or when a look finds what a process the child left running holds all that is left.</summary>
         public Task Reading { get; }
 
         /// <summary>
@@ -1472,7 +1473,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             var buffer = new char[ReadBufferSize];
             int read;
 
-            while ((read = await Next(reader, buffer).ConfigureAwait(false)) > 0)
+            while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
             {
                 lock (_gate)
                 {
@@ -1498,30 +1499,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                     EndLines();
                     EndLog();
                 }
-            }
-        }
-
-        /// <summary>
-        /// The next read, marked as waiting while it is under way. The task the read answers is kept, so a look can
-        /// tell a read that still waits from one that has returned, its keeping not yet run: a busy machine can hold
-        /// that back long past the read's own return.
-        /// </summary>
-        private async Task<int> Next(StreamReader reader, char[] buffer)
-        {
-            _waiting = true;
-
-            try
-            {
-                var reading = reader.ReadAsync(buffer.AsMemory()).AsTask();
-                _pending = reading;
-
-                return await reading.ConfigureAwait(false);
-            }
-            finally
-            {
-                _pending = null;
-                _waiting = false;
-                Interlocked.Increment(ref _reads);
             }
         }
 
@@ -1602,16 +1579,115 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>
+    /// How a child's stream is read as text: under <paramref name="Encoding"/>, its byte order marks read where
+    /// <paramref name="Marks"/> says so - a stream that begins as a mark does is then decoded as the mark says, the mark
+    /// dropped - as .NET's own reader of a child's output reads it.
+    /// </summary>
+    /// <param name="Encoding">What its bytes are decoded as.</param>
+    /// <param name="Marks">Whether a byte order mark at its start is read as one.</param>
+    internal sealed record StreamDecoding(Encoding Encoding, bool Marks);
+
+    /// <summary>A child's stream read as .NET reads a child's output: as UTF-8, a byte order mark at its start read as one.</summary>
+    internal static readonly StreamDecoding AsDotNetReadsIt = new(Utf8NoBom, Marks: true);
+
+    /// <summary>
     /// How the child's standard output is read: under the encoding the caller named, exactly, from its first byte - a reader
     /// .NET makes for a child takes bytes that begin as a byte order mark does for the mark, drops them and decodes the rest
     /// as the mark says, which turns the output of a caller that reads bytes through Latin-1 into other bytes. The encoding
     /// named has no mark of its own, refused otherwise, so none is dropped. Text read as UTF-8, the caller naming none, is
-    /// read as .NET reads it.
+    /// read as .NET reads it (<see cref="AsDotNetReadsIt"/>).
     /// </summary>
-    private static StreamReader OutputOf(Process process, ProcessRequest request)
-        => request.StandardOutputEncoding is { } exact
-            ? new StreamReader(process.StandardOutput.BaseStream, exact, detectEncodingFromByteOrderMarks: false, OutputBuffer)
-            : process.StandardOutput;
+    private static StreamDecoding OutputDecoding(ProcessRequest request)
+        => request.StandardOutputEncoding is { } exact ? new(exact, Marks: false) : AsDotNetReadsIt;
+
+    /// <summary>
+    /// The pipe a <see cref="StreamCapture"/> reads, each read of it given a token a look ends: a read a look ended has taken
+    /// nothing - the runtime ends a read that waits only before it takes a byte, on Windows the system's read of a synchronous
+    /// pipe and on Linux and macOS its own - and the pipe is asked, no read waiting on it, what it holds
+    /// (<see cref="PipeBytes.HeldEmpty"/>). Holding nothing while something still holds it open, it is settled: every read
+    /// from then on answers the stream's end, so a reader drains what it already decoded and stops. Holding anything, or let
+    /// go of by every writer, it is read again.
+    /// </summary>
+    /// <param name="pipe">The child's stream, as the process gives it; never closed here, the process owns it.</param>
+    /// <param name="handle">The pipe under it, which a look asks; <see langword="null"/> where it is no pipe, and no look ends its reads.</param>
+    private sealed class LookedPipe(Stream pipe, System.Runtime.InteropServices.SafeHandle? handle) : Stream
+    {
+        /// <summary>
+        /// What the read that waits was given: ended by a look, and replaced once the pipe has been asked. Never disposed: it
+        /// holds no timer and no wait handle, and a look may still be ending one replaced - a look that ends a replaced one
+        /// is lost, and the next look ends the read it missed.
+        /// </summary>
+        private volatile CancellationTokenSource _look = new();
+
+        private volatile bool _settled;
+
+        /// <summary>Whether a look found the pipe holding nothing while something still held it open.</summary>
+        public bool Settled => _settled;
+
+        /// <summary>
+        /// Ends the read that waits, where the pipe can be asked; a look between two reads ends the next. Its reader is told
+        /// on a pool thread, never on the looker's: the read it ends goes on reading from there.
+        /// </summary>
+        public void Look()
+        {
+            if (handle is not null)
+            {
+                _ = _look.CancelAsync();
+            }
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            while (!_settled)
+            {
+                var looked = _look.Token;
+
+                try
+                {
+                    return await pipe.ReadAsync(buffer, looked).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (looked.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    // Ended by a look before it took a byte: no read waits on the pipe, so what it holds is asked.
+                    _settled = PipeBytes.HeldEmpty(handle!);
+                    _look = new();
+                }
+            }
+
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        /// <summary>Refused: a look ends only a read made through <see cref="ReadAsync(Memory{byte}, CancellationToken)"/>, the one a capture makes.</summary>
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException("a child's pipe is read only through a read a look can end");
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException("a pipe has no length");
+
+        public override long Position
+        {
+            get => throw new NotSupportedException("a pipe has no position");
+            set => throw new NotSupportedException("a pipe has no position");
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException("a pipe has no position");
+
+        public override void SetLength(long value) => throw new NotSupportedException("a pipe has no length");
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException("a child's output is only read");
+    }
 
     /// <summary>A stream as it was read: what is kept of it, and what its line handler raised, where it raised anything.</summary>
     internal sealed record Captured(string Text, ExceptionDispatchInfo? Failed);

@@ -270,11 +270,14 @@ the child ends or is stopped - every process still in it, and at a stop every on
 child's tree, read before anything is signalled, asked to end with SIGTERM and waited for while
 any of it stands - told every five minutes, and killed at what is left of the child's time limit,
 or at once where a sweep ends what a killed run left, that run's bound having passed with it - and
-the output is read until every character the child wrote has been, to its end or until the pipe
-holds nothing more and its read waits on it (`PipeBytes` taking the pipe; the waiting read itself
-the answer - anything more would have ended it - and the system asked nothing, for on Windows the
-handle a synchronous read pends on answers no peek, which waits for that read); what a leftover
-writes after that is its
+the output is read until every character the child wrote has been, to its end or until a look finds
+the pipe holding nothing while something still holds it open (`ProcessRunner.StreamCapture`: each
+look, once the child has ended, ends the read that waits - a read ended so has taken nothing, the
+runtime ending a read only before it takes a byte - and asks the pipe through `PipeBytes`, no read
+waiting on it, by a peek on Windows and by poll on Linux and macOS; never by the read's task, which on
+Windows waits for a pool thread to make the read while what the child wrote sits in the pipe, and a
+pipe holding bytes, or one every writer has let go of, is read on); what a leftover writes after
+that is its
 own, said in `ProcessResult.OutputHeld` and not read: a process
 that made a session of its own away from the child's tree is not reached, and nothing waits for
 what it holds. On macOS, where the isolation keeps no process namespace, such a process of an
@@ -433,7 +436,7 @@ kill among them, ends
 the child and all it started at once. Its own end and a stop are as any other child's: nothing is
 terminated as it ends, and what it leaves running lives on until the harness ends - so, on every
 system, its output is read, once it has ended, until every character it wrote has been - to its
-end, or until the pipe holds nothing more and its read waits on it - as a contained child's is
+end, or until a look finds the pipe holding nothing with no read waiting on it - as a contained child's is
 once its container has: what still holds the output then is one of those leftovers, a server its
 phase started in the background, whose later output is its own and is said not read
 (`ProcessResult.OutputHeld`), so the run is held neither for as long as it lives nor cut short of
