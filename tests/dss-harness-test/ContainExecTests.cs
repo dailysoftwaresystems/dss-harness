@@ -1169,6 +1169,152 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A zombie a test learned of is not running, on Linux and macOS: it has ended as the harness counts an end
+    /// (<see cref="ProcessGoing.HasEnded"/>), whatever its id still answers - so no assertion after a stop races the system's
+    /// reaping of what the stop killed. The zombie is the child of a process that never reaps it.
+    /// </summary>
+    [Fact]
+    public async Task AZombieATestLearnedOf_IsNotRunning_AsTheHarnessCountsAnEnd()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no zombie: a process's handle is signalled once it has run down.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-zombie-and-sleep", "300000"));
+
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+
+        try
+        {
+            var said = await root.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+            var zombie = LearnedProcess.In(said ?? string.Empty, "zombie=");
+
+            Assert.True(zombie is { Stamp: not null }, $"the root never named a zombie whose start could be read: '{said}'");
+            Assert.False(zombie.Value.Running, $"the zombie {zombie} was taken for a process that runs");
+        }
+        finally
+        {
+            if (!root.HasExited)
+            {
+                root.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A session's end asked from inside what it would end - by a process in the session, or in the group where a group is
+    /// ended, or by one that made a session or a group of its own and still descends from the leader - signals nothing and
+    /// holds nothing still, on Linux and macOS: it answers that it holds this very process, nothing of it reached, and the
+    /// caller and the leader run on after - the caller to say so, the leader to say the caller's end and stand. Every process
+    /// here is the test's own - the leader a child it starts, in a session or a group of its own, the caller that leader's -
+    /// so an end that acted on its caller could stop or end those two alone; the wait is bounded, and both are ended on every
+    /// path.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ASessionsEnd_FromInsideWhatItWouldEnd_SignalsNothing_AndSaysItHoldsThisVeryProcess(bool group, bool apart)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a session's or a group's end is Linux's and macOS's: a child there is held in a job.");
+
+        var kind = group ? "group" : "session";
+        var held = group ? "the process group a child apart from the terminal led" : "the contained child's session";
+        var (lines, leader, caller) = await FromInsideAsync(Child("lead-then", kind, "spawn-holder", "outlive", "300000", "end-own-leader", kind, apart ? "apart" : "inside"));
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"ending=Found=True HoldsThisProcess=True: {held} ({leader}) holds this very process (pid {caller}), in it or in its leader's tree, "
+                    + "and no process ends what it runs in: nothing in it was signalled",
+                $"holder={caller}",
+            ],
+            lines);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="request"/> - a leader, which starts a caller inside what it leads and outlives it, saying
+    /// <c>holder=</c>, then <c>after=</c> once the caller has ended - until the leader says <c>after=</c>, within the long
+    /// bound: every line said, in order of the text, the leader's id, and the caller's. The leader is asserted still standing;
+    /// the caller and the leader are both ended, whatever happened, on every path.
+    /// </summary>
+    internal static async Task<(string[] Lines, int Leader, LearnedProcess Caller)> FromInsideAsync(ProcessRequest request)
+    {
+        var start = TestHost.StartOf(request);
+        var lines = new List<string>();
+        var caller = LearnedProcess.None;
+        var told = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        start.RedirectStandardOutput = true;
+        start.RedirectStandardError = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            leader.OutputDataReceived += (_, line) =>
+            {
+                lock (lines)
+                {
+                    if (line.Data is not { } said)
+                    {
+                        _ = told.TrySetResult(false);
+                        return;
+                    }
+
+                    lines.Add(said);
+                    caller = LearnedProcess.In(said, "caller=") ?? LearnedProcess.In(said, "holder=") ?? caller;
+
+                    if (said.StartsWith("after=", StringComparison.Ordinal))
+                    {
+                        _ = told.TrySetResult(true);
+                    }
+                }
+            };
+
+            leader.ErrorDataReceived += (_, line) =>
+            {
+                lock (lines)
+                {
+                    if (line.Data is { } said)
+                    {
+                        lines.Add($"error: {said}");
+                    }
+                }
+            };
+
+            leader.BeginOutputReadLine();
+            leader.BeginErrorReadLine();
+
+            var after = await told.Task.WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            lock (lines)
+            {
+                Assert.True(after, $"the leader ended before it said the caller's end: {string.Join(" | ", lines)}");
+                Assert.False(leader.HasExited, $"the leader {leader.Id} was ended by an end asked from inside what it leads");
+
+                return ([.. lines.Order(StringComparer.Ordinal)], leader.Id, caller);
+            }
+        }
+        finally
+        {
+            lock (lines)
+            {
+                caller.TryEnding();
+            }
+
+            if (!leader.HasExited)
+            {
+                leader.Kill(entireProcessTree: true);
+                leader.WaitForExit(LongBound);
+            }
+        }
+    }
+
+    /// <summary>
     /// A child the system lists that no process answers the hold for yet - one being created, or one in its exit, can be
     /// listed while nothing answers to its id - is asked again, never dropped as gone on that answer alone, on Linux and
     /// macOS: it is held, and ended with its tree. No real child can be made to answer so on demand: the hold of the child is

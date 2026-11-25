@@ -63,6 +63,9 @@ internal static class TestChild
             "print-code-page" => PrintCodePage(standardOutput),
             "print-parent" => PrintParent(standardOutput),
             "end-own-parent" => EndOwnParent(standardOutput),
+            "lead-then" => LeadThen(arguments),
+            "end-own-leader" => EndOwnLeader(standardOutput, arguments),
+            "sweep-own-leader" => ChildSessionsTests.SweepFromInside(standardOutput, arguments),
             "spawn-zombie-and-sleep" => SpawnZombieAndSleep(standardOutput, arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
@@ -1038,6 +1041,49 @@ internal static class TestChild
     }
 
     /// <summary>
+    /// Leads a session of its own - or, where <c>arguments[0]</c> is <c>group</c>, a process group of its own within its
+    /// starter's session - as a contained child, or a child apart from the terminal, does, then does what the behaviour
+    /// <c>arguments[1]</c> names with the arguments after it; the session and group calls are the C library's.
+    /// </summary>
+    private static int LeadThen(string[] arguments)
+    {
+        if (OperatingSystem.IsWindows() || (string.Equals(arguments[0], "group", StringComparison.Ordinal) ? setpgid(0, 0) : setsid()) == -1)
+        {
+            return 98;
+        }
+
+        return Run(arguments[1], arguments[2..]);
+    }
+
+    /// <summary>
+    /// Ends the session - or, where <c>arguments[0]</c> is <c>group</c>, the process group - the process that started it
+    /// leads, as a sweep ends one a killed process left (<see cref="Core.Processes.LeftSessions"/>), and writes its own id as
+    /// <c>caller</c> before and what that end answered as <c>ending</c> after: from inside it, or, where <c>arguments[1]</c>
+    /// is <c>apart</c>, from a session or a group of its own made first, still in its leader's tree. Its parent is a process
+    /// a test starts, and ends itself.
+    /// </summary>
+    private static int EndOwnLeader(TextWriter output, string[] arguments)
+    {
+        var group = string.Equals(arguments[0], "group", StringComparison.Ordinal);
+
+        if (OperatingSystem.IsWindows()
+            || ParentId() is not { } leader
+            || (string.Equals(arguments[1], "apart", StringComparison.Ordinal) && (group ? setpgid(0, 0) : setsid()) == -1))
+        {
+            return 98;
+        }
+
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        var platform = new Core.Platform.HostPlatform();
+        var table = Core.Platform.ProcessTableFactory.Create(platform, new Core.Processes.ProcessRunner(platform, Core.Platform.FilePermissionsFactory.Create()));
+        var ending = new Core.Processes.LeftSessions(platform, table).EndAsync(leader, group).GetAwaiter().GetResult();
+
+        output.Write($"ending=Found={ending.Found} HoldsThisProcess={ending.HoldsThisProcess}: {ending.Unreached}\n");
+        return 0;
+    }
+
+    /// <summary>
     /// Starts <c>/bin/sh -c "exit 0"</c> by the C library's own call, which nothing in this process reaps, so it stays a
     /// zombie for as long as this process stands; writes its id as <c>zombie</c> once it is one, and sleeps for the
     /// milliseconds <c>arguments[0]</c> gives: a tree one of whose processes the system lists past its last reference.
@@ -1058,7 +1104,7 @@ internal static class TestChild
     }
 
     /// <summary>The id of the process that started this one, as the system records it; <see langword="null"/> where it would not say.</summary>
-    private static int? ParentId()
+    internal static int? ParentId()
     {
         if (!OperatingSystem.IsWindows())
         {

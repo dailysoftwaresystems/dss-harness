@@ -495,7 +495,9 @@ public sealed partial class HelpTests
             + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL at once, each process killed waited for until it has gone), "
             + "removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json; stop-orchestrator --now does it again once it has ended the engine and its "
-            + "tree, and says what it ended. A session or group whose starter still runs is left; one whose id a later process "
+            + "tree, and says what it ended. A session or group whose starter still runs is left; one that holds the command "
+            + "itself - it runs in it, or descends from its leader - is said and left with its record, nothing in it signalled, for "
+            + "a command run from outside it to end; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
             + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
             + "that started it.",
@@ -506,7 +508,7 @@ public sealed partial class HelpTests
             + "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a "
             + "leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by "
-            + "stop-orchestrator --now - once its starter has gone",
+            + "stop-orchestrator --now - once its starter has gone, by one that runs outside it",
             layout,
             StringComparison.Ordinal);
     }

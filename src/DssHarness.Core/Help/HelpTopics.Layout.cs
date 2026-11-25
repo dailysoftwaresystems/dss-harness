@@ -104,7 +104,7 @@ public static partial class HelpTopics
             "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "
             + "carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and "
-            + "by stop-orchestrator --now - once its starter has gone"),
+            + "by stop-orchestrator --now - once its starter has gone, by one that runs outside it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AsksDirectoryName}/",
             "ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, "
             + $"the files of its reporter's attempt, the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/) and ask.json; "

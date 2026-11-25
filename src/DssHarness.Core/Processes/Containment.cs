@@ -133,6 +133,13 @@ internal static class Containment
     /// </returns>
     /// <remarks>
     /// <para>
+    /// Nothing it does acts on the process running it: a session - or a group, where a group is ended - that holds that
+    /// process, or whose leader it descends from (<see cref="TheCallersChain"/>), is refused before anything is read or
+    /// signalled - the asking among it, which a command takes for a cancel and goes on through, and the hold after it,
+    /// which would stop it where it stands with all it runs in, never to be killed - and answered as unreached, holding
+    /// this very process (<see cref="HeldEnding.HoldsThisProcess"/>), for a process outside it to end.
+    /// </para>
+    /// <para>
     /// The members are read before anything is signalled. A member that ends first takes nothing
     /// with it from the session, whose id every process it started keeps when it is handed to
     /// another parent - but it takes its children out of its tree, and a stop that walked the tree
@@ -181,6 +188,21 @@ internal static class Containment
         bool In(int process) => (group ? calls.GroupOf(process) : calls.SessionOf(process)) == leader;
 
         var held = group ? "the process group a child apart from the terminal led" : "the contained child's session";
+
+        // Nothing a session's end does acts on the process running it: one that holds it, or whose leader it descends from,
+        // is refused before anything is read or signalled, and left as it stands for a process outside it to end.
+        var caller = TheCallersChain();
+
+        if (In(caller[0]) || caller.Contains(leader))
+        {
+            return new HeldEnding(
+                Found: true,
+                string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"{held} ({leader}) holds this very process (pid {caller[0]}), in it or in its leader's tree, and no process ends what it runs in: nothing in it was signalled"),
+                HoldsThisProcess: true);
+        }
+
         var (first, unread) = await ReadAsync(read).ConfigureAwait(false);
         var members = first is null ? [] : Members(first, leader, In);
 
@@ -364,10 +386,11 @@ internal static class Containment
 
     /// <summary>
     /// Whether the tree of <paramref name="root"/> holds this very process: it is the root, or the root is one this process
-    /// descends from, read once up this process's own chain of parents - each the parent the walk itself reads (Linux's
-    /// <c>/proc</c>, macOS's own record of a process, the list Windows keeps of every process), and each started no later
-    /// than the child it is read for, so a later holder of a parent's id that has gone is never taken for it. A parent
-    /// that cannot be read ends the chain: what the walk cannot read it cannot walk through either.
+    /// descends from, read once up this process's own chain of parents, each the parent the walk itself reads. On Linux
+    /// and macOS that is the parent the system names now (<see cref="TheCallersChain"/>).
+    /// On Windows it is the list Windows keeps of every process, each parent started no
+    /// later than the child it is read for, so a later holder of a parent's id that has gone is never taken for it.
+    /// A parent that cannot be read ends the chain: what the walk cannot read it cannot walk through either.
     /// </summary>
     /// <param name="root">The id of the process whose tree would be ended.</param>
     private static bool HoldsTheCaller(int root)
@@ -401,22 +424,47 @@ internal static class Containment
             return false;
         }
 
-        var walked = new HashSet<int>();
+        return TheCallersChain().Contains(root);
+    }
 
-        for (var child = self; walked.Add(child) && ParentOf(child) is { } parent && parent > 0; child = parent)
+    /// <summary>
+    /// This process and each process it descends from, on Linux and macOS, nearest first: for each, the parent the system
+    /// names now (<see cref="ParentOf"/>), the walk's own relation - always the one it stands under, since a child is
+    /// handed to another as its parent ends, before that parent's id can be given out, so no start is compared, and
+    /// macOS's, the wall clock's, which a step back reorders, decides nothing. Each parent's own parent is read while
+    /// its child still names it, and the whole chain is read again from this process where one no longer does - a
+    /// process of it ended meanwhile, and what it started was handed on - so the id of a parent that has gone, given out
+    /// since, is never read through. A parent that cannot be read ends the chain. The one reader of what this process
+    /// runs in: the refusal of a tree's end (<see cref="HoldsTheCaller"/>) and of a session's or a group's
+    /// (<see cref="EndSessionAsync"/>) both read it.
+    /// </summary>
+    private static List<int> TheCallersChain()
+    {
+        while (true)
         {
-            if (Started(parent) is { } parentStarted && Started(child) is { } childStarted && parentStarted > childStarted)
+            var chain = new List<int> { Environment.ProcessId };
+            var parent = ParentOf(chain[0]);
+            var handedOn = false;
+
+            while (parent is { } id && id > 0 && !chain.Contains(id))
             {
-                return false;
+                var above = ParentOf(id);
+
+                if (ParentOf(chain[^1]) != id)
+                {
+                    handedOn = true;
+                    break;
+                }
+
+                chain.Add(id);
+                parent = above;
             }
 
-            if (parent == root)
+            if (!handedOn)
             {
-                return true;
+                return chain;
             }
         }
-
-        return false;
     }
 
     /// <summary>Ends a kept process at once, as the machine does: TerminateProcess on Windows, SIGKILL on Linux and macOS.</summary>
@@ -1000,7 +1048,7 @@ internal static class Containment
     /// <summary>
     /// The parent of the process <paramref name="id"/> names, read now - the process it was handed to where its own parent
     /// went, on Linux and macOS alike - or <see langword="null"/> where it has gone or cannot be read: the one read of a
-    /// parent the walk and the refusal of a tree that holds this process both make.
+    /// parent the walk and the chain of what this process descends from (<see cref="TheCallersChain"/>) both make.
     /// </summary>
     private static int? ParentOf(int id)
     {
@@ -1010,20 +1058,6 @@ internal static class Containment
         }
 
         return FieldOf(id, ProcStat.ParentField) is { } parent ? (int)parent : null;
-    }
-
-    /// <summary>
-    /// When the process <paramref name="id"/> names started, as a number that orders one start against another - Linux's
-    /// ticks since boot, macOS's microseconds since 1970 - or <see langword="null"/> where it cannot be read.
-    /// </summary>
-    private static long? Started(int id)
-    {
-        if (OperatingSystem.IsMacOS())
-        {
-            return ProcessGoing.MacStarted(id) is var (seconds, microseconds) ? unchecked((long)((seconds * ProcessGoing.MicrosecondsInASecond) + microseconds)) : null;
-        }
-
-        return FieldOf(id, ProcStat.StartTicksField);
     }
 
     /// <summary>

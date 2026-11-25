@@ -275,6 +275,10 @@ its exit standing until it is one, one the harness may not signal - another user
 and the group for none once every member it is listed to hold is one, never by a signal alone, which
 macOS passes a process in its exit over for - told every five minutes, and killed at what is left of the child's time limit,
 or at once where a sweep ends what a killed run left, that run's bound having passed with it.
+Nothing a session's end does acts on the process running it: a session, or a group, that holds that
+process, or whose leader it descends from, is refused before anything is signalled - the asking is
+taken for a cancel and gone on through, and the hold after it would stop that process where it
+stands with everything it runs in - and left for a process outside it to end.
 Whatever a stop or a container's end ends is waited for until it has gone before the output's end
 is looked for (`EndedProcesses`): the system answers a kill before the process's end has run - a
 descendant still unmapping its memory or running down its handles holds the write end of the
@@ -337,7 +341,11 @@ its record removed and the end said in the command's lines and in its document's
 answers with one, where anything was left in it - but only where the process carrying its id still
 has the recorded start, or no process carries the id at all: none is given an id a session or a
 group still carries, so what a leader killed with the engine's tree handed on is still found by
-it. An id given to a later process ends nothing, and that record simply goes.
+it. An id given to a later process ends nothing, and that record simply goes. A session or group
+that holds the command sweeping - it runs in it, or descends from its leader, read up the chain of
+parents the walk's own refusal reads (`Containment.TheCallersChain`) - is never ended from inside:
+nothing in it is signalled, the refusal is said, and its record kept for a command run from outside
+it to end.
 `stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
 ended: what outlived that end. A tree is ended by holding each process of it still before any is
 killed (`Containment.EndTree`, below), and the system hangs up a group that loses its last parent in
@@ -504,8 +512,10 @@ well, at once, which reaches what its tree handed on; what it leaves at its own 
 tree, and the group beside it, is ended by one walk (`Containment.EndTree`) - for a stop, for
 `stop-run --now` and `stop-orchestrator --now`, and for a host agent's last resort alike. It never
 acts on the process running it: a tree whose root is that process, or one it descends from - read
-up its own chain of parents, each the parent the walk itself reads and started no later than its
-child - is refused before anything is held or ended, which `--now` answers as could not be ended,
+up its own chain of parents, each the parent the walk itself reads - on Linux and macOS the one the
+system names now, a child being handed on as its parent ends, before that parent's id is given out;
+on Windows one started no later than its child -
+is refused before anything is held or ended, which `--now` answers as could not be ended,
 its owner kept, and the last resort as left. On Linux
 and macOS it holds each process still (SIGSTOP) before it takes that process's children - once it
 has stopped, a process starts no other, and a child of it is never reaped and its id given out

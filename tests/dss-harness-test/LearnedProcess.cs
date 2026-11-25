@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Tests;
 
@@ -33,7 +34,11 @@ internal readonly record struct LearnedProcess(int Id, string? Stamp)
             ? Of(id)
             : null;
 
-    /// <summary>Whether this very process runs now - never one given its id since.</summary>
+    /// <summary>
+    /// Whether this very process runs now - never one given its id since, and never one that has ended as the harness says
+    /// a process has (<see cref="ProcessGoing.HasEnded"/>): a zombie, which the system may not have reaped yet once its
+    /// parent has gone too, has ended, as every stop and every end counts it.
+    /// </summary>
     public bool Running
     {
         get
@@ -46,7 +51,7 @@ internal readonly record struct LearnedProcess(int Id, string? Stamp)
             try
             {
                 using var found = Process.GetProcessById(Id);
-                return !found.HasExited && Identity.IsSame(Id, stamp);
+                return !found.HasExited && !ProcessGoing.HasEnded(Id) && Identity.IsSame(Id, stamp);
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {

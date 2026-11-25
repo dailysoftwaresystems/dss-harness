@@ -88,7 +88,9 @@ public sealed record EndedChildSession(string Orchestrator, string? Agent, strin
 /// gone was left running by it - killed before it could end it, or a group holding what its child left at its own end -
 /// and is ended as a contained child's session is ended at its end -
 /// where its leader is still the process recorded, or where no process carries its id, since none is given an id a
-/// session or a group still carries, and never where another process has been given it - and its record removed. An
+/// session or a group still carries, and never where another process has been given it - and its record removed. One
+/// that holds the command sweeping - it runs in it, or descends from its leader - is never ended from inside: it is said
+/// and left with its record, for a command run from outside it to end. An
 /// owner on another machine is never taken to have gone, since nothing here can ask that machine. Windows records
 /// nothing: a child there is held in a job that ends with the process holding it.
 /// </para>
@@ -131,7 +133,8 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
     /// <summary>
     /// Ends each session or group a child of the orchestrator's steps leads whose owner has gone, as that owner would have
     /// ended it, and removes its record: said, each, as a line of <paramref name="command"/>, and kept for the documents
-    /// the operation answers with (<see cref="EndedChildSessions"/>).
+    /// the operation answers with (<see cref="EndedChildSessions"/>). One that holds this very process is said and left,
+    /// its record with it.
     /// </summary>
     /// <param name="orchestrator">The orchestrator.</param>
     /// <param name="command">The command sweeping, which its lines name.</param>
@@ -172,6 +175,14 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
                     _output.Warn(command, $"'{file}' is {RecordKind}, which this system never writes: {ex.Message.TrimEnd('.')}. It was left as it is.");
                     continue;
                 }
+            }
+
+            // One that holds this very process - the command runs in it, or descends from its leader - is never ended from
+            // inside: it is said and left with its record, for a command run from outside it to end.
+            if (ending.HoldsThisProcess)
+            {
+                _output.Warn(command, $"'{file}' is {RecordKind}, and {ending.Unreached}. It was left as it is, for a command run from outside it to end.");
+                continue;
             }
 
             // Ended, or holding nothing any more - its id another process's, or nothing left in it - the record has nothing

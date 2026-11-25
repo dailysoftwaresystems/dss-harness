@@ -29,7 +29,10 @@ public sealed class LeftSessions(IHostPlatform platform, IProcessTable table)
     /// </summary>
     /// <param name="leader">The id of its leader, which is the session's or the group's.</param>
     /// <param name="group">Whether it led a process group within its starter's session, rather than a session of its own.</param>
-    /// <returns>Whether anything was still in it to end, and what could not be reached, and why.</returns>
+    /// <returns>
+    /// Whether anything was still in it to end, and what could not be reached, and why: all of it, nothing signalled, where
+    /// it holds this very process (<see cref="HeldEnding.HoldsThisProcess"/>).
+    /// </returns>
     /// <exception cref="PlatformNotSupportedException">This is Windows, whose jobs end their children with their owner.</exception>
     public Task<HeldEnding> EndAsync(int leader, bool group)
     {

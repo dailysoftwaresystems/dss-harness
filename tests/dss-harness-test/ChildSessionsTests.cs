@@ -883,6 +883,82 @@ public sealed class ChildSessionsTests
         Assert.DoesNotContain("left process group", listed.Error, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A command over an orchestrator run from inside a session its sweep would end - a step's own script in the session
+    /// a contained child of a killed engine leads - never ends it: nothing in it is signalled, the refusal is said, and the
+    /// record is kept for a command run from outside it to end. Run where it would act on itself: the sweep runs in a
+    /// child the session's leader starts (<see cref="SweepFromInside"/>), every process the test's own, bounded, and ended
+    /// on every path.
+    /// </summary>
+    [Fact]
+    public async Task ASessionHoldingTheSweepingCommand_IsSaidAndLeft_WithItsRecord()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left, which ARecordFoundOnWindows_IsSaidAndLeft holds.");
+
+        using var temp = new TempDirectory();
+        var directory = temp.Combine("o1");
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "sweep-own-leader", directory));
+        var record = OrchestratorLayout.ChildFile(new OrchestratorLayout("o1", directory).StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                "ended=0",
+                $"holder={caller}",
+                "kept=True",
+                $"said={SweepCommand}: WARN - '{record}' is {ChildSessions.RecordKind}, and the contained child's session ({leader}) holds this very process "
+                    + $"(pid {caller}), in it or in its leader's tree, and no process ends what it runs in: nothing in it was signalled. "
+                    + "It was left as it is, for a command run from outside it to end.",
+            ],
+            lines);
+    }
+
+    /// <summary>The command a sweep from inside a session names.</summary>
+    private const string SweepCommand = "list-orchestrator";
+
+    /// <summary>
+    /// The child's side of <see cref="ASessionHoldingTheSweepingCommand_IsSaidAndLeft_WithItsRecord"/>: records the session
+    /// the process that started it leads in step <c>s1</c> of the orchestrator <c>o1</c> at <c>arguments[0]</c>, as a
+    /// process that has gone since left it, sweeps that orchestrator from inside the session, and writes its own id as
+    /// <c>caller</c>, each line the sweep said as <c>said</c>, whether the record is still there as <c>kept</c>, and how
+    /// many sessions the sweep ended as <c>ended</c>.
+    /// </summary>
+    internal static int SweepFromInside(TextWriter output, string[] arguments)
+    {
+        if (OperatingSystem.IsWindows() || TestChild.ParentId() is not { } leader)
+        {
+            return 98;
+        }
+
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        var platform = new HostPlatform();
+        var permissions = FilePermissionsFactory.Create();
+        var said = new StringWriter();
+        var sessions = new ChildSessions(
+            new Core.FileSystem.PhysicalFileSystem(permissions),
+            new Gone(new ProcessIdentity(platform), laterStart: false),
+            new LeftSessions(platform, ProcessTableFactory.Create(platform, new ProcessRunner(platform, permissions))),
+            new ConsoleHarnessOutput(TextWriter.Null, said, verbose: false),
+            new EndedChildSessions());
+        var orchestrator = new OrchestratorLayout("o1", arguments[0]);
+        var step = orchestrator.StepDirectory("s1");
+
+        sessions.For(step).Placed(leader, started: null, TestHost.AssemblyProgram, group: false);
+
+        var ended = sessions.SweepAsync(orchestrator, SweepCommand).GetAwaiter().GetResult();
+
+        foreach (var line in Lines(said).Where(line => line.Length > 0))
+        {
+            output.Write($"said={line}\n");
+        }
+
+        output.Write($"kept={File.Exists(OrchestratorLayout.ChildFile(step, leader))}\n");
+        output.Write($"ended={ended.Count.ToString(CultureInfo.InvariantCulture)}\n");
+        return 0;
+    }
+
     /// <summary>What a sweep ended is counted by kind in one line - the sessions, then the process groups - naming only the kinds it ended.</summary>
     [Fact]
     public void WhatASweepEnded_IsCountedByKind()
