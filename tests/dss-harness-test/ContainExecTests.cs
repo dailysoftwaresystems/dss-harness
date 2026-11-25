@@ -1695,6 +1695,38 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A contained child's descendant that made a session of its own while its parent stands - a daemonizing helper - is
+    /// ended with the child's session at a stop on Linux and macOS, through the child's tree as the process table names
+    /// each parent (<see cref="SampledProcess.ParentId"/>), whatever a clock says of their starts: the table here dates
+    /// every process in the reverse of the order it started in, as a clock stepped back between their starts - macOS's
+    /// are the wall clock's - or the second pass of a fall-back hour would. Cut by a start that reads earlier than its
+    /// parent's, the link left the descendant out of what the session's end reached, the child's end handed it on out of
+    /// the tree, and it held the output for as long as it lived.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsDescendantInASessionOfItsOwn_IsEndedThroughItsTreeAtAStop_WhateverAClockSaysOfTheirStarts()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "sessions are the C library's; on Windows every descendant is born in the job, which AContainedChild_Stopped_EndsWhatItLeftOutsideItsTree_AndTheOutputItHeldEnds holds.");
+
+        var holder = LearnedProcess.None;
+
+        try
+        {
+            var (raised, _) = await RunAndStopOn(
+                Child("spawn-holder", "sleep", "300000", "own-session-and-sleep", "300000") with { Contained = true },
+                line => (holder = LearnedProcess.In(line, "holder=") ?? holder).Id != 0,
+                ContainingRunner(new StartsReversed(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()))));
+
+            Assert.IsType<ProcessStoppedException>(raised);
+            Assert.True(holder.AwaitGone(), $"the descendant {holder} in a session of its own outlived the stop");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
     /// A contained child stopped on Linux and macOS is asked to end before it is made to: the signal
     /// that asks comes first, so a program that tidies up on it is given the chance.
     /// </summary>
@@ -2647,6 +2679,27 @@ public sealed class ContainExecTests
     private static int GetGroupOfThisProcess() => getpgid(0);
 
     private static int GroupOf(int process) => getpgid(process);
+
+    /// <summary>
+    /// The machine's process table as <paramref name="inner"/> reads it, every start dated in the reverse of the order the
+    /// processes started in - each child before its parent - as a clock stepped back between their starts would date them:
+    /// one start to each process, the same in every reading, so a process is told from a later holder of its id as before.
+    /// </summary>
+    private sealed class StartsReversed(IProcessTable inner) : IProcessTable
+    {
+        public async Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            var reading = await inner.ReadAsync(cancellationToken);
+
+            return reading with
+            {
+                Processes = [.. reading.Processes.Select(process => process with
+                {
+                    StartedUtc = process.StartedUtc is { } started ? new DateTimeOffset(DateTimeOffset.MaxValue.UtcTicks - started.UtcTicks, TimeSpan.Zero) : null,
+                })],
+            };
+        }
+    }
 
     /// <summary>A process table read once from <paramref name="first"/>, and from <paramref name="then"/> ever after.</summary>
     private sealed class ReadOnce(IProcessTable first, IProcessTable then) : IProcessTable

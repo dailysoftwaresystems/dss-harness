@@ -215,6 +215,56 @@ public sealed class ProcessTableTests
     }
 
     /// <summary>
+    /// On Windows, which goes on naming a creator once it has gone and gives its id out again, a process listed under the
+    /// id a child names that was made after the child is a later holder of the id, and the reading names no parent for
+    /// that child: made after as the walk of a tree orders a creator and its child - by their sequence numbers where both
+    /// were read, whatever a clock that stepped between their creations says, and by their creation times where either was
+    /// not. A child the reading could not date keeps the parent it names, and one whose parent is not listed keeps it too.
+    /// The order is stood in for, read as asked with the creation time WMI listed.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_AParentMadeAfterTheChildThatNamesIt_IsNoParent_AsTheWalkOrdersThem()
+    {
+        const char separator = (char)31;
+        var agent = new DateTimeOffset(2026, 11, 25, 10, 0, 0, TimeSpan.Zero);
+        var sequences = new Dictionary<int, ulong?> { [100] = 50, [201] = 60, [202] = 40, [203] = null, [204] = null, [206] = 70, [1] = 1 };
+        var asked = new List<(int Id, long Created)>();
+
+        static string Line(int id, int parent, DateTimeOffset? created, string name)
+            => string.Join(separator, id.ToString(CultureInfo.InvariantCulture), parent.ToString(CultureInfo.InvariantCulture), created?.ToString("o", CultureInfo.InvariantCulture) ?? string.Empty, name + ".exe", name, string.Empty);
+
+        var wmi = new ScriptedPowerShell
+        {
+            Output = string.Join(
+                '\n',
+                Line(100, 1, agent, "agent"),
+                Line(201, 100, agent.AddSeconds(-5), "stepped"),
+                Line(202, 100, agent.AddSeconds(5), "earlier"),
+                Line(203, 100, agent.AddSeconds(5), "after"),
+                Line(204, 100, agent.AddSeconds(-5), "before"),
+                Line(205, 100, null, "undated"),
+                Line(206, 999, agent.AddSeconds(5), "orphan"),
+                Line(1, 0, agent.AddDays(-1), "init")),
+        };
+
+        var table = new ProcessTable(HostDoubles.Platform(PlatformId.Windows), wmi)
+        {
+            MadeAt = (id, created) =>
+            {
+                asked.Add((id, created));
+                return new CreationOrder(created, sequences[id]);
+            },
+        };
+
+        var reading = await table.ReadAsync(Token);
+
+        Assert.Equal(
+            [(100, 1), (201, 100), (202, null), (203, 100), (204, null), (205, 100), (206, 999), (1, (int?)0)],
+            reading.Processes.Select(process => (process.Id, process.ParentId)));
+        Assert.Contains((100, agent.ToFileTime()), asked);
+    }
+
+    /// <summary>
     /// This machine's own table carries the program this test process runs, as the runtime names it - WMI's image path
     /// on Windows, the link /proc names on Linux, libproc's path on macOS -, each of the three systems by its own source.
     /// </summary>

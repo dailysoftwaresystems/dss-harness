@@ -201,20 +201,23 @@ public sealed class ProcessSamplerTests
         Assert.Equal(SamplingLimits.Always, report.Limits);
     }
 
+    /// <summary>
+    /// A process is placed by the parent the table names, and no start: one the table names as the harness's child is
+    /// inside its tree though a clock that stepped between their starts dates the harness after it - and one the table
+    /// names as no one's child, as it names a child of a later holder of a recycled id (<see cref="SampledProcess.ParentId"/>),
+    /// is not.
+    /// </summary>
     [Fact]
-    public void AParentThatStartedAfterItsChild_IsNotFollowed()
+    public void AProcessIsPlacedByTheParentTheTableNames_WhateverAClockSaysOfTheirStarts()
     {
-        // Process ids are recycled: on Windows a freed one was measured coming back after about a
-        // hundred allocations. Following that link would invent an ancestry.
         var child = new SampledProcess(4242, ParentId: 100, "ninja", DateTimeOffset.UnixEpoch.AddHours(1), "ninja -C build");
-        var recycled = new SampledProcess(100, ParentId: null, "harness", DateTimeOffset.UnixEpoch.AddHours(2), "harness");
+        var harness = new SampledProcess(100, ParentId: null, "harness", DateTimeOffset.UnixEpoch.AddHours(2), "harness");
+        var unnamed = child with { ParentId = null };
 
-        var table = new Dictionary<int, SampledProcess> { [child.Id] = child, [recycled.Id] = recycled };
-
-        Assert.False(ProcessSampler.InHarnessTree(child, table, harnessId: 100));
-
-        var honest = recycled with { StartedUtc = DateTimeOffset.UnixEpoch };
-        Assert.True(ProcessSampler.InHarnessTree(child, new Dictionary<int, SampledProcess> { [child.Id] = child, [honest.Id] = honest }, harnessId: 100));
+        Assert.Equal(
+            (true, false),
+            (ProcessSampler.InHarnessTree(child, new Dictionary<int, SampledProcess> { [child.Id] = child, [harness.Id] = harness }, harnessId: 100),
+                ProcessSampler.InHarnessTree(unnamed, new Dictionary<int, SampledProcess> { [unnamed.Id] = unnamed, [harness.Id] = harness }, harnessId: 100)));
     }
 
     /// <summary>

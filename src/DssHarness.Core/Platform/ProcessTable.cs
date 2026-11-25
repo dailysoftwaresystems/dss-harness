@@ -8,7 +8,16 @@ namespace DssHarness.Core.Platform;
 
 /// <summary>One process the machine was running when the table was read.</summary>
 /// <param name="Id">Its process id.</param>
-/// <param name="ParentId">The id of the process that started it, where the platform reports one.</param>
+/// <param name="ParentId">
+/// The id of the process that started it, where the platform reports one - and only where that is the very process this
+/// reading lists under the id, or none is listed under it: which process started which is the platform's own relation, the
+/// one the walk of a tree keeps (<see cref="Containment.EndTree"/>), decided as the table is read and never again above
+/// it. On Linux and macOS it is the parent the system names now, which a child is handed on from before its parent's id can
+/// be given out, so no start is compared. On Windows, which goes on naming a creator once it has gone and gives its id out
+/// again, a process listed under the id that was made after the child (<see cref="CreationOrder"/>: by their sequence
+/// numbers where both could be opened, by their creation times where either could not) is a later holder of the id, and
+/// no parent is named.
+/// </param>
 /// <param name="Name">The program's name, without a directory or an extension.</param>
 /// <param name="StartedUtc">
 /// When it started, where the platform reports it. Recorded beside the id because ids are recycled:
@@ -88,6 +97,15 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     private readonly IHostPlatform _platform = platform;
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IProcessKernel _kernel = kernel ?? new ProcessKernel(platform);
+
+    /// <summary>
+    /// When a process a Windows reading lists was made - by its id and its listed creation time, as a file time - as the
+    /// walk of a tree orders a creator and its child (<see cref="Containment.OrderOf(int, long)"/>): this machine's where
+    /// it is Windows, and the creation time alone elsewhere, where no handle to a Windows process can be opened; a test's
+    /// in its place, for a reading whose clock stepped.
+    /// </summary>
+    internal Func<int, long, CreationOrder> MadeAt { get; init; } = static (id, created)
+        => OperatingSystem.IsWindows() ? Containment.OrderOf(id, created) : new CreationOrder(created, Sequence: null);
 
     /// <summary>Why a platform query failed, in one line, with what it said.</summary>
     private static string HostFailure(string what, ProcessResult result)
@@ -187,7 +205,40 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                 fields.Length > 5 && fields[5].Length > 0 ? fields[5] : null));
         }
 
-        return (processes, null);
+        return (WithTheirCreators(processes), null);
+    }
+
+    /// <summary>
+    /// <paramref name="processes"/>, as a Windows reading lists them, each naming as its parent only the process that made
+    /// it (<see cref="SampledProcess.ParentId"/>): Windows goes on naming a creator once it has gone, and gives its id out
+    /// again, so a process listed under that id and made after the child (<see cref="CreationOrder"/>) is a later holder of
+    /// it, and none is named. Ordered as the walk of a tree orders a creator and its child, the clock deciding only where a
+    /// sequence number could not be read; a process the reading could not date keeps the parent it names, as nothing
+    /// tells it from that parent's.
+    /// </summary>
+    private List<SampledProcess> WithTheirCreators(List<SampledProcess> processes)
+    {
+        var listed = processes.GroupBy(process => process.Id).ToDictionary(same => same.Key, same => same.First());
+        var made = new Dictionary<int, CreationOrder?>();
+
+        CreationOrder? MadeOf(int id)
+        {
+            if (!made.TryGetValue(id, out var order))
+            {
+                order = listed.TryGetValue(id, out var process) && process.StartedUtc is { } started ? MadeAt(id, started.ToFileTime()) : null;
+                made[id] = order;
+            }
+
+            return order;
+        }
+
+        return [.. processes.Select(process => process.ParentId is { } parent
+            && listed.ContainsKey(parent)
+            && MadeOf(process.Id) is { } child
+            && MadeOf(parent) is { } creator
+            && child.MadeBefore(creator)
+                ? process with { ParentId = null }
+                : process)];
     }
 
     /// <summary>

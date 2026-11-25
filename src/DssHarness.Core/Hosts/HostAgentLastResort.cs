@@ -141,11 +141,13 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
     /// <param name="cancellationToken">Stops the reading.</param>
     /// <remarks>
     /// <para>
-    /// A process listed as its child that started before it did is some earlier process's, which held the same id, and
-    /// is left alone: Windows goes on naming a parent that has gone. Both starts are read from the one table, which
-    /// dates every process by the same clock - on Linux one that counts from the machine's start, and is no time of
-    /// day: held against this process's own start as the runtime tells it, every child there read as older than its
-    /// parent, and none was ended. A table that could not be read whole names no parents, and says why instead.
+    /// Which processes it started is the table's own relation (<see cref="SampledProcess.ParentId"/>), decided as the table
+    /// is read by the relation the walk of a tree keeps, and read here as it is, never decided again: on Linux and macOS
+    /// the parent the system names now, on Windows - which goes on naming a parent that has gone - the creator made before
+    /// the child, so one some earlier holder of the id started is never named its child, and left alone. No clock decides
+    /// it: a start read against another, a wall clock's that stepped, or one that counts from the machine's start held
+    /// against this process's own start as the runtime tells it, once read every child as older than its parent and
+    /// ended none. A table that could not be read whole names no parents, and says why instead.
     /// </para>
     /// <para>
     /// Nor is the console it runs in anything it started. Windows lists that - a <c>conhost</c> - as the child of a
@@ -198,16 +200,16 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
     }
 
     /// <summary>
-    /// The processes <paramref name="reading"/> lists as started by <paramref name="parent"/>, in the order of their ids:
-    /// never one that started before it did, nor the console it runs in (see <see cref="EndStartedByAsync"/>).
+    /// The processes <paramref name="reading"/> lists as started by <paramref name="parent"/>, by its own relation of which
+    /// started which (<see cref="SampledProcess.ParentId"/>), in the order of their ids: never the console it runs in (see
+    /// <see cref="EndStartedByAsync"/>).
     /// </summary>
     private static IEnumerable<SampledProcess> StartedBy(ProcessTableReading reading, IHostPlatform platform, int parent)
     {
-        var parentStarted = reading.Processes.FirstOrDefault(process => process.Id == parent)?.StartedUtc;
         var itsConsole = platform.Current == PlatformId.Windows;
 
         return reading.Processes
-            .Where(process => process.ParentId == parent && process.Id != parent && !(process.StartedUtc < parentStarted))
+            .Where(process => process.ParentId == parent && process.Id != parent)
             .Where(process => !(itsConsole && string.Equals(process.Name, ConsoleHost, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(process => process.Id);
     }

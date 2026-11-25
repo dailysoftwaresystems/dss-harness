@@ -269,7 +269,7 @@ member goes with it - one whose own security refuses another its end among them,
 it, and each is waited for by a handle that only waits and asks when it was created; and since its members also end when its last handle closes, what a killed
 engine leaves behind ends with it there. On Linux and macOS the runner ends the child's session as
 the child ends or is stopped - every process still in it, and at a stop every one still in the
-child's tree, read before anything is signalled, asked to end with SIGTERM and waited for while
+child's tree, as the process table names each parent (`SampledProcess.ParentId`, no start compared), read before anything is signalled, asked to end with SIGTERM and waited for while
 any of it stands, a zombie - which nothing may ever reap - standing for none and a process still in
 its exit standing until it is one, one the harness may not signal - another user's - not waited for,
 and the group for none once every member it is listed to hold is one, never by a signal alone, which
@@ -4747,8 +4747,8 @@ refused to every agent where a word of a command or of a script the policy reads
 the shell expands may, and refusing itself where the agent's mark, `AgentChildEnvironment.AgentMarker`,
 is in its environment, a command that sets it, takes it away, may take it away or names it but as data refused
 (`AgentPolicy.MarkerTouched`), or where a process of this tool's is among the ones that started it
-(`AgentAncestry`, over the process table's seam: the tree walked parent by parent, a process that took a
-freed id - started after the child that names it - never read as a parent, the tool - its own runtime, as the engine is -
+(`AgentAncestry`, over the process table's seam: the tree walked parent by parent as the table names each, a process
+that took a freed id never read as a parent (`SampledProcess.ParentId`, below), the tool - its own runtime, as the engine is -
 told by the file the table gives a process: a runtime whose application - the first word past its own options, never
 an argument of it - is the tool's assembly, the file this process runs as, or a host of the tool's package
 (`ToolPackage.HostsPackage`: a file of the tool's command beside the tool's assembly, as a build puts it, or beside the
@@ -6782,9 +6782,10 @@ running, or writing a line nobody reads - is ended by the agent's last resort, a
 agent itself is stopped meanwhile
 (`HostAgentLastResort`): every process the agent started, each with its tree, as the process table
 lists them, then the agent itself, exit 130, whatever the ending of them came to. Which processes
-those are is read from one table: the parent's start and each child's by the same clock - on Linux
-one that counts from the machine's start, so that held against the agent's own start as the
-runtime tells it every child read as older than its parent and none was ended - and never the
+those are is the table's own relation of which process started which (`SampledProcess.ParentId`,
+below), read as it is and never decided again by a clock - one that counts from the machine's start,
+held against the agent's own start as the runtime tells it, once read every child as older than its
+parent and ended none - and never the
 console the agent runs in, which Windows lists as its child (`conhost`) and ends everything in the
 console with. The agent's last line says what that came to: each process ended, by its id, each it
 could not end, or why none could be listed. That line and the request's completion line are handed
@@ -7965,8 +7966,16 @@ while a gate ran turned a green suite red, with four test processes live at once
   child made a slow launch on a loaded machine read as a hung command. A child that starts and then
   says nothing is still bounded, because starting is itself something the clock is told about.
 - A process is identified by its id together with a stamp that tells it from the next
-  holder of that id, and a parent link is followed only when the parent started no later
-  than the child. Process ids are recycled: on Windows a freed id was measured coming back
+  holder of that id, and a parent link is the table's own relation of which process started
+  which (`SampledProcess.ParentId`), decided as the table is read by the relation the walk of a
+  tree keeps and read as it is by every reader - the sampler's placing of a process in the
+  harness's tree, an agent's ancestry, the host agent's last resort, an update's wait on what
+  started it: on Linux and macOS the parent the system names now, which a child is handed on from
+  before its parent's id is given out, so no start is compared; on Windows, which goes on naming
+  a creator once it has gone, a process listed under the creator's id that was made after the
+  child is a later holder of it and no parent is named - made after read by the sequence numbers
+  Windows gives the two where both can be opened, by their creation times where either cannot
+  (`CreationOrder`). Process ids are recycled: on Windows a freed id was measured coming back
   after about a hundred allocations.
 - **That stamp holds no clock.** On Linux it is the boot this machine is on and the tick
   within it the process started, read from `/proc`; on Windows and macOS it is the start

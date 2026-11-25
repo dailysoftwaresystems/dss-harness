@@ -845,16 +845,28 @@ internal static class Containment
     /// <summary>When the process <paramref name="kept"/> holds was made, as the walk orders it.</summary>
     private static CreationOrder OrderOf(KeptProcess kept) => new(kept.Created, kept.Handle is { } handle ? SequenceOf(handle) : null);
 
-    /// <summary>
-    /// When the process <paramref name="listed"/> names was made, as the walk orders it: its sequence number read from a
-    /// handle opened to ask it, where that is the very process the list named; its creation time alone where none could be.
-    /// </summary>
-    private static CreationOrder OrderOf(ListedProcess listed)
-    {
-        using var read = Opened(listed.Id, Windows.ReadCreation, out _);
+    /// <summary>When the process <paramref name="listed"/> names was made, as the walk orders it (<see cref="OrderOf(int, long)"/>).</summary>
+    private static CreationOrder OrderOf(ListedProcess listed) => OrderOf(listed.Id, listed.Created);
 
-        return new CreationOrder(listed.Created, read is not null && CreatedOf(read) == listed.Created ? SequenceOf(read) : null);
+    /// <summary>
+    /// When the process <paramref name="id"/> names was made, on Windows, as the walk orders a creator and its child, where
+    /// it is the very process a reading listed as created at <paramref name="created"/>: its sequence number, read from a
+    /// handle opened to ask it, whose own creation time is the listed one to the microsecond - all a creation date WMI
+    /// gives holds -; its creation time alone where none could be opened, or the id is another's since. The one reading of
+    /// a listed process's order: the walk's chain of parents and the process table's relation of which process started
+    /// which (<see cref="Platform.ProcessTable"/>) both make it.
+    /// </summary>
+    /// <param name="id">The process's id.</param>
+    /// <param name="created">When the reading listed it created, as a file time.</param>
+    internal static CreationOrder OrderOf(int id, long created)
+    {
+        using var read = Opened(id, Windows.ReadCreation, out _);
+
+        return new CreationOrder(created, read is not null && CreatedOf(read) / FileTimeMicrosecond == created / FileTimeMicrosecond ? SequenceOf(read) : null);
     }
+
+    /// <summary>A microsecond, in a file time's hundreds of nanoseconds.</summary>
+    private const long FileTimeMicrosecond = 10;
 
     /// <summary>
     /// The sequence number Windows gave the process <paramref name="handle"/> holds as it created it (ProcessSequenceNumber):
@@ -1335,7 +1347,10 @@ internal static class Containment
 
     /// <summary>
     /// Every process of <paramref name="reading"/> in the session or the group <paramref name="leader"/>
-    /// leads, and while the leader stands every one in its tree: the leader itself among them.
+    /// leads, and while the leader stands every one in its tree, as the reading names each parent
+    /// (<see cref="SampledProcess.ParentId"/>, through <see cref="ProcessSampler.InHarnessTree"/>) - the parent the
+    /// system names now, with no start compared, so a clock that stepped between two starts drops no link: the leader
+    /// itself among them.
     /// </summary>
     /// <remarks>
     /// The tree is read only while its root still leads what it led. One that has ended is no

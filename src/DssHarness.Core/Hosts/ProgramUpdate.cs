@@ -114,7 +114,8 @@ public sealed class ProgramUpdate(IProcessRunner processRunner, IHostPlatform pl
 
     /// <summary>
     /// The nearest of <paramref name="running"/> that started the process <paramref name="currentId"/>,
-    /// through whatever it started in between, or <see langword="null"/>.
+    /// through whatever it started in between, or <see langword="null"/>: walked by each process's parent as the table names
+    /// it (<see cref="SampledProcess.ParentId"/>), which never names a later holder of a parent's id.
     /// </summary>
     /// <param name="table">The machine's processes, as it was read.</param>
     /// <param name="running">The program's running processes.</param>

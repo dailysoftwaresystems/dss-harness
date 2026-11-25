@@ -11,52 +11,51 @@ public sealed class HostAgentLastResortTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// The agent's last resort ends every process the table lists as started by the one named, and no other: not one
-    /// another process started, and not one listed as its child that started before it did - some earlier process's,
-    /// which held the same id, as Windows goes on naming a parent that has gone. Both starts are read from the one
-    /// table, whatever its clock counts from: a time of day, or - as on Linux - the seconds since the machine started,
-    /// which held against this process's own start as the runtime tells it read every child as older than its parent.
+    /// The agent's last resort ends every process the table names as started by the one named - the table's own relation
+    /// of which process started which (<see cref="SampledProcess.ParentId"/>) - and no other, never deciding it again by a
+    /// clock: one the table names as its child is ended though a clock that stepped between their starts dates it before
+    /// its parent, as is one the table could not date; one another process started is not, nor one the table names as no
+    /// one's child, as it names a child of some earlier holder of the id - Windows goes on naming a parent that has gone.
     /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task TheLastResort_EndsWhatTheProcessStarted_AndNothingItDidNot_HoweverTheTableDatesThem(bool sinceTheMachineStarted)
+    [Fact]
+    public async Task TheLastResort_EndsWhatTheTableNamesTheProcessAsStarting_AndNothingElse_WhateverAClockSaysOfTheirStarts()
     {
         const int Parent = 424242;
-        var parentStarted = sinceTheMachineStarted ? DateTimeOffset.UnixEpoch.AddSeconds(86_400) : DateTimeOffset.UtcNow.AddMinutes(-1);
+        var parentStarted = DateTimeOffset.UtcNow.AddMinutes(-1);
 
         using var started = Sleeping();
-        using var earlier = Sleeping();
+        using var stepped = Sleeping();
         using var anothers = Sleeping();
         using var undated = Sleeping();
+        using var earlierHolders = Sleeping();
 
         try
         {
             var table = new ListedProcesses(
                 new SampledProcess(started.Id, Parent, "child", parentStarted.AddSeconds(5), null),
-                new SampledProcess(earlier.Id, Parent, "child", parentStarted.AddSeconds(-5), null),
+                new SampledProcess(stepped.Id, Parent, "child", parentStarted.AddSeconds(-5), null),
                 new SampledProcess(anothers.Id, Parent + 1, "child", parentStarted.AddSeconds(5), null),
                 new SampledProcess(Parent, 1, "agent", parentStarted, null),
-
-                // One the table could not date is the agent's all the same: only a start known to be earlier clears it.
                 new SampledProcess(undated.Id, Parent, "child", null, null),
+                new SampledProcess(earlierHolders.Id, null, "child", parentStarted.AddSeconds(5), null),
 
                 // One that ended since it was listed is passed over, and the rest still go.
                 new SampledProcess(int.MaxValue - 7, Parent, "gone", parentStarted.AddSeconds(5), null));
 
             var outcome = await HostAgentLastResort.EndStartedByAsync(table, HostDoubles.Platform(PlatformId.Linux, "x64"), Parent, Token);
 
-            Assert.Equal(new[] { started.Id, undated.Id }.Order(), outcome.Ended);
+            Assert.Equal(new[] { started.Id, stepped.Id, undated.Id }.Order(), outcome.Ended);
             Assert.Empty(outcome.Left);
             Assert.Null(outcome.Unlisted);
             Assert.True(started.WaitForExit(TimeSpan.FromSeconds(30)), "The process it started was left running.");
+            Assert.True(stepped.WaitForExit(TimeSpan.FromSeconds(30)), "The process it started, which a clock that stepped dates before it, was left running.");
             Assert.True(undated.WaitForExit(TimeSpan.FromSeconds(30)), "The process it started, which the table could not date, was left running.");
-            Assert.False(earlier.HasExited, "A process some earlier holder of the id started was ended.");
+            Assert.False(earlierHolders.HasExited, "A process the table names as no one's child was ended.");
             Assert.False(anothers.HasExited, "A process another started was ended.");
         }
         finally
         {
-            foreach (var process in new[] { started, earlier, anothers, undated })
+            foreach (var process in new[] { started, stepped, anothers, undated, earlierHolders })
             {
                 if (!process.HasExited)
                 {

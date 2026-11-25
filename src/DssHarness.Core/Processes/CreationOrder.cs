@@ -1,8 +1,9 @@
 namespace DssHarness.Core.Processes;
 
 /// <summary>
-/// When a process of Windows was made, as the walk of a tree (<see cref="Containment.EndTree"/>) and the chain of this
-/// process's own parents order a creator and a child Windows' list of every process names as made by it: by the sequence
+/// When a process of Windows was made, as the walk of a tree (<see cref="Containment.EndTree"/>), the chain of this
+/// process's own parents and the process table's relation of which process started which
+/// (<see cref="Platform.SampledProcess.ParentId"/>) order a creator and a child Windows names as made by it: by the sequence
 /// number Windows gives each process as it creates it (ProcessSequenceNumber) - counted up once a boot, so a process made
 /// later always holds a higher one, and never moved by the clock - where both of the two could be opened to read theirs,
 /// and by their creation times where either could not.
