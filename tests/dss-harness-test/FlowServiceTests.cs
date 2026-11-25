@@ -2378,12 +2378,12 @@ public sealed class FlowServiceTests
     /// <summary>
     /// A session of a run already made begun from inside a session a sweep keeps - a step's own script in the session a
     /// contained child of a killed engine leads - is refused (13) at its claim of the run, naming the record and saying to
-    /// run the command from outside: no owner is left written, nothing of the run is answered, and this process never
-    /// becomes the run's engine inside what the next command from outside ends - whether the record is the run's own or
-    /// another orchestrator's of the repository, which the claim sweeps as list-orchestrator does: a resume, a new answer
-    /// to the run's open question, and a changed answer (<c>--again</c>) alike. Run where it would act on itself: the
-    /// command runs in a child the session's leader starts (<see cref="EngineFromInside"/>), every process the test's own,
-    /// bounded, and ended on every path.
+    /// run the command from outside: the owner that killed engine left is left as it was, the claim refused before it took
+    /// it, nothing of the run is answered, and this process never becomes the run's engine inside what the next command
+    /// from outside ends - whether the record is the run's own or another orchestrator's of the repository, which the claim
+    /// sweeps as list-orchestrator does: a resume, a new answer to the run's open question, and a changed answer
+    /// (<c>--again</c>) alike. Run where it would act on itself: the command runs in a child the session's leader starts
+    /// (<see cref="EngineFromInside"/>), every process the test's own, bounded, and ended on every path.
     /// </summary>
     [Theory]
     [InlineData("resume", "r1")]
@@ -2392,7 +2392,7 @@ public sealed class FlowServiceTests
     [InlineData("answer", "o0")]
     [InlineData("again", "r1")]
     [InlineData("again", "o0")]
-    public async Task ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_NoOwnerWritten_NothingAnswered(string command, string recordedIn)
+    public async Task ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_ItsDeadOwnerLeftAsItWas_NothingAnswered(string command, string recordedIn)
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
 
@@ -2409,6 +2409,7 @@ public sealed class FlowServiceTests
         }
 
         var run = RunOf(repository);
+        var (gone, written) = await GoneOwnerAsync(repository, run);
         var questions = File.ReadAllText(run.QuestionsFile);
         var holding = AnotherOrchestrator(repository, recordedIn);
         var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, recordedIn, command));
@@ -2422,24 +2423,49 @@ public sealed class FlowServiceTests
                 $"exit={HarnessExit.Refused}",
                 $"holder={caller}",
                 "kept=True",
-                "owner=none",
+                $"owner={gone}",
                 $"runs={string.Join(",", new[] { "o0", "r1" }.Where(name => name == "r1" || recordedIn == "o0"))}",
                 $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
                     + $"inside it would be ended with it by the next command run from outside. Run {(command == "resume" ? FlowService.ResumeCommand : FlowService.AnswerCommand)} "
                     + "from outside it. Nothing was changed.",
             ],
             lines);
-        Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+        Assert.Equal(written, File.ReadAllText(run.OwnerFile));
         Assert.Equal(questions, File.ReadAllText(run.QuestionsFile));
+    }
+
+    /// <summary>
+    /// Writes as <paramref name="run"/>'s owner an engine that has gone - a process of the test's own, ended once its start
+    /// was read - the owner a killed engine leaves; answers its id and the owner file as it was written.
+    /// </summary>
+    private static async Task<(int Id, string Written)> GoneOwnerAsync(Repository repository, OrchestratorLayout run)
+    {
+        var identity = repository.Harness.Identity;
+        using var engine = Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
+        string stamp;
+
+        try
+        {
+            stamp = identity.StampOf(engine.Id) ?? throw new InvalidOperationException($"the start of the engine {engine.Id} could not be read");
+        }
+        finally
+        {
+            engine.Kill();
+            await engine.WaitForExitAsync(Token);
+        }
+
+        repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(identity.CurrentMachine, engine.Id, DateTimeOffset.UtcNow, stamp));
+        return (engine.Id, File.ReadAllText(run.OwnerFile));
     }
 
     /// <summary>
     /// An answer handed to the engine running the run, from inside a session a step of that engine's leads - the step's own
     /// script answering the run's question - whose engine dies while the answer waits on it, is refused (13) at the claim
-    /// the answer then makes as the run's next session: the claim sweeps every run there, after its own look at the owner,
-    /// so the record the dead engine left of that session - kept, for it holds this very process - refuses it, though the
-    /// command's first sweep, made while the engine stood, left that record as its live owner's. No owner is left written,
-    /// the record is kept, and the answer is said to stay in the inbox for the next session of the run. Run where it would
+    /// the answer then makes as the run's next session: the claim sweeps every run there, once its own look has found the
+    /// owner gone and before it takes it, so the record the dead engine left of that session - kept, for it holds this very
+    /// process - refuses it, though the command's first sweep, made while the engine stood, left that record as its live
+    /// owner's. The dead engine's owner is left as it was, the record is kept, and the answer is said to stay in the inbox
+    /// for the next session of the run. Run where it would
     /// act on itself: the answer runs in a child the session's leader starts (<see cref="EngineFromInside"/>), the engine
     /// is a process of the test's own, ended once the answer is in the inbox, and every process is ended on every path.
     /// </summary>
@@ -2464,6 +2490,7 @@ public sealed class FlowServiceTests
             var stamp = identity.StampOf(engine.Id) ?? throw new InvalidOperationException($"the start of the engine {engine.Id} could not be read");
 
             store.WriteOwner(run, new RunOwner(identity.CurrentMachine, engine.Id, DateTimeOffset.UtcNow, stamp));
+            var written = File.ReadAllText(run.OwnerFile);
 
             // The engine dies once the answer is handed to it, while the answer waits on it.
             var dying = Task.Run(async () =>
@@ -2494,13 +2521,13 @@ public sealed class FlowServiceTests
                     $"exit={HarnessExit.Refused}",
                     $"holder={caller}",
                     "kept=True",
-                    "owner=none",
+                    $"owner={engine.Id}",
                     "runs=r1",
                     $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
                         + $"inside it would be ended with it by the next command run from outside. Run {FlowService.AnswerCommand} from outside it. Nothing was changed.",
                 ],
                 lines);
-            Assert.Null(store.ReadOwner(run));
+            Assert.Equal(written, File.ReadAllText(run.OwnerFile));
             Assert.Equal(("q1", "go"), (Assert.Single(store.ReadInbox(run)!.Answers).Question, Assert.Single(store.ReadInbox(run)!.Answers).Answer));
         }
         finally
@@ -2568,7 +2595,7 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// The child's side of <see cref="ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_NoOwnerWritten_NothingAnswered"/>,
+    /// The child's side of <see cref="ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_ItsDeadOwnerLeftAsItWas_NothingAnswered"/>,
     /// <see cref="AnAnswerWaitingOnAnEngineThatDies_IsRefusedAtItsClaim_FromInsideASessionThatEnginesRecordKeeps"/> and
     /// <see cref="ARunStartedFromInsideASessionASweepKept_IsRefused_NothingOfItMade"/>: records the session the process that
     /// started it leads in step <c>s1</c> of the orchestrator <c>arguments[1]</c> of the repository at <c>arguments[0]</c> -

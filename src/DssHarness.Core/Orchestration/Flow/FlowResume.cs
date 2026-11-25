@@ -389,11 +389,14 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     /// Claims the run for this process: refused (13) where a live owner holds it - an engine that paused its run and
     /// is still recording the machine steps the pause left running is a live owner like any other - and a dead one is
     /// reclaimed and said. Called inside the repository's one section, so two sessions can never both claim one run.
+    /// Once the owner is found gone, or none is recorded, and before this process takes the run, <paramref name="taking"/>
+    /// decides what the claim still waits on - a refusal it throws leaves the owner file as it was.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
+    /// <param name="taking">What is decided at the claim itself, once no live owner holds the run; null where nothing is.</param>
     /// <returns>What is said of a dead owner's record reclaimed; null where none was recorded.</returns>
-    /// <exception cref="HarnessException">A live owner holds the run (<see cref="HarnessExit.Refused"/>).</exception>
-    public string? Claim(OrchestratorLayout layout)
+    /// <exception cref="HarnessException">A live owner holds the run, or <paramref name="taking"/> refuses it (<see cref="HarnessExit.Refused"/>).</exception>
+    public string? Claim(OrchestratorLayout layout, Action? taking = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -401,7 +404,8 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
             layout.OwnerFile,
             OrchestrationStore.OwnerKind,
             $"run '{layout.Name}'",
-            held => $"run '{layout.Name}' is owned by a live engine ({held}); stop-orchestrator {layout.Name} ends it, or wait for the engine to leave it. Nothing was changed.");
+            held => $"run '{layout.Name}' is owned by a live engine ({held}); stop-orchestrator {layout.Name} ends it, or wait for the engine to leave it. Nothing was changed.",
+            taking);
     }
 
     /// <summary>

@@ -176,12 +176,14 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// refused by name, with no owner written beside it - the test for another unfinished run, leaving out
     /// <paramref name="run"/>, the run's owner claimed - refused where a live one holds it, a dead one reclaimed and said -
     /// and a request no engine took removed, so it never reaches this session - where it cannot be taken, the claim just
-    /// made is let go before the refusal, so no owner is left behind by a session that never began. Once the claim - the last
-    /// look at a live owner - is made, every run of the repository is swept (<paramref name="sweep"/>), which ends what a dead
-    /// engine left before this session runs beside it, and a session where it keeps a record because its session holds this
-    /// very process is refused, the claim let go: a session of the run inside it would be ended with it by the next command
-    /// run from outside, which ends what the record names. Swept there, what it keeps is never older than the claim: an
-    /// owner the command saw standing - one an answer was handed to and waited on - and gone since is swept with the rest.
+    /// made is let go before the refusal, so no owner is left behind by a session that never began. Once the claim's last
+    /// look at the owner has found it gone, or none, and before the claim takes it, every run of the repository is swept
+    /// (<paramref name="sweep"/>), which ends what a dead engine left before this session runs beside it, and a session
+    /// where it keeps a record because its session holds this very process is refused, the owner file left as it was: a
+    /// session of the run inside it would be ended with it by the next command run from outside, which ends what the
+    /// record names. Swept there, what it keeps is never older than the claim - an owner seen gone inside the section
+    /// cannot come back, and a live one is never claimed - so an owner the command saw standing - one an answer was handed
+    /// to and waited on - and gone since is swept with the rest.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
@@ -192,7 +194,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <exception cref="HarnessException">
     /// The run is gone, another run of the repository is unfinished, a live engine owns the run, or the sweep keeps a record
     /// whose session holds this very process (<see cref="HarnessExit.Refused"/>); or a request left for an engine that ended
-    /// cannot be taken. A refusal after the claim - the sweep's, or the request's - lets the claim this process made go first.
+    /// cannot be taken, the claim this process made let go first. The sweep's refusal comes before the claim is made.
     /// </exception>
     public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, Func<ChildSweep> sweep, string command, CancellationToken cancellationToken = default)
     {
@@ -213,15 +215,16 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             RefuseAnotherUnfinished(layout, run.Name, differing);
 
             var owner = new FlowRunOwner(_store, _identity, _clock);
-            var reclaimed = owner.Claim(run);
-
-            try
+            var reclaimed = owner.Claim(run, taking: () =>
             {
                 if (sweep().Refusal($"run '{run.Name}' was not taken", "a session of the run inside it would be ended with it by the next command run from outside", command) is { } holding)
                 {
                     throw new HarnessException(HarnessExit.Refused, holding);
                 }
+            });
 
+            try
+            {
                 // A pause or a stop asked of an engine that ended before it took it was asked of that engine, and of no
                 // session after it.
                 _ = _store.TakeStopFile(run);

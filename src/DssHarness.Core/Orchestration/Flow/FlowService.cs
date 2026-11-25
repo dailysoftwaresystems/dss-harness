@@ -1571,9 +1571,10 @@ public sealed class FlowService(
     /// <summary>
     /// The sweep of every run of the repository, as <c>list-orchestrator</c> sweeps them, that each act making this process a
     /// run's engine reads at the act itself - a new run's start (<see cref="FlowSessions.CreateAsync"/>) and a session's claim
-    /// of a run already made (<see cref="FlowSessions.ClaimAsync"/>), inside the section that decides the run's owner, after
-    /// its last look at a live owner - so a record kept because its session holds this process refuses the engine whatever
-    /// owner stood when the command began: one an answer was handed to and waited on among them.
+    /// of a run already made (<see cref="FlowSessions.ClaimAsync"/>), inside the section that decides the run's owner, once
+    /// its last look at the owner has found it gone or none and before the run is made or the owner taken - so a record kept
+    /// because its session holds this process refuses the engine whatever owner stood when the command began, one an answer
+    /// was handed to and waited on among them, and the refusal leaves the owner file as it was.
     /// </summary>
     /// <param name="context">The repository.</param>
     /// <param name="command">The command sweeping, which its lines name.</param>

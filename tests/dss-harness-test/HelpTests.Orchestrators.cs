@@ -501,8 +501,9 @@ public sealed partial class HelpTests
             + "and run-orchestrator, resume-orchestrator and answer-orchestrator, which would make the command a run's engine "
             + "inside it, are refused (13), naming the record, nothing changed - each over a sweep taken at the act itself: "
             + "delete-orchestrator its orchestrator's right before the removal, the others every run of the repository's, as "
-            + "list-orchestrator sweeps them, once their last look at the run's owner is made, so an owner gone since the "
-            + "command began - one an answer was handed to among them - is swept with the rest; one whose id a later process "
+            + "list-orchestrator sweeps them, once their last look at the run's owner has found none live, before it is taken, "
+            + "so an owner gone since the command began - one an answer was handed to among them - is swept with the rest, and "
+            + "a refusal leaves the owner as it was; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
             + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
             + "that started it.",
