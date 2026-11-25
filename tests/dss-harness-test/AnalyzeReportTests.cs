@@ -426,7 +426,7 @@ public sealed class AnalyzeReportTests
     [Fact]
     public void EachPlaceholder_IsWrittenAsItsCitedValue_InTheUnitTheReportHoldsItIn()
     {
-        const string Template = "q1 waited {1} and b {2} on the path; the run reasoned {3} and spent {4} on model-y, {5} of its input read from the cache; b used {6} over {7} tries, a ran {8} and c-rate was reopened {9} times.";
+        const string Template = "q1 waited {1} and b {2} on the path; the run reasoned {3} and spent {4} on model-y, {5} of its input read from the cache; b used {6} over {7}, a ran {8} and c-rate had {9}.";
         var source = FlowRunReportTests.Source();
         var report = FlowRunReport.Of(source with
         {
@@ -453,7 +453,7 @@ public sealed class AnalyzeReportTests
         var rendered = FlowAnalysisEvidence.Rendered(answer, report, out var problems)!;
         var analysis = System.Text.Json.JsonSerializer.Deserialize<FlowAnalysis>(rendered, DssHarness.Core.FileSystem.JsonStateFile.Options)!;
         var point = Assert.Single(analysis.PainPoints);
-        const string Written = "q1 waited 60.0 s and b 30.0 s on the path; the run reasoned 90.0 minutes and spent 0.0200 USD on model-y, 28.0% of its input read from the cache; b used 100500 tokens over 2 tries, a ran 10.0 s and c-rate was reopened 2 times.";
+        const string Written = "q1 waited 60.0 s and b 30.0 s on the path; the run reasoned 90.0 minutes and spent 0.0200 USD on model-y, 28.0% of its input read from the cache; b used 100500 tokens over 2 tries, a ran 10.0 s and c-rate had 2 reopens.";
 
         Assert.Empty(problems);
         Assert.Equal((Written, Template), (point.Impact, point.ImpactTemplate));
@@ -489,6 +489,7 @@ public sealed class AnalyzeReportTests
                 $"painPoints[0].impact: writes '(20)', {OfItsOwn}",
                 $"painPoints[0].impact: writes '$0.02,', {OfItsOwn}",
                 $"painPoints[0].impact: writes '½', {OfItsOwn}",
+                $"painPoints[0].impact: {{1}} touches '0' after it - a placeholder stands apart from every letter, number, currency's sign, % and sign before it, for the tool writes the figure with its own unit; leave the unit to it",
                 $"painPoints[0].impact: writes '{{1}}0', {OfItsOwn}",
                 $"painPoints[0].impact: writes 'b@2', {OfItsOwn}",
             ],
@@ -595,6 +596,151 @@ public sealed class AnalyzeReportTests
     }
 
     /// <summary>
+    /// Every count the report holds is said with what it counts, one and more than one, and every number that is no
+    /// amount after its label - a failed attempt's exception and first error after the path of the member that holds it -
+    /// so no figure of an impact is ever written as a bare number a word beside it could make a cost or a time. Pinned for
+    /// every such member of the report's one table of units.
+    /// </summary>
+    [Fact]
+    public void EveryCountTheReportHolds_IsSaidWithWhatItCounts()
+    {
+        static string Said(string path, string member)
+        {
+            var unit = FlowRunReport.Units[path];
+            return $"{path}: {FlowRunReport.SaidIn(unit, JsonValue.Create(1), member)} / {FlowRunReport.SaidIn(unit, JsonValue.Create(2), member)}";
+        }
+
+        Assert.Equal(
+            [
+                "theRun.sessions: 1 session / 2 sessions",
+                "totals.tokens.searches: 1 search / 2 searches",
+                "totals.agents: 1 agent / 2 agents",
+                "totals.stepsRun: 1 step run / 2 steps run",
+                "totals.stepsSkipped: 1 step skipped / 2 steps skipped",
+                "totals.stepsFailed: 1 step failed / 2 steps failed",
+                "totals.retries: 1 retry / 2 retries",
+                "totals.fallbacks: 1 fallback / 2 fallbacks",
+                "totals.graph.steps: 1 step given a graph / 2 steps given a graph",
+                "totals.graph.calls: 1 graph call / 2 graph calls",
+                "totals.graph.bodies: 1 body served / 2 bodies served",
+                "totals.graph.textHits: 1 text hit / 2 text hits",
+                "totals.graph.edits.made: 1 graph edit made / 2 graph edits made",
+                "totals.graph.edits.refused: 1 graph edit refused / 2 graph edits refused",
+                "totals.graph.wholeFileReads.count: 1 whole-file read / 2 whole-file reads",
+                "totals.graph.deniedReads: 1 denied read / 2 denied reads",
+                "totals.graph.escapes.count: 1 graph escape / 2 graph escapes",
+                "totals.graph.escapes.lowConfidence: 1 low-confidence escape / 2 low-confidence escapes",
+                "totals.graph.escapes.stated: 1 stated escape / 2 stated escapes",
+                "steps[].tries: 1 try / 2 tries",
+                "steps[].exit: exit 1 / exit 2",
+                "steps[].graph.pack.seeds: 1 pack seed / 2 pack seeds",
+                "steps[].graph.pack.nodes: 1 pack node / 2 pack nodes",
+                "steps[].graph.pack.used: 1 pack node used / 2 pack nodes used",
+                "steps[].graph.calls: 1 graph call / 2 graph calls",
+                "steps[].graph.bodies: 1 body served / 2 bodies served",
+                "steps[].graph.textHits: 1 text hit / 2 text hits",
+                "steps[].graph.edits.made: 1 graph edit made / 2 graph edits made",
+                "steps[].graph.edits.refused: 1 graph edit refused / 2 graph edits refused",
+                "steps[].graph.wholeFileReads.count: 1 whole-file read / 2 whole-file reads",
+                "steps[].graph.deniedReads: 1 denied read / 2 denied reads",
+                "steps[].graph.escapes.count: 1 graph escape / 2 graph escapes",
+                "steps[].graph.escapes.lowConfidence: 1 low-confidence escape / 2 low-confidence escapes",
+                "steps[].graph.escapes.stated: 1 stated escape / 2 stated escapes",
+                "errors[].attempt: attempt 1 / attempt 2",
+                "errors[].exit: exit 1 / exit 2",
+                "errors[].exception: exception stackCut 1 / exception stackCut 2",
+                "errors[].firstError: firstError line 1 / firstError line 2",
+                "convergence.items[].reviewRounds: 1 review round / 2 review rounds",
+                "convergence.items[].homeAudits: 1 home audit / 2 home audits",
+                "convergence.items[].classes[].sitesConsolidated: 1 site consolidated / 2 sites consolidated",
+                "convergence.items[].classes[].sitesDeleted: 1 site deleted / 2 sites deleted",
+                "convergence.items[].classes[].cellsPinned: 1 cell pinned / 2 cells pinned",
+                "convergence.items[].classes[].neighboursMeasured: 1 neighbour measured / 2 neighbours measured",
+                "convergence.items[].classes[].neighboursUnmeasured: 1 neighbour unmeasured / 2 neighbours unmeasured",
+                "convergence.items[].classes[].sendBacks: 1 send-back / 2 send-backs",
+                "convergence.classesReopened[].reopens: 1 reopen / 2 reopens",
+                "convergence.hotspots[].touches: 1 touch / 2 touches",
+            ],
+            FlowRunReport.Units
+                .Where(entry => entry.Value.Kind is FlowUnitKind.Counted or FlowUnitKind.Labelled)
+                .Select(entry => Said(entry.Key, entry.Key switch { "errors[].exception" => "exception.stackCut", "errors[].firstError" => "firstError.line", _ => "unread" })));
+    }
+
+    /// <summary>
+    /// A placeholder stands apart from what would make its figure another measure: a letter, a number, a currency's sign
+    /// or a percent touching it on either side, or a sign before it, is refused - a cited count of tries written after a
+    /// dollar's sign is no cost of two dollars, and a wait glued to an h no hours - while brackets, Markdown's marks and
+    /// punctuation leave it its own, and a cited count is written with what it counts.
+    /// </summary>
+    [Fact]
+    public void APlaceholderTouchingALetterANumberASignOrPercent_IsRefused()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        var evidence = string.Join(",", Cited("steps", "b", "tries", "2"), Cited("criticalPath", "b", "seconds", "30.0"));
+        const string Touches = "a placeholder stands apart from every letter, number, currency's sign, % and sign before it, for the tool writes the figure with its own unit; leave the unit to it";
+
+        Assert.Equal(
+            "b ran 2 tries (30.0 s), **2 tries**, `30.0 s`; 2 tries - 30.0 s.",
+            FlowAnalysisEvidence.Rendered(AnalysisOf(evidence, "b ran {1} ({2}), **{1}**, `{2}`; {1} - {2}."), report, out var problems)!["painPoints"]![0]!["impact"]!.GetValue<string>());
+        Assert.Empty(problems);
+        Assert.Equal(
+            [
+                $"painPoints[0].impact: {{1}} touches '$' before it - {Touches}",
+                $"painPoints[0].impact: {{2}} touches 'h' after it - {Touches}",
+                $"painPoints[0].impact: {{1}} touches 'k' after it - {Touches}",
+                $"painPoints[0].impact: {{1}} touches '%' after it - {Touches}",
+                $"painPoints[0].impact: {{2}} touches '$' before it - {Touches}",
+                $"painPoints[0].impact: {{1}} touches '€' before it - {Touches}",
+                $"painPoints[0].impact: {{2}} touches '-' before it - {Touches}",
+                $"painPoints[0].impact: {{1}} touches 'z' before it and 'z' after it - {Touches}",
+            ],
+            FlowAnalysisEvidence.Problems(AnalysisOf(evidence, "b's retries cost ${1}, took {2}h, {1}k, {1}%, US${2}, €{1}, -{2} and z{1}z."), report));
+    }
+
+    /// <summary>
+    /// The analysis as a whole states no number of its own: the summary, each pain point's title and cause, and each thing
+    /// noted and why are refused for a numeral outside an id the report or a citation holds, each at its member, for its
+    /// figures are its impacts' and its citations'; a recommendation states the values it proposes and is held as written.
+    /// </summary>
+    [Fact]
+    public void EveryTextOfTheAnalysisButItsRecommendation_HoldsNoNumberOfItsOwn()
+    {
+        var report = FlowRunReport.Of(FlowRunReportTests.Source());
+        JsonNode Analysis(string summary, string title, string cause, string what, string why)
+            => new JsonObject
+            {
+                ["summary"] = summary,
+                ["painPoints"] = new JsonArray(new JsonObject
+                {
+                    ["title"] = title,
+                    ["severity"] = "high",
+                    ["where"] = new JsonArray("b"),
+                    ["evidence"] = JsonNode.Parse($"[{Cited("criticalPath", "b", "seconds", "30.0")}]"),
+                    ["impact"] = "b waited {1}.",
+                    ["cause"] = cause,
+                    ["recommendation"] = "Set maxRetries: 2 and defaults.report.top: 5 in flow.yml.",
+                }),
+                ["noted"] = new JsonArray(new JsonObject { ["what"] = what, ["why"] = why }),
+            };
+        const string Free = "a number of its own - an analysis's figures are its impacts', each a placeholder of a citation the tool writes, and its evidence's; say this without one, a digit standing only in an id the report holds";
+
+        Assert.Empty(FlowAnalysisEvidence.Problems(
+            Analysis("b's wait on the queue cost the run most, as q1's did.", "b waits on the machine's queue", "b@1 failed and c@1 failed after it, as b.seconds says.", "q1 waited on a person", "q2 is still open"),
+            report));
+        Assert.Equal(
+            [
+                $"summary: writes '3600', {Free}",
+                $"painPoints[0].title: writes '2', {Free}",
+                $"painPoints[0].cause: writes '20', {Free}",
+                $"noted[0].what: writes '{{1}}', {Free}",
+                $"noted[0].why: writes '2nd', {Free}",
+            ],
+            FlowAnalysisEvidence.Problems(
+                Analysis("The build alone wasted 3600 s on the queue, as q1 did.", "b retried 2 times", "b@1 failed and c@1 exited 20", "q1 waited {1}", "the 2nd answer is not in the records"),
+                report));
+    }
+
+    /// <summary>
     /// An impact the gate refuses is asked again for in the analyst's own conversation, under the gate's one count of
     /// repairs, naming what is wrong: a number of its own is sent back, the answer written with a placeholder in its place
     /// is held on the second turn, and the analysis is kept with its impact as the tool wrote it and the template beside
@@ -605,7 +751,7 @@ public sealed class AnalyzeReportTests
     {
         var (_, temp, analyst, service, run) = await AnalyzableAsync();
         using var disposed = temp;
-        const string Template = "The run has spent {1} session waiting on its gate.";
+        const string Template = "The run has spent {1} waiting on its gate.";
         const string Written = "The run has spent 1 session waiting on its gate.";
         string Answer(string impact)
             => Held.Replace("\"The whole wall time so far, which the report names.\"", $"\"{impact}\"", StringComparison.Ordinal)

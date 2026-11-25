@@ -10,7 +10,7 @@
     "summary": {
       "type": "string",
       "pattern": "\\S",
-      "description": "Where the run's time and money went, in three sentences at most."
+      "description": "Where the run's time and money went, in three sentences at most, with no number of your own: a digit is refused and you are asked again but inside a word the report holds as an id or one of your citations writes as its path (c@1, a step named build2) - the figures are the pain points', in their impacts and their evidence."
     },
     "painPoints": {
       "type": "array",
@@ -31,7 +31,7 @@
           "title": {
             "type": "string",
             "pattern": "\\S",
-            "description": "One line a person who never saw the run understands: what to change, and where."
+            "description": "One line a person who never saw the run understands: what to change, and where, with no number of your own: a digit is refused and you are asked again but inside a word the report holds as an id or one of your citations writes as its path (c@1, a step named build2)."
           },
           "severity": {
             "type": "string",
@@ -100,17 +100,17 @@
           "impact": {
             "type": "string",
             "pattern": "\\S",
-            "description": "The time and dollars it cost, as a template with no number of your own: write every figure as a placeholder naming one of this point's citations by its place in evidence - {1} the first, {2} the second - and the tool writes it as the cited value in the unit the report holds that member in, as the report writes it (a time in seconds, 412.3 s; the budget's reasoning in minutes, 90.0 minutes; a cost in dollars, 0.0200 USD; a cache share in percent, 28.0%; tokens, 180000 tokens; the rest a count, 2), so write no unit beside it: build waited {1} on the critical path and cost {2}. A digit anywhere else is refused and you are asked again - 412.3, 3600s, $0.02, 2x, a date or a time of day alike - but inside a word the report holds as an id (a row's id or a name it is made of, a section's or a member's name) or one of your citations writes as its path (c@1, a step named build2); and so are a placeholder past your evidence and one whose citation holds no number the report measures (a text of words)."
+            "description": "The time and dollars it cost, as a template with no number of your own: write every figure as a placeholder naming one of this point's citations by its place in evidence - {1} the first, {2} the second - and the tool writes it as the cited value with the unit the report holds that member in, as the report writes it (a time in seconds, 412.3 s; the budget's reasoning in minutes, 90.0 minutes; a cost in dollars, 0.0200 USD; a cache share in percent, 28.0%; tokens, 180000 tokens; any other count with what it counts, 2 tries; a number that is no amount after its label, exit 20), so write no unit beside it: build waited {1} on the critical path and cost {2}. A placeholder stands apart: one a letter, a number, a currency's sign or % touches, or a sign before it (${1}, {1}h, {1}%, -{1}), is refused, and so are one past your evidence and one whose citation holds no number the report measures (a text of words). A digit anywhere else is refused and you are asked again - 412.3, 3600s, $0.02, 2x, a date or a time of day alike - but inside a word the report holds as an id (a row's id or a name it is made of, a section's or a member's name) or one of your citations writes as its path (c@1, a step named build2)."
           },
           "cause": {
             "type": "string",
             "pattern": "\\S",
-            "description": "What the records show of why: no guessing - where the cause is not in the report or the records, it goes under noted instead."
+            "description": "What the records show of why: no guessing - where the cause is not in the report or the records, it goes under noted instead - with no number of your own: a digit is refused and you are asked again but inside a word the report holds as an id or one of your citations writes as its path (c@1, a step named build2)."
           },
           "recommendation": {
             "type": "string",
             "pattern": "\\S",
-            "description": "The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key, as the configuration or the yml spells it."
+            "description": "The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key, as the configuration or the yml spells it. It states the values it proposes and is never a measurement: the figures are the impact's and the evidence's."
           }
         }
       }
@@ -129,12 +129,12 @@
           "what": {
             "type": "string",
             "pattern": "\\S",
-            "description": "What you saw."
+            "description": "What you saw, with no number of your own: a digit is refused and you are asked again but inside a word the report holds as an id or one of your citations writes as its path (c@1, a step named build2)."
           },
           "why": {
             "type": "string",
             "pattern": "\\S",
-            "description": "Why you could not confirm it from the report or the run's records."
+            "description": "Why you could not confirm it from the report or the run's records, with no number of your own: a digit is refused and you are asked again but inside a word the report holds as an id or one of your citations writes as its path (c@1, a step named build2)."
           }
         }
       }

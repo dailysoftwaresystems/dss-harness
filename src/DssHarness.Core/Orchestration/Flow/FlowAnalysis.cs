@@ -16,9 +16,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// written from; said as text, as Markdown (<see cref="FlowAnalysis.Markdown"/>) and as one JSON document
 /// (<see cref="FlowAnalysis.Document"/>).
 /// </summary>
-/// <param name="Summary">Where the run's time and money went, in three sentences at most.</param>
+/// <param name="Summary">Where the run's time and money went, in three sentences at most, with no number of its own: the figures are its pain points'.</param>
 /// <param name="PainPoints">Each thing to change, ordered by what it cost; empty where the report shows nothing to change.</param>
-/// <param name="Noted">What the analyst saw and could not confirm, each with why.</param>
+/// <param name="Noted">What the analyst saw and could not confirm, each with why, with no number of its own.</param>
 public sealed record FlowAnalysis(
     string Summary,
     IReadOnlyList<FlowPainPoint> PainPoints,
@@ -134,13 +134,13 @@ public sealed record FlowAnalysis(
 }
 
 /// <summary>One thing to change, as the analyst sees it.</summary>
-/// <param name="Title">One line a person who never saw the run understands.</param>
+/// <param name="Title">One line a person who never saw the run understands, with no number of its own.</param>
 /// <param name="Severity">How much it matters: the review's levels - critical, high, medium, low.</param>
 /// <param name="Where">The steps it names, by the ids of the report's step rows.</param>
 /// <param name="Evidence">The report's own values it rests on, each cited by its section, row and member.</param>
 /// <param name="Impact">The time and dollars it cost, as the tool wrote it from <paramref name="ImpactTemplate"/>: each placeholder there the cited value in the cited member's unit, as the report writes it (<see cref="FlowAnalysisEvidence"/>).</param>
-/// <param name="Cause">What the records show of why.</param>
-/// <param name="Recommendation">The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key.</param>
+/// <param name="Cause">What the records show of why, with no number of its own.</param>
+/// <param name="Recommendation">The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key, the values it proposes and never a measurement.</param>
 /// <param name="ImpactTemplate">The impact as the analyst wrote it: no number of its own, every figure a placeholder naming one of <paramref name="Evidence"/> by its place, from <c>{1}</c>.</param>
 public sealed record FlowPainPoint(
     string Title,
@@ -177,12 +177,16 @@ public sealed record FlowNoted(string What, string Why);
 /// holds it: a number as a number, whatever form it is written in, a text and a truth word for word. Each step a pain
 /// point names is a row of the report's steps. An impact states no number of its own: it is a template whose every
 /// figure is a placeholder naming one of its pain point's citations by its place in the evidence, <c>{1}</c> the first,
-/// which the tool writes as the cited value in the unit the report holds that member in, as the report writes it
-/// (<see cref="FlowRunReport.SaidIn"/>, its unit the one <see cref="FlowRunReport.Units"/> holds). A digit anywhere else in it is a
-/// number of its own and refused, but inside a word the report holds as an id - a row's id or a name it is made of, a
-/// section's or a member's name - or a citation writes as its path (<see cref="Names"/>); and so are a placeholder past
-/// its evidence and one whose citation holds no number of the report's. So an analysis cannot invent a measurement: the
-/// only figures its impact says are the report's own, written by the tool.
+/// which the tool writes as the cited value with the unit the report holds that member in, as the report writes it - a
+/// count with what it counts, a number that is no amount after its label (<see cref="FlowRunReport.SaidIn"/>, its unit
+/// the one <see cref="FlowRunReport.Units"/> holds). A digit anywhere else in it is a number of its own and refused, but
+/// inside a word the report holds as an id - a row's id or a name it is made of, a section's or a member's name - or a
+/// citation writes as its path (<see cref="Names"/>); and so are a placeholder past its evidence, one whose citation
+/// holds no number of the report's, and one a letter, a number, a currency's sign or <c>%</c> touches, or a sign before
+/// it. The summary, each pain point's title and cause, and each thing noted hold no number of their own either, but in
+/// an id; a recommendation states the values it proposes - a key's exact text - and is no measurement. So an analysis
+/// cannot invent a measurement: its only figures are its citations, the report's own, and its impacts', written by the
+/// tool.
 /// </summary>
 public static class FlowAnalysisEvidence
 {
@@ -249,12 +253,19 @@ public static class FlowAnalysisEvidence
         var impacts = new List<string>();
         var steps = (report["steps"] as JsonArray ?? []).OfType<JsonObject>().Select(row => TextOf(row["id"])).ToHashSet(StringComparer.Ordinal);
         var held = Names.Of(report);
+        var points = analysis["painPoints"] as JsonArray ?? [];
 
-        foreach (var (point, at) in (analysis["painPoints"] as JsonArray ?? []).Select((point, at) => (point, at)))
+        // The summary and what was noted belong to no pain point, so every citation's paths are their ids.
+        var every = held.With(points.SelectMany(point => (point?["evidence"] as JsonArray ?? []).SelectMany(PathsOf)));
+        Written(TextOf(analysis["summary"]), cited: null, every, "summary", problems);
+
+        foreach (var (point, at) in points.Select((point, at) => (point, at)))
         {
             var evidence = point?["evidence"] as JsonArray ?? [];
             var names = held.With(evidence.SelectMany(PathsOf));
             var cited = new List<Cited?>();
+
+            Written(TextOf(point?["title"]), cited: null, names, $"painPoints[{at}].title", problems);
 
             foreach (var (step, named) in (point?["where"] as JsonArray ?? []).Select((step, named) => (TextOf(step), named)))
             {
@@ -278,40 +289,56 @@ public static class FlowAnalysisEvidence
             }
 
             impacts.Add(Written(TextOf(point?["impact"]), cited, names, $"painPoints[{at}].impact", problems));
+            Written(TextOf(point?["cause"]), cited: null, names, $"painPoints[{at}].cause", problems);
+        }
+
+        foreach (var (noted, at) in (analysis["noted"] as JsonArray ?? []).Select((noted, at) => (noted, at)))
+        {
+            Written(TextOf(noted?["what"]), cited: null, every, $"noted[{at}].what", problems);
+            Written(TextOf(noted?["why"]), cited: null, every, $"noted[{at}].why", problems);
         }
 
         return (impacts, problems);
     }
 
     /// <summary>
-    /// The impact <paramref name="template"/> as the tool writes it: its text as the analyst wrote it, and each placeholder
-    /// the value of the citation it names, said in that value's unit (<see cref="FlowRunReport.SaidIn"/>). Every numeral
-    /// it writes of its own - outside a placeholder, and outside an id <paramref name="names"/> holds - is a problem, once
-    /// for the word it stands in; so is a placeholder that names no citation of <paramref name="cited"/>, and one whose
-    /// citation holds no number of the report's. A placeholder whose citation the report does not hold says nothing more:
-    /// its citation's own problem is said at its path.
+    /// <paramref name="text"/> as the tool writes it, where it is an impact: its text as the analyst wrote it, and each
+    /// placeholder the value of the citation it names, said with that value's unit (<see cref="FlowRunReport.SaidIn"/>).
+    /// Every numeral it writes of its own - outside a placeholder of an impact, and outside an id <paramref name="names"/>
+    /// holds - is a problem, once for the word it stands in, for an analysis's figures are its impacts' placeholders and
+    /// its citations; so is, in an impact, a placeholder that names no citation of <paramref name="cited"/>, one whose
+    /// citation holds no number of the report's, and one a letter, a number, a currency's sign or <c>%</c> touches - or a
+    /// sign before it - which would make the figure another measure than the one the tool writes. A placeholder whose
+    /// citation the report does not hold says nothing more: its citation's own problem is said at its path.
     /// </summary>
-    /// <param name="template">The impact as the analyst wrote it.</param>
-    /// <param name="cited">Its pain point's citations in their order, each null where the report does not hold it.</param>
+    /// <param name="text">The member as the analyst wrote it.</param>
+    /// <param name="cited">Its pain point's citations in their order, each null where the report does not hold it, where it is an impact; null for any other member, which no placeholder is read in.</param>
     /// <param name="names">The words read as ids.</param>
-    /// <param name="path">Where the impact is in the output.</param>
+    /// <param name="path">Where the member is in the output.</param>
     /// <param name="problems">The problems found, appended to.</param>
-    private static string Written(string template, IReadOnlyList<Cited?> cited, Names names, string path, List<string> problems)
+    private static string Written(string text, IReadOnlyList<Cited?>? cited, Names names, string path, List<string> problems)
     {
-        var written = new StringBuilder(template.Length);
+        var written = new StringBuilder(text.Length);
         var said = 0;
 
-        for (var at = 0; at < template.Length;)
+        for (var at = 0; at < text.Length;)
         {
-            if (names.At(template, at) is > 0 and var name)
+            if (names.At(text, at) is > 0 and var name)
             {
-                written.Append(template, at, name);
+                written.Append(text, at, name);
                 at += name;
                 continue;
             }
 
-            if (PlaceholderAt(template, at) is { } placeholder)
+            if (cited is not null && PlaceholderAt(text, at) is { } placeholder)
             {
+                var end = at + placeholder.Text.Length;
+
+                if (Touching(text, at, end) is { } touching)
+                {
+                    problems.Add($"{path}: {placeholder.Text} touches {touching} - a placeholder stands apart from every letter, number, currency's sign, % and sign before it, for the tool writes the figure with its own unit; leave the unit to it");
+                }
+
                 if (placeholder.Place is not { } place || place < 1 || place > cited.Count)
                 {
                     problems.Add($"{path}: {placeholder.Text} names no citation - its evidence holds {cited.Count.ToString(CultureInfo.InvariantCulture)}, and {{n}} names the n-th of them, from {{1}}");
@@ -320,7 +347,7 @@ public static class FlowAnalysisEvidence
                 {
                     if (citation.Figure is { } figure)
                     {
-                        written.Append(FlowRunReport.SaidIn(figure.Unit, figure.Value));
+                        written.Append(FlowRunReport.SaidIn(figure.Unit, figure.Value, figure.Member));
                     }
                     else
                     {
@@ -328,22 +355,51 @@ public static class FlowAnalysisEvidence
                     }
                 }
 
-                at += placeholder.Text.Length;
+                at = end;
                 continue;
             }
 
-            if (at >= said && char.IsNumber(template, at))
+            if (at >= said && char.IsNumber(text, at))
             {
-                var (start, end) = WordAround(template, at);
-                problems.Add($"{path}: writes '{template[start..end]}', a number of its own - write each figure as the placeholder of the citation that holds it ({{1}} the first of its evidence), which the tool writes as the report does; a digit stands only in a placeholder or in an id the report holds");
+                var (start, end) = WordAround(text, at);
+                problems.Add(cited is not null
+                    ? $"{path}: writes '{text[start..end]}', a number of its own - write each figure as the placeholder of the citation that holds it ({{1}} the first of its evidence), which the tool writes as the report does; a digit stands only in a placeholder or in an id the report holds"
+                    : $"{path}: writes '{text[start..end]}', a number of its own - an analysis's figures are its impacts', each a placeholder of a citation the tool writes, and its evidence's; say this without one, a digit standing only in an id the report holds");
                 said = end;
             }
 
-            written.Append(template[at]);
+            written.Append(text[at]);
             at++;
         }
 
         return written.ToString();
+    }
+
+    /// <summary>
+    /// What touches the placeholder from <paramref name="start"/> to <paramref name="end"/> of <paramref name="text"/> and
+    /// would make its figure another measure: a letter, a number, a currency's sign or <c>%</c> directly before or after
+    /// it, or a sign directly before it (<c>${1}</c>, <c>{1}h</c>, <c>{1}%</c>, <c>-{1}</c>) - only the characters that
+    /// touch it are read; null where nothing does.
+    /// </summary>
+    private static string? Touching(string text, int start, int end)
+    {
+        var said = new List<string>();
+
+        if (start > 0 && Rune.DecodeLastFromUtf16(text.AsSpan(0, start), out var before, out _) == System.Buffers.OperationStatus.Done
+            && (Measures(before) || before.Value is '+' or '-' or '−' or '±'))
+        {
+            said.Add($"'{before}' before it");
+        }
+
+        if (end < text.Length && Rune.TryGetRuneAt(text, end, out var after) && Measures(after))
+        {
+            said.Add($"'{after}' after it");
+        }
+
+        return said.Count == 0 ? null : string.Join(" and ", said);
+
+        static bool Measures(Rune rune)
+            => Rune.IsLetter(rune) || Rune.IsNumber(rune) || Rune.GetUnicodeCategory(rune) == UnicodeCategory.CurrencySymbol || rune.Value == '%';
     }
 
     /// <summary>
@@ -473,7 +529,7 @@ public static class FlowAnalysisEvidence
                 return $"{named} is {holds}, not '{said}'";
             }
 
-            cited = new Cited(named, unit is { } measured ? (value, measured) : null);
+            cited = new Cited(named, unit is { } measured ? (value, measured, of) : null);
             return null;
         }
 
@@ -491,7 +547,7 @@ public static class FlowAnalysisEvidence
         cited = new Cited(
             named,
             kind == JsonValueKind.String && unit is { } textUnit && decimal.TryParse(text, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out _)
-                ? (value, textUnit)
+                ? (value, textUnit, of)
                 : null);
         return null;
     }
@@ -520,8 +576,8 @@ public static class FlowAnalysisEvidence
     /// a text of one that is one number whole; null where it holds none, a text of words or a truth.
     /// </summary>
     /// <param name="Named">What it names.</param>
-    /// <param name="Figure">The value and its unit; null where it holds no number the report measures.</param>
-    private sealed record Cited(string Named, (JsonValue Value, FlowUnit Unit)? Figure);
+    /// <param name="Figure">The value, its unit and the member's path below its row as the citation writes it; null where it holds no number the report measures.</param>
+    private sealed record Cited(string Named, (JsonValue Value, FlowUnit Unit, string Member)? Figure);
 
     /// <summary>
     /// The words an impact is read with as ids, its digits never a number of its own: what the report holds as a name -

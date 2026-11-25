@@ -127,7 +127,8 @@ public sealed class RecordsAgentRunner(
                     providers => $"tierConfig names no 'reporting' tier for the analyst to run on (defined: {(string.Join(", ", providers.Tiers) is { Length: > 0 } defined ? defined : "none")}); add one - \"reporting\": [a model to word the analyses] - under tierConfig"),
                 layout => Path.Combine(layout.AnalysisDirectory, call.Stamp),
                 // Its answer is held to the report it read beyond the schema: every citation the report's own, every step
-                // it names a row of the report's, and its impact a template of its citations, with no number of its own.
+                // it names a row of the report's, its impact a template of its citations, and no text of it - but a
+                // recommendation's proposed values - with a number of its own.
                 Holds: answer => FlowAnalysisEvidence.Problems(answer, call.Report),
                 Retries: null,
                 BackoffSeconds: null),

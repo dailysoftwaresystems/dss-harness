@@ -595,8 +595,9 @@ public sealed class FlowRunReportTests
     /// entry of the table is a member the report writes: a number the builder writes with no unit is one no placeholder of
     /// an impact could write, and an entry no member is names a unit for nothing - so a member added, renamed or moved
     /// without its unit is caught here. A duration is in seconds but the budget's reasoning in minutes, a cost in dollars,
-    /// a cache share in percent, tokens in tokens - a graph's among them, but its calls and the searches counts - a text
-    /// that is one number whole in its member's unit, and the rest a count.
+    /// a cache share in percent, tokens in tokens - a graph's among them - a text that is one number whole in its member's
+    /// unit, every other count with what it counts (a graph's calls, the searches, a hotspot's touches, a class's cells),
+    /// and a failed attempt's exception and first error each number after its own path.
     /// </summary>
     [Fact]
     public void EveryNumberACitedSectionHolds_HasItsUnitInTheReportsOneTable()
@@ -622,7 +623,7 @@ public sealed class FlowRunReportTests
                 [
                     steps[0] with
                     {
-                        Graph = JsonNode.Parse("""{"mode":"tools","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"calls":3,"servedTokens":1200,"wholeFileReads":{"count":1,"tokens":90},"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
+                        Graph = JsonNode.Parse("""{"mode":"tools","from":"base","view":"base","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"calls":3,"servedTokens":1200,"bodies":1,"textHits":4,"edits":{"made":1,"refused":0},"wholeFileReads":{"count":1,"tokens":90},"deniedReads":0,"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
                         Measure = steps[0].Measure! with { Ran = 10 },
                     },
                     steps[1],
@@ -690,7 +691,7 @@ public sealed class FlowRunReportTests
 
         Assert.All(pinned, path => Assert.Contains(path, numbers.Concat(texts)));
         Assert.Equal(
-            [FlowUnit.Seconds, FlowUnit.Minutes, FlowUnit.Dollars, FlowUnit.Percent, FlowUnit.Tokens, FlowUnit.Count, FlowUnit.Tokens, FlowUnit.Count, FlowUnit.Seconds, FlowUnit.Count, FlowUnit.Count, FlowUnit.Count],
+            [FlowUnit.Seconds, FlowUnit.Minutes, FlowUnit.Dollars, FlowUnit.Percent, FlowUnit.Tokens, FlowUnit.Of("graph call", "graph calls"), FlowUnit.Tokens, FlowUnit.Of("search", "searches"), FlowUnit.Seconds, FlowUnit.Of("touch", "touches"), FlowUnit.ByItsPath, FlowUnit.Of("cell pinned", "cells pinned")],
             pinned.Select(FlowRunReport.UnitOf));
     }
 
