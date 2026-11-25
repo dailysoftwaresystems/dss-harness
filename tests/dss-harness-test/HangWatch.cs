@@ -7,8 +7,8 @@ namespace DssHarness.Tests;
 /// <summary>
 /// TEMPORARY, macOS on CI alone: says what a hung shard is stuck on. Every wait told through the operation's teller is
 /// written to the error stream, and the kernel's table of this user's processes - read in this process through libproc,
-/// starting nothing - is written once a process of this user has stood stopped, or in its exit, for three looks a minute
-/// apart, and again every ten minutes while one does.
+/// starting nothing - is written once a process of this user has stood stopped, a zombie or in its exit for three looks a
+/// minute apart, and again at seven, when the run is ended so the job's log is kept at once.
 /// </summary>
 internal static class HangWatch
 {
@@ -34,7 +34,6 @@ internal static class HangWatch
     {
         var uid = getuid();
         var standing = new Dictionary<(int Id, uint State, uint Flags), int>();
-        var lastDump = DateTime.MinValue;
 
         while (true)
         {
@@ -57,9 +56,10 @@ internal static class HangWatch
                     standing.Remove(gone);
                 }
 
-                if (standing.Values.Any(count => count >= 3) && DateTime.UtcNow - lastDump > TimeSpan.FromMinutes(10))
+                var longest = standing.Count == 0 ? 0 : standing.Values.Max();
+
+                if (longest is 3 or 7)
                 {
-                    lastDump = DateTime.UtcNow;
                     var said = new StringBuilder();
 
                     ThreadPool.GetMinThreads(out var minWorkers, out _);
@@ -71,6 +71,13 @@ internal static class HangWatch
                     }
 
                     Console.Error.Write(said.ToString());
+
+                    // The told waits of five minutes have been written by the second table: the run is ended, so its log is kept now.
+                    if (longest == 7)
+                    {
+                        Console.Error.Flush();
+                        Environment.FailFast("hang-watch: a process stood stopped, a zombie or in its exit for seven minutes");
+                    }
                 }
             }
             catch (Exception ex)
