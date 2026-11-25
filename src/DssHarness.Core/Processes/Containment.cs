@@ -12,7 +12,8 @@ namespace DssHarness.Core.Processes;
 /// The calls containment is made of, below the platform seam: the C library's session, group,
 /// signal and exec calls on Linux and macOS, and the job objects, process creation and console
 /// signals of Windows - and the end of what a child started, at a stop and at a contained child's
-/// own end, each process it ends kept until it has gone (<see cref="EndedProcesses"/>).
+/// own end, and of a process with its tree, each process it ends kept in what its caller gives it
+/// (<see cref="EndedProcesses"/>), for that caller to wait for as it needs.
 /// Each side is called only where that system runs, and the choice between them is made here and
 /// nowhere above.
 /// </summary>
@@ -284,9 +285,11 @@ internal static class Containment
 
     /// <summary>
     /// Ends <paramref name="root"/> and its whole tree - and, where <paramref name="group"/>, on Linux and macOS, the process
-    /// group it leads, which reaches what its tree handed on - keeping each process it ends in <paramref name="ended"/>,
-    /// which waits for each to go: the one walk that ends a process with its tree, for a stop and for every other end of a
-    /// process with what it started.
+    /// group it leads, which reaches what its tree handed on - keeping each process it ends in <paramref name="ended"/>, for
+    /// its caller to wait for as it needs (<see cref="EndedProcesses.GoneAsync"/>): the one walk that ends a process with its
+    /// tree - for a stop, which waits until every process kept has gone; for <c>--now</c>, which waits for
+    /// <paramref name="root"/> alone; and for a host agent's last resort and a child whose start could not be read, which
+    /// wait for none.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -299,18 +302,27 @@ internal static class Containment
     /// </para>
     /// <para>
     /// On Windows, where nothing is held still, each process is ended as it is found - the root first, so it starts no
-    /// other - and kept by a handle, which keeps its id its own. A child is one Windows' list of every process names as
-    /// created by a kept process, created no later than it, and the very process the list named, as its handle's creation
-    /// time says, so an id taken since the list was read is never ended. The list is read again until it names nothing
-    /// new, and again once every process kept has gone (<see cref="EndedProcesses.GoneAsync"/>), for a child one made
-    /// while it was being ended.
+    /// other - and kept by a handle, which keeps its id its own: the root by a copy of <paramref name="handle"/>, the one it
+    /// was created with, where its caller started it - which ends and waits for it whatever its own security refuses
+    /// another - and opened by its id where its caller knows it by that alone. A child is one Windows' list of every
+    /// process names as created by a kept process, created no earlier than it, and the very process the list named, as its
+    /// handle's creation time says, so an id taken since the list was read is never ended. A process of the tree that
+    /// cannot be ended - one running as another user, or one whose own security refuses this process its end - is passed
+    /// over, its failure said once, and still has its children taken, from the reading that found it - the root's from the
+    /// first - held while they are by what asks when it was created. The list is read again until it names nothing new, and again once every process kept has
+    /// gone (<see cref="EndedProcesses.GoneAsync"/>), for a child one made while it was being ended.
     /// </para>
     /// </remarks>
     /// <param name="root">The process whose tree ends.</param>
     /// <param name="group">Whether the group it leads ends too, on Linux and macOS.</param>
     /// <param name="ended">What keeps each process ended.</param>
+    /// <param name="handle">
+    /// The handle the runtime got as this process created <paramref name="root"/> (<see cref="Process.SafeHandle"/>), where it
+    /// did: on Windows the root is kept by a copy of it. <see langword="null"/> where <paramref name="root"/> is known by its
+    /// id alone, and opened by it.
+    /// </param>
     /// <exception cref="AggregateException">A process of the tree or the group could not be ended: every other was.</exception>
-    public static void EndTree(Process root, bool group, EndedProcesses ended)
+    public static void EndTree(Process root, bool group, EndedProcesses ended, SafeProcessHandle? handle = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(ended);
@@ -319,7 +331,7 @@ internal static class Containment
 
         if (OperatingSystem.IsWindows())
         {
-            EndTreeOnWindows(root, ended, failed);
+            EndTreeOnWindows(root, handle, ended, failed);
         }
         else
         {
@@ -379,16 +391,28 @@ internal static class Containment
     private static readonly ProcessKernel Kernel = new(new HostPlatform());
 
     /// <summary>The Windows half of <see cref="EndTree"/>.</summary>
-    private static void EndTreeOnWindows(Process root, EndedProcesses ended, List<Exception> failed)
+    private static void EndTreeOnWindows(Process root, SafeProcessHandle? handle, EndedProcesses ended, List<Exception> failed)
     {
         var tree = new WindowsTree(ended);
 
-        if (!tree.Took(root.Id, failed))
+        if (tree.Took(root.Id, handle, failed))
         {
-            return;
+            _ = tree.Walk(failed);
+        }
+        else
+        {
+            // A root that cannot be ended still has its children ended, as every process of the tree that cannot be does
+            // (WindowsTree.Walk): held by what asks when it was created while they are taken from the list's first reading.
+            using var read = Opened(root.Id, Windows.ReadCreation, failed: null);
+
+            if (read is null)
+            {
+                return;
+            }
+
+            _ = tree.Walk(failed, (root.Id, CreatedOf(read)));
         }
 
-        _ = tree.Walk(failed);
         ended.LookAgainWith(() => tree.Walk(failed: null));
     }
 
@@ -398,38 +422,58 @@ internal static class Containment
     /// </summary>
     private sealed class WindowsTree(EndedProcesses ended)
     {
-        /// <summary>The tree's processes, by id: each kept, here or by another of what the stop ended.</summary>
-        private readonly HashSet<int> _members = [];
+        /// <summary>The tree's processes, by id, each with when it was created: each kept, here or by another of what the stop ended.</summary>
+        private readonly Dictionary<int, long> _members = [];
 
-        /// <summary>Opens, keeps and ends the root; whether it could be.</summary>
+        /// <summary>
+        /// The processes of the tree that could not be ended - by id and when each was created, as the list named it - each
+        /// tried once, its failure said once, and its children taken from the reading that found it and from no later one.
+        /// </summary>
+        private readonly HashSet<(int Id, long Created)> _passed = [];
+
+        /// <summary>
+        /// Keeps and ends the root - by a copy of <paramref name="handle"/>, the one it was created with, where its caller
+        /// holds that, which ends and waits for it whatever its own security refuses another; else opened by its id - and
+        /// whether it was kept.
+        /// </summary>
         /// <param name="id">The root's id, its own while the runtime holds the process.</param>
+        /// <param name="handle">The handle the root was created with, where its caller started it; <see langword="null"/> where its id alone is known.</param>
         /// <param name="failed">Where a process that could not be ended is said.</param>
-        public bool Took(int id, List<Exception> failed)
+        public bool Took(int id, SafeProcessHandle? handle, List<Exception> failed)
         {
-            if (ended.Kept(id) is null)
+            if (ended.Kept(id) is not { } kept)
             {
-                if (Opened(id, failed) is not { } handle)
+                var held = (handle is null ? null : Copied(handle)) ?? Opened(id, Windows.EndAndWait, failed);
+
+                if (held is null)
                 {
                     return false;
                 }
 
-                var kept = new KeptProcess(id, handle, CreatedOf(handle));
+                kept = new KeptProcess(id, held, CreatedOf(held));
 
                 _ = ended.Keep(kept);
                 ended.End(kept);
             }
 
-            _ = _members.Add(id);
+            _members[id] = kept.Created;
             return true;
         }
 
         /// <summary>
-        /// Reads Windows' list of every process, keeps and ends each child of a member not kept yet, and reads it again
-        /// until it names none.
+        /// Reads Windows' list of every process, keeps and ends each child of a member not kept yet - and, in its first
+        /// reading, of <paramref name="root"/> - and reads it again until it names none. A child that cannot be ended is
+        /// passed over, its failure said, and its own children taken from the same reading, as its tree's: held while they
+        /// are by what asks when it was created, so its id stays its own, and walked from in that reading alone, since one
+        /// that stands may go on starting others for as long as it stands.
         /// </summary>
         /// <param name="failed">Where a process that could not be ended is said; <see langword="null"/> where nothing is said.</param>
+        /// <param name="root">
+        /// A root that could not be ended, by its id and when it was created, held by the caller while the walk takes its
+        /// children: walked from in the first reading alone.
+        /// </param>
         /// <returns>How many it found.</returns>
-        public int Walk(List<Exception>? failed)
+        public int Walk(List<Exception>? failed, (int Id, long Created)? root = null)
         {
             var found = 0;
 
@@ -442,44 +486,67 @@ internal static class Containment
                 }
 
                 var byCreator = listed.ToLookup(process => process.ParentId);
-                var walking = new Queue<int>(_members);
+                var walking = new Queue<(int Id, long Created)>(_members.Select(member => (Id: member.Key, Created: member.Value)));
+                var passedOver = new List<SafeProcessHandle>();
                 var round = 0;
 
-                while (walking.TryDequeue(out var creator))
+                if (root is { } unended)
                 {
-                    var created = ended.Kept(creator)!.Created;
+                    walking.Enqueue(unended);
+                    root = null;
+                }
 
-                    foreach (var child in byCreator[creator])
+                try
+                {
+                    while (walking.TryDequeue(out var creator))
                     {
-                        // A process created before its named creator was made by an earlier holder of that id.
-                        if (_members.Contains(child.Id) || child.Created < created)
+                        foreach (var child in byCreator[creator.Id])
                         {
-                            continue;
-                        }
-
-                        if (ended.Kept(child.Id) is null)
-                        {
-                            if (Opened(child.Id, failed) is not { } handle)
+                            // A process created before its named creator was made by an earlier holder of that id.
+                            if (_members.ContainsKey(child.Id) || _passed.Contains((child.Id, child.Created)) || child.Created < creator.Created)
                             {
                                 continue;
                             }
 
-                            if (CreatedOf(handle) != child.Created)
+                            if (ended.Kept(child.Id) is null)
                             {
-                                // Another process has the id since the list was read.
-                                handle.Dispose();
-                                continue;
+                                if (Opened(child.Id, Windows.EndAndWait, failed) is not { } handle)
+                                {
+                                    _ = _passed.Add((child.Id, child.Created));
+
+                                    if (Read(child) is { } read)
+                                    {
+                                        passedOver.Add(read);
+                                        walking.Enqueue((child.Id, child.Created));
+                                    }
+
+                                    continue;
+                                }
+
+                                if (CreatedOf(handle) != child.Created)
+                                {
+                                    // Another process has the id since the list was read.
+                                    handle.Dispose();
+                                    continue;
+                                }
+
+                                var kept = new KeptProcess(child.Id, handle, child.Created);
+
+                                _ = ended.Keep(kept);
+                                ended.End(kept);
+                                round++;
                             }
 
-                            var kept = new KeptProcess(child.Id, handle, child.Created);
-
-                            _ = ended.Keep(kept);
-                            ended.End(kept);
-                            round++;
+                            _members[child.Id] = child.Created;
+                            walking.Enqueue((child.Id, child.Created));
                         }
-
-                        _ = _members.Add(child.Id);
-                        walking.Enqueue(child.Id);
+                    }
+                }
+                finally
+                {
+                    foreach (var read in passedOver)
+                    {
+                        read.Dispose();
                     }
                 }
 
@@ -491,16 +558,36 @@ internal static class Containment
                 found += round;
             }
         }
+
+        /// <summary>
+        /// A handle to <paramref name="listed"/> that asks when it was created, where it is the very process the list named;
+        /// <see langword="null"/> where none could be opened, or the id is another's since.
+        /// </summary>
+        private static SafeProcessHandle? Read(ListedProcess listed)
+        {
+            if (Opened(listed.Id, Windows.ReadCreation, failed: null) is not { } read)
+            {
+                return null;
+            }
+
+            if (CreatedOf(read) != listed.Created)
+            {
+                read.Dispose();
+                return null;
+            }
+
+            return read;
+        }
     }
 
     /// <summary>
-    /// A handle to the process <paramref name="id"/> names, on Windows, that ends it, waits for its end and asks when it was
-    /// created; <see langword="null"/> where none could be opened - one that has gone, or one this process may not end,
-    /// which is said in <paramref name="failed"/>.
+    /// A handle to the process <paramref name="id"/> names, on Windows, with <paramref name="rights"/>;
+    /// <see langword="null"/> where none could be opened - one that has gone, or one whose own security refuses this
+    /// process those rights, which is said in <paramref name="failed"/>.
     /// </summary>
-    private static SafeProcessHandle? Opened(int id, List<Exception>? failed)
+    private static SafeProcessHandle? Opened(int id, uint rights, List<Exception>? failed)
     {
-        var handle = Windows.OpenProcess(Windows.EndAndWait, inheritHandle: false, id);
+        var handle = Windows.OpenProcess(rights, inheritHandle: false, id);
 
         if (!handle.IsInvalid)
         {
@@ -515,6 +602,24 @@ internal static class Containment
             failed?.Add(new Win32Exception(error, $"pid {id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could not be ended: {new Win32Exception(error).Message}"));
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// A copy of <paramref name="handle"/>, a process's, holding every right it holds - granted as the handle was got, so
+    /// nothing the process has said of its own security since is asked again; <see langword="null"/> where it could not be
+    /// copied.
+    /// </summary>
+    private static SafeProcessHandle? Copied(SafeProcessHandle handle)
+    {
+        var self = Windows.GetCurrentProcess();
+
+        if (Windows.DuplicateHandle(self, handle, self, out var copy, desiredAccess: 0, inheritHandle: false, Windows.SameAccess))
+        {
+            return copy;
+        }
+
+        copy.Dispose();
         return null;
     }
 
@@ -762,8 +867,10 @@ internal static class Containment
     /// <summary>
     /// Ends every process in <paramref name="job"/> at once, on Windows, keeping each by a handle in <paramref name="ended"/>,
     /// which waits for each to go: the job's members are listed and kept before it is ended - each checked to be in the
-    /// job by its own handle, so an id taken since the list was read is never kept - and listed again once each kept one
-    /// has gone, the job ended again for any found then, made while it was being ended.
+    /// job by its own handle, so an id taken since the list was read is never kept, and kept by one that waits for its end
+    /// and asks when it was created, all the job's own end leaves to ask of it, so a member whose own security refuses
+    /// another its end is waited for all the same - and listed again once each kept one has gone, the job ended again for
+    /// any found then, made while it was being ended.
     /// </summary>
     /// <param name="job">The job, held by whoever made it.</param>
     /// <param name="ended">What keeps each process ended.</param>
@@ -795,7 +902,7 @@ internal static class Containment
 
         foreach (var id in Members(job).Where(id => ended.Kept(id) is null))
         {
-            if (Opened(id, failed: null) is not { } handle)
+            if (Opened(id, Windows.WaitAndRead, failed: null) is not { } handle)
             {
                 continue;
             }
@@ -815,8 +922,9 @@ internal static class Containment
         return kept;
     }
 
-    /// <summary>The ids of the processes <paramref name="job"/> holds, as Windows lists them; none where it will not say.</summary>
-    private static List<int> Members(SafeWaitHandle job)
+    /// <summary>The ids of the processes <paramref name="job"/> holds, as Windows lists them now; none where it will not say.</summary>
+    /// <param name="job">The job.</param>
+    internal static List<int> Members(SafeWaitHandle job)
     {
         var room = Windows.IdListOffset + IntPtr.Size;
 
@@ -1331,8 +1439,17 @@ internal static class Containment
         /// <summary>The wait that found the object not yet signalled.</summary>
         public const uint WaitTimeout = 0x102;
 
-        /// <summary>The rights a process a stop keeps is opened with: to end it, to wait for its end, and to ask when it was created.</summary>
-        public const uint EndAndWait = 0x0001 | 0x1000 | 0x0010_0000;
+        /// <summary>PROCESS_QUERY_LIMITED_INFORMATION: the right that asks when a process was created, and whether it is in a job.</summary>
+        public const uint ReadCreation = 0x1000;
+
+        /// <summary>The rights a member of a job a stop keeps is opened with: to wait for its end and to ask when it was created - the job's own end ends it.</summary>
+        public const uint WaitAndRead = ReadCreation | 0x0010_0000;
+
+        /// <summary>The rights a process of a tree a stop keeps is opened with: to end it, to wait for its end, and to ask when it was created.</summary>
+        public const uint EndAndWait = 0x0001 | WaitAndRead;
+
+        /// <summary>DUPLICATE_SAME_ACCESS: a handle copied holding every right the handle copied holds.</summary>
+        public const uint SameAccess = 0x2;
 
         /// <summary>ERROR_INVALID_PARAMETER: what opening a process that has gone answers.</summary>
         public const int InvalidParameter = 87;
@@ -1418,6 +1535,18 @@ internal static class Containment
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool DuplicateHandle(
+            IntPtr sourceProcess,
+            SafeProcessHandle source,
+            IntPtr targetProcess,
+            out SafeProcessHandle target,
+            uint desiredAccess,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+            uint options);
 
         [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

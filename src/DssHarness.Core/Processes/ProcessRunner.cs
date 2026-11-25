@@ -454,7 +454,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Nothing the step says can be read, so nothing it starts is run blind: it goes, with its tree.
+                // Nothing the step says can be read, so nothing it starts is run blind: it goes, with its tree - none of it
+                // waited for, since its output is never read.
                 using (var ended = new EndedProcesses(Ends))
                 {
                     EndTree(process, grouped: false, ended);
@@ -686,7 +687,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <summary>
     /// Ends <paramref name="process"/>'s tree, and the group it leads where <paramref name="grouped"/>, keeping what it
     /// ends in <paramref name="ended"/> (<see cref="Containment.EndTree"/>): a process of it that could not be ended - one
-    /// running as another user - is passed over, every other ended, the child among them, so the wait for it ends.
+    /// running as another user, or one whose own security refuses another its end - is passed over, every other ended, the
+    /// child among them, kept by the handle the runtime got as this process created it, which ends it whatever its own
+    /// security refuses another, so the wait for it ends.
     /// </summary>
     /// <param name="process">The child.</param>
     /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
@@ -695,7 +698,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     {
         try
         {
-            Containment.EndTree(process, grouped, ended);
+            Containment.EndTree(process, grouped, ended, process.SafeHandle);
         }
         catch (AggregateException)
         {

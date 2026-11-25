@@ -149,7 +149,7 @@ Below that seam a few primitives ask the runtime for one fact each, where nothin
 asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
 session, group, signal and job-object calls containment is made of, and the choice between them
 that `ContainExec` places a child through, and the one walk that ends a process with its tree,
-each process it ends kept until it has gone), `UserState`,
+each process it ends kept in what its caller gives it, for that caller to wait for as it needs), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory),
 `AgentChildEnvironment.Own` (the tool's own environment, which an agent's child would inherit),
 `SystemWebNames` (a host name's addresses) and `HarnessFetch.Connecting` (the sockets the harness's
@@ -265,7 +265,8 @@ it was given on to it. The step says nothing on the runner's channel until the r
 one byte saying its connection was taken (`ContainExec.Taken`), so a step seen to end with its
 connection not taken said nothing, however late the system would have handed over a connection
 made just before its end, and is given up at once. On Windows the job is ended as the child ends or is stopped, and every
-member goes with it; and since its members also end when its last handle closes, what a killed
+member goes with it - one whose own security refuses another its end among them, since the job's end asks nothing of
+it, and each is waited for by a handle that only waits and asks when it was created; and since its members also end when its last handle closes, what a killed
 engine leaves behind ends with it there. On Linux and macOS the runner ends the child's session as
 the child ends or is stopped - every process still in it, and at a stop every one still in the
 child's tree, read before anything is signalled, asked to end with SIGTERM and waited for while
@@ -505,12 +506,21 @@ id, and only then kills it all: the group as one first, while it stands, so a me
 `/proc` hides, or whose reading failed - goes with it and is never left held still, each member killed by the group
 alone, since its id may be given out again once the group is killed, and every other process by its own id, the child
 last (`Containment.HeldStill`, the one order a session's end kills in too). On Windows, where nothing is held still, it
-ends each process as it finds it, the child first, a child being one the list Windows keeps of every
-process names as created by a process the walk ended, created no later than that process, and the
-very one the list named, as its own handle's creation time says, so an id taken since the list was
-read is never ended. Every process a stop ends is kept and waited for until it has gone before the
-child's output's end is looked for (above), so what is said to hold the output then is only ever
-what the stop did not end. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
+ends each process as it finds it, the root first - the child the process runner ends, at a stop or
+where its start could not be read, kept by a copy of the handle the runtime got as it was created,
+which ends and waits for it whatever its own security refuses another, and the process `--now` or a
+last resort ends opened by its id, all they know of it - a child being one the list Windows keeps of
+every process names as created by a process the walk ended, created no earlier than that process,
+and the very one the list named, as its own handle's creation time says, so an id taken since the
+list was read is never ended. A process of the tree that cannot be ended - one running as another
+user, or one whose own security refuses the harness its end - is passed over, its failure said once,
+and still has its children taken from the reading that found it, the root's from the first. The
+walk keeps each process it ends in what its caller gives it (`EndedProcesses`), and each
+caller waits for what it needs: a stop waits until every process it ended has gone before the
+child's output's end is looked for (above), as a contained child's end does, so what is said to hold
+the output then is only ever what the stop did not end; `--now` waits for the recorded process
+alone, the rest of its tree let go of as it is ended; and a host agent's last resort, and a child
+whose start could not be read, wait for none. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
 Windows, as above, and as any other child elsewhere.
 
 ### Paths come from git
@@ -4574,7 +4584,7 @@ The inbox is named on every exit after the write, a cancelled
 wait and a session refused before it weighed the entry among them. Where the engine leaves before it takes a request, the command answers from the
 run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
 only on this machine, and only the process whose start matches the one its owner recorded - and
-removes the owner once it is gone. Whether a run's engine is live is asked of one owner
+removes the owner once the engine's process has gone, the rest of its tree not waited for. Whether a run's engine is live is asked of one owner
 (`FlowRunOwner`) by every command: `delete-orchestrator` refuses a run a live engine owns (13,
 naming `pause-orchestrator` and `stop-orchestrator`) and removes a gone engine's owner with the run,
 and `list-orchestrator` says what the engine is doing - none, running, pausing, recording what a
@@ -8287,7 +8297,8 @@ asked since, giving the directory up however it ends (`RunStopWatch.EndThenAsync
 ever said to have stopped a run whose work was done. Not
 stopped in time, the request stays asked (13), and `--now` ends the dispatcher's process where it
 stands with its whole tree - only one of this machine, and only the process its owner file names by
-its start - and releases its claim; its ledger is never written. A run that has ended, or whose
+its start - and releases its claim once the dispatcher has gone, the rest of its tree not waited for; its ledger is
+never written. A run that has ended, or whose
 dispatcher went without giving its directory up, is nothing to stop (13), and an abandoned claim is
 released - one killed while the stop was waited for too, said stopped (0) where it had taken the
 stop first; a request nothing will read any more goes with the claim of the run that left it,

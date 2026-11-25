@@ -41,7 +41,9 @@ internal static class TestChild
             "spawn-orphan" => SpawnOrphan(standardOutput, arguments),
             "spawn-orphan-and-sleep" => SpawnOrphanAndSleep(standardOutput, arguments),
             "spawn-holder" => SpawnHolder(standardOutput, arguments),
+            "spawn-late-holder" => SpawnLateHolder(standardOutput, arguments),
             "spawn-orphan-holder" => SpawnOrphanHolder(standardOutput, arguments),
+            "deny-terminate" => DenyTerminate(arguments),
             "own-group-and-sleep" => OwnGroupAndSleep(arguments),
             "own-group-note-term-and-sleep" => OwnGroupNoteTermAndSleep(arguments),
             "own-session-and-sleep" => OwnSessionAndSleep(arguments),
@@ -541,6 +543,7 @@ internal static class TestChild
             "own-group-and-sleep" or "own-group-note-term-and-sleep" => getpgid(holder.Id) == holder.Id,
             "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
             "ignore-term-and-sleep" => File.Exists(arguments[4]),
+            "deny-terminate" => File.Exists(arguments[4]),
             _ => true,
         });
 
@@ -567,6 +570,77 @@ internal static class TestChild
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Waits until the file <c>arguments[0]</c> names is there, then starts a holder of this process's own streams - a late
+    /// one, made only once a test asks for it - writes <c>late=</c> and its id, and sleeps for the milliseconds
+    /// <c>arguments[1]</c> gives, as it does where it is never asked: a process that makes another once the walk of its tree
+    /// has last looked, as one being ended may.
+    /// </summary>
+    /// <remarks>
+    /// The holder is given a console of its own on Windows - without a window, as the process runner gives its children -
+    /// and holds this process's streams among every handle it inherits: started into the console this process runs in, it
+    /// ends of itself where a stop's walk has ended that console's host, a child of the process the console was made for,
+    /// and a test of what the walk does with a late process then tests nothing.
+    /// </remarks>
+    private static int SpawnLateHolder(TextWriter output, string[] arguments)
+    {
+        var milliseconds = int.Parse(arguments[1], CultureInfo.InvariantCulture);
+
+        for (var waited = Stopwatch.StartNew(); !File.Exists(arguments[0]); Thread.Sleep(20))
+        {
+            if (waited.ElapsedMilliseconds > milliseconds)
+            {
+                return 0;
+            }
+        }
+
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false, CreateNoWindow = true };
+
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add(arguments[1]);
+        start.Environment[TestHost.ChildModeVariable] = "sleep";
+
+        using var late = Process.Start(start) ?? throw new InvalidOperationException("The late holder did not start.");
+
+        output.Write($"late={late.Id}\n");
+        Thread.Sleep(milliseconds);
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Waits until the file <c>arguments[0]</c> names is there - written by a test once it holds this process by a handle of
+    /// its own, or before it starts it - then has its own security refuse its end to everyone, its owner included
+    /// (<see cref="RefusedEnd.Refuse"/>), writes its own id into the file <c>arguments[1]</c> names once it does, and does
+    /// what the behaviour <c>arguments[2]</c> names with the arguments after it: a program that guards itself against being
+    /// ended by other software of the same user. Windows' alone: a process's own security is Windows'.
+    /// </summary>
+    private static int DenyTerminate(string[] arguments)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        for (var waited = Stopwatch.StartNew(); !File.Exists(arguments[0]); Thread.Sleep(20))
+        {
+            if (waited.Elapsed > TimeSpan.FromMinutes(5))
+            {
+                return 95;
+            }
+        }
+
+        RefusedEnd.Refuse();
+
+        // Written to a temporary name and renamed, so a test never reads a half-written id.
+        var partial = arguments[1] + ".partial";
+        File.WriteAllText(partial, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        File.Move(partial, arguments[1]);
+
+        return Run(arguments[2], arguments[3..]);
     }
 
     /// <summary>

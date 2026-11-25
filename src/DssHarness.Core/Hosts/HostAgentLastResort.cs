@@ -132,7 +132,8 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
     public void End(int exitCode) => Environment.Exit(exitCode);
 
     /// <summary>
-    /// Ends every process <paramref name="parent"/> started, each with everything it started, and says which.
+    /// Ends every process <paramref name="parent"/> started, each with everything it started, waiting for none of them to
+    /// go, and says which.
     /// </summary>
     /// <param name="processes">Reads what is running.</param>
     /// <param name="platform">Says which machine this is.</param>

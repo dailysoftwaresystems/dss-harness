@@ -4,9 +4,12 @@ using Microsoft.Win32.SafeHandles;
 namespace DssHarness.Core.Processes;
 
 /// <summary>
-/// What a stop ended - a child's tree, its group, a job's members, what a session's end killed - each process kept as it
-/// is ended, and waited for until it has gone (<see cref="GoneAsync"/>), so nothing the stop ended is still holding what
-/// it held - the write end of the child's output among it - once the stop returns. Disposed, it lets go of what it kept.
+/// What an end of processes ended - a stop's: a child's tree, its group, a job's members, what a session's end killed; and
+/// the tree <c>--now</c> and a host agent's last resort end - each process kept as it is ended, for the end's caller to
+/// wait until it has gone (<see cref="GoneAsync"/>) where it needs: a stop and a contained child's end do, so nothing the
+/// stop ended is still holding what it held - the write end of the child's output among it - once the stop returns;
+/// <c>--now</c> waits for the process it was asked to end alone, and a host agent's last resort and a child whose start
+/// could not be read for none. Disposed, it lets go of what it kept.
 /// </summary>
 /// <remarks>
 /// Kept by what keeps a process from being taken for another: on Windows a handle, which keeps its id its own and is

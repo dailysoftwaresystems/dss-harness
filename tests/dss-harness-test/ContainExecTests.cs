@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.Versioning;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
@@ -751,6 +752,188 @@ public sealed class ContainExecTests
         finally
         {
             holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A member of a contained child's job that, as the job is ended, makes another process holding the output it
+    /// inherited - once the job's members were first listed - has that one ended too when the child ends of itself, on
+    /// Windows, and gone before the end of the child's output is looked for: once every member kept has gone the job is
+    /// listed again, ended again for what that finds, and what it found waited for in turn. TerminateJobObject is as
+    /// asynchronous as any end, and a member's thread already inside a process's creation completes it, which the job's end
+    /// may miss; that end is stood in for - each job's end, held back until the runner first asks whether what it ended has
+    /// gone, ends the members the job held as it was asked, each alone - and the member makes the late process at the first
+    /// ask, before the end is made.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsJob_WhoseMemberMakesAnotherAsTheJobIsEnded_HasThatOneEndedToo_BeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a job is Windows' alone; on Linux and macOS a contained child's session is held still as one before it is killed, and a held process starts no other.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var asked = temp.Combine("asked.txt");
+        var ends = new SlowEnds();
+        var learnedLate = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (holder, late) = (LearnedProcess.None, LearnedProcess.None);
+
+        ends.SlowJobsByTheirListing();
+        ends.AtFirstAsk(_ =>
+        {
+            File.WriteAllText(asked, "asked");
+            late = learnedLate.Task.WaitAsync(LongBound, cancellationToken).GetAwaiter().GetResult();
+        });
+
+        try
+        {
+            var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "spawn-late-holder", asked, "300000") with
+                {
+                    Contained = true,
+                    OnOutputLine = line =>
+                    {
+                        holder = LearnedProcess.In(line, "holder=") ?? holder;
+
+                        if (LearnedProcess.In(line, "late=") is { } made)
+                        {
+                            learnedLate.TrySetResult(made);
+                        }
+                    },
+                },
+                cancellationToken).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(
+                (0, false, $"holder={holder}\nlate={late}\n", (string?)null),
+                (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // Both of the job's ends were held back, the late process made before the first was: what this test is about happened.
+            Assert.Equal((2, true), (ends.HeldBack, late.Id != 0));
+            Assert.False(late.Running, $"the late process {late} outlived the job that held it");
+        }
+        finally
+        {
+            late.TryEnding();
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A member of a contained child's job whose own security refuses its end to everyone - as a program that guards itself
+    /// against being ended by other software of the same user does - is waited for all the same when the child ends of
+    /// itself, on Windows, and has gone before the end of the child's output is looked for: the job's own end asks nothing
+    /// of it, and it is kept by a handle that only waits for its end and asks when it was created, which its security
+    /// grants. Opened to be ended as well, it would not be kept, nor its end waited for, and it would be taken for a process
+    /// the child left running. The job's slow end is stood in for: it ends only once the runner first asks whether what it
+    /// ended has gone.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AContainedChildsJobMember_WhoseOwnSecurityRefusesItsEnd_IsWaitedForAllTheSame()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a job, and a process's own security, are Windows'.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var go = temp.Combine("go.txt");
+        var ends = new SlowEnds();
+        var holder = LearnedProcess.None;
+        bool? mayEnd = null;
+
+        // The holder needs no handle of the test's got before it refuses: its job ends it whatever the test does.
+        File.WriteAllText(go, "go");
+        ends.SlowJobs();
+        ends.AtFirstAsk(asked => mayEnd = RefusedEnd.MayEnd(asked.Id));
+
+        try
+        {
+            var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "deny-terminate", go, temp.Combine("refused.txt"), "sleep", "300000") with
+                {
+                    Contained = true,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
+                },
+                cancellationToken).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal((0, false, $"holder={holder}\n", (string?)null), (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld));
+            Assert.SkipWhen(mayEnd == true, "this process's rights pass over any process's own security - its debug privilege is enabled - so no member can refuse it its end.");
+
+            // The member refused its end while it was kept, and the job's end was held back: what this test is about happened.
+            Assert.Equal((false, 1), (mayEnd, ends.HeldBack));
+            Assert.False(holder.Running, $"the holder {holder} outlived the job that held it");
+        }
+        finally
+        {
+            RefusedEnd.End(holder);
+        }
+    }
+
+    /// <summary>
+    /// A tree whose processes' own security refuses their end - its root's, and a grandchild's that has a child of its own -
+    /// still has every other process of it ended, on Windows, as the walk of a process known by its id alone meets it: one
+    /// that cannot be ended is passed over, its refusal said once - though the list of every process is read again, and
+    /// names it again, once the walk has ended more - and its children taken all the same, from the reading that found it,
+    /// as .NET's own end of a tree goes on to the children. The test starts the root itself, and ends it by the handle it
+    /// was created with; the refusing grandchild is ended, its refusal lifted, by the test.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task ATreeWhoseProcessesRefuseTheirEnd_HasEveryOtherProcessOfItEnded_EachRefusalSaidOnce()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (go, rootRefused, middleRefused, last) = (temp.Combine("go.txt"), temp.Combine("root.txt"), temp.Combine("middle.txt"), temp.Combine("last.txt"));
+
+        File.WriteAllText(go, "go");
+
+        // The root refuses, its child does not; that child's child refuses, and has a child of its own.
+        var start = TestHost.StartOf(
+            Child("deny-terminate", go, rootRefused, "spawn-holder", "sleep", "300000", "spawn-holder", "sleep", "300000", "deny-terminate", go, middleRefused, "spawn-grandchild", last, "300000"));
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+        var (middle, holder) = (LearnedProcess.None, LearnedProcess.None);
+
+        try
+        {
+            Assert.True(Until(() => File.Exists(middleRefused) && File.Exists(last)), $"the tree of {root.Id} never stood");
+
+            middle = LearnedProcess.Of(int.Parse(File.ReadAllText(middleRefused), CultureInfo.InvariantCulture));
+            holder = LearnedProcess.Of(int.Parse(File.ReadAllText(last), CultureInfo.InvariantCulture));
+
+            Assert.SkipWhen(RefusedEnd.MayEnd(root.Id), "this process's rights pass over any process's own security - its debug privilege is enabled - so no process can refuse it its end.");
+
+            using var byItsId = Process.GetProcessById(root.Id);
+            using var ended = new EndedProcesses(ProcessEnds.Machine);
+
+            var raised = Assert.Throws<AggregateException>(() => Containment.EndTree(byItsId, group: false, ended));
+            var refused = new Win32Exception(5).Message;
+
+            Assert.Equal(
+                [$"pid {root.Id} could not be ended: {refused}", $"pid {middle.Id} could not be ended: {refused}"],
+                raised.InnerExceptions.Select(failure => failure.Message));
+            Assert.Equal((false, false, true), (ended.Kept(root.Id) is not null, ended.Kept(middle.Id) is not null, ended.Kept(holder.Id) is not null));
+
+            await ended.GoneAsync("what of the tree could be ended to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+
+            Assert.False(holder.Running, $"the refusing process's child {holder} outlived its tree's end");
+        }
+        finally
+        {
+            holder.TryEnding();
+            RefusedEnd.End(middle);
+
+            try
+            {
+                root.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or AggregateException)
+            {
+                // Gone already, or a process of its tree going.
+            }
         }
     }
 

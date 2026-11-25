@@ -487,6 +487,152 @@ public sealed class ProcessRunnerTests
         }
     }
 
+    /// <summary>
+    /// A child stopped at its time limit whose descendant, as the stop ends it, makes another process that holds the output
+    /// it inherited - once the walk of the child's tree has last read Windows' list of every process - has that one ended
+    /// too, and gone before the end of the output is looked for: once every process the stop ended has gone, the tree is
+    /// walked again, and what that finds is ended and waited for in turn, so the run says nothing holds its output. A
+    /// killed process's thread already inside a process's creation completes it; the descendant's slow end is stood in
+    /// for, and it makes the late process at the stop's first ask whether what it ended has gone, before its end is made.
+    /// </summary>
+    [Fact]
+    public async Task AChildStopped_WhileADescendantItsStopEndsMakesAnother_HasThatOneEndedToo_BeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a stopped tree is walked again once what its walk ended has gone on Windows alone; on Linux and macOS each process is held still before its children are taken, and a held one starts no other (AChildStoppedWhileADescendantItsStopKilledIsStillEnding_IsReadToTheEndOfItsOutput).");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var asked = temp.Combine("asked.txt");
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learnedHolder = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var learnedLate = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (holder, late) = (LearnedProcess.None, LearnedProcess.None);
+        var limit = TimeSpan.FromMinutes(1);
+
+        ends.AtFirstAsk(_ =>
+        {
+            File.WriteAllText(asked, "asked");
+            late = learnedLate.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken).GetAwaiter().GetResult();
+        });
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            learnedHolder.TrySetResult(found);
+                        }
+
+                        if (LearnedProcess.In(line, "late=") is { } made)
+                        {
+                            learnedLate.TrySetResult(made);
+                        }
+                    },
+                },
+                cancellationToken);
+
+            holder = await learnedHolder.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            ends.Slow(holder.Id);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+
+            Assert.Equal((true, $"holder={holder}\nlate={late}\n", (string?)null), (result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // The descendant's end was held back, and it made the late process while it was: what this test is about happened.
+            Assert.Equal((1, true), (ends.HeldBack, late.Id != 0));
+            Assert.False(late.Running, $"the late process {late} outlived the stop");
+        }
+        finally
+        {
+            late.TryEnding();
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A child whose own security refuses its end to everyone, its owner included - as a program that guards itself against
+    /// being ended by other software of the same user does - is ended at its time limit all the same, on Windows, and has
+    /// gone when the run answers: the stop keeps it by a copy of the handle the runtime got as it created the child, granted
+    /// before the child could refuse anything, never by one opened by its id, which its security refuses - opened so,
+    /// nothing would be ended, and the run would wait for the child for as long as it ran. The test holds the child by a
+    /// handle of its own, got before it refuses, which ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AChildWhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItWasCreatedWith()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's, and a stop at a child's limit is held by AChildStoppedWhileADescendantItsStopKilledIsStillEnding_IsReadToTheEndOfItsOutput.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (held, refused) = (temp.Combine("held.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var learned = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var limit = TimeSpan.FromMinutes(1);
+        Process? child = null;
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock }.RunAsync(
+                TestHost.ChildRequest("say-pid-then", "deny-terminate", held, refused, "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (line.StartsWith("pid=", StringComparison.Ordinal) && int.TryParse(line[4..], NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+                        {
+                            learned.TrySetResult(id);
+                        }
+                    },
+                },
+                cancellationToken);
+
+            var id = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+
+            // Opened before the child refuses its end, a handle keeps every right it was granted.
+            child = Process.GetProcessById(id);
+            _ = child.SafeHandle;
+            File.WriteAllText(held, "held");
+
+            var waited = Stopwatch.StartNew();
+
+            while (!File.Exists(refused))
+            {
+                Assert.True(waited.Elapsed < TimeSpan.FromMinutes(2), $"the child {id} never refused its end");
+                await Task.Delay(20, cancellationToken);
+            }
+
+            Assert.SkipWhen(RefusedEnd.MayEnd(id), "this process's rights pass over any process's own security - its debug privilege is enabled - so no child can refuse it its end.");
+
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+
+            Assert.Equal((true, $"pid={id}\n"), (result.TimedOut, result.StandardOutput));
+            Assert.True(child.HasExited, $"the child {id} outlived the stop that ended it");
+        }
+        finally
+        {
+            if (child is { HasExited: false })
+            {
+                child.Kill();
+            }
+
+            child?.Dispose();
+        }
+    }
+
     [Fact]
     public async Task RunAsync_AppliesEnvironmentOverrides()
     {

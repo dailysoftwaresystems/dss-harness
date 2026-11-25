@@ -455,7 +455,8 @@ public static class ProcessHolders
 
     /// <summary>
     /// The machine's own end of a process: it and its whole tree, ended through the one walk that ends a tree
-    /// (<see cref="Containment.EndTree"/>), then waited for until <paramref name="bound"/> is cancelled.
+    /// (<see cref="Containment.EndTree"/>), then the process alone waited for until <paramref name="bound"/> is cancelled -
+    /// what else of its tree the walk ended is let go of as this returns, never waited for.
     /// </summary>
     private static async Task KillAndWaitAsync(int processId, CancellationToken bound)
     {
