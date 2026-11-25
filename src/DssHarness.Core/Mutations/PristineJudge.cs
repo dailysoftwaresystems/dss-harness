@@ -105,6 +105,18 @@ public static class PristineJudge
     public static readonly TimeSpan LongestBound = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 
     /// <summary>
+    /// The least a bound can be: ten seconds, which no run however short takes a bound below. What a busy machine holds a
+    /// program back by - its start, and each step of its run, waiting while the machine's other work runs: the other
+    /// workers' builds, everything else it was given - is a delay of its own, as long for a run of a millisecond as for
+    /// one of a minute, and never a share of the run; and one measurement of the unmutated run, taken under one load,
+    /// says nothing of what another load holds the next run back by. So a run that took milliseconds unmutated, bounded
+    /// at ten times that alone, is stopped by whatever the machine was doing as it ran, and said to have run past the
+    /// factor though the mutation changed nothing of its time. Only ever a wait, never a cut: a run that ends before it
+    /// is judged on all it did, and one that goes on is stopped, a few seconds later than the factor alone would.
+    /// </summary>
+    public static readonly TimeSpan LeastBound = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// What the control of <paramref name="runner"/> decided: <paramref name="build"/>, and <paramref name="run"/> where
     /// the build passed, which took <paramref name="duration"/>.
     /// </summary>
@@ -190,21 +202,23 @@ public static class PristineJudge
 
     /// <summary>
     /// How long a mutated run may take: <paramref name="factor"/> times the unmutated run, never less than the unmutated
-    /// run and its start and exit again (<paramref name="startAndExit"/>), the program's own cost on this machine, and never
-    /// more than <see cref="LongestBound"/> - saying which of the three set it, so a run stopped under the least a bound can
-    /// be is never said to have run past the factor.
+    /// run and its start and exit again (<paramref name="startAndExit"/>), the program's own cost on this machine, nor than
+    /// <see cref="LeastBound"/>, and never more than <see cref="LongestBound"/> - saying which of the four set it, so a run
+    /// stopped under the least a bound can be is never said to have run past the factor.
     /// </summary>
     /// <param name="duration">How long the unmutated run took.</param>
     /// <param name="startAndExit">What the unmutated run took beyond its cases (<see cref="StartAndExit"/>).</param>
     /// <param name="factor">How many times that a mutated run may take.</param>
     public static RunBound Bound(TimeSpan duration, TimeSpan startAndExit, double factor)
     {
-        var least = (double)duration.Ticks + startAndExit.Ticks;
+        var again = (double)duration.Ticks + startAndExit.Ticks;
         var scaled = duration.Ticks * factor;
+        var least = (double)LeastBound.Ticks;
 
-        // Written so that a factor that is no number is the longest a bound can be, as it has always been.
-        return !(Math.Max(scaled, least) < LongestBound.Ticks) ? new RunBound(LongestBound, "the longest a run is waited for")
-            : scaled >= least ? new RunBound(TimeSpan.FromTicks((long)scaled), $"{factor.ToString(CultureInfo.InvariantCulture)}x the unmutated run")
-            : new RunBound(TimeSpan.FromTicks((long)least), $"the unmutated run and its start and exit, {LedgerReport.FormatDuration(startAndExit)}, again");
+        // Written so that a factor that is no number is the longest a bound can be: no comparison with it holds.
+        return !(Math.Max(Math.Max(scaled, again), least) < LongestBound.Ticks) ? new RunBound(LongestBound, "the longest a run is waited for")
+            : scaled >= again && scaled >= least ? new RunBound(TimeSpan.FromTicks((long)scaled), $"{factor.ToString(CultureInfo.InvariantCulture)}x the unmutated run")
+            : again >= least ? new RunBound(TimeSpan.FromTicks((long)again), $"the unmutated run and its start and exit, {LedgerReport.FormatDuration(startAndExit)}, again")
+            : new RunBound(LeastBound, "the least a run is waited for");
     }
 }

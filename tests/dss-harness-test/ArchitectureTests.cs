@@ -495,6 +495,10 @@ public sealed class ArchitectureTests
         [@"DssHarness.Core\Sync\SyncServe.cs|MostFilesInABatch"] = "partition: files cross in batches, every one of them",
         [@"DssHarness.Core\Web\Index\SitemapFill.cs|MostStaleLines"] = "compaction: fill.jsonl is written anew once its stale lines outnumber those kept, never emptied",
 
+        // A floor, not a cap: the least a wait is, which only ever waits longer and keeps a verdict from resting on a busy
+        // machine's own delay; nothing is cut or left out by it.
+        [@"DssHarness.Core\Mutations\PristineJudge.cs|LeastBound"] = "floor: a mutated run is waited for ten seconds at least, past what one measurement of a short run says",
+
         // Presentation, not a cap: a derived label's shape.
         [@"DssHarness.Core\Agents\SideTasks\SideTaskService.cs|MostNameCharacters"] = "presentation: the label of a derived side-task name; the prompt is kept whole",
 

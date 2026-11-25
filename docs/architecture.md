@@ -10705,11 +10705,20 @@ long it takes when nothing is wrong. So a mutated run may take `mutations.runTim
 times that run, never less than it
 and its start and exit again - what the unmutated run took beyond the time its report says its
 cases took, measured on this machine, the whole run where the report says nothing of their time
-(`PristineJudge.StartAndExit`) - and one stopped past that is `unattributed`, saying so and which
-of the two set its bound: a binary whose unmutated run is short is stopped at that run and its
-start and exit again, never said to have
-run past ten times it. A stall bound applies to it as
-to every phase. Each such run, and the unmutated one that bounds it, is timed on both clocks as
+(`PristineJudge.StartAndExit`) - nor than ten seconds (`PristineJudge.LeastBound`), and one stopped
+past that is `unattributed`, saying so and which of the three set its bound: a binary whose start
+and exit is most of its run, swept with a factor under two, is stopped at that run and its start
+and exit again, and one whose unmutated run took milliseconds at ten seconds - never said to have
+run past ten times it. The least is not measured, and cannot be: what a busy machine holds a
+program back by - its start and each step of its run waiting while the sweep's other workers build
+and whatever else the machine was given runs - is a delay of its own, as long for a run of a
+millisecond as for one of a minute, and one measurement of the unmutated run, taken under one
+load, says nothing of what another load holds the next run back by; ten times a run of a few
+milliseconds is stopped by that delay alone. It only ever waits longer: a run that ends is judged
+on all it did, and one that does not is stopped seconds later than the factor would. A stall bound applies to it as
+to every phase. Each such run, and the unmutated one that bounds it, is measured over the window
+its bound is held against - from the moment the sweep begins it to the moment its phase ends, what
+this tool took to start the binary and read its end counted with it - and timed on both clocks as
 every phase is, by the sweep itself: one that spanned a clock step or a host sleep is said on the
 leg's line, among why its timings are suspect, however it ended - stopped past its bound included,
 which no phase is left to say - with what each of the sweep's builds says of its own, a worker's

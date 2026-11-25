@@ -66,8 +66,9 @@ public sealed class MutationSettings
 
     /// <summary>
     /// How many times the duration of a test binary's unmutated run one of its mutated runs may take before it is
-    /// stopped as hung, above 1. Never less than that run's duration and a minute: a binary that takes a second
-    /// unmutated is not stopped at ten.
+    /// stopped as hung, above 1. Never less than that run and its start and exit again, nor than
+    /// <see cref="Mutations.PristineJudge.LeastBound"/>: a binary that takes a few milliseconds unmutated is not stopped
+    /// at a few tens of them, by whatever else its machine was doing as it ran (<see cref="Mutations.PristineJudge.Bound"/>).
     /// </summary>
     /// <remarks>
     /// A bound on the run's whole duration, which the harness otherwise never sets for a phase: a mutation that turns

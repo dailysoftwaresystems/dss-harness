@@ -99,6 +99,10 @@ public sealed class ArmJudgeTests
             ArmRun.StoppedAt(PristineJudge.Bound(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(6), 1.5)),
             LegVerdict.Unattributed,
             "ran past the unmutated run and its start and exit, 6s, again, 16s, and was stopped"),
+        ["11 past the least a bound is"] = (
+            ArmRun.StoppedAt(PristineJudge.Bound(TimeSpan.FromMilliseconds(5), TimeSpan.FromMilliseconds(5), 10)),
+            LegVerdict.Unattributed,
+            "ran past the least a run is waited for, 10s, and was stopped"),
         ["11 silent until it was stopped as hung"] = (
             ArmRun.Hung(45),
             LegVerdict.Unattributed,

@@ -188,41 +188,66 @@ public sealed class PristineJudgeTests
 
     /// <summary>
     /// The bound is the factor times the unmutated run, and never less than the unmutated run and its start and exit
-    /// again - a binary whose own start and exit is most of its run is never stopped for a slower start - nor so large it
-    /// cannot be waited for.
+    /// again - a binary whose own start and exit is most of its run is never stopped for a slower start - nor than the
+    /// least a bound is, nor so large it cannot be waited for.
     /// </summary>
     [Theory]
     [InlineData(30, 1, 10, 300)]
     [InlineData(2, 1, 10, 20)]
-    [InlineData(2, 2, 1.5, 4)]
+    [InlineData(20, 20, 1.5, 40)]
     [InlineData(100, 60, 1.5, 160)]
     [InlineData(1000, 1, 1.5, 1500)]
-    public void TheBound_IsTheFactorTimesTheRun_AndNeverLessThanTheRunAndItsStartAndExitAgain(double seconds, double startAndExit, double factor, double bound)
+    [InlineData(2, 2, 1.5, 10)]
+    [InlineData(0.9, 0.9, 10, 10)]
+    [InlineData(0.005, 0.005, 10, 10)]
+    public void TheBound_IsTheFactorTimesTheRun_NeverLessThanTheRunAndItsStartAndExitAgain_NorThanTheLeast(double seconds, double startAndExit, double factor, double bound)
         => Assert.Equal(TimeSpan.FromSeconds(bound), PristineJudge.Bound(TimeSpan.FromSeconds(seconds), TimeSpan.FromSeconds(startAndExit), factor).Limit);
 
     /// <summary>
     /// A bound says what set it, as the verdict of a run stopped at it then says: the factor times the unmutated run
     /// where that is what it is; the unmutated run and its start and exit again, naming what that was, where the factor
-    /// would give less; and the longest a run is waited for where either is past it. Never the factor where the factor is
-    /// not what stopped the run.
+    /// would give less; the least a run is waited for where both would give less than that; and the longest a run is
+    /// waited for where any is past it. Never the factor where the factor is not what stopped the run.
     /// </summary>
     [Theory]
     [InlineData(30, 1, 10, "10x the unmutated run")]
     [InlineData(1, 1, 10, "10x the unmutated run")]
-    [InlineData(2, 2, 1.5, "the unmutated run and its start and exit, 2s, again")]
+    [InlineData(20, 20, 1.5, "the unmutated run and its start and exit, 20s, again")]
     [InlineData(100, 60, 1.5, "the unmutated run and its start and exit, 1m00s, again")]
     [InlineData(120, 1, 1.5, "1.5x the unmutated run")]
     [InlineData(1000, 1, 1.5, "1.5x the unmutated run")]
+    [InlineData(2, 2, 1.5, "the least a run is waited for")]
+    [InlineData(0.005, 0.005, 10, "the least a run is waited for")]
     [InlineData(40 * 86400, 0, 10, "the longest a run is waited for")]
     [InlineData(60 * 86400, 0, 1.5, "the longest a run is waited for")]
     public void ABound_SaysWhatSetIt(double seconds, double startAndExit, double factor, string setBy)
         => Assert.Equal(setBy, PristineJudge.Bound(TimeSpan.FromSeconds(seconds), TimeSpan.FromSeconds(startAndExit), factor).SetBy);
 
     /// <summary>
-    /// The headroom a mutated run is given past the unmutated run is measured, never a minute of the code's own: what the
-    /// unmutated run took beyond the time its report gives its cases - a 40-second start and exit around a second of
-    /// cases bounds a run at 81 seconds where a factor of 1.5 alone would stop it at 61.5 - and the whole run where its
-    /// report gives its cases no time. Red with the minute put back as the least a bound is.
+    /// A run that took milliseconds unmutated is waited for ten seconds mutated, never ten times its milliseconds: what a
+    /// busy machine holds a program back by - its start, waiting on the sweep's other worker's build and whatever else the
+    /// machine runs - is a delay of its own, and a mutated run of a binary that takes 5 ms unmutated, bounded at 50 ms,
+    /// would be stopped by that delay alone and said to have run past ten times its unmutated run, its bound said as 0s.
+    /// The least is said as what set the bound, with the bound itself.
+    /// </summary>
+    [Fact]
+    public void AShortRunsBound_IsTheLeastARunIsWaitedFor_NeverTheFactorTimesItsMilliseconds()
+    {
+        var unmutated = TimeSpan.FromMilliseconds(5);
+        var report = JUnitReport.Read(
+            "<testsuites><testsuite><testcase classname=\"Fixture\" name=\"Charge\" time=\"0\"/><testcase classname=\"Fixture\" name=\"Depth\" time=\"0\"/></testsuite></testsuites>")!;
+
+        var judged = PristineJudge.Judge("fixture_tests", Built, ArmRun.Exited(0, RunReport.Of(report)), unmutated, 10);
+
+        Assert.Equal(TimeSpan.FromSeconds(10), PristineJudge.LeastBound);
+        Assert.Equal(PristineOutcome.Passed(new RunBound(TimeSpan.FromSeconds(10), "the least a run is waited for")), judged);
+    }
+
+    /// <summary>
+    /// The headroom a mutated run is given past the unmutated run is measured, where that is more than the least a bound
+    /// is: what the unmutated run took beyond the time its report gives its cases - a 40-second start and exit around a
+    /// second of cases bounds a run at 81 seconds where a factor of 1.5 alone would stop it at 61.5 - and the whole run
+    /// where its report gives its cases no time.
     /// </summary>
     [Fact]
     public void TheHeadroom_IsMeasured()
