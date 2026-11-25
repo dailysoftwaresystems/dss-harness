@@ -105,6 +105,7 @@ internal static class TestHost
 
         IsolateGitConfiguration();
         IsolateUserState();
+        HangWatch.Start();
 
         // Threads at once for the work the suite's many tests hand the pool, so a test that blocks one - a double that
         // sleeps, a sync wait - never leaves a timer's callback queued behind the pool's slow growth: on a busy runner
