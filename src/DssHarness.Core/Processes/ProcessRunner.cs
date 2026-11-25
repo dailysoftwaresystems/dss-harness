@@ -321,6 +321,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         var statusName = throughStep ? StatusName(windows) : null;
         using var status = statusName is null ? null : OpenedStatus(statusName, request.FileName, resolved);
 
+        // The program the step created, on Windows, by a copy of the handle the step created it with, held for as long as
+        // the run: a stop ends and waits for it by that, whatever its own security refuses another.
+        using var program = new CreatedProgram();
+
         if (throughStep)
         {
             // Placed before it runs a line of its own, through this tool's own step: the container
@@ -446,24 +450,32 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
                 placed = true;
                 started = heard.Started;
+
+                // Copied out of the step while it stands, waiting on the program: a step that has gone holds no handle.
+                if (windows && heard.Program is { } value)
+                {
+                    program.Handle = Containment.CopiedFrom(process.SafeHandle, value);
+                }
             }
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
                 stopped = true;
-                uncontained = await StopAsync(request, resolved, grouped, job, process, Left()).ConfigureAwait(false);
+                uncontained = await StopAsync(request, resolved, grouped, job, process, Left(), program.Handle).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Nothing the step says can be read, so nothing it starts is run blind: it goes, with its tree - none of it
-                // waited for, since its output is never read.
+                // waited for, since its output is never read - and what of it could not be ended is said with it.
+                string? unended;
+
                 using (var ended = new EndedProcesses(Ends))
                 {
-                    EndTree(process, grouped: false, ended);
+                    unended = EndTree(process, grouped: false, ended, program: null);
                 }
 
                 throw new ProgramStartException(
                     request.FileName,
-                    $"'{resolved}' could not be started: what contain-exec said of its start could not be read: {ex.Message}",
+                    $"'{resolved}' could not be started: what contain-exec said of its start could not be read: {ex.Message}{(unended is null ? string.Empty : $"; {unended}")}",
                     ex);
             }
         }
@@ -510,7 +522,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 // contained child is ended through its container, which reaches what detached itself
                 // from its parent as surely as what did not.
                 stopped = true;
-                uncontained = await StopAsync(request, resolved, grouped, job, process, Left()).ConfigureAwait(false);
+                uncontained = await StopAsync(request, resolved, grouped, job, process, Left(), program.Handle).ConfigureAwait(false);
             }
         }
 
@@ -548,8 +560,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // and ended where the caller gives up.
         // A stopped child's rest is read whatever the caller does: the stop has been made, and what it said as it went is the
         // run's to keep. Whatever the stop, or a contained child's container, ended has gone by now, so what still holds a
-        // pipe is only ever what the child left running.
-        var held = await DrainedAsync(resolved, standardOutput, standardError, stopped ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
+        // pipe is only ever what the child left running - or what the stop, or the container, could not reach or end, which
+        // the result says.
+        var held = await DrainedAsync(resolved, standardOutput, standardError, unreached: uncontained is not null, stopped ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
 
         var capturedOutput = standardOutput.Taken();
         var capturedError = standardError.Taken();
@@ -604,11 +617,19 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// waiting on it (<see cref="StreamCapture.Look"/>), which ends its reading there. A look settles at once, so a
     /// process still ending would be taken for one left running: nothing a stop ended is, by then.
     /// </summary>
+    /// <param name="resolved">The program the child runs.</param>
+    /// <param name="output">The child's output.</param>
+    /// <param name="error">The child's error output.</param>
+    /// <param name="unreached">
+    /// Whether the stop, or the child's container, could not reach or end a process it was to (<see cref="ProcessResult.Uncontained"/>):
+    /// what holds the output may then be that process, never one the child left running.
+    /// </param>
+    /// <param name="cancellationToken">Gives the wait up.</param>
     /// <returns>
-    /// What says a process the child left holds its output, where one does; <see langword="null"/> where both streams
-    /// ended, or the caller gave up first.
+    /// What says a process the child left - or one its end could not reach or end - holds its output, where one does;
+    /// <see langword="null"/> where both streams ended, or the caller gave up first.
     /// </returns>
-    private async Task<string?> DrainedAsync(string resolved, StreamCapture output, StreamCapture error, CancellationToken cancellationToken)
+    private async Task<string?> DrainedAsync(string resolved, StreamCapture output, StreamCapture error, bool unreached, CancellationToken cancellationToken)
     {
         var ended = Task.WhenAll(output.Reading, error.Reading);
 
@@ -642,9 +663,16 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         await ended.ConfigureAwait(false);
 
-        return output.HeldOpen || error.HeldOpen
-            ? $"'{resolved}' left a process running that holds its output: every character it wrote was read, and what that process writes from now on is its own, and is not read"
-            : null;
+        if (!output.HeldOpen && !error.HeldOpen)
+        {
+            return null;
+        }
+
+        var holder = unreached
+            ? $"the output of '{resolved}' is held by a process its end could not reach or end, or one it left running"
+            : $"'{resolved}' left a process running that holds its output";
+
+        return $"{holder}: every character it wrote was read, and what that process writes from now on is its own, and is not read";
     }
 
     /// <summary>
@@ -653,22 +681,32 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// tree; a child that leads a group of its own, apart from the terminal on Linux and macOS, by its
     /// group as well, at once, which reaches what its tree handed on - and waits until every process
     /// the stop ended has gone, told every five minutes, so none of them is still holding the child's
-    /// output when its end is looked for, and none is taken for a process the child left running.
+    /// output when its end is looked for, and none is taken for a process the child left running. What it could not reach
+    /// or end it says.
     /// </summary>
     /// <param name="request">The child's request, saying whether it was contained.</param>
     /// <param name="resolved">The program the child runs.</param>
     /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
     /// <param name="job">The job holding a contained child on Windows, or <see langword="null"/>.</param>
     /// <param name="process">The child.</param>
-    /// <returns>What the container could not reach, or <see langword="null"/> where it reached all it holds.</returns>
     /// <param name="bound">What is left of the child's time limit, at which what it left asked to end is made to; none where it has none.</param>
-    private async Task<string?> StopAsync(ProcessRequest request, string resolved, bool grouped, SafeWaitHandle? job, Process process, TimeSpan? bound)
+    /// <param name="program">
+    /// The program the tool's own step created for the child, on Windows, by a copy of the handle it was created with;
+    /// <see langword="null"/> where the child runs no such step, or the step had not said it yet.
+    /// </param>
+    /// <returns>
+    /// What the container could not reach, and what of the child's tree the stop could not end; <see langword="null"/>
+    /// where it reached and ended all it was to.
+    /// </returns>
+    private async Task<string?> StopAsync(ProcessRequest request, string resolved, bool grouped, SafeWaitHandle? job, Process process, TimeSpan? bound, SafeProcessHandle? program)
     {
         using var ended = new EndedProcesses(Ends);
+        string? unreached = null;
+        string? unended;
 
         try
         {
-            return request.Contained ? await EndContainerAsync(job, process, bound, resolved).ConfigureAwait(false) : null;
+            unreached = request.Contained ? await EndContainerAsync(job, process, bound, resolved).ConfigureAwait(false) : null;
         }
         finally
         {
@@ -678,32 +716,53 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             // for what the tree handed on: walked first, while the child stands, the tree still
             // reaches what moved to a group of its own - a test under timeout - which the child's end
             // would have handed on, out of the tree's reach.
-            EndTree(process, grouped, ended);
+            unended = EndTree(process, grouped, ended, program);
 
             await ended.GoneAsync($"what the stop of '{resolved}' ended to go", Waits.Told, Clock).ConfigureAwait(false);
         }
+
+        return unreached is null ? unended : unended is null ? unreached : $"{unreached}, and {unended}";
     }
 
     /// <summary>
     /// Ends <paramref name="process"/>'s tree, and the group it leads where <paramref name="grouped"/>, keeping what it
-    /// ends in <paramref name="ended"/> (<see cref="Containment.EndTree"/>): a process of it that could not be ended - one
-    /// running as another user, or one whose own security refuses another its end - is passed over, every other ended, the
-    /// child among them, kept by the handle the runtime got as this process created it, which ends it whatever its own
-    /// security refuses another, so the wait for it ends.
+    /// ends in <paramref name="ended"/> (<see cref="Containment.EndTree"/>) - the child by a copy of the handle the runtime
+    /// got as this process created it, and the program the tool's own step created for it by a copy of the handle the step
+    /// created it with, each ended so whatever its own security refuses another, so the wait for it ends - and says what it
+    /// could not end: a process of the tree running as another user, or one whose own security refuses another its end,
+    /// is passed over, every other ended.
     /// </summary>
     /// <param name="process">The child.</param>
     /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
     /// <param name="ended">What keeps each process ended.</param>
-    private static void EndTree(Process process, bool grouped, EndedProcesses ended)
+    /// <param name="program">The program the tool's own step created for the child, on Windows; <see langword="null"/> where there is none to hand on.</param>
+    /// <returns>What of the tree could not be ended, and why; <see langword="null"/> where every process of it was.</returns>
+    private static string? EndTree(Process process, bool grouped, EndedProcesses ended, SafeProcessHandle? program)
     {
         try
         {
-            Containment.EndTree(process, grouped, ended, process.SafeHandle);
+            Containment.EndTree(process, grouped, ended, program is null ? [process.SafeHandle] : [process.SafeHandle, program]);
+            return null;
         }
-        catch (AggregateException)
+        catch (AggregateException ex)
         {
-            // Passed over, as above: what could not be ended was never this process's to end.
+            return string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"not every process of the tree of pid {process.Id} could be ended: {string.Join("; ", ex.InnerExceptions.Select(failure => failure.Message.TrimEnd('.')))}");
         }
+    }
+
+    /// <summary>
+    /// The program the tool's own step created for a child, on Windows: a copy of the handle the step created it with, held
+    /// for as long as the child's run, and let go of with it.
+    /// </summary>
+    private sealed class CreatedProgram : IDisposable
+    {
+        /// <summary>The handle, once it was copied out of the step; <see langword="null"/> before, or where it could not be.</summary>
+        public SafeProcessHandle? Handle { get; set; }
+
+        /// <inheritdoc/>
+        public void Dispose() => Handle?.Dispose();
     }
 
     /// <summary>
@@ -773,7 +832,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             // A child no record names is one a killed tool would leave running unseen: it is not run, stopped as a stop
             // stops it, whatever kept the record from being written.
-            await StopAsync(request, resolved, grouped, job, process, request.Timeout).ConfigureAwait(false);
+            await StopAsync(request, resolved, grouped, job, process, request.Timeout, program: null).ConfigureAwait(false);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
 
             if (ex is IOException or UnauthorizedAccessException)

@@ -563,8 +563,10 @@ public sealed class ProcessRunnerTests
     /// being ended by other software of the same user does - is ended at its time limit all the same, on Windows, and has
     /// gone when the run answers: the stop keeps it by a copy of the handle the runtime got as it created the child, granted
     /// before the child could refuse anything, never by one opened by its id, which its security refuses - opened so,
-    /// nothing would be ended, and the run would wait for the child for as long as it ran. The test holds the child by a
-    /// handle of its own, got before it refuses, which ends it on every path.
+    /// nothing would be ended, and the run would wait for the child for as long as it ran. The run is made from a child of
+    /// the suite whose token holds no debug privilege (<see cref="ChildRun.UnprivilegedAsync"/>), so the refusal holds
+    /// against it on an administrator's elevated run as on any other; that child holds the stopped child by a handle of its
+    /// own, got before it refuses, which ends it on every path.
     /// </summary>
     [Fact]
     [SupportedOSPlatform("windows")]
@@ -574,7 +576,67 @@ public sealed class ProcessRunnerTests
             OperatingSystem.IsWindows(),
             "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's, and a stop at a child's limit is held by AChildStoppedWhileADescendantItsStopKilledIsStillEnding_IsReadToTheEndOfItsOutput.");
 
-        var cancellationToken = TestContext.Current.CancellationToken;
+        Assert.Equal(
+            new ChildRunAnswer(0, "refused True, timed out True, output its id, gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(ARefusingChildStoppedAtItsLimitAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A stop that cannot end a process of the child's tree - a holder of the child's output whose own security refuses its
+    /// end - says so in its result, on Windows: what of the tree it could not end, and why (<see cref="ProcessResult.Uncontained"/>),
+    /// and that what holds the output is a process its end could not reach or end, or one the child left running - never
+    /// that the child left it running, which a refusal it dropped would read as. The holder is passed over, every other
+    /// process ended, the child among them; the run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), which lifts the holder's refusal and ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AStopThatCannotEndAProcessOfTheChildsTree_SaysSoInItsResult_NeverAsAProcessTheChildLeftRunning()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's.");
+
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                $"refused True, timed out True, unended not every process of the tree of pid {{child}} could be ended: pid {{holder}} could not be ended: {new Win32Exception(5).Message.TrimEnd('.')}, "
+                    + "output held the output of '{program}' is held by a process its end could not reach or end, or one it left running: every character it wrote was read, and what that process writes from now on is its own, and is not read, "
+                    + "holder stands True",
+                ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(AStopPassingAHolderOverAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A privilege a child of the suite removes from its own token is gone from it, read back: what a test of a process's
+    /// own security counts on of the child it runs in (<see cref="ChildRun.UnprivilegedAsync"/>), shown on a privilege every
+    /// user's token holds - the debug privilege only an administrator's does.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task APrivilegeAChildOfTheSuiteRemoves_IsGoneFromItsToken()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a token's privileges are Windows'.");
+
+        Assert.Equal(
+            new ChildRunAnswer(0, "held True, removed nothing left, held after False, debug privilege False", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(RemovedFromTheToken), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child's side of <see cref="APrivilegeAChildOfTheSuiteRemoves_IsGoneFromItsToken"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static string RemovedFromTheToken()
+    {
+        const string WorkingSet = "SeIncreaseWorkingSetPrivilege";
+
+        var held = RefusedEnd.Holds(WorkingSet);
+        var removed = RefusedEnd.Removed(WorkingSet);
+
+        return $"held {held}, removed {removed ?? "nothing left"}, held after {RefusedEnd.Holds(WorkingSet)}, debug privilege {RefusedEnd.Holds(RefusedEnd.DebugPrivilege)}";
+    }
+
+    /// <summary>The child's side of <see cref="AChildWhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItWasCreatedWith"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> ARefusingChildStoppedAtItsLimitAsync()
+    {
         using var temp = new TempDirectory();
         var (held, refused) = (temp.Combine("held.txt"), temp.Combine("refused.txt"));
         var clock = new TimerClock();
@@ -596,31 +658,27 @@ public sealed class ProcessRunnerTests
                         }
                     },
                 },
-                cancellationToken);
+                CancellationToken.None);
 
-            var id = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            var id = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2));
 
             // Opened before the child refuses its end, a handle keeps every right it was granted.
             child = Process.GetProcessById(id);
             _ = child.SafeHandle;
             File.WriteAllText(held, "held");
 
-            var waited = Stopwatch.StartNew();
-
-            while (!File.Exists(refused))
+            for (var waited = Stopwatch.StartNew(); !File.Exists(refused); await Task.Delay(20))
             {
                 Assert.True(waited.Elapsed < TimeSpan.FromMinutes(2), $"the child {id} never refused its end");
-                await Task.Delay(20, cancellationToken);
             }
 
-            Assert.SkipWhen(RefusedEnd.MayEnd(id), "this process's rights pass over any process's own security - its debug privilege is enabled - so no child can refuse it its end.");
+            var refusing = !RefusedEnd.MayEnd(id);
 
             clock.Advance(limit);
 
-            var result = await run.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2));
 
-            Assert.Equal((true, $"pid={id}\n"), (result.TimedOut, result.StandardOutput));
-            Assert.True(child.HasExited, $"the child {id} outlived the stop that ended it");
+            return $"refused {refusing}, timed out {result.TimedOut}, output {(result.StandardOutput == $"pid={id}\n" ? "its id" : result.StandardOutput)}, gone {child.HasExited}";
         }
         finally
         {
@@ -630,6 +688,58 @@ public sealed class ProcessRunnerTests
             }
 
             child?.Dispose();
+        }
+    }
+
+    /// <summary>The child's side of <see cref="AStopThatCannotEndAProcessOfTheChildsTree_SaysSoInItsResult_NeverAsAProcessTheChildLeftRunning"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> AStopPassingAHolderOverAsync()
+    {
+        using var temp = new TempDirectory();
+        var (go, refused) = (temp.Combine("go.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var learned = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var limit = TimeSpan.FromMinutes(1);
+        var holder = LearnedProcess.None;
+
+        // The holder needs no handle of this process's got before it refuses: its refusal is lifted by its owner's right.
+        File.WriteAllText(go, "go");
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "deny-terminate", go, refused, "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } made)
+                        {
+                            learned.TrySetResult(made);
+                        }
+                    },
+                },
+                CancellationToken.None);
+
+            // Named once it has refused its end.
+            holder = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2));
+
+            var refusing = !RefusedEnd.MayEnd(holder.Id);
+
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2));
+            var unended = result.Uncontained is null
+                ? "nothing"
+                : System.Text.RegularExpressions.Regex.Replace(result.Uncontained, @"tree of pid \d+", "tree of pid {child}").Replace($"pid {holder} could", "pid {holder} could", StringComparison.Ordinal);
+
+            var outputHeld = result.OutputHeld is null ? "by nothing" : System.Text.RegularExpressions.Regex.Replace(result.OutputHeld, "'[^']*'", "'{program}'");
+
+            return $"refused {refusing}, timed out {result.TimedOut}, unended {unended}, output held {outputHeld}, holder stands {RefusedEnd.Stands(holder)}";
+        }
+        finally
+        {
+            RefusedEnd.End(holder);
         }
     }
 

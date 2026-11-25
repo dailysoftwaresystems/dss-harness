@@ -25,9 +25,11 @@ public sealed record ProcessResult(
     public string? BeatLost { get; init; }
 
     /// <summary>
-    /// What a contained child's container could not reach when it was ended - at the child's own end or at a stop -
-    /// and why, or <see langword="null"/> where it reached everything it holds: a session ended on Linux or macOS
-    /// without the process table it is read from ends the child's group and nothing outside it.
+    /// What the child's end could not reach or end, and why, or <see langword="null"/> where it reached and ended
+    /// everything it was to: what a contained child's container could not reach when it was ended - at the child's own
+    /// end or at a stop - a session ended on Linux or macOS without the process table it is read from ending the child's
+    /// group and nothing outside it; and what of the child's tree a stop could not end - a process running as another
+    /// user, or one whose own security refuses this process its end - each passed over, every other ended.
     /// </summary>
     public string? Uncontained { get; init; }
 
@@ -42,7 +44,9 @@ public sealed record ProcessResult(
     /// kept for the next phase by design - what that says: every character the child wrote was read, and what the process
     /// it left writes from then on is its own, never the child's, and is not read; <see langword="null"/> where the output
     /// ended with the child. Never a process a stop or a container's end ended: each is waited for until it has gone before
-    /// the output's end is looked for (<see cref="EndedProcesses"/>).
+    /// the output's end is looked for (<see cref="EndedProcesses"/>). Where the end could not reach or end a process it was
+    /// to (<see cref="Uncontained"/>), it says the holder is that process or one the child left running, never that the
+    /// child left it.
     /// </summary>
     public string? OutputHeld { get; init; }
 

@@ -322,9 +322,9 @@ public sealed record AgentRunResult(
     public AgentFallbackCredit? Credit { get; init; }
 
     /// <summary>
-    /// What the container of a child the client started could not reach when that child ended, and why - one entry for
-    /// each child whose container missed some of what it held, for what that child started may still run. Empty where
-    /// every child was ended whole.
+    /// What the end of a child the client started could not reach or end, and why - its container, a process of its tree a
+    /// stop could not end - one entry for each child whose end missed some of what it was to end, for what that child
+    /// started may still run. Empty where every child was ended whole.
     /// </summary>
     public IReadOnlyList<string> Uncontained { get; init; } = [];
 

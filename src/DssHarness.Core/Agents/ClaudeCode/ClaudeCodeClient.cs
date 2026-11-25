@@ -600,7 +600,7 @@ public sealed class ClaudeCodeClient(
                 try
                 {
                     // However the launch ended - its outcome, a fault of the loop's, the hard stop - what its end left is
-                    // said once it has gone: what its container could not reach, and a session file it kept all the same.
+                    // said once it has gone: what its end could not reach or end, and a session file it kept all the same.
                     await EndedAsync(process).ConfigureAwait(false);
                     await RemoveSessionFileAsync().ConfigureAwait(false);
                 }
@@ -1842,9 +1842,9 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>
-        /// Waits for the launch to have ended, and says what its container could not reach at that end, where it could not
-        /// reach all it held - however it ended, stopped among the ways: what the launch started may still run, which the
-        /// step's stream and its result say.
+        /// Waits for the launch to have ended, and says what its end could not reach or end - its container, a process of its
+        /// tree a stop could not end - where it could not reach and end all it was to, however it ended, stopped among the
+        /// ways: what the launch started may still run, which the step's stream and its result say.
         /// </summary>
         private async Task EndedAsync(Task<ProcessResult> process)
         {

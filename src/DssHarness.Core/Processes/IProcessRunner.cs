@@ -13,7 +13,8 @@ public interface IProcessRunner
     /// </exception>
     /// <exception cref="ProcessStoppedException">
     /// <paramref name="cancellationToken"/> stopped the run once the child had started, and the child has gone: carrying
-    /// what its container could not reach, which a stopped run hands no result to read from.
+    /// what it could not reach or end - its container, a process of its tree - which a stopped run hands no result to read
+    /// from.
     /// </exception>
     /// <remarks>
     /// An implementation must invoke <see cref="ProcessRequest.OnStarted"/> once the child is

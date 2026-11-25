@@ -118,9 +118,9 @@ public sealed record PhaseResult(
     public IReadOnlyList<string> LastLines { get; init; } = [];
 
     /// <summary>
-    /// What a contained phase's container could not reach when the phase ended, and why
-    /// (<see cref="Processes.ProcessResult.Uncontained"/>), for what it started may still run; null where it reached everything, and
-    /// for a phase that was not contained.
+    /// What the phase's end could not reach or end, and why (<see cref="Processes.ProcessResult.Uncontained"/>) - a contained
+    /// phase's container, a process of its tree a stop could not end - for what it started may still run, said as the phase
+    /// ends; null where its end reached and ended everything it was to.
     /// </summary>
     public string? Uncontained { get; init; }
 

@@ -119,7 +119,7 @@ public sealed partial class AgentToolRuntime
         }
         catch (ProcessStoppedException ex) when (ex.Uncontained is { } unreached)
         {
-            // Stopped by the run's own stop: what its container could not reach may still run, which the run says
+            // Stopped by the run's own stop: what the stop could not reach or end may still run, which the run says
             // however it ended, so it is kept before the stop goes on.
             Tally.LeftRunning($"{command}: {unreached}");
             throw;

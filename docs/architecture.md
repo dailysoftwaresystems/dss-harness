@@ -514,7 +514,7 @@ tree, and the group beside it, is ended by one walk (`Containment.EndTree`) - fo
 acts on the process running it: a tree whose root is that process, or one it descends from - read
 up its own chain of parents, each the parent the walk itself reads - on Linux and macOS the one the
 system names now, a child being handed on as its parent ends, before that parent's id is given out;
-on Windows one started no later than its child -
+on Windows one made no later than its child, as the walk orders a creator and its child (below) -
 is refused before anything is held or ended, which `--now` answers as could not be ended,
 its owner kept, and the last resort as left. On Linux
 and macOS it holds each process still (SIGSTOP) before it takes that process's children - once it
@@ -531,15 +531,27 @@ id, and only then it kills it all: the group as one first, while it stands, so a
 `/proc` hides, or whose reading failed - goes with it and is never left held still, each member killed by the group
 alone, since its id may be given out again once the group is killed, and every other process by its own id, the child
 last (`Containment.HeldStill`, the one order a session's end kills in too). On Windows, where nothing is held still, it
-ends each process as it finds it, the root first - the child the process runner ends, at a stop or
-where its start could not be read, kept by a copy of the handle the runtime got as it was created,
-which ends and waits for it whatever its own security refuses another, and the process `--now` or a
-last resort ends opened by its id, all they know of it - a child being one the list Windows keeps of
-every process names as created by a process the walk ended, created no earlier than that process,
-and the very one the list named, as its own handle's creation time says, so an id taken since the
-list was read is never ended. A process of the tree that cannot be ended - one running as another
-user, or one whose own security refuses the harness its end - is passed over, its failure said once,
-and still has its children taken from the reading that found it, the root's from the first. The
+ends each process as it finds it, the root first - each process its caller holds the handle it was
+created with for kept by a copy of that handle, which ends and waits for it whatever its own security
+refuses another: the child the process runner ends, at a stop or where its start could not be read,
+by the handle the runtime got as it was created, and the program the tool's own step created for a
+bound, contained or isolated child by the handle `contain-exec` got as it created it, whose value
+`contain-exec` says on its channel before it says the program placed and the runner copies out of it
+while it stands (`Containment.CopiedFrom`); the process `--now` or a last resort ends is opened by its
+id, all they know of it - a child being one the list Windows keeps of every process names as created
+by a process of the tree and made after it, and the very one the list named, as its own handle's
+creation time says, so an id taken since the list was read is never ended. Made after is read by the
+sequence number Windows gives each process as it creates it (`ProcessSequenceNumber`, counted up once
+a boot and never moved by the clock) where both could be opened to read theirs, and by their creation
+times, the clock's, where either could not (`CreationOrder`, the one order of a creator and its child,
+which the chain of parents above reads too). A process of the tree that cannot be opened - one running
+as another user, one whose own security refuses the harness its end, or one gone as it was reached -
+is passed over, its refusal said once, and still has its children taken from the reading that found
+it, by its listed id and creation time alone, no right asked of it, as a root that could not be ended
+has its own from the first reading. What a stop could not end it says beside what a container could
+not reach (`ProcessResult.Uncontained`, which a leg's phase warns), and what then holds the child's
+output is said to be such a process or one the child left running, never a refusal taken for a
+leftover (`ProcessResult.OutputHeld`). The
 walk keeps each process it ends in what its caller gives it (`EndedProcesses`), and each
 caller waits for what it needs: a stop waits until every process it ended has gone before the
 child's output's end is looked for (above), as a contained child's end does, so what is said to hold
@@ -2975,7 +2987,7 @@ connected, every tool of it taken, no other server (`ClaudeCodeTools.ServerTools
 `--tools`, each with an ask rule, and `ClaudeToolDecider` allows a call of one as asked: its rules
 are its tool's, each address decided and recorded as it runs, as on the API clients, and what the
 runtime refused and asked of the web is counted in the step's result. Once a launch has ended, however it ended, a session file it
-left is removed, and what its container could not reach where the runner hands its end back
+left is removed, and what its end could not reach or end where the runner hands its end back
 (`ProcessResult.Uncontained`) is said and kept in the result's `uncontained`; a call the engine's
 own deciding fails on is a denial like any other, by the rule `undecided`. The client holds each
 launch to the protocol in the same loop: the user's settings read first by `ClaudeUserSettings` (a

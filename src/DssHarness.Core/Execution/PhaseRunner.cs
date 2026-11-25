@@ -339,6 +339,13 @@ public sealed class PhaseRunner(
         // Every character the child wrote is in the log; what a process it left running - a server its build started,
         // kept for the next phase - writes from now on is that process's own, and is not read. Said, so a log that ends
         // where the child's output did is never taken for all that process went on to write.
+        // What the child's end could not reach or end - a contained child's container, a process of its tree that refuses
+        // its end at a stop - is said, for it may still run.
+        if (result.Uncontained is { } unreached)
+        {
+            _output.Warn(request.Phase, $"{request.Leg}: {unreached}");
+        }
+
         if (result.OutputHeld is { } held)
         {
             _output.Warn(request.Phase, $"{request.Leg}: {held}");
@@ -440,8 +447,8 @@ public sealed class PhaseRunner(
         {
             // The bound fired, and the runner stopped the child and its descendants. The exit code
             // is meaningless, which is what a stopped phase reports; the lines the child wrote
-            // before it went quiet were kept as they arrived, and what a contained child's container
-            // could not reach at the stop is said.
+            // before it went quiet were kept as they arrived, and what the stop could not reach or end
+            // is said.
             return (
                 new ProcessResult(-1, string.Empty, string.Empty, clock.Elapsed, TimedOut: true) { Uncontained = (ex as ProcessStoppedException)?.Uncontained },
                 PhaseStop.Silence);

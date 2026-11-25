@@ -43,7 +43,8 @@ internal static class TestChild
             "spawn-holder" => SpawnHolder(standardOutput, arguments),
             "spawn-late-holder" => SpawnLateHolder(standardOutput, arguments),
             "spawn-orphan-holder" => SpawnOrphanHolder(standardOutput, arguments),
-            "deny-terminate" => DenyTerminate(arguments),
+            "deny-terminate" => DenyTerminate(arguments, everything: false),
+            "deny-everything" => DenyTerminate(arguments, everything: true),
             "own-group-and-sleep" => OwnGroupAndSleep(arguments),
             "own-group-note-term-and-sleep" => OwnGroupNoteTermAndSleep(arguments),
             "own-session-and-sleep" => OwnSessionAndSleep(arguments),
@@ -84,6 +85,7 @@ internal static class TestChild
             "flow-interrupted" => FlowServiceTests.InterruptedChild(standardOutput, arguments),
             StructuralScannerTests.AssertionsChild => StructuralScannerTests.AssertionsOnASmallStack(standardOutput, arguments),
             ChildRun.Mode => ChildRun.Run(standardOutput, standardError, arguments),
+            ChildRun.UnprivilegedMode => ChildRun.RunUnprivileged(standardOutput, standardError, arguments),
             "exit" => int.Parse(arguments[0], CultureInfo.InvariantCulture),
             _ => 99,
         };
@@ -548,7 +550,7 @@ internal static class TestChild
             "own-group-and-sleep" or "own-group-note-term-and-sleep" => getpgid(holder.Id) == holder.Id,
             "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
             "ignore-term-and-sleep" => File.Exists(arguments[4]),
-            "deny-terminate" => File.Exists(arguments[4]),
+            "deny-terminate" or "deny-everything" => File.Exists(arguments[4]),
             _ => true,
         });
 
@@ -627,12 +629,13 @@ internal static class TestChild
 
     /// <summary>
     /// Waits until the file <c>arguments[0]</c> names is there - written by a test once it holds this process by a handle of
-    /// its own, or before it starts it - then has its own security refuse its end to everyone, its owner included
-    /// (<see cref="RefusedEnd.Refuse"/>), writes its own id into the file <c>arguments[1]</c> names once it does, and does
-    /// what the behaviour <c>arguments[2]</c> names with the arguments after it: a program that guards itself against being
-    /// ended by other software of the same user. Windows' alone: a process's own security is Windows'.
+    /// its own, or before it starts it - then has its own security refuse its end to everyone, its owner included - or,
+    /// where <paramref name="everything"/>, every right (<see cref="RefusedEnd.Refuse"/>) - writes its own id into the file
+    /// <c>arguments[1]</c> names once it does, and does what the behaviour <c>arguments[2]</c> names with the arguments after
+    /// it: a program that guards itself against being ended, or even looked at, by other software of the same user.
+    /// Windows' alone: a process's own security is Windows'.
     /// </summary>
-    private static int DenyTerminate(string[] arguments)
+    private static int DenyTerminate(string[] arguments, bool everything)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -647,7 +650,7 @@ internal static class TestChild
             }
         }
 
-        RefusedEnd.Refuse();
+        RefusedEnd.Refuse(everything);
 
         // Written to a temporary name and renamed, so a test never reads a half-written id.
         var partial = arguments[1] + ".partial";

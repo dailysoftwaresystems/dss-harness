@@ -381,7 +381,8 @@ public sealed class ContainExecTests
 
     /// <summary>
     /// What the step says of a start is read as it said it: placed - with the start of the process that becomes the
-    /// program, where it said one - and what failed after, the start kept; a line that is neither says nothing.
+    /// program, where it said one, and the handle it created the program with, on Windows, where it said that - and what
+    /// failed after, the start kept; a line that is neither says nothing.
     /// </summary>
     [Fact]
     public void WhatTheStepSays_IsReadWithTheStartItSaid()
@@ -390,6 +391,8 @@ public sealed class ContainExecTests
         Assert.Equal(new ContainExec.StartHeard(true, null, 0), ContainExec.Heard("placed\n"));
         Assert.Equal(new ContainExec.StartHeard(true, ContainExec.Stage.Start, 2, "boot-1:42"), ContainExec.Heard("placed boot-1:42\nfailed start 2\n"));
         Assert.Equal(new ContainExec.StartHeard(false, null, 0), ContainExec.Heard("placed two words\n"));
+        Assert.Equal(new ContainExec.StartHeard(true, null, 0) { Program = 1234 }, ContainExec.Heard("program 1234\nplaced\n"));
+        Assert.Equal(new ContainExec.StartHeard(true, null, 0), ContainExec.Heard("program -1\nprogram twelve\nprogram 12 34\nplaced\n"));
     }
 
     /// <summary>
@@ -826,7 +829,9 @@ public sealed class ContainExecTests
     /// of it, and it is kept by a handle that only waits for its end and asks when it was created, which its security
     /// grants. Opened to be ended as well, it would not be kept, nor its end waited for, and it would be taken for a process
     /// the child left running. The job's slow end is stood in for: it ends only once the runner first asks whether what it
-    /// ended has gone.
+    /// ended has gone. The run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), so the refusal holds against it on an administrator's elevated run as on
+    /// any other.
     /// </summary>
     [Fact]
     [SupportedOSPlatform("windows")]
@@ -834,14 +839,114 @@ public sealed class ContainExecTests
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "a job, and a process's own security, are Windows'.");
 
-        var cancellationToken = TestContext.Current.CancellationToken;
+        Assert.Equal(
+            new ChildRunAnswer(0, "exit 0, timed out False, output its holder, output held by nothing, refused True, held back 1, holder gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ContainExecTests), nameof(AJobMemberRefusingItsEndAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A tree whose processes' own security refuses them every right - its root's, and a grandchild's that has a child of
+    /// its own - still has every other process of it ended, on Windows, as the walk of a process known by its id alone
+    /// meets it: one that cannot be opened is passed over, its refusal said once - though the list of every process is read
+    /// again, and names it again, once the walk has ended more - and its children taken all the same, from the reading that
+    /// found it, by its listed id and creation time alone, since it refuses even the asking of when it was created. The walk
+    /// is made from a child of the suite whose token holds no debug privilege (<see cref="ChildRun.UnprivilegedAsync"/>),
+    /// which starts the root itself and ends it by the handle it was created with; the refusing grandchild is ended, its
+    /// refusal lifted by its owner's right, there too.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task ATreeWhoseProcessesRefuseTheirEnd_HasEveryOtherProcessOfItEnded_EachRefusalSaidOnce()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's.");
+
+        var refused = new Win32Exception(5).Message;
+
+        Assert.Equal(
+            new ChildRunAnswer(0, $"refused True, said pid {{root}} could not be ended: {refused} | pid {{middle}} could not be ended: {refused}, kept False False True, holder gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ContainExecTests), nameof(ATreeRefusingEveryRightAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// The program a bound child's step created, whose own security refuses its end to everyone, is ended at the child's
+    /// time limit all the same, on Windows, and has gone when the run answers - nothing holding the child's output, and
+    /// nothing said unended: the stop keeps it by a copy of the handle <c>contain-exec</c> got as it created it, copied out
+    /// of <c>contain-exec</c> as the start was said, granted before the program could refuse anything - never by one opened
+    /// by its id, which its security refuses, and which would leave the program running and taken for one the child left.
+    /// The run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), which holds the program by a handle of its own, got before it refuses,
+    /// that ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task ABoundChildsProgram_WhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItsStepCreatedItWith()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS the step becomes the program, which the runner created.");
+
+        Assert.Equal(
+            new ChildRunAnswer(0, "refused True, timed out True, output its id, output held by nothing, unended nothing, program gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ContainExecTests), nameof(ABoundProgramRefusingItsEndAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A creator and the child Windows names as made by it are ordered by their sequence numbers where both were read, so a
+    /// step of the clock between their creations - a child's creation time set before its creator's - never makes a child
+    /// of the tree look made by an earlier holder of its creator's id; and by their creation times where either sequence
+    /// number was not.
+    /// </summary>
+    [Fact]
+    public void ACreatorAndItsChild_AreOrderedByTheirSequenceNumbers_ByTheirCreationTimesWhereEitherIsUnread()
+    {
+        var creator = new CreationOrder(Created: 200, Sequence: 7);
+
+        Assert.Equal(
+            (false, true, true, false, true, false),
+            (new CreationOrder(Created: 100, Sequence: 8).MadeBefore(creator),
+                new CreationOrder(Created: 300, Sequence: 6).MadeBefore(creator),
+                new CreationOrder(Created: 100, Sequence: null).MadeBefore(creator),
+                new CreationOrder(Created: 300, Sequence: null).MadeBefore(creator),
+                new CreationOrder(Created: 100, Sequence: 8).MadeBefore(creator with { Sequence = null }),
+                creator.MadeBefore(creator)));
+    }
+
+    /// <summary>
+    /// Windows gives every process a sequence number as it creates it, read from a handle that asks when the process was
+    /// created: this process's, and a higher one for a child it starts after it - what the walk of a tree and the chain of
+    /// a process's parents order a creator and its child by (<see cref="CreationOrder"/>), on every Windows the suite runs.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void EveryProcess_HoldsASequenceNumber_AChildAHigherOneThanTheProcessThatMadeIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's sequence number is Windows'.");
+
+        using var self = Process.GetCurrentProcess();
+        using var child = Process.Start(TestHost.StartOf(Child("sleep", "300000")))!;
+
+        try
+        {
+            var (parent, made) = (Containment.OrderOf(self.SafeHandle), Containment.OrderOf(child.SafeHandle));
+
+            Assert.True(parent.Sequence is not null && made.Sequence is not null, $"a sequence number went unread: {parent}, {made}");
+            Assert.True(parent.MadeBefore(made) && !made.MadeBefore(parent), $"the child {made} was not made after this process {parent}");
+        }
+        finally
+        {
+            child.Kill();
+        }
+    }
+
+    /// <summary>The child's side of <see cref="AContainedChildsJobMember_WhoseOwnSecurityRefusesItsEnd_IsWaitedForAllTheSame"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> AJobMemberRefusingItsEndAsync()
+    {
         using var temp = new TempDirectory();
         var go = temp.Combine("go.txt");
         var ends = new SlowEnds();
         var holder = LearnedProcess.None;
         bool? mayEnd = null;
 
-        // The holder needs no handle of the test's got before it refuses: its job ends it whatever the test does.
+        // The holder needs no handle of this process's got before it refuses: its job ends it whatever this process does.
         File.WriteAllText(go, "go");
         ends.SlowJobs();
         ends.AtFirstAsk(asked => mayEnd = RefusedEnd.MayEnd(asked.Id));
@@ -854,14 +959,11 @@ public sealed class ContainExecTests
                     Contained = true,
                     OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
-                cancellationToken).WaitAsync(LongBound, cancellationToken);
-
-            Assert.Equal((0, false, $"holder={holder}\n", (string?)null), (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld));
-            Assert.SkipWhen(mayEnd == true, "this process's rights pass over any process's own security - its debug privilege is enabled - so no member can refuse it its end.");
+                CancellationToken.None).WaitAsync(LongBound);
 
             // The member refused its end while it was kept, and the job's end was held back: what this test is about happened.
-            Assert.Equal((false, 1), (mayEnd, ends.HeldBack));
-            Assert.False(holder.Running, $"the holder {holder} outlived the job that held it");
+            return $"exit {result.ExitCode}, timed out {result.TimedOut}, output {(result.StandardOutput == $"holder={holder}\n" ? "its holder" : result.StandardOutput)}, "
+                + $"output held {result.OutputHeld ?? "by nothing"}, refused {mayEnd == false}, held back {ends.HeldBack}, holder gone {!RefusedEnd.Stands(holder)}";
         }
         finally
         {
@@ -869,29 +971,18 @@ public sealed class ContainExecTests
         }
     }
 
-    /// <summary>
-    /// A tree whose processes' own security refuses their end - its root's, and a grandchild's that has a child of its own -
-    /// still has every other process of it ended, on Windows, as the walk of a process known by its id alone meets it: one
-    /// that cannot be ended is passed over, its refusal said once - though the list of every process is read again, and
-    /// names it again, once the walk has ended more - and its children taken all the same, from the reading that found it,
-    /// as .NET's own end of a tree goes on to the children. The test starts the root itself, and ends it by the handle it
-    /// was created with; the refusing grandchild is ended, its refusal lifted, by the test.
-    /// </summary>
-    [Fact]
+    /// <summary>The child's side of <see cref="ATreeWhoseProcessesRefuseTheirEnd_HasEveryOtherProcessOfItEnded_EachRefusalSaidOnce"/>.</summary>
     [SupportedOSPlatform("windows")]
-    public async Task ATreeWhoseProcessesRefuseTheirEnd_HasEveryOtherProcessOfItEnded_EachRefusalSaidOnce()
+    private static async Task<string> ATreeRefusingEveryRightAsync()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's.");
-
-        var cancellationToken = TestContext.Current.CancellationToken;
         using var temp = new TempDirectory();
         var (go, rootRefused, middleRefused, last) = (temp.Combine("go.txt"), temp.Combine("root.txt"), temp.Combine("middle.txt"), temp.Combine("last.txt"));
 
         File.WriteAllText(go, "go");
 
-        // The root refuses, its child does not; that child's child refuses, and has a child of its own.
+        // The root refuses every right, its child does not; that child's child refuses every right, and has a child of its own.
         var start = TestHost.StartOf(
-            Child("deny-terminate", go, rootRefused, "spawn-holder", "sleep", "300000", "spawn-holder", "sleep", "300000", "deny-terminate", go, middleRefused, "spawn-grandchild", last, "300000"));
+            Child("deny-everything", go, rootRefused, "spawn-holder", "sleep", "300000", "spawn-holder", "sleep", "300000", "deny-everything", go, middleRefused, "spawn-grandchild", last, "300000"));
         start.RedirectStandardOutput = true;
 
         using var root = Process.Start(start)!;
@@ -904,22 +995,20 @@ public sealed class ContainExecTests
             middle = LearnedProcess.Of(int.Parse(File.ReadAllText(middleRefused), CultureInfo.InvariantCulture));
             holder = LearnedProcess.Of(int.Parse(File.ReadAllText(last), CultureInfo.InvariantCulture));
 
-            Assert.SkipWhen(RefusedEnd.MayEnd(root.Id), "this process's rights pass over any process's own security - its debug privilege is enabled - so no process can refuse it its end.");
+            var refusing = !RefusedEnd.MayEnd(root.Id) && !RefusedEnd.MayEnd(middle.Id);
 
             using var byItsId = Process.GetProcessById(root.Id);
             using var ended = new EndedProcesses(ProcessEnds.Machine);
 
             var raised = Assert.Throws<AggregateException>(() => Containment.EndTree(byItsId, group: false, ended));
-            var refused = new Win32Exception(5).Message;
+            var said = string.Join(" | ", raised.InnerExceptions.Select(failure => failure.Message))
+                .Replace($"pid {root.Id} could", "pid {root} could", StringComparison.Ordinal)
+                .Replace($"pid {middle.Id} could", "pid {middle} could", StringComparison.Ordinal);
+            var kept = $"{ended.Kept(root.Id) is not null} {ended.Kept(middle.Id) is not null} {ended.Kept(holder.Id) is not null}";
 
-            Assert.Equal(
-                [$"pid {root.Id} could not be ended: {refused}", $"pid {middle.Id} could not be ended: {refused}"],
-                raised.InnerExceptions.Select(failure => failure.Message));
-            Assert.Equal((false, false, true), (ended.Kept(root.Id) is not null, ended.Kept(middle.Id) is not null, ended.Kept(holder.Id) is not null));
+            await ended.GoneAsync("what of the tree could be ended to go", _ => { }, TimeProvider.System).WaitAsync(LongBound);
 
-            await ended.GoneAsync("what of the tree could be ended to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
-
-            Assert.False(holder.Running, $"the refusing process's child {holder} outlived its tree's end");
+            return $"refused {refusing}, said {said}, kept {kept}, holder gone {!holder.Running}";
         }
         finally
         {
@@ -934,6 +1023,63 @@ public sealed class ContainExecTests
             {
                 // Gone already, or a process of its tree going.
             }
+        }
+    }
+
+    /// <summary>The child's side of <see cref="ABoundChildsProgram_WhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItsStepCreatedItWith"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> ABoundProgramRefusingItsEndAsync()
+    {
+        using var temp = new TempDirectory();
+        var (held, refused) = (temp.Combine("held.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var learned = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var limit = TimeSpan.FromMinutes(1);
+        Process? program = null;
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Clock = clock }.RunAsync(
+                Child("say-pid-then", "deny-terminate", held, refused, "sleep", "300000") with
+                {
+                    Bound = true,
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (line.StartsWith("pid=", StringComparison.Ordinal) && int.TryParse(line[4..], NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+                        {
+                            learned.TrySetResult(id);
+                        }
+                    },
+                },
+                CancellationToken.None);
+
+            var id = await learned.Task.WaitAsync(LongBound);
+
+            // Opened before the program refuses its end, a handle keeps every right it was granted.
+            program = Process.GetProcessById(id);
+            _ = program.SafeHandle;
+            File.WriteAllText(held, "held");
+
+            Assert.True(Until(() => File.Exists(refused)), $"the program {id} never refused its end");
+
+            var refusing = !RefusedEnd.MayEnd(id);
+
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(LongBound);
+
+            return $"refused {refusing}, timed out {result.TimedOut}, output {(result.StandardOutput == $"pid={id}\n" ? "its id" : result.StandardOutput)}, "
+                + $"output held {result.OutputHeld ?? "by nothing"}, unended {result.Uncontained ?? "nothing"}, program gone {program.HasExited}";
+        }
+        finally
+        {
+            if (program is { HasExited: false })
+            {
+                program.Kill();
+            }
+
+            program?.Dispose();
         }
     }
 
