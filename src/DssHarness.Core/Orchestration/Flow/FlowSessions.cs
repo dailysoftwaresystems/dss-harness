@@ -158,20 +158,32 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// refused by name, with no owner written beside it - the test for another unfinished run, leaving out
     /// <paramref name="run"/>, the run's owner claimed - refused where a live one holds it, a dead one reclaimed and said -
     /// and a request no engine took removed, so it never reaches this session - where it cannot be taken, the claim just
-    /// made is let go before the refusal, so no owner is left behind by a session that never began.
+    /// made is let go before the refusal, so no owner is left behind by a session that never began. Before any of it, a
+    /// run whose sweep kept a record because its session holds this very process is refused: a session of the run inside
+    /// it would be ended with it by the next command run from outside, which ends what the record names.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
+    /// <param name="swept">What the sweep of the run that loaded it did.</param>
+    /// <param name="command">The command beginning the session, which a refusal says to run from outside.</param>
     /// <param name="cancellationToken">Stops the read of the main tree, before anything is written.</param>
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
     /// <exception cref="HarnessException">
-    /// The run is gone, another run of the repository is unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>);
-    /// or a request left for an engine that ended cannot be taken, the claim this process made let go first.
+    /// The sweep kept a record whose session holds this very process, the run is gone, another run of the repository is
+    /// unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>); or a request left for an engine that
+    /// ended cannot be taken, the claim this process made let go first.
     /// </exception>
-    public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, CancellationToken cancellationToken = default)
+    public async Task<string?> ClaimAsync(HarnessLayout layout, OrchestratorLayout run, ChildSweep swept, string command, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(swept);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+
+        if (swept.Refusal($"run '{run.Name}' was not taken", "a session of the run inside it would be ended with it by the next command run from outside", command) is { } holding)
+        {
+            throw new HarnessException(HarnessExit.Refused, holding);
+        }
 
         var differing = await DifferingAsync(layout, run.Name, cancellationToken).ConfigureAwait(false);
 

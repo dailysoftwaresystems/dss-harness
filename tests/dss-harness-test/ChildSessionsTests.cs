@@ -905,6 +905,7 @@ public sealed class ChildSessionsTests
                 "after=0",
                 $"caller={caller}",
                 "ended=0",
+                $"held={record}:{leader}:{caller}",
                 $"holder={caller}",
                 "kept=True",
                 $"said={SweepCommand}: WARN - '{record}' is {ChildSessions.RecordKind}, and the contained child's session ({leader}) holds this very process "
@@ -921,42 +922,126 @@ public sealed class ChildSessionsTests
     /// The child's side of <see cref="ASessionHoldingTheSweepingCommand_IsSaidAndLeft_WithItsRecord"/>: records the session
     /// the process that started it leads in step <c>s1</c> of the orchestrator <c>o1</c> at <c>arguments[0]</c>, as a
     /// process that has gone since left it, sweeps that orchestrator from inside the session, and writes its own id as
-    /// <c>caller</c>, each line the sweep said as <c>said</c>, whether the record is still there as <c>kept</c>, and how
-    /// many sessions the sweep ended as <c>ended</c>.
+    /// <c>caller</c>, each line the sweep said as <c>said</c>, whether the record is still there as <c>kept</c>, how many
+    /// sessions the sweep ended as <c>ended</c>, and what it answered it kept because it holds this process as <c>held</c>.
     /// </summary>
     internal static int SweepFromInside(TextWriter output, string[] arguments)
     {
-        if (OperatingSystem.IsWindows() || TestChild.ParentId() is not { } leader)
+        if (OperatingSystem.IsWindows())
         {
             return 98;
         }
 
         output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
 
-        var platform = new HostPlatform();
-        var permissions = FilePermissionsFactory.Create();
         var said = new StringWriter();
-        var sessions = new ChildSessions(
-            new Core.FileSystem.PhysicalFileSystem(permissions),
-            new Gone(new ProcessIdentity(platform), laterStart: false),
-            new LeftSessions(platform, ProcessTableFactory.Create(platform, new ProcessRunner(platform, permissions))),
-            new ConsoleHarnessOutput(TextWriter.Null, said, verbose: false),
-            new EndedChildSessions());
         var orchestrator = new OrchestratorLayout("o1", arguments[0]);
-        var step = orchestrator.StepDirectory("s1");
-
-        sessions.For(step).Placed(leader, started: null, TestHost.AssemblyProgram, group: false);
-
-        var ended = sessions.SweepAsync(orchestrator, SweepCommand).GetAwaiter().GetResult();
+        var record = RecordParentsSession(orchestrator);
+        var swept = LeftBehind(said).SweepAsync(orchestrator, SweepCommand).GetAwaiter().GetResult();
 
         foreach (var line in Lines(said).Where(line => line.Length > 0))
         {
             output.Write($"said={line}\n");
         }
 
-        output.Write($"kept={File.Exists(OrchestratorLayout.ChildFile(step, leader))}\n");
-        output.Write($"ended={ended.Count.ToString(CultureInfo.InvariantCulture)}\n");
+        output.Write($"kept={File.Exists(record)}\n");
+        output.Write($"ended={swept.Ended.Count.ToString(CultureInfo.InvariantCulture)}\n");
+        output.Write($"held={string.Join(",", swept.HeldHere.Select(held => $"{held.Record}:{held.Session.ToString(CultureInfo.InvariantCulture)}:{held.Process.ToString(CultureInfo.InvariantCulture)}"))}\n");
         return 0;
+    }
+
+    /// <summary>
+    /// A deletion of the orchestrator run from inside a session its sweep kept - a step's own script in the session a
+    /// contained child of a killed engine leads - is refused (13), naming the record and saying to run it from outside:
+    /// nothing is deleted, so the record is there for a command run from outside the session to end what it names. Run
+    /// where it would act on itself: the deletion runs in a child the session's leader starts (<see cref="DeleteFromInside"/>),
+    /// every process the test's own, bounded, and ended on every path.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionFromInsideASessionItsSweepKept_IsRefused_TheRecordAndTheOrchestratorKept()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left, which ARecordFoundOnWindows_IsSaidAndLeft holds.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "delete-own-orchestrator", kit.Main));
+        var record = OrchestratorLayout.ChildFile(kit.Layout.StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"exit={HarnessExit.Refused}",
+                $"holder={caller}",
+                "kept=True",
+                "orchestrator=True",
+                $"said=Orchestrator '{OrchestrationKit.Orchestrator}' was not deleted: '{record}' records session {leader}, which holds this very process (pid {caller}), "
+                    + $"and its record would go with the orchestrator, leaving what it holds running with nothing left to end it. Run {OrchestratorService.DeleteCommand} "
+                    + "from outside it. Nothing was changed.",
+            ],
+            lines);
+        Assert.True(File.Exists(record), $"the record the deletion was refused over went: '{record}'");
+    }
+
+    /// <summary>
+    /// The child's side of <see cref="ADeletionFromInsideASessionItsSweepKept_IsRefused_TheRecordAndTheOrchestratorKept"/>:
+    /// records the session the process that started it leads in step <c>s1</c> of the orchestrator of the main tree at
+    /// <c>arguments[0]</c>, as a process that has gone since left it, deletes that orchestrator with its evidence from
+    /// inside the session as the command line would, and writes its own id as <c>caller</c>, how the deletion ended as
+    /// <c>exit</c> and <c>said</c>, and whether the record and the orchestrator are still there as <c>kept</c> and
+    /// <c>orchestrator</c>.
+    /// </summary>
+    internal static int DeleteFromInside(TextWriter output, string[] arguments)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        var main = arguments[0];
+        var orchestrator = OrchestratorLayout.Of(new Core.Repository.HarnessLayout(main, main), OrchestrationKit.Orchestrator);
+        var record = RecordParentsSession(orchestrator);
+        var deleted = new HarnessFactory().OrchestratorService.DeleteAsync(main, OrchestrationKit.Orchestrator, deleteEvidence: true).GetAwaiter().GetResult();
+
+        output.Write($"exit={deleted.ExitCode}\n");
+        output.Write($"said={deleted.Message}\n");
+        output.Write($"kept={File.Exists(record)}\n");
+        output.Write($"orchestrator={Directory.Exists(orchestrator.Directory)}\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// Records the session the process that started this one leads in step <c>s1</c> of <paramref name="orchestrator"/>, as
+    /// a process that has gone since left it - its owner this process under a start it does not have: the record a killed
+    /// engine leaves of a step's contained child, for a test run inside that child's session. Linux's and macOS's.
+    /// </summary>
+    /// <returns>The record's path.</returns>
+    internal static string RecordParentsSession(OrchestratorLayout orchestrator)
+    {
+        var leader = TestChild.ParentId() ?? throw new InvalidOperationException("this process's parent could not be read");
+        var step = orchestrator.StepDirectory("s1");
+
+        LeftBehind(TextWriter.Null).For(step).Placed(leader, started: null, TestHost.AssemblyProgram, group: false);
+        return OrchestratorLayout.ChildFile(step, leader);
+    }
+
+    /// <summary>
+    /// The machine's records of a step's children, as a process that has gone wrote them (<see cref="Gone"/>), its lines
+    /// written to <paramref name="said"/>: what a child of a test reads and writes them by.
+    /// </summary>
+    private static ChildSessions LeftBehind(TextWriter said)
+    {
+        var platform = new HostPlatform();
+        var permissions = FilePermissionsFactory.Create();
+
+        return new ChildSessions(
+            new Core.FileSystem.PhysicalFileSystem(permissions),
+            new Gone(new ProcessIdentity(platform), laterStart: false),
+            new LeftSessions(platform, ProcessTableFactory.Create(platform, new ProcessRunner(platform, permissions))),
+            new ConsoleHarnessOutput(TextWriter.Null, said, verbose: false),
+            new EndedChildSessions());
     }
 
     /// <summary>What a sweep ended is counted by kind in one line - the sessions, then the process groups - naming only the kinds it ended.</summary>

@@ -379,7 +379,7 @@ public sealed class FlowService(
     /// <inheritdoc/>
     public async Task<CommandOutcome> ResumeAsync(string startDirectory, string run, bool json, FlowInterrupts? interrupts = null, CancellationToken cancellationToken = default)
     {
-        var (refused, context, layout) = await LoadAsync(startDirectory, run, ResumeCommand, cancellationToken).ConfigureAwait(false);
+        var (refused, context, layout, swept) = await LoadAsync(startDirectory, run, ResumeCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -397,7 +397,7 @@ public sealed class FlowService(
 
         try
         {
-            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, swept, ResumeCommand, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -446,7 +446,7 @@ public sealed class FlowService(
             text = read;
         }
 
-        var (refused, context, layout) = await LoadAsync(startDirectory, run, AnswerCommand, cancellationToken).ConfigureAwait(false);
+        var (refused, context, layout, swept) = await LoadAsync(startDirectory, run, AnswerCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -518,7 +518,7 @@ public sealed class FlowService(
 
             try
             {
-                reclaimedChange = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+                reclaimedChange = await _sessions.ClaimAsync(context.Layout, layout, swept, AnswerCommand, cancellationToken).ConfigureAwait(false);
             }
             catch (HarnessException ex)
             {
@@ -636,7 +636,7 @@ public sealed class FlowService(
                     return NotBegun(changed);
                 }
 
-                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, swept, AnswerCommand, cancellationToken).ConfigureAwait(false);
                 break;
             }
             catch (HarnessException ex)
@@ -813,7 +813,7 @@ public sealed class FlowService(
             return CommandOutcome.Usage("the amendment is empty; give one, as the command's own argument or in a file named by --file");
         }
 
-        var (refused, context, layout) = await LoadAsync(startDirectory, run, AmendCommand, cancellationToken).ConfigureAwait(false);
+        var (refused, context, layout, _) = await LoadAsync(startDirectory, run, AmendCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -885,7 +885,7 @@ public sealed class FlowService(
     /// <inheritdoc/>
     public async Task<CommandOutcome> PauseAsync(string startDirectory, string run, bool all, bool json, CancellationToken cancellationToken = default)
     {
-        var (refused, _, layout) = await LoadAsync(startDirectory, run, PauseCommand, cancellationToken).ConfigureAwait(false);
+        var (refused, _, layout, _) = await LoadAsync(startDirectory, run, PauseCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -937,7 +937,7 @@ public sealed class FlowService(
     /// <inheritdoc/>
     public async Task<CommandOutcome> StopAsync(string startDirectory, string run, bool now, bool json, CancellationToken cancellationToken = default)
     {
-        var (refused, _, layout) = await LoadAsync(startDirectory, run, StopCommand, cancellationToken).ConfigureAwait(false);
+        var (refused, _, layout, _) = await LoadAsync(startDirectory, run, StopCommand, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -982,7 +982,7 @@ public sealed class FlowService(
     public async Task<CommandOutcome> QuestionsAsync(string startDirectory, string run, bool json, CancellationToken cancellationToken = default)
     {
         const string command = "list-orchestrator";
-        var (refused, _, layout) = await LoadAsync(startDirectory, run, command, cancellationToken).ConfigureAwait(false);
+        var (refused, _, layout, _) = await LoadAsync(startDirectory, run, command, cancellationToken).ConfigureAwait(false);
 
         if (refused is not null)
         {
@@ -1544,14 +1544,16 @@ public sealed class FlowService(
 
     /// <summary>
     /// Loads the run's context and layout, and sweeps what a killed engine's steps left running before anything else of
-    /// the run is read - or the refusal that answers for the command: a bad name (10), or no such run (13, with nothing
-    /// written, for a run that is not there has no directory to log in).
+    /// the run is read - what the sweep did answered beside them, for a session of the run to refuse over a record it kept
+    /// because its session holds this process (<see cref="FlowSessions.ClaimAsync"/>) - or the refusal that answers for the
+    /// command: a bad name (10), or no such run (13, with nothing written, for a run that is not there has no directory to
+    /// log in).
     /// </summary>
-    private async Task<(CommandOutcome? Refused, HarnessContext Context, OrchestratorLayout Layout)> LoadAsync(string startDirectory, string run, string command, CancellationToken cancellationToken)
+    private async Task<(CommandOutcome? Refused, HarnessContext Context, OrchestratorLayout Layout, ChildSweep Swept)> LoadAsync(string startDirectory, string run, string command, CancellationToken cancellationToken)
     {
         if (OrchestrationRules.NameProblem(run) is { } shape)
         {
-            return (CommandOutcome.Usage(shape), null!, null!);
+            return (CommandOutcome.Usage(shape), null!, null!, ChildSweep.None);
         }
 
         var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
@@ -1559,11 +1561,11 @@ public sealed class FlowService(
 
         if (_store.ReadOrchestrator(layout) is null)
         {
-            return (CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run)), context, layout);
+            return (CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run)), context, layout, ChildSweep.None);
         }
 
-        await _children.SweepAsync(layout, command).ConfigureAwait(false);
-        return (null, context, layout);
+        var swept = await _children.SweepAsync(layout, command).ConfigureAwait(false);
+        return (null, context, layout, swept);
     }
 
     /// <summary>
@@ -2554,7 +2556,7 @@ public sealed class FlowService(
 
         // Gone already or ended now, the engine leaves its steps' children to the sweep, which ends what its owner's end left.
         _owner.RemoveGone(layout);
-        var ended = await _children.SweepAsync(layout, StopCommand).ConfigureAwait(false);
+        var ended = (await _children.SweepAsync(layout, StopCommand).ConfigureAwait(false)).Ended;
         IReadOnlyList<string> endedWithIt = ended.Count == 0 ? [] : [$"what its steps left running was ended with it: {EndedChildSessions.Counted(ended)}"];
 
         if (ending.How == ProcessEnded.AlreadyGone)

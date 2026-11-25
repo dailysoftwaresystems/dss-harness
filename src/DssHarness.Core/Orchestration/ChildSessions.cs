@@ -71,6 +71,57 @@ public sealed record ChildSessionOwner(string Machine, int ProcessId, string? St
 public sealed record EndedChildSession(string Orchestrator, string? Agent, string Step, int Session, string Program, int Owner, string? Unreached, bool Group = false);
 
 /// <summary>
+/// A session or a process group a sweep kept, with its record, because it holds the process sweeping - that process runs
+/// in it, or descends from its leader: for a command run from outside it to end.
+/// </summary>
+/// <param name="Record">The record's path.</param>
+/// <param name="Session">The id of the session or the group: its leader's process id.</param>
+/// <param name="Group">Whether it is a process group rather than a contained child's session.</param>
+/// <param name="Process">The process it holds: the one that swept.</param>
+public sealed record HeldChildSession(string Record, int Session, bool Group, int Process);
+
+/// <summary>
+/// What a sweep did (<see cref="ChildSessions.SweepAsync"/>): each session or group it ended with anything still in it,
+/// and each it kept because it holds this very process - which a command that would lose its record, or take the run
+/// inside it, refuses over (<see cref="Refusal"/>).
+/// </summary>
+/// <param name="Ended">Each session or group ended with anything still in it, in the order its record was found.</param>
+/// <param name="HeldHere">Each kept because it holds this very process, in the order its record was found.</param>
+public sealed record ChildSweep(IReadOnlyList<EndedChildSession> Ended, IReadOnlyList<HeldChildSession> HeldHere)
+{
+    /// <summary>A sweep that found nothing to end and kept nothing.</summary>
+    public static ChildSweep None { get; } = new([], []);
+
+    /// <summary>
+    /// The refusal of a command that would lose a record kept here, or take the run inside what it records: what was not
+    /// done, each record named with what it holds, why the command would undo the keep, and that it is to be run from
+    /// outside - nothing changed; <see langword="null"/> where the sweep kept none.
+    /// </summary>
+    /// <param name="refused">What was not done, as the refusal begins.</param>
+    /// <param name="because">What doing it would leave, as the refusal says it.</param>
+    /// <param name="command">The command refused, to be run from outside.</param>
+    public string? Refusal(string refused, string because, string command)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(refused);
+        ArgumentException.ThrowIfNullOrWhiteSpace(because);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+
+        if (HeldHere.Count == 0)
+        {
+            return null;
+        }
+
+        var held = string.Join(
+            "; ",
+            HeldHere.Select(kept => string.Create(
+                CultureInfo.InvariantCulture,
+                $"'{kept.Record}' records {LeftSessions.Noun(kept.Group)} {kept.Session}, which holds this very process (pid {kept.Process})")));
+
+        return $"{refused}: {held}, and {because}. Run {command} from outside {(HeldHere.Count == 1 ? "it" : "each")}. Nothing was changed.";
+    }
+}
+
+/// <summary>
 /// Keeps the records of the sessions contained children of an orchestrator's steps lead, and of the process groups of
 /// what its machine steps' legs start, and ends the ones the process that started them left once it has gone: the one
 /// writer and the one reader of <see cref="ChildSessionRecord"/>.
@@ -90,7 +141,9 @@ public sealed record EndedChildSession(string Orchestrator, string? Agent, strin
 /// where its leader is still the process recorded, or where no process carries its id, since none is given an id a
 /// session or a group still carries, and never where another process has been given it - and its record removed. One
 /// that holds the command sweeping - it runs in it, or descends from its leader - is never ended from inside: it is said
-/// and left with its record, for a command run from outside it to end. An
+/// and left with its record, for a command run from outside it to end, and the sweep answers it kept so
+/// (<see cref="ChildSweep.HeldHere"/>): a command that would lose that record - the orchestrator's deletion - or take the
+/// run inside it - a session of the run, claiming its owner - refuses over it, changing nothing. An
 /// owner on another machine is never taken to have gone, since nothing here can ask that machine. Windows records
 /// nothing: a child there is held in a job that ends with the process holding it.
 /// </para>
@@ -134,17 +187,19 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
     /// Ends each session or group a child of the orchestrator's steps leads whose owner has gone, as that owner would have
     /// ended it, and removes its record: said, each, as a line of <paramref name="command"/>, and kept for the documents
     /// the operation answers with (<see cref="EndedChildSessions"/>). One that holds this very process is said and left,
-    /// its record with it.
+    /// its record with it, and answered as kept so: a command that would lose that record, or take the run inside it,
+    /// refuses over it (<see cref="ChildSweep.Refusal"/>).
     /// </summary>
     /// <param name="orchestrator">The orchestrator.</param>
     /// <param name="command">The command sweeping, which its lines name.</param>
-    /// <returns>Each session or group ended with anything still in it, in the order its record was found.</returns>
-    public async Task<IReadOnlyList<EndedChildSession>> SweepAsync(OrchestratorLayout orchestrator, string command)
+    /// <returns>Each session or group ended with anything still in it, and each kept because it holds this very process.</returns>
+    public async Task<ChildSweep> SweepAsync(OrchestratorLayout orchestrator, string command)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
         var ended = new List<EndedChildSession>();
+        var heldHere = new List<HeldChildSession>();
 
         foreach (var (file, agent, step) in RecordFiles(orchestrator))
         {
@@ -182,6 +237,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
             if (ending.HoldsThisProcess)
             {
                 _output.Warn(command, $"'{file}' is {RecordKind}, and {ending.Unreached}. It was left as it is, for a command run from outside it to end.");
+                heldHere.Add(new HeldChildSession(file, record.Session, record.Group, _identity.CurrentId));
                 continue;
             }
 
@@ -199,7 +255,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
             }
         }
 
-        return ended;
+        return new ChildSweep(ended, heldHere);
     }
 
     /// <summary>The line a command says a session or a group it ended with.</summary>

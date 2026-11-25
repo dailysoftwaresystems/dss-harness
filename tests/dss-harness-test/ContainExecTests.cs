@@ -1315,6 +1315,71 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// The chain of what this process descends from, where a process of it is handed on while it is read - this one's
+    /// parent ends after it was read, this process is handed to the process above it, and the parent's id is given to a
+    /// process under another tree before that id's own parent is read - is read again from this process, never through the
+    /// id given out since: what the reading names then is the chain this process stands in. No system can be made to hand
+    /// a process on between two reads on demand, so the reading is stood in for.
+    /// </summary>
+    [Fact]
+    public void TheChainThisProcessStandsIn_WhereAProcessOfItIsHandedOnAsItIsRead_IsReadAgain_NeverThroughAnIdGivenOutSince()
+    {
+        var parents = new Parents(
+            new() { [10] = 20, [20] = 30, [30] = 1, [1] = 0 },
+            afterFirst: now =>
+            {
+                now[10] = 30;
+                now[20] = 99;
+                now[99] = 98;
+                now[98] = 1;
+            });
+
+        var chain = Containment.TheCallersChain(10, parents.Of);
+
+        Assert.Equal([10, 30, 1], chain);
+        Assert.DoesNotContain(99, chain);
+    }
+
+    /// <summary>
+    /// The chain of what this process descends from, where nothing of it changes as it is read, is read to its top - the
+    /// process whose parent is none - each parent as the reading names it; and where a parent's own parent cannot be read,
+    /// it ends at that parent, read once.
+    /// </summary>
+    [Fact]
+    public void TheChainThisProcessStandsIn_WhereNothingOfItChanges_IsReadToItsTop_OrToAParentThatCannotBeRead()
+    {
+        var stable = new Parents(new() { [10] = 20, [20] = 30, [30] = 1, [1] = 0 });
+        var unreadable = new Parents(new() { [10] = 20, [20] = null });
+
+        Assert.Equal([10, 20, 30, 1], Containment.TheCallersChain(10, stable.Of));
+        Assert.Equal([10, 20], Containment.TheCallersChain(10, unreadable.Of));
+        Assert.Equal(3, unreadable.Reads);
+    }
+
+    /// <summary>
+    /// A reading of each process's parent that stands in for the system's: <c>now</c> answers each, and <c>afterFirst</c>
+    /// changes it once the first reading has been answered - a process of the chain handed on between two reads.
+    /// </summary>
+    private sealed class Parents(Dictionary<int, int?> now, Action<Dictionary<int, int?>>? afterFirst = null)
+    {
+        /// <summary>How many parents were read.</summary>
+        public int Reads { get; private set; }
+
+        /// <summary>The parent <paramref name="id"/> stands under now; <see langword="null"/> where it cannot be read.</summary>
+        public int? Of(int id)
+        {
+            var parent = now.GetValueOrDefault(id);
+
+            if (Reads++ == 0)
+            {
+                afterFirst?.Invoke(now);
+            }
+
+            return parent;
+        }
+    }
+
+    /// <summary>
     /// A zombie a test learned of is not running, on Linux and macOS: it has ended as the harness counts an end
     /// (<see cref="ProcessGoing.HasEnded"/>), whatever its id still answers - so no assertion after a stop races the system's
     /// reaping of what the stop killed. The zombie is the child of a process that never reaps it.

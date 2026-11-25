@@ -134,7 +134,7 @@ internal static class Containment
     /// <remarks>
     /// <para>
     /// Nothing it does acts on the process running it: a session - or a group, where a group is ended - that holds that
-    /// process, or whose leader it descends from (<see cref="TheCallersChain"/>), is refused before anything is read or
+    /// process, or whose leader it descends from (<see cref="TheCallersChain()"/>), is refused before anything is read or
     /// signalled - the asking among it, which a command takes for a cancel and goes on through, and the hold after it,
     /// which would stop it where it stands with all it runs in, never to be killed - and answered as unreached, holding
     /// this very process (<see cref="HeldEnding.HoldsThisProcess"/>), for a process outside it to end.
@@ -390,7 +390,7 @@ internal static class Containment
     /// <summary>
     /// Whether the tree of <paramref name="root"/> holds this very process: it is the root, or the root is one this process
     /// descends from, read once up this process's own chain of parents, each the parent the walk itself reads. On Linux
-    /// and macOS that is the parent the system names now (<see cref="TheCallersChain"/>).
+    /// and macOS that is the parent the system names now (<see cref="TheCallersChain()"/>).
     /// On Windows it is the list Windows keeps of every process, which never names another creator once one has gone,
     /// each parent made no later than the child it is read for, so a later holder of a parent's id is never taken for it,
     /// ordered as the walk orders a creator and its child (<see cref="CreationOrder"/>): by their sequence numbers where
@@ -460,19 +460,30 @@ internal static class Containment
     /// runs in: the refusal of a tree's end (<see cref="HoldsTheCaller"/>) and of a session's or a group's
     /// (<see cref="EndSessionAsync"/>) both read it.
     /// </summary>
-    private static List<int> TheCallersChain()
+    private static List<int> TheCallersChain() => TheCallersChain(Environment.ProcessId, ParentOf);
+
+    /// <summary>
+    /// <paramref name="self"/> and each process it descends from, nearest first, as <paramref name="parentOf"/> reads each
+    /// one's parent now - the chain <see cref="TheCallersChain()"/> reads by the machine's own reading, read here by a
+    /// test's where no system can be made to hand a process on between two reads.
+    /// </summary>
+    /// <param name="self">The process the chain starts from.</param>
+    /// <param name="parentOf">Reads the parent a process stands under now; <see langword="null"/> where it cannot be read.</param>
+    internal static List<int> TheCallersChain(int self, Func<int, int?> parentOf)
     {
+        ArgumentNullException.ThrowIfNull(parentOf);
+
         while (true)
         {
-            var chain = new List<int> { Environment.ProcessId };
-            var parent = ParentOf(chain[0]);
+            var chain = new List<int> { self };
+            var parent = parentOf(chain[0]);
             var handedOn = false;
 
             while (parent is { } id && id > 0 && !chain.Contains(id))
             {
-                var above = ParentOf(id);
+                var above = parentOf(id);
 
-                if (ParentOf(chain[^1]) != id)
+                if (parentOf(chain[^1]) != id)
                 {
                     handedOn = true;
                     break;
@@ -1142,7 +1153,7 @@ internal static class Containment
     /// <summary>
     /// The parent of the process <paramref name="id"/> names, read now - the process it was handed to where its own parent
     /// went, on Linux and macOS alike - or <see langword="null"/> where it has gone or cannot be read: the one read of a
-    /// parent the walk and the chain of what this process descends from (<see cref="TheCallersChain"/>) both make.
+    /// parent the walk and the chain of what this process descends from (<see cref="TheCallersChain()"/>) both make.
     /// </summary>
     private static int? ParentOf(int id)
     {

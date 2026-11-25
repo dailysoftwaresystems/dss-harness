@@ -2375,6 +2375,76 @@ public sealed class FlowServiceTests
         Assert.Equal(("q1", "go"), (Assert.Single(store.ReadInbox(run)!.Answers).Question, Assert.Single(store.ReadInbox(run)!.Answers).Answer));
     }
 
+    /// <summary>
+    /// A resume run from inside a session its sweep kept - a step's own script in the session a contained child of a
+    /// killed engine leads - is refused (13) before it claims the run, naming the record and saying to run it from
+    /// outside: no owner is written, so this process never becomes the run's engine inside what the next command from
+    /// outside ends. Run where it would act on itself: the resume runs in a child the session's leader starts
+    /// (<see cref="ResumeFromInside"/>), every process the test's own, bounded, and ended on every path.
+    /// </summary>
+    [Fact]
+    public async Task AResumeFromInsideASessionItsSweepKept_IsRefused_NoOwnerWritten()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
+
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await Service(repository.Harness, runner).RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "resume-own-run", repository.Path));
+        var record = OrchestratorLayout.ChildFile(run.StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"exit={HarnessExit.Refused}",
+                $"holder={caller}",
+                "kept=True",
+                "owner=none",
+                $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
+                    + $"inside it would be ended with it by the next command run from outside. Run {FlowService.ResumeCommand} from outside it. Nothing was changed.",
+            ],
+            lines);
+        Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+    }
+
+    /// <summary>
+    /// The child's side of <see cref="AResumeFromInsideASessionItsSweepKept_IsRefused_NoOwnerWritten"/>: records the
+    /// session the process that started it leads in step <c>s1</c> of run <c>r1</c> of the repository at
+    /// <c>arguments[0]</c>, as a process that has gone since left it, resumes that run from inside the session, and writes
+    /// its own id as <c>caller</c>, how the resume ended as <c>exit</c> and <c>said</c>, whether the record is still there
+    /// as <c>kept</c>, and the run's owner once it ended as <c>owner</c>.
+    /// </summary>
+    internal static int ResumeFromInside(TextWriter output, string[] arguments)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        var harness = new HarnessFactory();
+        var run = OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(arguments[0], arguments[0]), "r1");
+        var record = ChildSessionsTests.RecordParentsSession(run);
+        var runner = new SteppedRunner();
+
+        Script(runner);
+
+        var resumed = Service(harness, runner).ResumeAsync(arguments[0], "r1", json: false, cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
+        var owner = harness.OrchestrationStore.ReadOwner(run);
+
+        output.Write($"exit={resumed.ExitCode}\n");
+        output.Write($"said={resumed.Message}\n");
+        output.Write($"kept={File.Exists(record)}\n");
+        output.Write($"owner={(owner is null ? "none" : owner.ProcessId.ToString(CultureInfo.InvariantCulture))}\n");
+        return 0;
+    }
+
     /// <summary>A resume whose claim of the run meets a stop file the store refuses is refused with its problem (13), and leaves no owner on the run.</summary>
     [Fact]
     public async Task AResumeWhoseClaimMeetsAStopFileTheStoreRefuses_IsRefusedWithItsProblem_AndLeavesNoOwner()
@@ -4404,7 +4474,7 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Success, deleted.ExitCode);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, ChildSweep.None, FlowService.ResumeCommand, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(OrchestrationReports.NoOrchestrator("r1"), refused.Message);

@@ -232,7 +232,7 @@ public sealed class FlowSessionsTests
         // While the first runs, a session of the second is refused.
         _ = new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Claim(first);
 
-        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(layout, second, Token));
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(layout, second, ChildSweep.None, FlowService.ResumeCommand, Token));
 
         Assert.Contains($"run '{first.Name}' of this repository is unfinished", raised.Message, StringComparison.Ordinal);
         Assert.Null(harness.OrchestrationStore.ReadOwner(second));
@@ -242,7 +242,7 @@ public sealed class FlowSessionsTests
         Released(harness, first);
         harness.OrchestrationStore.WriteStopFile(first, new FlowStopFile(1, Stop: new FlowStopStop(DateTimeOffset.UtcNow)));
 
-        Assert.Null(await sessions.ClaimAsync(layout, first, Token));
+        Assert.Null(await sessions.ClaimAsync(layout, first, ChildSweep.None, FlowService.ResumeCommand, Token));
         Assert.Equal(Environment.ProcessId, harness.OrchestrationStore.ReadOwner(first)!.ProcessId);
         Assert.Null(harness.OrchestrationStore.ReadStopFile(first));
     }
@@ -311,8 +311,8 @@ public sealed class FlowSessionsTests
         Released(harness, run);
 
         var results = AtOnce(
-            async () => await sessions.ClaimAsync(layout, run, Token) ?? "claimed",
-            async () => await sessions.ClaimAsync(layout, run, Token) ?? "claimed");
+            async () => await sessions.ClaimAsync(layout, run, ChildSweep.None, FlowService.ResumeCommand, Token) ?? "claimed",
+            async () => await sessions.ClaimAsync(layout, run, ChildSweep.None, FlowService.ResumeCommand, Token) ?? "claimed");
 
         Assert.Single(results, result => result.Made == "claimed");
         Assert.StartsWith("run 'r1' is owned by a live engine (process ", Assert.Single(results, result => result.Refused is not null).Refused!.Message, StringComparison.Ordinal);
