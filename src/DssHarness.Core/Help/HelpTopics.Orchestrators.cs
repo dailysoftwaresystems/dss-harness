@@ -386,7 +386,7 @@ public static partial class HelpTopics
             + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
             + "own end keeps it. Every command over an orchestrator - the three "
             + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
-            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL five seconds later), "
+            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL at once, each process killed waited for until it has gone), "
             + "removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json; stop-orchestrator --now does it again once it has ended the engine and its "
             + "tree, and says what it ended. A session or group whose starter still runs is left; one whose id a later process "

@@ -435,6 +435,58 @@ public sealed class ProcessRunnerTests
             $"Grandchild process {grandchildId} was still running after the run was cancelled.");
     }
 
+    /// <summary>
+    /// A child stopped at its time limit whose descendant - holding the output it inherited - is still ending when the stop
+    /// has killed it, as a killed process is on every system, the kill answered before its end has run, is read to the end
+    /// of its output: the stop waits until every process it ended has gone before the output's end is looked for, so a
+    /// process the stop itself ended is never taken for one the child left running, and the run says nothing holds its
+    /// output. The descendant's slow end is stood in for: it ends only once the stop first asks whether what it ended has
+    /// gone. The clock the limit is measured by is moved past it once the descendant runs, so the stop finds it there.
+    /// </summary>
+    [Fact]
+    public async Task AChildStoppedWhileADescendantItsStopKilledIsStillEnding_IsReadToTheEndOfItsOutput()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learned = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = LearnedProcess.None;
+        var limit = TimeSpan.FromMinutes(1);
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            learned.TrySetResult(found);
+                        }
+                    },
+                },
+                cancellationToken);
+
+            holder = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            ends.Slow(holder.Id);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+
+            Assert.Equal((true, $"holder={holder}\n", (string?)null), (result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // The stop found the descendant and its end was held back: what this test is about happened.
+            Assert.Equal(1, ends.HeldBack);
+            Assert.False(holder.Running, $"the descendant {holder} outlived the stop that ended it");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
     [Fact]
     public async Task RunAsync_AppliesEnvironmentOverrides()
     {
@@ -864,6 +916,87 @@ public sealed class ProcessRunnerTests
     [InlineData("41 (x) X 40 41 41 0 -1 0 1 0 0 0", true)]
     public void AThreadsStatLine_SaysWhetherItIsExiting(string stat, bool exiting)
         => Assert.Equal(exiting, ProcessGoing.ThreadExiting(stat));
+
+    /// <summary>
+    /// A thread's <c>stat</c> line says it has ended only where it is a zombie or dead - never where its flags say only
+    /// that it is exiting, its process's files maybe still open, which is what a stop's wait for what it ended waits out -
+    /// read after the last parenthesis of its name.
+    /// </summary>
+    [Theory]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194308 120 0 0 0", false)]
+    [InlineData("41 (a (b) c) Z 40 41 41 0 -1 4194304 120 0 0 0", true)]
+    [InlineData("41 (x) X 40 41 41 0 -1 0 1 0 0 0", true)]
+    public void AThreadsStatLine_SaysWhetherItHasEnded(string stat, bool ended)
+        => Assert.Equal(ended, ProcessGoing.ThreadEnded(stat));
+
+    /// <summary>
+    /// A process a stop ended that is a zombie nobody reaps - its parent alive and never asking - has gone, as a stop's wait
+    /// asks it, on Linux: its descriptors are closed, so it holds nothing the wait waits out, and a wait held for it would
+    /// never end. It is still the very process kept, its start read as it was - this test process, its parent, never reaps
+    /// it until the end - and that live parent has not gone.
+    /// </summary>
+    [Fact]
+    public async Task AZombieNobodyReaps_HasGone_AsAStopsWaitAsksIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "Linux keeps a zombie's start readable; on macOS a zombie's start reads as gone, and Windows keeps no zombie.");
+
+        var identity = new DssHarness.Core.Execution.ProcessIdentity(new HostPlatform());
+        var zombie = SpawnUnreaped("/bin/sh", "sh", "-c", "exit 0");
+
+        try
+        {
+            var stamp = identity.StampOf(zombie);
+
+            Assert.NotNull(stamp);
+
+            using var kept = new KeptProcess(zombie, stamp);
+            using var parent = new KeptProcess(Environment.ProcessId, identity.Current!);
+            var bound = Stopwatch.StartNew();
+
+            while (!ProcessEnds.Machine.Gone(kept))
+            {
+                Assert.True(bound.Elapsed < TimeSpan.FromSeconds(30), $"the zombie {zombie} was never taken for gone");
+                await Task.Delay(TimeSpan.FromMilliseconds(20), TestContext.Current.CancellationToken);
+            }
+
+            Assert.True(identity.IsSame(zombie, stamp), $"pid {zombie} was reaped, so it was never a zombie nobody reaps");
+            Assert.False(ProcessEnds.Machine.Gone(parent), "a live process was taken for gone");
+        }
+        finally
+        {
+            _ = WaitPid(zombie, out _, 0);
+        }
+    }
+
+    /// <summary>Starts <paramref name="program"/> by the C library's own call, which no runtime reaps: its zombie stays until this process asks for it.</summary>
+    private static int SpawnUnreaped(string program, params string[] arguments)
+    {
+        var spelled = arguments.Select(Marshal.StringToHGlobalAnsi).Append(IntPtr.Zero).ToArray();
+
+        try
+        {
+            var refused = PosixSpawn(out var id, program, IntPtr.Zero, IntPtr.Zero, spelled, [IntPtr.Zero]);
+
+            Assert.Equal(0, refused);
+            return id;
+        }
+        finally
+        {
+            foreach (var argument in spelled.Where(argument => argument != IntPtr.Zero))
+            {
+                Marshal.FreeHGlobal(argument);
+            }
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "posix_spawn", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern int PosixSpawn(out int id, string path, IntPtr fileActions, IntPtr attributes, IntPtr[] arguments, IntPtr[] environment);
+
+    [DllImport("libc", EntryPoint = "waitpid", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern int WaitPid(int id, out int status, int options);
 
     /// <summary>
     /// A start that fails as a program being written does is made again until it succeeds, where the system refuses to

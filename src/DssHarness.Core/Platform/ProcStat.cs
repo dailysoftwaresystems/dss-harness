@@ -6,7 +6,7 @@ namespace DssHarness.Core.Platform;
 /// Reading <c>/proc/&lt;pid&gt;/stat</c>, which is where Linux publishes what it knows about a process.
 /// </summary>
 /// <remarks>
-/// Shared by the process table and by the identity a lock records, because both want the same two
+/// Shared by the process table, by the identity a lock records and by a stop's walk of what it ends, because each wants
 /// facts out of the same file and a second parser would be a second thing to get wrong. The program
 /// name is in parentheses and may itself hold spaces and parentheses, so every field after it is
 /// found from the last closing one and never by counting from the start.
@@ -15,6 +15,9 @@ internal static class ProcStat
 {
     /// <summary>The parent's id, among the fields after the name.</summary>
     public const int ParentField = 1;
+
+    /// <summary>The id of the process group the process is in, among the fields after the name.</summary>
+    public const int GroupField = 2;
 
     /// <summary>
     /// When the process started, in clock ticks since this machine booted, among the fields after the

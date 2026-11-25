@@ -534,11 +534,13 @@ internal static class TestChild
         using var holder = StartInheriting(arguments[2], arguments[3..]);
 
         // A holder that leaves this group or session is named once it has, so a test acting on
-        // its id acts on a process that stands apart.
+        // its id acts on a process that stands apart; one that refuses to be asked to end, once it
+        // has said it refuses, so this process's end never asks it first.
         var apart = Until(() => arguments[2] switch
         {
             "own-group-and-sleep" or "own-group-note-term-and-sleep" => getpgid(holder.Id) == holder.Id,
             "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
+            "ignore-term-and-sleep" => File.Exists(arguments[4]),
             _ => true,
         });
 

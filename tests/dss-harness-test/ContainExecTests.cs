@@ -714,6 +714,112 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// What a contained child's job holds when the child ends of itself has gone before the end of the child's output is
+    /// looked for, on Windows: a job is ended as asynchronously as any process, and a member still ending then - still
+    /// holding the output it inherited - was taken for a process the child left running. The job's slow end is stood in
+    /// for: it ends only once the runner first asks whether what it ended has gone.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsJob_OnWindows_HasGoneBeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a job is Windows' alone; on Linux and macOS a contained child's session is asked to end and made to (AContainedChildsSessionMadeToEndAtItsBound_HasGoneBeforeTheEndOfItsOutputIsLookedFor).");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var ends = new SlowEnds();
+        var holder = LearnedProcess.None;
+
+        ends.SlowJobs();
+
+        try
+        {
+            var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "sleep", "300000") with
+                {
+                    Contained = true,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
+                },
+                cancellationToken).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal((0, false, $"holder={holder}\n", (string?)null), (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // The job's end was held back: what this test is about happened.
+            Assert.Equal(1, ends.HeldBack);
+            Assert.False(holder.Running, $"the holder {holder} outlived the job that held it");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// What a contained child's session holds that refuses to be asked to end, made to once what is left of the child's
+    /// time limit has passed at the child's own end, has gone before the end of the child's output is looked for, on Linux
+    /// and macOS: a killed process's end runs after the kill is answered, and a member still ending then - still holding
+    /// the output it inherited - was taken for a process the child left running. The member's slow end is stood in for: it
+    /// ends only once the runner first asks whether what the session's end killed has gone. The clock the bound is
+    /// measured by is moved past it once the session's wait for what it asked to end has begun.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsSessionMadeToEndAtItsBound_HasGoneBeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipWhen(
+            OperatingSystem.IsWindows(),
+            "a session is the C library's; on Windows a contained child's job is ended at once (AContainedChildsJob_OnWindows_HasGoneBeforeTheEndOfItsOutputIsLookedFor).");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learned = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = LearnedProcess.None;
+        var limit = TimeSpan.FromHours(1);
+
+        try
+        {
+            // A table that reads nothing of the child's: what the session holds is found by its group, which needs none,
+            // and no program is started on the clock the test moves.
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram, new QuietProcessTable()) { Clock = clock, Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "ignore-term-and-sleep", "300000", temp.Combine("ready.txt")) with
+                {
+                    Contained = true,
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            ends.Slow(found.Id);
+                            learned.TrySetResult(found);
+                        }
+                    },
+                },
+                cancellationToken);
+
+            holder = await learned.Task.WaitAsync(LongBound, cancellationToken);
+
+            // The child's limit, and the session's wait for what it asked to end, which refuses.
+            await clock.WaitingAsync(2).WaitAsync(LongBound, cancellationToken);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(
+                (0, false, $"holder={holder}\n", (string?)null, (string?)null),
+                (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld, result.Uncontained));
+
+            // The member's end was held back: what this test is about happened.
+            Assert.Equal(1, ends.HeldBack);
+            Assert.False(holder.Running, $"the holder {holder} outlived the session's end that killed it");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
     /// A contained child that is stopped takes with it what it left outside its tree, at once, on
     /// every system: a holder of the output whose parent has gone, which no walk of the child's tree
     /// reaches, is ended by the job on Windows and by the session on Linux and macOS - and the run

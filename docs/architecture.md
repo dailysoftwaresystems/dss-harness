@@ -148,7 +148,8 @@ on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `I
 Below that seam a few primitives ask the runtime for one fact each, where nothing else is
 asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
 session, group, signal and job-object calls containment is made of, and the choice between them
-that `ContainExec` places a child through), `UserState`,
+that `ContainExec` places a child through, and the one walk that ends a process with its tree,
+each process it ends kept until it has gone), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory),
 `AgentChildEnvironment.Own` (the tool's own environment, which an agent's child would inherit),
 `SystemWebNames` (a host name's addresses) and `HarnessFetch.Connecting` (the sockets the harness's
@@ -269,7 +270,20 @@ engine leaves behind ends with it there. On Linux and macOS the runner ends the 
 the child ends or is stopped - every process still in it, and at a stop every one still in the
 child's tree, read before anything is signalled, asked to end with SIGTERM and waited for while
 any of it stands - told every five minutes, and killed at what is left of the child's time limit,
-or at once where a sweep ends what a killed run left, that run's bound having passed with it - and
+or at once where a sweep ends what a killed run left, that run's bound having passed with it.
+Whatever a stop or a container's end ends is waited for until it has gone before the output's end
+is looked for (`EndedProcesses`): the system answers a kill before the process's end has run - a
+descendant still unmapping its memory or running down its handles holds the write end of the
+child's output for that while - and a process the stop itself ended, taken then for one the child
+left running, was said to hold the output on a run whose stop had ended everything. So each process
+ended is kept as it is ended - on Windows by a handle, the job's members listed and kept before the
+job is ended, each checked to be in it by its own handle; on Linux and macOS by its id and its start,
+read while it is held still (SIGSTOP) before anything is killed - and waited for, told every five
+minutes and with no grace of any length: on Windows until its handle is signalled, which comes only
+once its handle table has run down, and on Linux and macOS until no process carries its id with its
+start or that process is a zombie, whose descriptors are closed, whether or not anything ever reaps
+it. On Windows the job, and a stopped tree, are listed again once every process kept has gone, for a
+child one made while it was being ended. Then
 the output is read until every character the child wrote has been, to its end or until a look finds
 the pipe holding nothing while something still holds it open (`ProcessRunner.StreamCapture`: each
 look, once the child has ended, ends the read that waits - a read ended so has taken nothing, the
@@ -318,9 +332,10 @@ has the recorded start, or no process carries the id at all: none is given an id
 group still carries, so what a leader killed with the engine's tree handed on is still found by
 it. An id given to a later process ends nothing, and that record simply goes.
 `stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
-ended: what outlived that end. A tree is ended by stopping each process before killing it, and the
-system hangs up a group that loses its last parent in the session while one of its members is
-stopped, so a leftover may die of that hangup with the engine, and is then not said. A
+ended: what outlived that end. A tree is ended by holding each process of it still before any is
+killed (`Containment.EndTree`, below), and the system hangs up a group that loses its last parent in
+the session while one of its members is held, so a leftover may die of that hangup with the engine,
+and is then not said. A
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
@@ -435,7 +450,8 @@ own - which ends every member when its last handle closes; so the harness ending
 kill among them, ends
 the child and all it started at once. Its own end and a stop are as any other child's: nothing is
 terminated as it ends, and what it leaves running lives on until the harness ends - so, on every
-system, its output is read, once it has ended, until every character it wrote has been - to its
+system, its output is read, once it has ended - and at a stop once everything the stop ended has
+gone - until every character it wrote has been - to its
 end, or until a look finds the pipe holding nothing with no read waiting on it - as a contained child's is
 once its container has: what still holds the output then is one of those leftovers, a server its
 phase started in the background, whose later output is its own and is said not read
@@ -477,7 +493,20 @@ interruption typed at the harness's terminal is sent to a group, and that group 
 On Windows such a child starts as any other, since a child started with no window already has a
 console of its own that an interruption typed at the harness's never reaches. A child apart from
 the terminal is stopped by its process tree, as any other, and on Linux and macOS by its group as
-well, at once, which reaches what its tree handed on; what it leaves at its own end is left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
+well, at once, which reaches what its tree handed on; what it leaves at its own end is left. A
+tree, and the group beside it, is ended by one walk (`Containment.EndTree`) - for a stop, for
+`stop-run --now` and `stop-orchestrator --now`, and for a host agent's last resort alike. On Linux
+and macOS it holds each process still (SIGSTOP) before it takes that process's children - held, a
+process starts no other, and a child of it is never reaped and its id given out before the walk
+acts on it; Linux's table is read once a round however deep the tree, each child asked again once
+its parent is held, until a round takes none - then the group, as one before it is listed and each member by its own
+id, and only then kills each by its id, the child last. On Windows, where nothing is held still, it
+ends each process as it finds it, the child first, a child being one the list Windows keeps of every
+process names as created by a process the walk ended, created no later than that process, and the
+very one the list named, as its own handle's creation time says, so an id taken since the list was
+read is never ended. Every process a stop ends is kept and waited for until it has gone before the
+child's output's end is looked for (above), so what is said to hold the output then is only ever
+what the stop did not end. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
 Windows, as above, and as any other child elsewhere.
 
 ### Paths come from git

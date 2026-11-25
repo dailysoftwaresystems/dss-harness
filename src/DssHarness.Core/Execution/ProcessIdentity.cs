@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Execution;
@@ -452,11 +453,16 @@ public static class ProcessHolders
         return new ProcessEnding(ProcessEnded.Ended);
     }
 
-    /// <summary>The machine's own end of a process: it and its whole tree, then waited for until <paramref name="bound"/> is cancelled.</summary>
+    /// <summary>
+    /// The machine's own end of a process: it and its whole tree, ended through the one walk that ends a tree
+    /// (<see cref="Containment.EndTree"/>), then waited for until <paramref name="bound"/> is cancelled.
+    /// </summary>
     private static async Task KillAndWaitAsync(int processId, CancellationToken bound)
     {
         using var process = System.Diagnostics.Process.GetProcessById(processId);
-        process.Kill(entireProcessTree: true);
+        using var ended = new EndedProcesses(ProcessEnds.Machine);
+
+        Containment.EndTree(process, group: false, ended);
         await process.WaitForExitAsync(bound).ConfigureAwait(false);
     }
 

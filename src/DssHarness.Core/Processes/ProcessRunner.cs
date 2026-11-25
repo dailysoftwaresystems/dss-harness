@@ -78,10 +78,16 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>
-    /// What a child's own waits - its leftovers' ending, its output held - are measured and told by: the system's clock, or
-    /// a test's.
+    /// What a child's time limit and its own waits - what a stop ended going, its leftovers' ending, its output held - are
+    /// measured and told by: the system's clock, or a test's.
     /// </summary>
     internal TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// How what a stop ends - and what a contained child's container ends at its own end - is ended and seen to have gone:
+    /// the machine's own, or a test's standing in for a process whose end is slow.
+    /// </summary>
+    internal ProcessEnds Ends { get; init; } = ProcessEnds.Machine;
 
     /// <summary>
     /// How child output is decoded, and child input encoded, on every platform. Left unset,
@@ -376,7 +382,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         var stopwatch = Stopwatch.StartNew();
 
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // The child's time limit, on the runner's clock - its timer the clock's - cancelled too as the caller gives up, as a
+        // source linked to the caller's would be; a source cancelled lets go of its timer.
+        using var timeoutSource = new CancellationTokenSource(Timeout.InfiniteTimeSpan, Clock);
+        using var callerGaveUp = cancellationToken.Register(static source => ((CancellationTokenSource)source!).Cancel(), timeoutSource);
         using var reaching = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token);
 
         // Waited for before the step starts, so a step however quick to say how its start went is
@@ -406,6 +415,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             throw;
         }
 
+        var limitFrom = Clock.GetTimestamp();
+
         if (request.Timeout is { } budget)
         {
             timeoutSource.CancelAfter(budget);
@@ -413,7 +424,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // What is left of the child's time limit, at which what it left asked to end and still standing is made to: none
         // where it was given none.
-        TimeSpan? Left() => request.Timeout is { } limit ? (limit > stopwatch.Elapsed ? limit - stopwatch.Elapsed : TimeSpan.Zero) : null;
+        TimeSpan? Left() => request.Timeout is { } limit && Clock.GetElapsedTime(limitFrom) is var spent
+            ? (limit > spent ? limit - spent : TimeSpan.Zero)
+            : null;
 
         var stopped = false;
         var placed = false;
@@ -437,12 +450,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
                 stopped = true;
-                uncontained = await StopAsync(request, grouped, job, process, Left()).ConfigureAwait(false);
+                uncontained = await StopAsync(request, resolved, grouped, job, process, Left()).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Nothing the step says can be read, so nothing it starts is run blind: it goes.
-                KillTree(process);
+                // Nothing the step says can be read, so nothing it starts is run blind: it goes, with its tree.
+                using (var ended = new EndedProcesses(Ends))
+                {
+                    EndTree(process, grouped: false, ended);
+                }
 
                 throw new ProgramStartException(
                     request.FileName,
@@ -493,7 +509,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 // contained child is ended through its container, which reaches what detached itself
                 // from its parent as surely as what did not.
                 stopped = true;
-                uncontained = await StopAsync(request, grouped, job, process, Left()).ConfigureAwait(false);
+                uncontained = await StopAsync(request, resolved, grouped, job, process, Left()).ConfigureAwait(false);
             }
         }
 
@@ -505,8 +521,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             // What a contained child starts is ended with it, at its own end as at a stop: a
             // leftover holding the output - a server started in the background, a build's node -
-            // would otherwise keep the reading below from ever ending.
-            uncontained = await EndContainerAsync(job, process, Left()).ConfigureAwait(false);
+            // would otherwise keep the reading below from ever ending. Ended, it has gone before
+            // the reading's end is looked for, so it is never taken for a process left running.
+            uncontained = await EndContainerAsync(job, process, Left(), resolved).ConfigureAwait(false);
         }
 
         // The child has ended, and a contained child's session with it, at its own end or at a stop: its record has nothing
@@ -529,7 +546,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // long as such a process lives. Told every five minutes while a busy leftover keeps the pipe from ever going quiet,
         // and ended where the caller gives up.
         // A stopped child's rest is read whatever the caller does: the stop has been made, and what it said as it went is the
-        // run's to keep.
+        // run's to keep. Whatever the stop, or a contained child's container, ended has gone by now, so what still holds a
+        // pipe is only ever what the child left running.
         var held = await DrainedAsync(resolved, standardOutput, standardError, stopped ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
 
         var capturedOutput = standardOutput.Taken();
@@ -579,9 +597,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>
-    /// Waits, once the child has ended, until every character it wrote has been read from both of its streams: to their
+    /// Waits, once the child has ended - and whatever its stop or its container's end ended has gone
+    /// (<see cref="EndedProcesses"/>) - until every character it wrote has been read from both of its streams: to their
     /// end, or - where something it left running holds one - until a look at it finds its pipe holding nothing, no read
-    /// waiting on it (<see cref="StreamCapture.Look"/>), which ends its reading there.
+    /// waiting on it (<see cref="StreamCapture.Look"/>), which ends its reading there. A look settles at once, so a
+    /// process still ending would be taken for one left running: nothing a stop ended is, by then.
     /// </summary>
     /// <returns>
     /// What says a process the child left holds its output, where one does; <see langword="null"/> where both streams
@@ -630,60 +650,85 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// Stops a child as its request says: a contained one through its container - and any other,
     /// and a contained one whose container was asked for in the moment before it was joined, by its
     /// tree; a child that leads a group of its own, apart from the terminal on Linux and macOS, by its
-    /// group as well, at once, which reaches what its tree handed on.
+    /// group as well, at once, which reaches what its tree handed on - and waits until every process
+    /// the stop ended has gone, told every five minutes, so none of them is still holding the child's
+    /// output when its end is looked for, and none is taken for a process the child left running.
     /// </summary>
     /// <param name="request">The child's request, saying whether it was contained.</param>
+    /// <param name="resolved">The program the child runs.</param>
     /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
     /// <param name="job">The job holding a contained child on Windows, or <see langword="null"/>.</param>
     /// <param name="process">The child.</param>
     /// <returns>What the container could not reach, or <see langword="null"/> where it reached all it holds.</returns>
     /// <param name="bound">What is left of the child's time limit, at which what it left asked to end is made to; none where it has none.</param>
-    private async Task<string?> StopAsync(ProcessRequest request, bool grouped, SafeWaitHandle? job, Process process, TimeSpan? bound)
+    private async Task<string?> StopAsync(ProcessRequest request, string resolved, bool grouped, SafeWaitHandle? job, Process process, TimeSpan? bound)
     {
+        using var ended = new EndedProcesses(Ends);
+
         try
         {
-            return request.Contained ? await EndContainerAsync(job, process, bound).ConfigureAwait(false) : null;
+            return request.Contained ? await EndContainerAsync(job, process, bound, resolved).ConfigureAwait(false) : null;
         }
         finally
         {
             // The tree as well, whatever ending the container met: a stop that lands in the moment
             // before the child joined its container reaches nothing through the container, and the
-            // child itself must still go, or the wait that follows would never end.
-            KillTree(process);
+            // child itself must still go, or the wait that follows would never end. Then the group,
+            // for what the tree handed on: walked first, while the child stands, the tree still
+            // reaches what moved to a group of its own - a test under timeout - which the child's end
+            // would have handed on, out of the tree's reach.
+            EndTree(process, grouped, ended);
 
-            // Then the group, for what the tree handed on: walked first, while the child stands, the
-            // tree still reaches what moved to a group of its own - a test under timeout - which the
-            // child's end would have handed on, out of the tree's reach. No later process takes the
-            // group's id while anything is left in it.
-            if (grouped)
-            {
-                Containment.KillGroup(process.Id);
-            }
+            await ended.GoneAsync($"what the stop of '{resolved}' ended to go", Waits.Told, Clock).ConfigureAwait(false);
         }
     }
 
     /// <summary>
-    /// Ends everything a contained child's container holds: on Windows the job, all at once; on
-    /// Linux and macOS the session the child leads, asked to end, waited for while any of it stands - told every five
-    /// minutes - and made to at <paramref name="bound"/>, what is left of the child's time limit.
+    /// Ends <paramref name="process"/>'s tree, and the group it leads where <paramref name="grouped"/>, keeping what it
+    /// ends in <paramref name="ended"/> (<see cref="Containment.EndTree"/>): a process of it that could not be ended - one
+    /// running as another user - is passed over, every other ended, the child among them, so the wait for it ends.
+    /// </summary>
+    /// <param name="process">The child.</param>
+    /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
+    /// <param name="ended">What keeps each process ended.</param>
+    private static void EndTree(Process process, bool grouped, EndedProcesses ended)
+    {
+        try
+        {
+            Containment.EndTree(process, grouped, ended);
+        }
+        catch (AggregateException)
+        {
+            // Passed over, as above: what could not be ended was never this process's to end.
+        }
+    }
+
+    /// <summary>
+    /// Ends everything a contained child's container holds, and waits until it has gone, told every five minutes: on
+    /// Windows the job, all at once, each member kept by a handle first; on Linux and macOS the session the child leads,
+    /// asked to end, waited for while any of it stands - told every five minutes - and made to at <paramref name="bound"/>,
+    /// what is left of the child's time limit.
     /// </summary>
     /// <param name="job">The job holding the child on Windows, or <see langword="null"/> elsewhere.</param>
     /// <param name="process">The child, which leads its session on Linux and macOS under its own id.</param>
     /// <param name="bound">What is left of the child's time limit; none where it has none.</param>
+    /// <param name="resolved">The program the child runs.</param>
     /// <returns>What could not be reached, or <see langword="null"/> where all the container holds was.</returns>
-    private Task<string?> EndContainerAsync(SafeWaitHandle? job, Process process, TimeSpan? bound)
+    private async Task<string?> EndContainerAsync(SafeWaitHandle? job, Process process, TimeSpan? bound, string resolved)
     {
         if (job is not null)
         {
-            Containment.Terminate(job);
-            return Task.FromResult<string?>(null);
+            using var ended = new EndedProcesses(Ends);
+
+            Containment.EndJob(job, ended);
+            await ended.GoneAsync($"what the job of '{resolved}' held to go once ended", Waits.Told, Clock).ConfigureAwait(false);
+
+            return null;
         }
 
         _processTable ??= ProcessTableFactory.Create(_platform, this);
 
-        return UnreachedOf(Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, bound, Waits.Told, Clock));
-
-        static async Task<string?> UnreachedOf(Task<HeldEnding> ending) => (await ending.ConfigureAwait(false)).Unreached;
+        return (await Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, bound, Waits.Told, Clock, Ends).ConfigureAwait(false)).Unreached;
     }
 
     /// <summary>
@@ -725,7 +770,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             // A child no record names is one a killed tool would leave running unseen: it is not run, stopped as a stop
             // stops it, whatever kept the record from being written.
-            await StopAsync(request, grouped, job, process, request.Timeout).ConfigureAwait(false);
+            await StopAsync(request, resolved, grouped, job, process, request.Timeout).ConfigureAwait(false);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
 
             if (ex is IOException or UnauthorizedAccessException)
@@ -1810,34 +1855,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         catch (IOException)
         {
             // Closing flushes, and the pipe can already be gone because the child exited.
-        }
-    }
-
-    private static void KillTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // The process exited between the check and the kill.
-        }
-        catch (Exception ex) when (ex is Win32Exception or AggregateException)
-        {
-            // A descendant could not be stopped: it was already exiting, or it runs as another user. The
-            // process itself must still go, or the wait for it that follows would never end.
-            try
-            {
-                process.Kill();
-            }
-            catch (Exception inner) when (inner is InvalidOperationException or Win32Exception)
-            {
-                // It exited meanwhile, or cannot be signalled either; waiting for it says which.
-            }
         }
     }
 }

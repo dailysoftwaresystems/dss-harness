@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Core.Hosts;
 
@@ -176,8 +177,9 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
             try
             {
                 using var process = Process.GetProcessById(child.Id);
+                using var kept = new EndedProcesses(ProcessEnds.Machine);
 
-                process.Kill(entireProcessTree: true);
+                Containment.EndTree(process, group: false, kept);
                 ended.Add(child.Id);
             }
             catch (ArgumentException)

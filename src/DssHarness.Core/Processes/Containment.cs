@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
@@ -10,14 +11,15 @@ namespace DssHarness.Core.Processes;
 /// <summary>
 /// The calls containment is made of, below the platform seam: the C library's session, group,
 /// signal and exec calls on Linux and macOS, and the job objects, process creation and console
-/// signals of Windows.
+/// signals of Windows - and the end of what a child started, at a stop and at a contained child's
+/// own end, each process it ends kept until it has gone (<see cref="EndedProcesses"/>).
 /// Each side is called only where that system runs, and the choice between them is made here and
 /// nowhere above.
 /// </summary>
 internal static class Containment
 {
-    /// <summary>How often a wait for an ending looks again: a look's pace, never a bound.</summary>
-    private static readonly TimeSpan GraceSlice = TimeSpan.FromMilliseconds(20);
+    /// <summary>How often a wait for an ending looks again - a session asked to end, and what a stop ended (<see cref="EndedProcesses.GoneAsync"/>): a look's pace, never a bound.</summary>
+    internal static readonly TimeSpan EndingLook = TimeSpan.FromMilliseconds(20);
 
     /// <summary>
     /// Why the step cannot give the containment asked for on this system, or <see langword="null"/>
@@ -106,7 +108,8 @@ internal static class Containment
     /// child stands every one in its tree, is asked to end - the group as one, each member outside
     /// the group on its own - and waited for for as long as any of them stands, told every five minutes
     /// (<see cref="Waits.SaidEvery"/>); every one still standing once they have all gone or <paramref name="bound"/> - the
-    /// bound its run was configured with - is spent is killed.
+    /// bound its run was configured with - is spent is killed, and waited for until it has gone or is a zombie, so nothing
+    /// this end killed still holds what the child's output is read from once it returns.
     /// </summary>
     /// <param name="leader">The child, which leads the session and the group, or the group alone, by its own process id.</param>
     /// <param name="read">Reads the machine's process table.</param>
@@ -117,6 +120,7 @@ internal static class Containment
     /// </param>
     /// <param name="tell">Told of the wait every five minutes.</param>
     /// <param name="clock">What the wait is measured and told by: the system's, or a test's.</param>
+    /// <param name="ends">How what is killed is ended and seen gone: the machine's own, or a test's.</param>
     /// <param name="group">Whether the child leads a process group alone, in a session that is not its own.</param>
     /// <returns>
     /// Whether anything was still in it to end, and what could not be reached, and why - none where
@@ -138,7 +142,10 @@ internal static class Containment
     /// <para>
     /// What is killed at the end is read again, so what was started while the members were being
     /// asked goes too; a process the first reading found is killed only where the second finds it
-    /// under the same id and start, so an id given to another process meanwhile is left alone. A
+    /// under the same id and start, so an id given to another process meanwhile is left alone. Each
+    /// is held still (SIGSTOP) as it is found - the group as one before the table is read again - so
+    /// none starts another or goes before it is killed, and kept by its id and start read while it is
+    /// held, then killed and waited for (<see cref="EndedProcesses.GoneAsync"/>). A
     /// session with nothing in it is not read again, nor signalled. A process that left
     /// both the session and the tree - a daemon that made a session of its own and whose parent
     /// has gone - is reached by nothing here. A group is ended the same way, by its own members and
@@ -151,11 +158,13 @@ internal static class Containment
         TimeSpan? bound,
         Action<WaitTold> tell,
         TimeProvider clock,
+        ProcessEnds ends,
         bool group = false)
     {
         ArgumentNullException.ThrowIfNull(read);
         ArgumentNullException.ThrowIfNull(tell);
         ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(ends);
 
         var calls = Posix.Calls();
 
@@ -185,7 +194,7 @@ internal static class Containment
             {
                 while (!(calls.SignalGroup(leader, 0) == -1 && members.All(member => calls.Signal(member.Id, 0) == -1)))
                 {
-                    await Task.Delay(GraceSlice, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(EndingLook, cancellationToken).ConfigureAwait(false);
                 }
 
                 return true;
@@ -193,44 +202,81 @@ internal static class Containment
             new WaitWatch($"{held} ({leader.ToString(System.Globalization.CultureInfo.InvariantCulture)}) to end once asked", tell, bound, clock),
             CancellationToken.None).ConfigureAwait(false);
 
-        calls.SignalGroup(leader, Posix.Kill);
+        // What still stands is made to end, held still first - the group as one before it is listed, then each member by
+        // its own id, its leader first so it is killed last, and each member outside the group as the table finds it - so
+        // none starts another, or goes and has its id given out, before it is killed by that id.
+        using var ended = new EndedProcesses(ends);
+        var still = new List<int>();
+        var holding = new HashSet<int>();
 
-        if (unread is not null)
+        void Hold(int process)
         {
-            return new HeldEnding(Found: true, Unreached(unread, held, "its group was ended"));
+            if (holding.Add(process) && calls.Signal(process, Posix.HoldStill) != -1)
+            {
+                still.Add(process);
+            }
         }
 
-        var (again, unreadAgain) = await ReadAsync(read).ConfigureAwait(false);
+        HeldEnding ending;
 
-        if (again is null)
+        try
         {
-            // Still a member of the session - or the group - is still one of the run's, whoever its
-            // parent: only what left it can no longer be told from another process under the same id.
-            foreach (var member in members.Where(member => In(member.Id)))
+            if (calls.SignalGroup(leader, Posix.HoldStill) != -1)
             {
-                calls.Signal(member.Id, Posix.Kill);
+                foreach (var member in MembersOf(leader).OrderBy(member => member != leader))
+                {
+                    Hold(member);
+                }
             }
 
-            return new HeldEnding(
-                Found: true,
-                group
-                    ? $"the process table could not be read again once {held} had been asked to end ({unreadAgain}): "
-                        + "its group was ended, and what of its tree had left the group was not reached"
-                    : $"the process table could not be read again once {held} had been asked to end ({unreadAgain}): "
-                        + "its group and what the first reading found still in the session were ended, and what was started meanwhile outside the group, "
-                        + "and what of its tree had left the session, was not reached");
+            ending = unread is not null
+                ? new HeldEnding(Found: true, Unreached(unread, held, "its group was ended"))
+                : await HeldAgainAsync().ConfigureAwait(false);
         }
-
-        // Known by id and start alone: a process handed to another parent, or one that became
-        // another program, is still the one the first reading found.
-        var known = members.Select(member => (member.Id, member.StartedUtc)).ToHashSet();
-
-        foreach (var member in again.Processes.Where(process => known.Contains((process.Id, process.StartedUtc)) || In(process.Id)))
+        finally
         {
-            calls.Signal(member.Id, Posix.Kill);
+            // Whatever reading the table again met, nothing held still is left so.
+            KillHeld(still, ended);
         }
 
-        return new HeldEnding(Found: true, null);
+        await ended.GoneAsync($"{held} ({leader.ToString(System.Globalization.CultureInfo.InvariantCulture)}) to go once made to", tell, clock).ConfigureAwait(false);
+
+        return ending;
+
+        async Task<HeldEnding> HeldAgainAsync()
+        {
+            var (again, unreadAgain) = await ReadAsync(read).ConfigureAwait(false);
+
+            if (again is null)
+            {
+                // Still a member of the session - or the group - is still one of the run's, whoever its
+                // parent: only what left it can no longer be told from another process under the same id.
+                foreach (var member in members.Where(member => In(member.Id)))
+                {
+                    Hold(member.Id);
+                }
+
+                return new HeldEnding(
+                    Found: true,
+                    group
+                        ? $"the process table could not be read again once {held} had been asked to end ({unreadAgain}): "
+                            + "its group was ended, and what of its tree had left the group was not reached"
+                        : $"the process table could not be read again once {held} had been asked to end ({unreadAgain}): "
+                            + "its group and what the first reading found still in the session were ended, and what was started meanwhile outside the group, "
+                            + "and what of its tree had left the session, was not reached");
+            }
+
+            // Known by id and start alone: a process handed to another parent, or one that became
+            // another program, is still the one the first reading found.
+            var known = members.Select(member => (member.Id, member.StartedUtc)).ToHashSet();
+
+            foreach (var member in again.Processes.Where(process => known.Contains((process.Id, process.StartedUtc)) || In(process.Id)))
+            {
+                Hold(member.Id);
+            }
+
+            return new HeldEnding(Found: true, null);
+        }
     }
 
     /// <summary>
@@ -241,11 +287,506 @@ internal static class Containment
     public static bool GroupHolds(int leader) => Posix.Calls().SignalGroup(leader, 0) != -1;
 
     /// <summary>
-    /// Kills every process in the group <paramref name="leader"/> leads, on Linux and macOS, at once: what a stop of a child
-    /// that leads a group of its own reaches beside its tree - a process its tree handed on, still in the group.
+    /// Ends <paramref name="root"/> and its whole tree - and, where <paramref name="group"/>, on Linux and macOS, the process
+    /// group it leads, which reaches what its tree handed on - keeping each process it ends in <paramref name="ended"/>,
+    /// which waits for each to go: the one walk that ends a process with its tree, for a stop and for every other end of a
+    /// process with what it started.
     /// </summary>
-    /// <param name="leader">The id of the group.</param>
-    public static void KillGroup(int leader) => Posix.Calls().SignalGroup(leader, Posix.Kill);
+    /// <remarks>
+    /// <para>
+    /// On Linux and macOS each process is held still (SIGSTOP) before its children are taken: held, it starts no other,
+    /// and a child of it is never reaped and its id given out before the walk acts on it (<see cref="HoldDescendants"/>).
+    /// Every process of the tree is held so, then the group - as one before it is listed, and each member by its own id -
+    /// and only then each is kept by its id and start and killed by that id, the root last. A root the runtime has seen
+    /// end is not walked: its children were handed on, and its id may be another's.
+    /// </para>
+    /// <para>
+    /// On Windows, where nothing is held still, each process is ended as it is found - the root first, so it starts no
+    /// other - and kept by a handle, which keeps its id its own. A child is one Windows' list of every process names as
+    /// created by a kept process, created no later than it, and the very process the list named, as its handle's creation
+    /// time says, so an id taken since the list was read is never ended. The list is read again until it names nothing
+    /// new, and again once every process kept has gone (<see cref="EndedProcesses.GoneAsync"/>), for a child one made
+    /// while it was being ended.
+    /// </para>
+    /// </remarks>
+    /// <param name="root">The process whose tree ends.</param>
+    /// <param name="group">Whether the group it leads ends too, on Linux and macOS.</param>
+    /// <param name="ended">What keeps each process ended.</param>
+    /// <exception cref="AggregateException">A process of the tree or the group could not be ended: every other was.</exception>
+    public static void EndTree(Process root, bool group, EndedProcesses ended)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(ended);
+
+        var failed = new List<Exception>();
+
+        if (OperatingSystem.IsWindows())
+        {
+            EndTreeOnWindows(root, ended, failed);
+        }
+        else
+        {
+            EndTreeOnPosix(root, group, ended, failed);
+        }
+
+        if (failed.Count > 0)
+        {
+            throw new AggregateException($"Not every process of the tree of pid {root.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could be ended.", failed);
+        }
+    }
+
+    /// <summary>Ends a kept process at once, as the machine does: TerminateProcess on Windows, SIGKILL on Linux and macOS.</summary>
+    /// <param name="process">The process.</param>
+    public static void EndNow(KeptProcess process)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+
+        if (process.Handle is { } handle)
+        {
+            // A process already in its exit refuses it: it goes all the same.
+            _ = Windows.TerminateProcess(handle, unchecked((uint)-1));
+        }
+        else
+        {
+            _ = Posix.Calls().Signal(process.Id, Posix.Kill);
+        }
+    }
+
+    /// <summary>
+    /// Whether a kept process has gone, asked now: on Windows its handle signalled, which comes only once its handle table
+    /// has run down; on Linux and macOS no process carrying its id with its start, or that process a zombie
+    /// (<see cref="ProcessGoing.HasEnded"/>).
+    /// </summary>
+    /// <param name="process">The process.</param>
+    public static bool Gone(KeptProcess process)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+
+        if (process.Handle is { } handle)
+        {
+            // A handle that cannot be waited on has nothing left to wait for.
+            return Windows.WaitForSingleObject(handle, 0) != Windows.WaitTimeout;
+        }
+
+        return !Identity.IsSame(process.Id, process.Stamp!) || ProcessGoing.HasEnded(process.Id);
+    }
+
+    /// <summary>What tells a process of Linux or macOS from a later one given its id: its start.</summary>
+    private static readonly ProcessIdentity Identity = new(new HostPlatform());
+
+    /// <summary>What Linux says of its processes, under <c>/proc</c>.</summary>
+    private static readonly ProcessKernel Kernel = new(new HostPlatform());
+
+    /// <summary>The Windows half of <see cref="EndTree"/>.</summary>
+    private static void EndTreeOnWindows(Process root, EndedProcesses ended, List<Exception> failed)
+    {
+        var tree = new WindowsTree(ended);
+
+        if (!tree.Took(root.Id, failed))
+        {
+            return;
+        }
+
+        _ = tree.Walk(failed);
+        ended.LookAgainWith(() => tree.Walk(failed: null));
+    }
+
+    /// <summary>
+    /// One tree a stop ends on Windows: the processes of it kept, and the walk that finds, keeps and ends the children of
+    /// any of them not kept yet.
+    /// </summary>
+    private sealed class WindowsTree(EndedProcesses ended)
+    {
+        /// <summary>The tree's processes, by id: each kept, here or by another of what the stop ended.</summary>
+        private readonly HashSet<int> _members = [];
+
+        /// <summary>Opens, keeps and ends the root; whether it could be.</summary>
+        /// <param name="id">The root's id, its own while the runtime holds the process.</param>
+        /// <param name="failed">Where a process that could not be ended is said.</param>
+        public bool Took(int id, List<Exception> failed)
+        {
+            if (ended.Kept(id) is null)
+            {
+                if (Opened(id, failed) is not { } handle)
+                {
+                    return false;
+                }
+
+                var kept = new KeptProcess(id, handle, CreatedOf(handle));
+
+                _ = ended.Keep(kept);
+                ended.End(kept);
+            }
+
+            _ = _members.Add(id);
+            return true;
+        }
+
+        /// <summary>
+        /// Reads Windows' list of every process, keeps and ends each child of a member not kept yet, and reads it again
+        /// until it names none.
+        /// </summary>
+        /// <param name="failed">Where a process that could not be ended is said; <see langword="null"/> where nothing is said.</param>
+        /// <returns>How many it found.</returns>
+        public int Walk(List<Exception>? failed)
+        {
+            var found = 0;
+
+            while (true)
+            {
+                if (SystemProcessList.Every() is not { } listed)
+                {
+                    failed?.Add(new InvalidOperationException("Windows' list of every process could not be read, so what the tree started was not reached"));
+                    return found;
+                }
+
+                var byCreator = listed.ToLookup(process => process.ParentId);
+                var walking = new Queue<int>(_members);
+                var round = 0;
+
+                while (walking.TryDequeue(out var creator))
+                {
+                    var created = ended.Kept(creator)!.Created;
+
+                    foreach (var child in byCreator[creator])
+                    {
+                        // A process created before its named creator was made by an earlier holder of that id.
+                        if (_members.Contains(child.Id) || child.Created < created)
+                        {
+                            continue;
+                        }
+
+                        if (ended.Kept(child.Id) is null)
+                        {
+                            if (Opened(child.Id, failed) is not { } handle)
+                            {
+                                continue;
+                            }
+
+                            if (CreatedOf(handle) != child.Created)
+                            {
+                                // Another process has the id since the list was read.
+                                handle.Dispose();
+                                continue;
+                            }
+
+                            var kept = new KeptProcess(child.Id, handle, child.Created);
+
+                            _ = ended.Keep(kept);
+                            ended.End(kept);
+                            round++;
+                        }
+
+                        _ = _members.Add(child.Id);
+                        walking.Enqueue(child.Id);
+                    }
+                }
+
+                if (round == 0)
+                {
+                    return found;
+                }
+
+                found += round;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A handle to the process <paramref name="id"/> names, on Windows, that ends it, waits for its end and asks when it was
+    /// created; <see langword="null"/> where none could be opened - one that has gone, or one this process may not end,
+    /// which is said in <paramref name="failed"/>.
+    /// </summary>
+    private static SafeProcessHandle? Opened(int id, List<Exception>? failed)
+    {
+        var handle = Windows.OpenProcess(Windows.EndAndWait, inheritHandle: false, id);
+
+        if (!handle.IsInvalid)
+        {
+            return handle;
+        }
+
+        var error = Marshal.GetLastPInvokeError();
+        handle.Dispose();
+
+        if (error != Windows.InvalidParameter)
+        {
+            failed?.Add(new Win32Exception(error, $"pid {id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could not be ended: {new Win32Exception(error).Message}"));
+        }
+
+        return null;
+    }
+
+    /// <summary>When the process <paramref name="handle"/> holds was created, as a file time; the latest there is where it could not be read.</summary>
+    private static long CreatedOf(SafeProcessHandle handle)
+        => Windows.GetProcessTimes(handle, out var created, out _, out _, out _) ? created : long.MaxValue;
+
+    /// <summary>The Linux and macOS half of <see cref="EndTree"/>.</summary>
+    private static void EndTreeOnPosix(Process root, bool group, EndedProcesses ended, List<Exception> failed)
+    {
+        var calls = Posix.Calls();
+        var held = new List<int>();
+        var holding = new HashSet<int>();
+
+        bool Hold(int id)
+        {
+            if (!holding.Add(id))
+            {
+                return false;
+            }
+
+            if (calls.Signal(id, Posix.HoldStill) == -1)
+            {
+                var error = Marshal.GetLastPInvokeError();
+
+                if (error != Posix.NoSuchProcess)
+                {
+                    failed.Add(new Win32Exception(error, $"pid {id.ToString(System.Globalization.CultureInfo.InvariantCulture)} could not be ended: {new Win32Exception(error).Message}"));
+                }
+
+                return false;
+            }
+
+            held.Add(id);
+            return true;
+        }
+
+        try
+        {
+            if (!HasExited(root) && Hold(root.Id))
+            {
+                HoldDescendants(held, holding, Hold);
+            }
+
+            // Then the group, held still as one before it is listed, and each member listed held by its own id as well.
+            if (group && calls.SignalGroup(root.Id, Posix.HoldStill) != -1)
+            {
+                foreach (var member in MembersOf(root.Id))
+                {
+                    _ = Hold(member);
+                }
+            }
+        }
+        finally
+        {
+            // Whatever the walk met, nothing it held still is left so.
+            KillHeld(held, ended);
+        }
+    }
+
+    /// <summary>
+    /// Keeps and kills every process of <paramref name="held"/>, each held still: its start read while it is, so the start
+    /// is that very process's; killed from the last held to the first, so the first - the root, the leader - goes last,
+    /// once the rest have been told to. One whose start cannot be read is killed and not kept.
+    /// </summary>
+    private static void KillHeld(List<int> held, EndedProcesses ended)
+    {
+        var stamps = held.ConvertAll(Identity.StampOf);
+
+        for (var index = held.Count - 1; index >= 0; index--)
+        {
+            if (stamps[index] is { Length: > 0 } stamp && new KeptProcess(held[index], stamp) is var kept && ended.Keep(kept))
+            {
+                ended.End(kept);
+            }
+            else
+            {
+                _ = Posix.Calls().Signal(held[index], Posix.Kill);
+            }
+        }
+    }
+
+    /// <summary>Whether the runtime has seen <paramref name="process"/> end, or holds no process at all.</summary>
+    private static bool HasExited(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Holds still every descendant of what <paramref name="held"/> holds, on Linux and macOS, each through
+    /// <paramref name="hold"/> - which adds it to both - and its own children taken only once it is held: a child of a
+    /// process held still is never reaped, and its id never given out, before the walk acts on it.
+    /// </summary>
+    /// <remarks>
+    /// macOS lists the children of one process at a time, asked once that process is held, so what it lists is that
+    /// process's own. Linux lists every process at once: read once a round, a child is taken where it is still the child of
+    /// the held process the reading named, as asked again now, and the table read again until a round takes none - a round
+    /// that takes none was read once every process held was, so it named every child any of them has. Each round is one
+    /// reading of the table, however deep the tree.
+    /// </remarks>
+    private static void HoldDescendants(List<int> held, HashSet<int> holding, Func<int, bool> hold)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            // The list grows as each child is held, and is walked to its end.
+            for (var index = 0; index < held.Count; index++)
+            {
+                foreach (var child in Posix.Listed(Posix.ByParent, held[index]))
+                {
+                    _ = hold(child);
+                }
+            }
+
+            return;
+        }
+
+        while (true)
+        {
+            var before = held.Count;
+            var byParent = Proc(ProcStat.ParentField).ToLookup(process => (int)process.Value, process => process.Id);
+            var walking = new Queue<int>(held);
+
+            while (walking.TryDequeue(out var parent))
+            {
+                foreach (var child in byParent[parent])
+                {
+                    if (!holding.Contains(child) && FieldOf(child, ProcStat.ParentField) == parent && hold(child))
+                    {
+                        walking.Enqueue(child);
+                    }
+                }
+            }
+
+            if (held.Count == before)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>The ids of the processes in the group <paramref name="group"/>, on Linux and macOS.</summary>
+    private static IEnumerable<int> MembersOf(int group)
+        => OperatingSystem.IsMacOS()
+            ? Posix.Listed(Posix.ByGroup, group)
+            : Proc(ProcStat.GroupField).Where(process => process.Value == group).Select(process => process.Id);
+
+    /// <summary>Every process Linux's <c>/proc</c> lists, with <paramref name="field"/> of its <c>stat</c>: one pass over the table.</summary>
+    private static List<(int Id, long Value)> Proc(int field)
+    {
+        var found = new List<(int Id, long Value)>();
+
+        foreach (var id in Kernel.Listed())
+        {
+            if (FieldOf(id, field) is { } value)
+            {
+                found.Add((id, value));
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary><paramref name="field"/> of the <c>stat</c> Linux keeps of the process <paramref name="id"/> names, read now; none where it has gone.</summary>
+    private static long? FieldOf(int id, int field)
+    {
+        try
+        {
+            return ProcStat.Number(ProcStat.FieldsAfterName(Kernel.Stat(id)), field);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Ends every process in <paramref name="job"/> at once, on Windows, keeping each by a handle in <paramref name="ended"/>,
+    /// which waits for each to go: the job's members are listed and kept before it is ended - each checked to be in the
+    /// job by its own handle, so an id taken since the list was read is never kept - and listed again once each kept one
+    /// has gone, the job ended again for any found then, made while it was being ended.
+    /// </summary>
+    /// <param name="job">The job, held by whoever made it.</param>
+    /// <param name="ended">What keeps each process ended.</param>
+    public static void EndJob(SafeWaitHandle job, EndedProcesses ended)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        ArgumentNullException.ThrowIfNull(ended);
+
+        _ = KeepMembers(job, ended);
+        ended.EndJob(job);
+        ended.LookAgainWith(
+            () =>
+            {
+                var found = KeepMembers(job, ended);
+
+                if (found > 0)
+                {
+                    ended.EndJob(job);
+                }
+
+                return found;
+            });
+    }
+
+    /// <summary>Keeps every member of <paramref name="job"/> not kept yet; how many it kept.</summary>
+    private static int KeepMembers(SafeWaitHandle job, EndedProcesses ended)
+    {
+        var kept = 0;
+
+        foreach (var id in Members(job).Where(id => ended.Kept(id) is null))
+        {
+            if (Opened(id, failed: null) is not { } handle)
+            {
+                continue;
+            }
+
+            if (!Windows.IsProcessInJob(handle, job, out var member) || !member)
+            {
+                handle.Dispose();
+                continue;
+            }
+
+            if (ended.Keep(new KeptProcess(id, handle, CreatedOf(handle))))
+            {
+                kept++;
+            }
+        }
+
+        return kept;
+    }
+
+    /// <summary>The ids of the processes <paramref name="job"/> holds, as Windows lists them; none where it will not say.</summary>
+    private static List<int> Members(SafeWaitHandle job)
+    {
+        var room = Windows.IdListOffset + IntPtr.Size;
+
+        while (true)
+        {
+            var list = Marshal.AllocHGlobal(room);
+
+            try
+            {
+                if (Windows.QueryInformationJobObject(job, Windows.JobObjectBasicProcessIdList, list, (uint)room, out _))
+                {
+                    var listed = Marshal.ReadInt32(list, sizeof(int));
+
+                    return [.. Enumerable.Range(0, listed).Select(index => (int)Marshal.ReadIntPtr(list, Windows.IdListOffset + (index * IntPtr.Size)))];
+                }
+
+                if (Marshal.GetLastPInvokeError() != Windows.MoreData)
+                {
+                    return [];
+                }
+
+                // Room for every member the job says it holds, and twice what was given where it says no more.
+                var assigned = Marshal.ReadInt32(list);
+                var given = (room - Windows.IdListOffset) / IntPtr.Size;
+
+                room = checked(Windows.IdListOffset + (Math.Max(assigned, given * 2) * IntPtr.Size));
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(list);
+            }
+        }
+    }
 
     /// <summary>The process table, or why it could not be read: a reading that fails takes nothing from the stop it was taken for.</summary>
     private static async Task<(ProcessTableReading? Reading, string? Unread)> ReadAsync(Func<CancellationToken, Task<ProcessTableReading>> read)
@@ -318,7 +859,10 @@ internal static class Containment
         return job;
     }
 
-    /// <summary>Ends every process in <paramref name="job"/> at once, on Windows: the container's own stop.</summary>
+    /// <summary>
+    /// Ends every process in <paramref name="job"/> at once, on Windows: the machine's own end of a job, which
+    /// <see cref="EndJob"/> makes once it has kept each member.
+    /// </summary>
     /// <param name="job">The job, held by whoever made it.</param>
     public static void Terminate(SafeWaitHandle job)
         => _ = Windows.TerminateJobObject(job, exitCode: unchecked((uint)-1));
@@ -507,6 +1051,58 @@ internal static class Containment
         /// <summary>The signal a process cannot refuse.</summary>
         public const int Kill = 9;
 
+        /// <summary>ESRCH: no process, or no group, carries the id signalled.</summary>
+        public const int NoSuchProcess = 3;
+
+        /// <summary><c>PROC_PGRP_ONLY</c>: libproc's listing of the processes in one group.</summary>
+        public const uint ByGroup = 2;
+
+        /// <summary><c>PROC_PPID_ONLY</c>: libproc's listing of the processes one process is the parent of.</summary>
+        public const uint ByParent = 6;
+
+        /// <summary>
+        /// SIGSTOP: the signal that holds a process still where it stands, which it cannot refuse - numbered 17 on macOS and
+        /// 19 on Linux.
+        /// </summary>
+        public static int HoldStill => OperatingSystem.IsMacOS() ? 17 : 19;
+
+        /// <summary>
+        /// The ids libproc lists as <paramref name="type"/> asks of <paramref name="of"/>, on macOS - every one of them, the
+        /// room it is read into doubled until the listing fits in it with room to spare.
+        /// </summary>
+        /// <param name="type">What is listed: <see cref="ByParent"/> or <see cref="ByGroup"/>.</param>
+        /// <param name="of">The parent, or the group.</param>
+        public static List<int> Listed(uint type, int of)
+        {
+            // Asked with no room, the listing says how many bytes it would take.
+            var bytes = ListPids(type, (uint)of, null, 0);
+
+            while (bytes > 0)
+            {
+                var room = new int[Math.Max(bytes / sizeof(int), 1) * 2];
+                var listed = ListPids(type, (uint)of, room, room.Length * sizeof(int));
+
+                if (listed <= 0)
+                {
+                    return [];
+                }
+
+                if (listed < room.Length * sizeof(int))
+                {
+                    return [.. room.Take(listed / sizeof(int)).Where(id => id > 0)];
+                }
+
+                bytes = listed;
+            }
+
+            return [];
+        }
+
+        /// <summary><c>proc_listpids</c>: the ids of the processes of one kind, in bytes written; with no room, the bytes the listing would take.</summary>
+        [DllImport("libc", EntryPoint = "proc_listpids", SetLastError = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+        private static extern int ListPids(uint type, uint typeInfo, int[]? buffer, int bufferSize);
+
         /// <summary>The names the C library is looked for under, in this order, the C library of Linux among them and the system library of macOS last.</summary>
         public static readonly IReadOnlyList<string> Libraries = ["libc.so.6", "libc.so", "libc", "libSystem.dylib"];
 
@@ -669,6 +1265,24 @@ internal static class Containment
         /// <summary>The wait that failed.</summary>
         public const uint WaitFailed = unchecked((uint)-1);
 
+        /// <summary>The wait that found the object not yet signalled.</summary>
+        public const uint WaitTimeout = 0x102;
+
+        /// <summary>The rights a process a stop keeps is opened with: to end it, to wait for its end, and to ask when it was created.</summary>
+        public const uint EndAndWait = 0x0001 | 0x1000 | 0x0010_0000;
+
+        /// <summary>ERROR_INVALID_PARAMETER: what opening a process that has gone answers.</summary>
+        public const int InvalidParameter = 87;
+
+        /// <summary>ERROR_MORE_DATA: a listing that outgrew the room it was given.</summary>
+        public const int MoreData = 234;
+
+        /// <summary><c>JobObjectBasicProcessIdList</c>: the ids of a job's members.</summary>
+        public const int JobObjectBasicProcessIdList = 3;
+
+        /// <summary>Where a job's listing of its members begins its ids: after the two counts, aligned for a pointer.</summary>
+        public const int IdListOffset = 8;
+
         /// <summary>The console's interruption, Ctrl+C.</summary>
         private const uint Interrupt = 0;
 
@@ -728,6 +1342,34 @@ internal static class Containment
         [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         internal static extern uint WaitForSingleObject(SafeWaitHandle process, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        internal static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        internal static extern SafeProcessHandle OpenProcess(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, int processId);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetProcessTimes(SafeProcessHandle process, out long creation, out long exit, out long kernel, out long user);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool QueryInformationJobObject(SafeWaitHandle job, int informationClass, IntPtr information, uint length, out uint returned);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool IsProcessInJob(SafeProcessHandle process, SafeWaitHandle job, [MarshalAs(UnmanagedType.Bool)] out bool result);
 
         [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

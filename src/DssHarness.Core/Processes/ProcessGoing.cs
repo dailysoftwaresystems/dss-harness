@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using DssHarness.Core.Platform;
 
 namespace DssHarness.Core.Processes;
 
@@ -16,6 +17,9 @@ namespace DssHarness.Core.Processes;
 /// <item>macOS marks a process <c>P_LEXIT</c> as it enters its exit, before its descriptors are freed, which
 /// <c>sysctl</c>'s <c>kinfo_proc</c> gives as <c>P_WEXIT</c>, and an ended one is a zombie.</item>
 /// </list>
+/// Whether a process has ended - gone, or a zombie, whose every descriptor each system has closed before it is one - is
+/// asked here too (<see cref="HasEnded"/>), on Linux and macOS: Windows tells it by a process's handle, signalled only once
+/// its handle table has run down.
 /// </summary>
 internal static class ProcessGoing
 {
@@ -60,6 +64,23 @@ internal static class ProcessGoing
         return Ended(process) || exiting;
     }
 
+    /// <summary>
+    /// Whether the process carrying <paramref name="processId"/> has ended, on Linux and macOS: none carries the id, or it
+    /// is a zombie - on Linux every thread of it a zombie or dead, the files they share closed with the last of them; on
+    /// macOS <c>SZOMB</c>, its descriptors freed before it became one. A zombie is ended whether or not anything ever reaps
+    /// it. Whether the process carrying the id is the one a caller means is the caller's to tell, by its start.
+    /// </summary>
+    /// <param name="processId">The process's id.</param>
+    public static bool HasEnded(int processId)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            return EveryThread(processId, ThreadEnded);
+        }
+
+        return OperatingSystem.IsMacOS() && MacProcess(processId) is { } known && (!known.Listed || known.Stat == MacZombie);
+    }
+
     /// <summary>Whether the runtime has seen the child end.</summary>
     private static bool Ended(Process process)
     {
@@ -84,10 +105,12 @@ internal static class ProcessGoing
 
         if (OperatingSystem.IsLinux())
         {
-            return EveryThreadExiting(process.Id);
+            return EveryThread(process.Id, ThreadExiting);
         }
 
-        return OperatingSystem.IsMacOS() && MacExitingOrEnded(process.Id);
+        return OperatingSystem.IsMacOS()
+            && MacProcess(process.Id) is { } known
+            && (!known.Listed || (known.Flags & MacExiting) != 0 || known.Stat == MacZombie);
     }
 
     /// <summary>Whether Windows has set the process's delete flag, which its last thread sets as it exits.</summary>
@@ -107,10 +130,10 @@ internal static class ProcessGoing
     }
 
     /// <summary>
-    /// Whether every thread of the process with <paramref name="processId"/> has entered its exit or ended, on Linux - the
-    /// files the threads share close only with the last of them - or none is left at all.
+    /// Whether every thread of the process with <paramref name="processId"/> is as <paramref name="thread"/> says of its
+    /// <c>stat</c> line, on Linux - the files the threads share close only with the last of them - or none is left at all.
     /// </summary>
-    private static bool EveryThreadExiting(int processId)
+    private static bool EveryThread(int processId, Func<string, bool> thread)
     {
         var tasks = $"/proc/{processId.ToString(CultureInfo.InvariantCulture)}/task";
 
@@ -130,7 +153,7 @@ internal static class ProcessGoing
                     continue;
                 }
 
-                if (!ThreadExiting(stat))
+                if (!thread(stat))
                 {
                     return false;
                 }
@@ -155,16 +178,34 @@ internal static class ProcessGoing
     {
         ArgumentNullException.ThrowIfNull(stat);
 
-        var named = stat.LastIndexOf(')');
-        var fields = stat[(named + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var fields = ProcStat.FieldsAfterName(stat);
 
-        return fields.Length > 6
-            && (fields[0] is "Z" or "X" or "x"
+        return fields is { Length: > 6 }
+            && (Ended(fields)
                 || (uint.TryParse(fields[6], NumberStyles.None, CultureInfo.InvariantCulture, out var flags) && (flags & LinuxExiting) != 0));
     }
 
-    /// <summary>Whether macOS marks the process with <paramref name="processId"/> as exiting or ended, or knows it no more.</summary>
-    private static bool MacExitingOrEnded(int processId)
+    /// <summary>
+    /// Whether a thread's <c>stat</c> line says it has ended - a zombie, or dead - which it is only once it has let go of
+    /// the files its process's threads share: its state, the third field, counted after the name in parentheses.
+    /// </summary>
+    /// <param name="stat">The line.</param>
+    internal static bool ThreadEnded(string stat)
+    {
+        ArgumentNullException.ThrowIfNull(stat);
+
+        return ProcStat.FieldsAfterName(stat) is { Length: > 0 } fields && Ended(fields);
+    }
+
+    /// <summary>Whether a thread's state, the first of the fields after its name, is a zombie's or a dead one's.</summary>
+    private static bool Ended(string[] fields) => fields[0] is "Z" or "X" or "x";
+
+    /// <summary>
+    /// What macOS keeps of the process with <paramref name="processId"/> - whether it knows it at all, and its flags and
+    /// state - or <see langword="null"/> where it could not be asked, or answered with a record that is not that process's,
+    /// which says nothing of it.
+    /// </summary>
+    private static (bool Listed, int Flags, byte Stat)? MacProcess(int processId)
     {
         // CTL_KERN, KERN_PROC, KERN_PROC_PID.
         int[] name = [1, 14, 1, processId];
@@ -172,33 +213,32 @@ internal static class ProcessGoing
 
         if (sysctl(name, (uint)name.Length, null, ref size, IntPtr.Zero, 0) != 0)
         {
-            return false;
+            return null;
         }
 
         if (size == 0)
         {
-            return true;
+            return (false, 0, 0);
         }
 
         var bytes = new byte[(int)size];
 
         if (sysctl(name, (uint)name.Length, bytes, ref size, IntPtr.Zero, 0) != 0)
         {
-            return false;
+            return null;
         }
 
         if (size == 0)
         {
-            return true;
+            return (false, 0, 0);
         }
 
-        // A record that is not this process's says nothing of it.
         if ((int)size < MacPidOffset + sizeof(int) || BitConverter.ToInt32(bytes, MacPidOffset) != processId)
         {
-            return false;
+            return null;
         }
 
-        return (BitConverter.ToInt32(bytes, MacFlagOffset) & MacExiting) != 0 || bytes[MacStatOffset] == MacZombie;
+        return (true, BitConverter.ToInt32(bytes, MacFlagOffset), bytes[MacStatOffset]);
     }
 
     [DllImport("ntdll.dll", ExactSpelling = true)]

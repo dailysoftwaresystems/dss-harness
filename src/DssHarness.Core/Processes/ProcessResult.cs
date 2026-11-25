@@ -41,7 +41,8 @@ public sealed record ProcessResult(
     /// Where a process the child left running holds its output once the child has ended - a server its build started,
     /// kept for the next phase by design - what that says: every character the child wrote was read, and what the process
     /// it left writes from then on is its own, never the child's, and is not read; <see langword="null"/> where the output
-    /// ended with the child.
+    /// ended with the child. Never a process a stop or a container's end ended: each is waited for until it has gone before
+    /// the output's end is looked for (<see cref="EndedProcesses"/>).
     /// </summary>
     public string? OutputHeld { get; init; }
 
