@@ -100,6 +100,9 @@ internal sealed class EndedProcesses(ProcessEnds ends) : IDisposable
     /// <param name="id">The process's id.</param>
     public int Hold(int id) => _ends.Hold(id);
 
+    /// <summary>Every process the system lists, on Linux and macOS, each with its parent, as the machine lists them or as a test stands in for it (<see cref="ProcessEnds.Parents"/>).</summary>
+    public IReadOnlyList<(int Id, int Parent)>? Parents() => _ends.Parents();
+
     /// <summary>
     /// Has <paramref name="look"/> asked again once every process kept has gone: it finds, keeps and ends what its source
     /// holds that is not kept yet - a child one of them made while it was being ended - and says how many it found.
@@ -251,11 +254,11 @@ internal class ProcessEnds
     public virtual IReadOnlyList<int>? Members(int group) => Containment.MembersOf(group);
 
     /// <summary>
-    /// The id of every process the system lists, on Linux and macOS, read in place now (<see cref="Containment.EveryProcess"/>),
-    /// as a session's end reads the system again once it holds the group: with no program started; <see langword="null"/>
-    /// where the system would not list them.
+    /// Every process the system lists, on Linux and macOS, each with its parent, read in place now
+    /// (<see cref="Containment.Parents"/>) - as a tree's walk reads it each round, and a session's end once it holds the
+    /// group: with no program started; <see langword="null"/> where the system would not list them.
     /// </summary>
-    public virtual IReadOnlyList<int>? Every() => Containment.EveryProcess();
+    public virtual IReadOnlyList<(int Id, int Parent)>? Parents() => Containment.Parents();
 
     /// <summary>
     /// Holds the process <paramref name="id"/> names still at once, on Linux and macOS (<see cref="Containment.HoldNow"/>):

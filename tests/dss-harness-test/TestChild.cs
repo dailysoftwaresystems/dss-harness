@@ -466,9 +466,10 @@ internal static class TestChild
 
     /// <summary>
     /// Starts, through a middle process that exits at once, a sleeper of its own in this process's
-    /// group, writes the sleeper's process id, and goes on sleeping: a stop that reaches the group
-    /// ends the sleeper with this process, where a stop that walks the tree cannot - the middle is
-    /// gone, the sleeper is no one's child, and the group is the only thing that holds them both.
+    /// group, writes the sleeper's process id once the system lists the middle no more, and goes on
+    /// sleeping: a stop that reaches the group ends the sleeper with this process, where a stop that
+    /// walks the tree cannot - the middle is gone, the sleeper is no one's child, and the group is the
+    /// only thing that holds them both.
     /// <c>arguments[2]</c> and after, where given, name the sleeper's behaviour and its arguments,
     /// as <c>spawn-orphan</c> takes them.
     /// </summary>
@@ -495,17 +496,47 @@ internal static class TestChild
 
         start.Environment[TestHost.ChildModeVariable] = "spawn-orphan";
 
-        using var middle = Process.Start(start)
-            ?? throw new InvalidOperationException("The middle process did not start.");
+        string said;
 
         // The middle writes the sleeper's id and exits; read to its end so it is not held.
-        output.Write(middle.StandardOutput.ReadToEnd());
+        using (var middle = Process.Start(start) ?? throw new InvalidOperationException("The middle process did not start."))
+        {
+            said = middle.StandardOutput.ReadToEnd();
+            middle.WaitForExit();
+        }
 
-        middle.WaitForExit();
+        // Named only once no list of the system names the middle as the sleeper's creator, so a stop made as soon as the
+        // sleeper is named, walking the tree, finds it no one's child: Windows' list of every process goes on naming a
+        // process for a while once it has ended - and been waited for - on a loaded machine, and a walk that read it then
+        // took the sleeper as the middle's (on Linux and macOS the sleeper is handed on before its parent's end is seen).
+        if (!Until(() => !OperatingSystem.IsWindows() || NamedApart(said)))
+        {
+            return 96;
+        }
+
+        output.Write(said);
 
         Thread.Sleep(int.Parse(arguments.Length > 1 ? arguments[1] : "300000", CultureInfo.InvariantCulture));
 
         return 0;
+    }
+
+    /// <summary>
+    /// Whether Windows' list of every process names no creator of the sleeper <paramref name="said"/> names - no process
+    /// carrying the id it names as its creator, made before it - as a walk of a tree reads the list: one it does not list
+    /// any more is named apart too.
+    /// </summary>
+    private static bool NamedApart(string said)
+    {
+        if (!said.StartsWith("orphan=", StringComparison.Ordinal)
+            || !int.TryParse(said.AsSpan("orphan=".Length).Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var id)
+            || Core.Execution.SystemProcessList.Every() is not { } listed)
+        {
+            return false;
+        }
+
+        return listed.FirstOrDefault(process => process.Id == id) is not { Id: > 0 } sleeper
+            || !listed.Any(process => process.Id == sleeper.ParentId && process.Created <= sleeper.Created);
     }
 
     /// <summary>The session <paramref name="process"/> is in - 0 for this one - on Linux and macOS; -1 where it is not there.</summary>
@@ -537,12 +568,16 @@ internal static class TestChild
     /// <summary>
     /// Starts a holder - this assembly as the behaviour <c>arguments[2]</c> names, given every
     /// argument after it - that inherits this process's own streams, writes its process id once it
-    /// stands where it puts itself, and then exits, sleeps, or outlives the holder - waits for its end,
+    /// stands where it puts itself, and then exits, sleeps, refuses to be asked to end and sleeps (<c>ignore-term</c>, refusing
+    /// before the holder starts), or outlives the holder - waits for its end,
     /// says it, and sleeps - as <c>arguments[0]</c> says, for the milliseconds <c>arguments[1]</c> gives: what a test of containment reads, since the holder
     /// keeps the pipes whoever started this process reads, and that reading ends only with it.
     /// </summary>
     private static int SpawnHolder(TextWriter output, string[] arguments)
     {
+        using var refusing = string.Equals(arguments[0], "ignore-term", StringComparison.Ordinal) && !OperatingSystem.IsWindows()
+            ? System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, context => context.Cancel = true)
+            : null;
         using var holder = StartInheriting(arguments[2], arguments[3..]);
 
         // A holder that leaves this group or session is named once it has, so a test acting on
@@ -569,7 +604,7 @@ internal static class TestChild
         // 'exit-unended' leaves its line with no break after it, for the reader to hand on at the output's end.
         output.Write(string.Equals(arguments[0], "exit-unended", StringComparison.Ordinal) ? $"holder={holder.Id}" : $"holder={holder.Id}\n");
 
-        if (string.Equals(arguments[0], "sleep", StringComparison.Ordinal))
+        if (arguments[0] is "sleep" or "ignore-term")
         {
             Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
         }

@@ -275,13 +275,21 @@ its exit standing until it is one, one the harness may not signal - another user
 and the group for none once every member it is listed to hold is one, never by a signal alone, which
 macOS passes a process in its exit over for - told every five minutes, and killed at what is left of the child's time limit,
 or at once where a sweep ends what a killed run left, that run's bound having passed with it.
-What still stands is held still, the group as one, and the system read again before it is killed,
-until a reading holds nothing new - in place, the system's own listing of every process, each member
-of the first reading known by its id and its start read as that reading was taken, never through a
-program: on macOS, for as long as a child of a process stands stopped, that process's runtime spins
-over reaping its children and holds the lock every start of a program takes, so a reading through
-`ps` there, with the group - which may hold the process's own child - held, never began, and every
-start of the process waited behind it.
+What still stands is held still before it is killed: the group as one, each member of the first
+reading still that very process - known by its id and its start read as that reading was taken - and
+then, round by round until a round takes none, every process the system names in the session, or the
+group, and every child of a process held, so what a member outside the group started after the first
+reading goes too; one named whose session or group cannot be asked yet is asked again. The system is
+read in place - its own listing of every process with its parent - never through a program: on macOS,
+for as long as a child of a process stands stopped, that process's runtime spins over reaping its
+children and holds the lock every start of a program takes, so a reading through `ps` there, with the
+group - which may hold the process's own child - held, never began, and every start of the process
+waited behind it. The process running the end is never held, nor anything below it. Once all it
+killed has gone the system is read again the same way, and what stands in the session, or the group,
+is held and killed in turn until a look finds none: a child whose creation was under way as its parent
+was held joins the listing only after the last round, and its parent's kill ends that call or leaves
+it standing there. Such a child of a member outside the group, born outside it, is reached by nothing
+once its parent has gone.
 Nothing a session's end does acts on the process running it: a session, or a group, that holds that
 process, or whose leader it descends from, is refused before anything is signalled - the asking is
 taken for a cancel and gone on through, and the hold after it would stop that process where it
@@ -559,7 +567,8 @@ is asked again, paced and told every five minutes, until it is held or the table
 A process stops only once a call it is inside has returned, so a child whose creation was already
 under way when its parent was held may join the table after the round that took none: nothing an
 unprivileged process may ask closes that instant, and a contained child's session, or a group, is
-the end that reaches what its tree started in it. Then the group, as one before it is listed and each member by its own
+the end that reaches what its tree started in it - a session's end reads the system again once all it
+killed has gone. Then the group, as one before it is listed and each member by its own
 id, and only then it kills it all: the group as one first, while it stands, so a member its listing did not show - one
 `/proc` hides, or whose reading failed - goes with it and is never left held still, each member killed by the group
 alone, since its id may be given out again once the group is killed, and every other process by its own id, the child
