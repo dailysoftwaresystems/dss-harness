@@ -121,7 +121,9 @@ and says why in noClass.
    part of its item cannot be done says so, and a person is asked before anything of the item is folded.
 6. For each item write: instructions a builder with none of this conversation can follow; its definition of done, as
    statements a check can answer one by one - each behaviour, the test that pins it, and what is true of the tree
-   when the builder reports; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
+   when the builder reports, a statement that compares with the tree before the work naming the run's base commit,
+   `{orient.startCommit}`, never a branch: a builder works in a repository of its own that holds no branch, so
+   `main` names nothing there; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
    path and for what; what it creates, with why nothing that exists serves and where you searched; and what it
    replaces because the request asked, by path, with what becomes of the old one.
 

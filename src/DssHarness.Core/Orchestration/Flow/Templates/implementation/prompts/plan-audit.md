@@ -89,7 +89,9 @@ The work of this run: {update.work}
    holds.
 6. Check each item's definition of done, and the plan's own: every statement concrete and checkable - a behaviour and
    what pins it, never prose a check cannot answer - each item's covering the whole of its instructions, and the
-   plan's covering the whole of what was asked. And check the sizing: no item carrying more than one builder's cycle
+   plan's covering the whole of what was asked; a statement that compares with the tree before the work names the
+   run's base commit, `{orient.startCommit}`, never a branch, which names nothing in the repository of its own a
+   builder works in. And check the sizing: no item carrying more than one builder's cycle
    of work, and none a sliver of one that belongs to the work beside it.
 7. Read each item as its builder will, and each test as someone who wants it to fail.
 8. Where a person gave a plan, check their plan against the items and the departures, as your instructions say.

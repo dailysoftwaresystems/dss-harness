@@ -1241,6 +1241,26 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains("A reasoning step is never recovered, by its own word or a group's", architecture, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The planner names the run's base commit, never a branch, where an item's definition of done compares with the tree
+    /// before the work: a builder works in a repository of its own that holds no branch, where <c>main</c> names nothing,
+    /// and a statement that names it can never hold there.
+    /// </summary>
+    [Fact]
+    public void ThePlanner_NamesTheBaseCommit_NeverABranch_InADefinitionOfDone()
+    {
+        var plan = Read("prompts/plan.md").ReplaceLineEndings("\n");
+
+        Assert.Contains(
+            "a statement that compares with the tree before the work naming the run's base commit,\n   `{orient.startCommit}`, never a branch: a builder works in a repository of its own that holds no branch, so\n   `main` names nothing there;",
+            plan,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a statement that compares with the tree before the work names the\n   run's base commit, `{orient.startCommit}`, never a branch, which names nothing in the repository of its own a\n   builder works in.",
+            Read("prompts/plan-audit.md").ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+    }
+
     private static string Read(string below)
     {
         var assembly = typeof(WorkflowTemplates).Assembly;
