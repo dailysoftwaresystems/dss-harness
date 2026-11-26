@@ -386,6 +386,36 @@ public sealed record AgentWebSearch(
     int MaxPerStep,
     IReadOnlyDictionary<string, Web.Search.WebSearchKey> Keys)
 {
+    /// <summary>
+    /// What the search does with the machine's gh login while it runs (<see cref="Web.Search.WebSearchRenewal"/>), over the
+    /// mask the run's records are kept through; null where it renews nothing, and each key is sent as it was read.
+    /// </summary>
+    public Web.Search.WebSearchRenewal? Renewal { get; init; }
+
+    /// <summary>
+    /// This search kept going over the machine's gh login while it runs, with the mask its run's records are kept through:
+    /// where a source of it is signed by the login, renewing by <paramref name="logins"/> (<see cref="Renewal"/>) over a mask
+    /// that begins as <paramref name="mask"/> and comes to hold each token read again before it is sent
+    /// (<see cref="Execution.GrowingMask"/>); else this search and <paramref name="mask"/> as they are.
+    /// </summary>
+    /// <param name="mask">The mask the run begins with; null where it carries no secret.</param>
+    /// <param name="logins">The machine's gh logins, as the search's keys were read of them.</param>
+    /// <param name="layout">The repository, whose main checkout <c>gh</c> runs in.</param>
+    public (AgentWebSearch Search, Execution.ILineMask? Mask) Renewing(Runners.ActionValues? mask, Ci.GhLogins logins, Repository.HarnessLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(logins);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        if (!Sources.Any(source => source.Credential?.Host is not null))
+        {
+            return (this, mask);
+        }
+
+        var growing = new Execution.GrowingMask(mask ?? Runners.ActionValues.Empty);
+
+        return (this with { Renewal = new Web.Search.WebSearchRenewal(logins, layout, growing) }, growing);
+    }
+
     /// <summary>The search a step whose <c>search</c> is <paramref name="search"/> is given of <paramref name="sources"/>, with <paramref name="keys"/>.</summary>
     /// <param name="sources">The configuration's web search.</param>
     /// <param name="search">The step's <c>search</c>; <see langword="null"/> where it names none.</param>

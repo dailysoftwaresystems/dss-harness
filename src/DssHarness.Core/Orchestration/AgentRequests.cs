@@ -13,7 +13,15 @@ namespace DssHarness.Core.Orchestration;
 /// nothing of it ever folded. Such an agent is handed nothing and records no session, so <paramref name="Empty"/> or
 /// <paramref name="Session"/> beside it is a usage error.
 /// </param>
-public sealed record AgentCreateRequest(string StartDirectory, string Orchestrator, string Agent, string Model, bool Empty, string? Session, bool ReadsOnly = false);
+public sealed record AgentCreateRequest(string StartDirectory, string Orchestrator, string Agent, string Model, bool Empty, string? Session, bool ReadsOnly = false)
+{
+    /// <summary>
+    /// The step attempt the tree of an agent made to only read is made for, recorded on the agent as the tree it is made
+    /// at the main checkout's HEAD is (<see cref="AgentRecord.ReadiedFor"/>), so that attempt's start, which brings a reader's
+    /// tree there, finds it brought already and brings it nowhere again; null where it is made for none the engine names.
+    /// </summary>
+    public AgentReadiedFor? ReadiedFor { get; init; }
+}
 
 /// <summary>
 /// What bringing a read-only agent's tree to the main checkout's HEAD - or to the commit its step names - was asked, as one

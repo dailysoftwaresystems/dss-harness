@@ -75,7 +75,7 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
                 mainCheckoutRoot,
                 address,
                 path,
-                () => AgentRepositoryMark.ObjectsOfAsync(_gitClient, mainCheckoutRoot, cancellationToken),
+                () => AgentRepositoryMark.ObjectsOfAsync(_gitClient, _platform, mainCheckoutRoot, cancellationToken),
                 cancellationToken).ConfigureAwait(false);
     }
 
@@ -115,7 +115,7 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
             return [];
         }
 
-        var objects = await AgentRepositoryMark.ObjectsOfAsync(_gitClient, mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+        var objects = await AgentRepositoryMark.ObjectsOfAsync(_gitClient, _platform, mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
         var found = new List<AgentRepositoryFound>();
 
         foreach (var candidate in candidates)
@@ -145,11 +145,24 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
     /// Whether the directory at <paramref name="path"/> carries the mark naming the main checkout and
     /// <paramref name="address"/>, and borrows the objects <paramref name="objects"/> names - the main checkout's, asked of
     /// it only once the mark is read - each asked of git in the directory unless it is taken away meanwhile
-    /// (<see cref="UnlessTakenAwayAsync"/>).
+    /// (<see cref="UnlessTakenAwayAsync"/>), and asked once in an engine's session, which keeps the mark of a directory
+    /// that borrows the objects of the main checkout it names (<see cref="SessionTrees.LentMarkOf"/>), as the locator does.
     /// </summary>
     private async Task<bool> IsOneAsync(string mainCheckoutRoot, WorktreeAddress address, string path, Func<Task<string>> objects, CancellationToken cancellationToken)
     {
-        if (!await UnlessTakenAwayAsync(path, () => MarkedAtAsync(mainCheckoutRoot, address, path, cancellationToken)).ConfigureAwait(false))
+        // Nothing an engine's session holds marks a tree, or makes or deletes one, but the one owner of the making and the
+        // deleting of trees, which drops what the session knew of it (SessionTrees.Forget): a mark the session kept is the
+        // directory's still, while the directory holds its .git - one taken away meanwhile is none, as it is below.
+        var known = SessionTrees.OfSession(_platform.PathComparison);
+
+        if (known?.LentMarkOf(path) is { } kept && WorktreeInspector.HoldsOwnGit(_fileSystem, path))
+        {
+            return Names(kept, mainCheckoutRoot, address);
+        }
+
+        AgentRepositoryMark? mark = null;
+
+        if (!await UnlessTakenAwayAsync(path, async () => (mark = await AgentRepositoryMark.ReadAsync(_gitClient, _fileSystem, path, cancellationToken).ConfigureAwait(false)) is { } read && Names(read, mainCheckoutRoot, address)).ConfigureAwait(false))
         {
             return false;
         }
@@ -158,7 +171,13 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
         // became of the directory.
         var borrowed = await objects().ConfigureAwait(false);
 
-        return await UnlessTakenAwayAsync(path, () => AgentRepositoryMark.BorrowsAsync(_gitClient, _platform, path, borrowed, cancellationToken)).ConfigureAwait(false);
+        if (!await UnlessTakenAwayAsync(path, () => AgentRepositoryMark.BorrowsAsync(_gitClient, _platform, path, borrowed, cancellationToken)).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        known?.KeepLentMark(path, mark!);
+        return true;
     }
 
     /// <summary>
@@ -185,10 +204,9 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
         }
     }
 
-    /// <summary>Whether the repository at <paramref name="path"/> carries the mark naming the main checkout and <paramref name="address"/>.</summary>
-    private async Task<bool> MarkedAtAsync(string mainCheckoutRoot, WorktreeAddress address, string path, CancellationToken cancellationToken)
-        => await AgentRepositoryMark.ReadAsync(_gitClient, _fileSystem, path, cancellationToken).ConfigureAwait(false) is { } mark
-            && string.Equals(mark.Agent, address.Name, StringComparison.Ordinal)
+    /// <summary>Whether <paramref name="mark"/> names the main checkout and <paramref name="address"/>.</summary>
+    private bool Names(AgentRepositoryMark mark, string mainCheckoutRoot, WorktreeAddress address)
+        => string.Equals(mark.Agent, address.Name, StringComparison.Ordinal)
             && mark.MainCheckout.Length > 0
             && PathContainment.AreSame(mark.MainCheckout, mainCheckoutRoot, _platform.PathComparison);
 
@@ -204,13 +222,14 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
     /// Stops git. Callers pass none once the keepalive could be written: a repository half made is taken back, and
     /// taking it back is never interrupted.
     /// </param>
-    public async Task<AgentRepositoryMade> MakeAsync(string mainCheckoutRoot, WorktreeAddress address, string path, CancellationToken cancellationToken)
+    /// <param name="atHead">The main checkout's HEAD as the caller read it a moment before, for the making; null where it read none, and it is read here.</param>
+    public async Task<AgentRepositoryMade> MakeAsync(string mainCheckoutRoot, WorktreeAddress address, string path, CancellationToken cancellationToken, string? atHead = null)
     {
         ArgumentNullException.ThrowIfNull(address);
 
         // What the repository is made from, asked of the main checkout before anything is written: its HEAD, where its objects
         // are, their format, whether its history is cut short, and the settings its included configuration would carry wrong.
-        if (await _gitClient.ResolveCommitAsync(mainCheckoutRoot, "HEAD", cancellationToken).ConfigureAwait(false) is not { } head)
+        if ((atHead ?? await _gitClient.ResolveCommitAsync(mainCheckoutRoot, "HEAD", cancellationToken).ConfigureAwait(false)) is not { } head)
         {
             return Refused(
                 $"'{ReportText.Printable(mainCheckoutRoot)}' has no commit yet, and the repository '{address.Name}' works in is made at the "
@@ -225,6 +244,9 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
         {
             return Failed(address, path, $"where the main checkout keeps its objects, and in what format, could not be read: {asked.FailureMessage.TrimEnd('.')}. Nothing was created.");
         }
+
+        // Where the main checkout keeps its objects is what an engine's session asks once of it (AgentRepositoryMark.ObjectsOfAsync).
+        SessionTrees.OfSession(_platform.PathComparison)?.KeepObjects(mainCheckoutRoot, common + "/objects");
 
         var settings = await _gitClient
             .RunAsync(mainCheckoutRoot, ["config", "--null", "--get-regexp", @"^(extensions\.partialclone|core\.worktree|lfs\.storage)$"], cancellationToken: cancellationToken)

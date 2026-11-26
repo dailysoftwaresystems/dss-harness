@@ -3518,6 +3518,33 @@ internal sealed class CountingProcesses(IProcessRunner inner) : IProcessRunner
     }
 
     public string? FindExecutable(string command) => inner.FindExecutable(command);
+
+    /// <summary>
+    /// The program <paramref name="request"/> starts and its subcommand - its first argument that is no setting given
+    /// before it (<c>-c</c>, <c>-C</c> and their values, or an option of git's own): <c>git status</c>, <c>gh auth</c>.
+    /// </summary>
+    public static string Named(ProcessRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        for (var at = 0; at < request.Arguments.Count; at++)
+        {
+            var argument = request.Arguments[at];
+
+            if (argument is "-c" or "-C")
+            {
+                at++;
+                continue;
+            }
+
+            if (!argument.StartsWith('-'))
+            {
+                return $"{request.FileName} {argument}";
+            }
+        }
+
+        return request.FileName;
+    }
 }
 
 /// <summary>Runs every program through <paramref name="inner"/> but <c>git version</c>, which <paramref name="answer"/> answers.</summary>

@@ -141,6 +141,13 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
         var key = step.Keys.GetValueOrDefault(source.Name);
         WebSearchPart Part(WebSearchAnswer answer, bool cached = false) => PartOf(step, source, kind, query, answer, cached) with { Page = page };
 
+        // A key the machine's gh login signs is the token the login holds now: one read since the step began - by another
+        // step, or for an expiry the host told that has come - in place of the step's, held by its mask first.
+        if (step.Renewal is { } renewal)
+        {
+            key = await renewal.CurrentAsync(source, key, cancellationToken).ConfigureAwait(false);
+        }
+
         // What the fetch sends as the source's key, where the step was given one - to the scheme, host and port the source's
         // configuration writes alone, never to one a document it fetched names: an answer made with it is no answer to a step
         // without it - nor one made without it to a step that sends it - so the run keeps each apart.
@@ -196,6 +203,33 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
             WebSearchRequest.OnePage one => ((WebSearchResponse?)null, WebSearchAnswer.NoPage(one.Why), (IReadOnlyList<string>)[], (Exception?)null),
             _ => throw new InvalidOperationException($"The kind '{kind.Kind}' asked for a request this search does not send: {request.GetType().Name}."),
         };
+
+        // A request the host refused as unsigned - the gh login's token expired, or was revoked, since it was read - is sent
+        // once more, with the login read again where that gives another token, never a third time: a second refusal is
+        // answered as the first would have been, and so is the first where the request could not be sent again.
+        if (response is WebSearchResponse.Http { Status: (int)System.Net.HttpStatusCode.Unauthorized }
+            && request is WebSearchRequest.Http resent
+            && unrecorded is null
+            && step.Renewal is { } renewing
+            && key is { Value: not null } refusedKey
+            && await renewing.RenewedAsync(source, refusedKey, cancellationToken).ConfigureAwait(false) is { Value: { } renewed } renewedKey)
+        {
+            var again = source.Credential!.Fetched(renewed, kind.KeyOrigin(source));
+            var (answeredAgain, refusedAgain, askedAgain, unrecordedAgain) = await AskAsync(step, source, resent, again, cancellationToken).ConfigureAwait(false);
+            addresses = [.. addresses, .. askedAgain];
+            unrecorded = unrecordedAgain;
+
+            if (answeredAgain is not null)
+            {
+                (response, refusal, key, sent) = (answeredAgain, refusedAgain, renewedKey, again);
+            }
+        }
+
+        // The expiry the host tells of the token it was sent is kept beside it, so it is read again before it passes.
+        if (response is WebSearchResponse.Http told && key is not null && step.Renewal is { } telling)
+        {
+            telling.Answered(source, key, told);
+        }
 
         WebSearchAnswer answer;
 
@@ -777,6 +811,13 @@ public sealed class WebSearchStep
 
     /// <summary>Its records.</summary>
     public IWebSearchRecords Records { get; }
+
+    /// <summary>
+    /// What its search does with the machine's gh login while it runs - the token held now, read again once where the host
+    /// refused it, its expiry kept - each token it comes to send held by <see cref="Mask"/> first; null where no source of
+    /// it is signed by the login.
+    /// </summary>
+    public WebSearchRenewal? Renewal { get; init; }
 
     /// <summary>How many requests of sources the step's searches have made.</summary>
     public int Spent => Volatile.Read(ref _spent);

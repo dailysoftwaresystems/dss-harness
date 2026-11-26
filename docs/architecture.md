@@ -652,6 +652,24 @@ directory behaves the same way.
 `--directory` is resolved to an absolute path, and confirmed to exist, once, before any
 command runs.
 
+An engine's session asks git where each of its trees is once (`EngineSession`, `SessionTrees`):
+the run's main checkout and each agent's tree cannot move while the engine holds the run, so a
+tree located from its own root - its top, the repository's worktrees, the main checkout's git
+directory, an agent's repository's mark, what every load of a context asks
+(`RepositoryLocator`) - is kept for the rest of the session and handed to every layer its work
+passes through, its step runners and the agent and worktree services they ask, rather than asked
+again at each. So are the directory the main checkout's repository keeps its objects in, however
+it was asked, and an agent's repository's mark where its main checkout lends it its objects -
+found by the locator or by the telling of an agent's repository (`AgentRepositories.IsAtAsync`),
+and taken by the other, so a tree a deletion tells and then loads is asked of once - and the
+files of each commit a tree is made at, by the commit's id (`WorktreeRoom.ForFilesAsync`). Its
+configuration is still read where it always is, for it is the tree's file. A
+tree the session makes, deletes or makes again is dropped by the one owner of the making and the
+deleting of trees (`WorktreeService`), and found anew by the next asking; a directory inside a
+tree is never kept, for it may become a tree of its own; and the session's scope flows with the
+work it starts alone, so no other command or session is answered from it, and it ends with the
+session.
+
 git's messages are matched in two places only: telling "not a repository" apart from
 "git could not look", and "not a gitdir" apart from the same when a directory among a
 worktree's submodule repositories is examined. Every git the tool starts runs with
@@ -1520,7 +1538,10 @@ them, is refused with nothing changed and fails the step, never read as the main
 is a reading step's alone: the definition's check refuses it on a step that writes or works in an agent's worktree, by
 its own keys or by those of the step whose work it goes on with (`WorkflowValidator`). Before the bringing touches the
 tree the record names the attempt it is brought for (`AgentReadyRequest.For`, `CreateAgentRunner.ReadiedFor`), so one
-stopped part way never reads as the tree an earlier attempt left. An attempt that goes on with an answer in its own
+stopped part way never reads as the tree an earlier attempt left. The making of a reader's tree for a step whose
+`commit` names none records the attempt it is made for the same way (`AgentCreateRequest.ReadiedFor`): the tree it makes
+stands at the main checkout's HEAD as the attempt starts, and the attempt's start - an attempt starts once - finds its
+record naming it and brings the tree nowhere again. An attempt that goes on with an answer in its own
 conversation - a person's, a limit's `more` or `compact` - is the same start going on, and finds the tree as its attempt
 left it, save where the record names another attempt - another step working as the agent started while this one
 waited, for a step that waits on a question holds no claim - or none, as a record an older tool wrote does: the tree is
@@ -3490,7 +3511,14 @@ asked by `web_search`'s `page` - counted against `maxPerStep`, each source's `pe
 asked one request at a time by a lease in that record that the process asking holds
 (`WebSearchPace.TurnAsync`, `Waits.WhileHeldAsync`), and a pause it asks for kept there
 (`WebSearchPace`), a key read by
-`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - a slot's key sent to the scheme, host
+`WebSearchKeys` from the slot or `gh auth token --hostname` for the source's host - the gh login's token held by its one
+owner (`GhLogins`), in memory alone, never in a record: read once per engine session (`EngineSession`) and kept for its
+every step, read again before the expiry the host tells of it passes - `gh` says none, and GitHub's API names it on each
+answer to a request a token that expires signed (`github-authentication-token-expiration`), read again a minute ahead
+(`GhLogins.Ahead`), once for that expiry - and read again once where the host refuses a request it signed as unsigned
+(401), the request then sent once more with the token read where it is another and never a third time, a second
+refusal answered as the first would have been (`WebSearchRenewal`), each token a step comes to send held by its mask
+before it is sent (`GrowingMask`) - a slot's key sent to the scheme, host
 and port the source's own address writes alone (`IWebSearchKind.KeyOrigin`, a source whose address takes its host from
 what discover finds refused one where the configuration is read), a gh login to that host or its API alone
 (`WebFetchKey.Origins`), never a host a document the source read names - and added by the fetch to what it sends the

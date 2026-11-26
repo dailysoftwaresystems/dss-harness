@@ -33,7 +33,11 @@ public sealed class HarnessFactory
     /// How the output writes this machine's home: as a host answering another machine writes it, or as it is
     /// where this is left out.
     /// </param>
-    public HarnessFactory(bool verbose = false, HomeShorthand? home = null)
+    /// <param name="processes">
+    /// What every program the services start passes through, over the real runner - a test's counting of what git is
+    /// started for; the real runner alone where this is left out.
+    /// </param>
+    public HarnessFactory(bool verbose = false, HomeShorthand? home = null, Func<IProcessRunner, IProcessRunner>? processes = null)
     {
         // This machine as a user's process on it, whatever account runs the suite - an administrator's on a hosted Windows
         // runner, where every agent the real answer reaches would be refused as elevated; a test of that refusal asks for
@@ -46,7 +50,8 @@ public sealed class HarnessFactory
         Output = new ConsoleHarnessOutput(StandardOutput, StandardError, verbose, home);
 
         FileSystem = new PhysicalFileSystem(FilePermissions);
-        ProcessRunner = new ProcessRunner(Platform, FilePermissions, CliRunner.CliProgram);
+        var runner = new ProcessRunner(Platform, FilePermissions, CliRunner.CliProgram);
+        ProcessRunner = processes is null ? runner : processes(runner);
         ProcessTable = ProcessTableFactory.Create(Platform, ProcessRunner);
         GitClient = new GitClient(ProcessRunner, Output, localVariables: LocalVariables);
         RepositoryLocator = new RepositoryLocator(GitClient, FileSystem, Platform);

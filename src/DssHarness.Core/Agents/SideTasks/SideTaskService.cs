@@ -331,12 +331,17 @@ public sealed class SideTaskService(
         }
 
         var appointed = providers.Appointed();
-        var read = await _webKeys.ReadAsync(context.Layout, appointed, [.. sources.On], cancellationToken).ConfigureAwait(false);
+        var logins = _webKeys.Logins();
+        var read = await _webKeys.ReadAsync(context.Layout, appointed, [.. sources.On], cancellationToken, logins).ConfigureAwait(false);
+        var began = _launch.Mask(context.Layout, providers, WebSearchKeys.Mask(sources.On, read));
+
+        // Its search renews the machine's gh login as a step's does, over a mask open to the login read again.
+        var (search, mask) = sources.On is [_, ..] ? SideTaskPolicy.WebSearch(sources, read).Renewing(began, logins, context.Layout) : (null, began);
         var common = new SideTaskCommon(
             context,
             providers,
-            sources.On is [_, ..] ? SideTaskPolicy.WebSearch(sources, read) : null,
-            _launch.Mask(context.Layout, providers, WebSearchKeys.Mask(sources.On, read)),
+            search,
+            mask,
             [.. appointed.Select(one => one.Name)]);
         var owner = new SideTaskOwner(_fileSystem, _store, _identity, _paths, _clock);
         var asked = new SideTaskRunsOn(call.Tier, call.Model, effort, effortByModel, call.Client);

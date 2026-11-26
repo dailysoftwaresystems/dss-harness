@@ -91,9 +91,9 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>The kit with a configuration whose providers resolve and whose slot holds the model's key.</summary>
-    private static async Task<(OrchestrationKit Kit, Agents Runner)> ReadyAsync(TempDirectory temp)
+    private static async Task<(OrchestrationKit Kit, Agents Runner)> ReadyAsync(TempDirectory temp, Func<DssHarness.Core.Processes.IProcessRunner, DssHarness.Core.Processes.IProcessRunner>? processes = null)
     {
-        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp, processes: processes);
 
         File.WriteAllText(
             Path.Combine(kit.Main, ".harness-config", "config.json"),
@@ -139,7 +139,7 @@ public sealed class ReasonStepRunnerTests
             agents,
             kit.Harness.FileSystem,
             Keys(kit),
-            new GhProcess(kit.Harness.ProcessRunner),
+            new GhProcess(kit.Harness.ProcessRunner, kit.Harness.LocalVariables),
             kit.Harness.Output,
             TimeProvider.System,
             isolation ?? new TestIsolation(),
@@ -455,6 +455,40 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(again.Passed, again.Error);
         Assert.Equal("a9", agents.Asked[1].Agent);
+    }
+
+    /// <summary>
+    /// A step the engine makes its read-only agent for works in the tree as its making left it: the making records the
+    /// attempt it was made for, so the step never brings the tree to the main checkout's HEAD again. In an engine's session
+    /// that located its main checkout, the step starts the git of the making alone, each untranslated, and gh no more than
+    /// once - for its login, where this machine has a gh.
+    /// </summary>
+    [Fact]
+    public async Task AStepsOwnReadOnlyAgent_IsWorkedInAsItsMakingLeftIt_TheStepStartingTheGitOfTheMakingAlone()
+    {
+        using var temp = new TempDirectory();
+        CountingProcesses? counted = null;
+        var (kit, agents) = await ReadyAsync(temp, inner => counted = new CountingProcesses(inner));
+
+        using var session = DssHarness.Core.Execution.EngineSession.Begin();
+
+        // The engine's session locates its main checkout as it begins.
+        _ = await kit.Harness.ContextLoader.LoadAsync(kit.Main, Token);
+        var from = counted!.Started.Count;
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" }, Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal(new AgentReadiedFor("think", 1), kit.Record("a9").ReadiedFor);
+
+        var started = counted.Started.Skip(from).ToList();
+
+        var gits = started.Where(request => request.FileName == "git").ToList();
+        var others = started.Except(gits).Select(CountingProcesses.Named).ToList();
+
+        Assert.Equal(SessionTreesTests.Made(listed: kit.Harness.PathBudget.Bounds()), gits.Select(CountingProcesses.Named));
+        Assert.All(gits, git => Assert.Equal(DssHarness.Core.Git.GitOwnSettings.Locale, git.Environment[DssHarness.Core.Git.GitOwnSettings.LocaleVariable]));
+        Assert.True(others is [] or ["gh auth"], string.Join(", ", others));
     }
 
     /// <summary>
