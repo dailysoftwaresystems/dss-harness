@@ -2059,7 +2059,7 @@ public sealed class ReasonStepRunnerTests
         // The run's map of this tree - a hub of 65 methods, and its configuration's every member a declaration - goes on past its first page, so
         // map is among the operations, as pack is for a pack that goes on past its message's page.
         Assert.True(DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(asked.Map!) > 1, asked.Map);
-        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Around, GraphOp.Impact, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
         Assert.Null(promptLine.Why);

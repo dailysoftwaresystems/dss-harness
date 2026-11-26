@@ -23,8 +23,14 @@ public enum GraphOp
     /// <summary>The nodes reached from a node over one relation.</summary>
     Related,
 
-    /// <summary>A file's or a type's declarations, or the repository's.</summary>
+    /// <summary>A directory's files with their languages, lines, tests and top declarations; a file's or a type's declarations; or the repository's.</summary>
     Outline,
+
+    /// <summary>A node's place: what it is declared in, its siblings and members, the declarations beside it, its callers and callees.</summary>
+    Around,
+
+    /// <summary>What a change of a node reaches - its callers at every distance, overrides, implementations, dispatchers, derived types - and the tests that reach any of them, each with its path.</summary>
+    Impact,
 
     /// <summary>The exact lines of nodes, read fresh.</summary>
     Body,
@@ -82,8 +88,9 @@ public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, stri
 }
 
 /// <summary>
-/// The nodes one <c>graph</c> call used, each by its id: those it asked about by name - <c>node</c>, <c>related</c> and
-/// <c>body</c> - those whose lines it served, and the one an <c>edit</c> wrote, with the lines it wrote.
+/// The nodes one <c>graph</c> call used, each by its id: those it asked about by name - <c>node</c>, <c>related</c>,
+/// <c>around</c>, <c>impact</c> and <c>body</c> - those whose lines it served, and the one an <c>edit</c> wrote, with the
+/// lines it wrote.
 /// </summary>
 /// <param name="Asked">The nodes it asked about, in the order it named them.</param>
 /// <param name="Served">The nodes a line of which a <c>body</c>'s answer gave, in order.</param>
@@ -160,7 +167,8 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 
 /// <summary>
 /// The one tool <c>graph</c>, over the lookups of <see cref="CodebaseGraphQueries"/>: its operations - <c>find</c>,
-/// <c>node</c>, <c>related</c>, <c>outline</c>, <c>body</c>, <c>sites</c>, <c>edit</c> and <c>wholeFile</c> - the same on every
+/// <c>node</c>, <c>related</c>, <c>outline</c>, <c>around</c>, <c>impact</c>, <c>body</c>, <c>sites</c>, <c>edit</c> and
+/// <c>wholeFile</c> - the same on every
 /// client, each answering in pages of whole entries with a line range and a hash on every node, and a text search where the
 /// graph is not sure; and <c>pack</c>, <c>changes</c> and <c>map</c>, the later pages of the context pack, of the codebase
 /// changes a step's message began and of the repository map, where they go on past it. The schema a step is given holds
@@ -254,6 +262,8 @@ public sealed partial class CodebaseGraphTool(
         [GraphOp.Node] = "node",
         [GraphOp.Related] = "related",
         [GraphOp.Outline] = "outline",
+        [GraphOp.Around] = "around",
+        [GraphOp.Impact] = "impact",
         [GraphOp.Body] = "body",
         [GraphOp.Sites] = "sites",
         [GraphOp.Edit] = "edit",
@@ -280,7 +290,7 @@ public sealed partial class CodebaseGraphTool(
     private StringComparison? _case;
 
     /// <summary>The read operations, which a step with the <c>read</c> capability and the verb are given.</summary>
-    public static IReadOnlyList<GraphOp> Read { get; } = [GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites];
+    public static IReadOnlyList<GraphOp> Read { get; } = [GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Around, GraphOp.Impact, GraphOp.Body, GraphOp.Sites];
 
     /// <summary>The view the tool answers from now: the one it was handed, or the one its last extraction left.</summary>
     public CodebaseGraphQueries Queries => _queries;
@@ -421,6 +431,7 @@ public sealed partial class CodebaseGraphTool(
         GraphOp.Node => (["symbol", "page"], ["symbol"]),
         GraphOp.Related => (["symbol", "relation", "depth", "page"], ["symbol", "relation"]),
         GraphOp.Outline => (["path", "symbol", "page"], []),
+        GraphOp.Around or GraphOp.Impact => (["symbol", "page"], ["symbol"]),
         GraphOp.Body => (["symbols", "full", "page"], ["symbols"]),
         GraphOp.Sites => (["data", "page"], ["data"]),
         GraphOp.Edit => (["symbol", "hash", "text"], ["symbol", "hash", "text"]),
@@ -480,7 +491,11 @@ public sealed partial class CodebaseGraphTool(
         }.ToJsonString(AgentEnvelope.Written);
     }
 
-    /// <summary>What the model is told the tool does, for a step given <paramref name="ops"/>: the operations it may use alone, with their bounds.</summary>
+    /// <summary>
+    /// What the model is told the tool does, for a step given <paramref name="ops"/>: the operations it may use alone, each
+    /// by the question it answers, with their bounds - and, where it may use all three, that <c>outline</c>, <c>around</c>
+    /// and <c>impact</c> answer in one call what takes many reads and searches.
+    /// </summary>
     /// <param name="ops">The operations the step may use.</param>
     public static string Description(IReadOnlySet<GraphOp> ops)
     {
@@ -488,12 +503,14 @@ public sealed partial class CodebaseGraphTool(
 
         var said = new Dictionary<GraphOp, string>
         {
-            [GraphOp.Find] = $"find - the nodes a query's words match, best first, {FindLines} a page",
-            [GraphOp.Node] = $"node - a node's card and its edges by kind, {NodeLinesAKind} of each a page",
-            [GraphOp.Related] = $"related - the nodes a relation reaches, as many hops as you ask, {RelatedLines} a page",
-            [GraphOp.Outline] = $"outline - a file's or a type's declarations, or the repository's, {OutlineLines} a page",
-            [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
-            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
+            [GraphOp.Find] = $"find - which nodes carry these words? best first, {FindLines} a page",
+            [GraphOp.Node] = $"node - what is this node, and what is joined to it? its card and its edges by kind, {NodeLinesAKind} of each a page",
+            [GraphOp.Related] = $"related - what does one relation reach from it? as many hops as you ask, by distance, {RelatedLines} a page",
+            [GraphOp.Outline] = $"outline - what does this directory, file or type hold? a directory's every file, its subdirectories' too, with its language, its lines, whether it is a test and what it tests, and its top declarations; a file's or a type's declarations; with neither, the repository's; {OutlineLines} a page",
+            [GraphOp.Around] = $"around - where does this node stand? what it is declared in - file, namespace, type - its siblings, its members, the declarations just before and after it, its callers and callees, {NodeLinesAKind} of each a page",
+            [GraphOp.Impact] = $"impact - what does changing it reach? its callers at every distance, what it overrides and what overrides it, its implementations, dispatchers and derived types, and every test that reaches any of them, each with the path it reaches by, {RelatedLines} of each a page",
+            [GraphOp.Body] = $"body - what are its lines? the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
+            [GraphOp.Sites] = $"sites - what decides this data? every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
@@ -501,9 +518,15 @@ public sealed partial class CodebaseGraphTool(
             [GraphOp.Map] = "map - a page of the repository map your first message began, by page, its last line saying where the rest is",
         };
 
+        // Said where the step may use all three: they are what saves the reads and searches an agent would make instead.
+        var navigating = ops.Contains(GraphOp.Outline) && ops.Contains(GraphOp.Around) && ops.Contains(GraphOp.Impact)
+            ? " Ask before view_file or search_files: one call of outline, around or impact answers what takes many file reads and searches, and you then read only the lines it names."
+            : string.Empty;
+
         return "Asks the codebase graph of the tree you work in: "
             + string.Join("; ", Ordered(ops).Select(op => said[op]))
-            + $". Every node is named with its handle and path:start-end #hash - read a range of a file by those lines - and every answer of a read is pages of whole entries, a line wider than a page given in pieces marked …: one of more than one page starts with the line 'page k of n' and any page is asked for with page, from 1; an answer with no header holds all of it. Where the graph is not sure, the answer adds text: lines that hold the name.";
+            + $". Every node is named with its handle and path:start-end #hash - read a range of a file by those lines - and every answer of a read is pages of whole entries, a line wider than a page given in pieces marked …: one of more than one page starts with the line 'page k of n' and any page is asked for with page, from 1; an answer with no header holds all of it. Where the graph is not sure, the answer adds text: lines that hold the name."
+            + navigating;
     }
 
     /// <summary>Runs the <c>graph</c> call <paramref name="input"/> asks, where its operation is among <paramref name="ops"/>.</summary>
@@ -540,6 +563,8 @@ public sealed partial class CodebaseGraphTool(
             GraphOp.Node => await NodeAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Related => await RelatedAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Outline => await OutlineAsync(input, cancellationToken).ConfigureAwait(false),
+            GraphOp.Around => await AroundAsync(input, cancellationToken).ConfigureAwait(false),
+            GraphOp.Impact => await ImpactAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Body => await BodyAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Sites => await SitesAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Edit => await OneEditAtATimeAsync(input, cancellationToken).ConfigureAwait(false),
@@ -697,6 +722,14 @@ public sealed partial class CodebaseGraphTool(
             var path = Held(view, given) ?? given;
             var printed = ReportText.Printable(path);
 
+            // A path the view holds no file at is a directory where it holds files under it: each of them outlined.
+            if (view.OutlineFile(path) is null && view.FilesUnder(given, _case ??= _paths.ComparisonIn(view.Tree)) is not null)
+            {
+                var directory = CodebaseGraphQueries.DirectoryNamed(given);
+
+                return await PagedAsync(input, view, GraphOp.Outline, new JsonObject { ["path"] = directory }, $"outline {DirectoryShown(directory)}", (on, token) => Task.FromResult(DirectoryOf(on, directory)), cancellationToken).ConfigureAwait(false);
+            }
+
             if (!_mayRead(path))
             {
                 return Said(input, $"outline {printed}", $"'{printed}' is a file your reads do not reach");
@@ -704,7 +737,7 @@ public sealed partial class CodebaseGraphTool(
 
             if (view.OutlineFile(path) is not { } cards)
             {
-                return Said(input, $"outline {printed}", $"the view holds no file at '{printed}'");
+                return Said(input, $"outline {printed}", $"the view holds no file or directory at '{printed}'");
             }
 
             return await PagedAsync(input, view, GraphOp.Outline, new JsonObject { ["path"] = path }, $"outline {printed}", (on, token) => Task.FromResult(OutlineOf(on, path, cards)), cancellationToken).ConfigureAwait(false);
@@ -744,13 +777,79 @@ public sealed partial class CodebaseGraphTool(
                 .Where(one => one.Files.Any(_mayRead))
                 .Select(one => $"namespace {ReportText.Printable(one.Card.Qualified)} ({ReportText.Counted(one.Declarations.Count(Reads), "declaration")})"));
 
-            return Task.FromResult(new GraphAnswer(
-                RepositoryOf(on, lines),
-                lines.Count == 0 ? [] : [Section(null, [.. lines.Select(line => new GraphEntry(line))], OutlineLines)],
-                [],
-                [],
-                []));
+            // The root's own files, outlined as a directory's are: what no top directory's count says.
+            var (files, left) = FilesOf([.. overview.Directories.Where(directory => directory.Directory == ".").SelectMany(directory => directory.Files)]);
+            List<GraphSection> sections = lines.Count == 0 ? [] : [Section(null, [.. lines.Select(line => new GraphEntry(line))], OutlineLines)];
+
+            if (files.Count > 0)
+            {
+                sections.Add(Section($"{DirectoryShown(string.Empty)} ({ReportText.Counted(files.Count, "file")}):", [.. files.SelectMany(file => FileEntries(on, file))], OutlineLines));
+            }
+
+            return Task.FromResult(new GraphAnswer(RepositoryOf(on, lines), sections, FilesLeft(left), [], []));
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A directory outline's answer: every file the view holds under <paramref name="directory"/> - its subdirectories'
+    /// among them - that the step may read, those it may not counted; a section for each directory that holds any of them
+    /// directly, by path, each file one result whose block holds its top declarations (<see cref="FileEntries"/>).
+    /// </summary>
+    private GraphAnswer DirectoryOf(CodebaseGraphQueries view, string directory)
+    {
+        var (files, left) = FilesOf(view.FilesUnder(directory, _case ??= _paths.ComparisonIn(view.Tree)) ?? []);
+        var shown = DirectoryShown(directory);
+        var leading = new List<string> { $"outline of {shown} ({ReportText.Counted(files.Count, "file")}):" };
+
+        if (files.Count == 0)
+        {
+            leading.Add($"no file under {shown} is one your reads reach");
+        }
+
+        IReadOnlyList<GraphSection> sections = [.. files
+            .GroupBy(CodebaseGraphQueries.DirectoryOf, StringComparer.Ordinal)
+            .OrderBy(held => held.Key, StringComparer.Ordinal)
+            .Select(held => Section($"{DirectoryShown(held.Key)} ({ReportText.Counted(held.Count(), "file")}):", [.. held.SelectMany(file => FileEntries(view, file))], OutlineLines))];
+
+        return new GraphAnswer(leading, sections, FilesLeft(left), [], []);
+    }
+
+    /// <summary>Of <paramref name="files"/>, by path, those the step may read, and how many it may not.</summary>
+    private (List<string> Files, int Left) FilesOf(IReadOnlyList<string> files)
+    {
+        var kept = files.Where(_mayRead).Order(StringComparer.Ordinal).ToList();
+        return (kept, files.Count - kept.Count);
+    }
+
+    /// <summary>The note of the files an outline left out because the step's reads do not reach them.</summary>
+    private static IReadOnlyList<string> FilesLeft(int left) => left == 0 ? [] : [$"{ReportText.Counted(left, "file")} left out: your reads do not reach them"];
+
+    /// <summary>A directory as an outline names it, with its trailing separator: <c>./</c> for the tree's root.</summary>
+    private static string DirectoryShown(string directory) => directory.Length == 0 ? "./" : $"{ReportText.Printable(directory)}/";
+
+    /// <summary>
+    /// One file of a directory outline, as one result's block: its own node's line - or its path where the view holds no
+    /// node of it - with the language that read it, or the state no language read it in, and <c>test</c> where it is test
+    /// code; then, riding on it, each of its top declarations (<see cref="CodebaseGraphQueries.TopDeclarations"/>), each
+    /// with what it tests where the graph's <c>tests</c> edges say so, the targets the step may not read left out.
+    /// </summary>
+    private IEnumerable<GraphEntry> FileEntries(CodebaseGraphQueries view, string path)
+    {
+        var block = ReportText.Printable(path);
+        var node = CodeGraphIds.FileId(path);
+        var entry = view.FileAt(path)!;
+        var head = view.Part(node, path) is { } file ? GraphLines.Of(file) : block;
+        var read = view.ReadByALanguage(path) && entry.Language is { } language ? language : entry.State;
+
+        yield return new GraphEntry($"{head} | {read}{(view.TestFile(path) ? " | test" : string.Empty)}", GoesOn: block, Node: node);
+
+        foreach (var top in view.TopDeclarations(path))
+        {
+            var tests = top.Tests.Where(Reads).Select(target => $"{ReportText.Printable(target.Name)} ({target.Handle})").ToList();
+            var tested = tests.Count == 0 ? string.Empty : $" | tests {string.Join(", ", tests)}";
+
+            yield return new GraphEntry($"  {GraphLines.Of(top.Card)}{tested}", Lines: 0, GoesOn: block, Node: node);
+        }
     }
 
     /// <summary>
@@ -801,6 +900,186 @@ public sealed partial class CodebaseGraphTool(
         }
 
         return leading;
+    }
+
+    /// <summary>
+    /// <c>around</c>: a node's place, in one answer - its card; what it is declared in, outermost first - its file, its
+    /// namespace, its type (<see cref="CodebaseGraphQueries.Containers"/>); its siblings in the nearest of those
+    /// (<see cref="CodebaseGraphQueries.Siblings"/>); what is declared inside it (<see cref="CodebaseGraphQueries.Inside"/>);
+    /// the declarations just before and after it in its file (<see cref="CodebaseGraphQueries.Beside"/>); and its callers and
+    /// callees, as <c>node</c> gives them - each a node line with its span and hash, a section of its own counted in its
+    /// caption, at <see cref="NodeLinesAKind"/> a page, the nodes the step may not read left out and counted, and a text
+    /// search where the graph is not sure, as <c>node</c> adds one.
+    /// </summary>
+    private async Task<GraphToolAnswer> AroundAsync(JsonObject input, CancellationToken cancellationToken)
+    {
+        var symbol = Str(input, "symbol")!;
+        var view = _queries;
+
+        if (Resolved(view, symbol) is not { } card)
+        {
+            return await UnresolvedAsync(input, view, GraphOp.Around, symbol, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await PagedAsync(input, view, GraphOp.Around, new JsonObject { ["symbol"] = card.Id }, $"around {ReportText.Printable(symbol)}", async (on, token) =>
+        {
+            var sections = new List<GraphSection>();
+            var left = 0;
+
+            void Add(string caption, IReadOnlyList<GraphCard> cards, bool counted = true)
+            {
+                var (kept, unread) = Readable(cards);
+                left += unread;
+
+                if (kept.Count > 0)
+                {
+                    sections.Add(Section(counted ? $"{caption} ({kept.Count}):" : $"{caption}:", [.. kept.Select(one => new GraphEntry("  " + GraphLines.Of(one)))], NodeLinesAKind));
+                }
+            }
+
+            Add("declared in", on.Containers(card.Id, card.Path), counted: false);
+            Add("siblings", on.Siblings(card.Id, card.Path));
+            Add("members", on.Inside(card.Id, card.Path));
+
+            var (before, after) = on.Beside(card.Id, card.Path);
+            List<GraphEntry> beside = [.. new (string Side, GraphCard? Card)[] { ("before", before), ("after", after) }
+                .Where(side => side.Card is not null && Reads(side.Card))
+                .Select(side => new GraphEntry($"  {side.Side}: {GraphLines.Of(side.Card!)}"))];
+
+            if (beside.Count > 0)
+            {
+                sections.Add(Section("beside it:", beside, NodeLinesAKind));
+            }
+
+            // Its callers and callees as node gives them, each edge with how sure it is; an edge of candidates makes the answer not sure.
+            var edges = on.Edges(card.Id);
+            var unsure = on.Unsure(card.Id);
+
+            foreach (var (group, members) in new[] { ("callers", edges.Callers), ("callees", edges.Callees) })
+            {
+                var kept = members.Where(edge => Reads(edge.Card)).ToList();
+                left += members.Count - kept.Count;
+                unsure |= kept.Any(on.Doubts);
+
+                if (kept.Count > 0)
+                {
+                    sections.Add(Section($"{group} ({kept.Count}):", [.. kept.Select(edge => new GraphEntry("  " + EdgeLine(edge)))], NodeLinesAKind));
+                }
+            }
+
+            var notes = new List<string>(Notes(left));
+
+            if (unsure)
+            {
+                var searched = await SearchAsync(card.Name, token).ConfigureAwait(false);
+                sections.AddRange(searched.SectionsOf(card.Name));
+                notes.AddRange(searched.NoHitsOf(card.Name));
+                notes.AddRange(searched.Notes);
+            }
+
+            return new GraphAnswer([GraphLines.Of(card)], sections, notes, [card.Id], []);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>impact</c>: what a change of a node reaches - the one walk of a change's impact the change-first pack leads with
+    /// (<see cref="CodebaseContextPack.Impact"/>), from the node and every other part of its declaration - every other node it
+    /// settles under a section of the relation whose edge reached it, the relations of <see cref="GraphRelations.Impact"/> in
+    /// their order and its tests last: its callers at every distance, what it overrides
+    /// and what overrides it, its implementations, the interface members that dispatch to it, its derived types, and every
+    /// test that reaches any of them. Each a node line with how many edges its best path has and that path, each edge of it
+    /// said as the pack says one and its confidence where it is not exact, nearest first and then best first, at
+    /// <see cref="RelatedLines"/> of each a page; a node the step may not read is neither listed nor gone through, only
+    /// counted, and a text search is added where the graph is not sure, as <c>related</c> adds one.
+    /// </summary>
+    private async Task<GraphToolAnswer> ImpactAsync(JsonObject input, CancellationToken cancellationToken)
+    {
+        var symbol = Str(input, "symbol")!;
+        var view = _queries;
+
+        if (Resolved(view, symbol) is not { } card)
+        {
+            return await UnresolvedAsync(input, view, GraphOp.Impact, symbol, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await PagedAsync(input, view, GraphOp.Impact, new JsonObject { ["symbol"] = card.Id }, $"impact {ReportText.Printable(symbol)}", async (on, token) =>
+        {
+            var left = new HashSet<string>(StringComparer.Ordinal);
+
+            bool Through(GraphCard reached)
+            {
+                if (Reads(reached))
+                {
+                    return true;
+                }
+
+                left.Add(reached.Id);
+                return false;
+            }
+
+            var sources = on.OneDeclaration(card.Id).Where(part => Through(on.Card(part))).Select(part => new GraphWalked(part, CodebaseContextPack.EditedWeight, 0, 0));
+            var settled = new Dictionary<string, GraphWalked>(StringComparer.Ordinal);
+            var reached = new List<GraphWalked>();
+
+            foreach (var one in CodebaseContextPack.Impact(on, sources, Through))
+            {
+                settled[one.Id] = one;
+
+                if (one.By is not null)
+                {
+                    reached.Add(one);
+                }
+            }
+
+            // The path each node's best walk reached it by, from it back to the node asked about - every node on it settled
+            // before it, and named by its handle too, for an override and what it overrides carry one name.
+            string PathOf(GraphWalked one)
+            {
+                var steps = new List<string>();
+
+                for (var at = one; at.By is { } by; at = settled[at.From!])
+                {
+                    var from = on.Card(at.From!);
+                    var named = $"{ReportText.Printable(from.Name)} ({from.Handle})";
+                    var phrase = steps.Count == 0 ? CodebaseContextPack.Phrase(by, named) : CodebaseContextPack.Which(by, named);
+                    steps.Add(string.Equals(by.Confidence, CodeConfidences.Exact, StringComparison.Ordinal) ? phrase : $"{phrase} ({by.Confidence})");
+                }
+
+                return string.Join(", ", steps);
+            }
+
+            var sections = new List<GraphSection>();
+
+            foreach (var relation in GraphRelations.Impact.Where(relation => relation != GraphRelations.Tests).Append(GraphRelations.Tests))
+            {
+                var edges = GraphRelations.Edges(relation);
+                var of = reached.Where(one => edges.Contains((one.By!.Side, one.By.Kind))).OrderBy(one => one.Hop).ToList();
+
+                if (of.Count > 0)
+                {
+                    sections.Add(Section($"{relation} ({of.Count}):", [.. of.Select(one => new GraphEntry($"  {one.Hop.ToString(CultureInfo.InvariantCulture)}: {GraphLines.Of(on.Card(one.Id))} | {PathOf(one)}"))], RelatedLines));
+                }
+            }
+
+            var leading = new List<string> { GraphLines.Of(card) };
+
+            if (reached.Count == 0)
+            {
+                leading.Add($"a change of '{ReportText.Printable(card.Qualified)}' reaches no other node the graph holds");
+            }
+
+            var notes = new List<string>(Notes(left.Count));
+
+            if (on.Unsure(card.Id) || reached.Any(one => string.Equals(one.By!.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal) || on.Unsure(one.Id)))
+            {
+                var searched = await SearchAsync(card.Name, token).ConfigureAwait(false);
+                sections.AddRange(searched.SectionsOf(card.Name));
+                notes.AddRange(searched.NoHitsOf(card.Name));
+                notes.AddRange(searched.Notes);
+            }
+
+            return new GraphAnswer(leading, sections, notes, [card.Id], []);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<GraphToolAnswer> BodyAsync(JsonObject input, CancellationToken cancellationToken)
@@ -2056,10 +2335,10 @@ public sealed partial class CodebaseGraphTool(
     [
         ("query", "string", "the words to match, split at case changes, underscores, digits and dots as a name is."),
         ("kind", "string", $"the one kind to keep: {string.Join(", ", CodeNodeKinds.Extracted)}."),
-        ("path", "string", "a file's path, relative to the tree with forward separators."),
+        ("path", "string", "a file's path - for outline a directory's too - relative to the tree with forward separators."),
         ("page", "integer", "which page of the answer to give, from 1; the first where it is left out."),
         ("symbol", "string", "a node: its handle, its id, a path:line, or a qualified or simple name."),
-        ("relation", "string", "which edge to follow."),
+        ("relation", "string", $"which edge to follow: {string.Join("; ", GraphRelations.Described.Select(relation => $"{relation.Name}, {relation.Meaning}"))}."),
         ("depth", "integer", "how many hops, from 1; 1 where it is left out."),
         ("symbols", "array", "the nodes to read, one or more, each a handle, an id or a name."),
         ("full", "boolean", "whether a type's members' bodies are given too."),

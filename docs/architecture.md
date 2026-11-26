@@ -5990,7 +5990,7 @@ the hook looks for it, which its runner finds as it does.
 `delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
 
 What an agent asks of the graph is one tool, `graph` (`Agents\Runtime\CodebaseGraphTool`), whose `op` is `find`, `node`,
-`related`, `outline`, `body`, `sites`, `pack`, `changes`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
+`related`, `outline`, `around`, `impact`, `body`, `sites`, `pack`, `changes`, `map`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
 handle, qualified name (one written with its language's `::` or `\` read as the model's `.`, or with only its last
 parts, `Order.Total`) and simple name and `path:line`, each file's nodes, each node's edges in and out by kind, the words its
 name splits into weighed by how rare they are - built once
@@ -5999,10 +5999,39 @@ from a `CodebaseGraphRead`. Every node an answer names is one line with its hand
 prefix, then the share of the query's words weighed by their rarity, a summary's and a path's words a twentieth as much,
 generated code after every other, a tie by how near the step's own work each node is (`GraphNearness`: its context
 pack or a working set it was given, a file its `writes` covers, a file its agent changed, a path or a name its prompt
-holds) and then by id; `related` walks as many hops as asked, from 1, going through every node it reaches: it keeps the
-nodes it reached and never reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that
-reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
-found its lines moved, and reads a file whole whatever it holds. `sites` answers "every place that decides this" of one datum
+holds) and then by id; `related` walks one relation (`GraphRelations.Described`, the one list of each relation and what it
+reaches, which the schema's `relation` and the help say: `callers`, `callees`, `derived`, `implementations`, `references`,
+`tests`, `includedBy`, `styledBy`, `styles`, and `bases`, `overrides`, `overriddenBy`, `dispatchers`, `users`, `uses`, `parts`
+and `tested`, which reach the edges the `node` operation groups - inheritance, implementation and mixins out of a type,
+overrides both ways, dispatches into a member, uses both ways, the parts of a declaration, a test's own `tests` edges) as
+many hops as asked, from 1, by distance, going through every node it reaches: it keeps the nodes it reached and never
+reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that reaches nothing new ends it -
+every other part of a declaration walked as the node itself (`CodebaseGraphQueries.OneDeclaration`) but by `parts`, which
+walks to them (`GraphRelations.WalksPartsAsOne`); `body` serves each node named once and reads each file once, again only where an extract of it
+found its lines moved, and reads a file whole whatever it holds. Three operations answer in one call what an agent
+otherwise reads and searches many files for. `outline` of a directory (`CodebaseGraphQueries.FilesUnder`, the directory as
+`CodebaseGraphQueries.DirectoryNamed` reads it - either separator, a leading `./` and a trailing separator read as none,
+`.` the tree's root - in another case where the tree's file system finds a name in any case) gives every file under it, its
+subdirectories' too, a section for each directory that holds any directly, by path - each file one result whose block is
+its own node's line with the language that read it, or the state none read it in, and `test` where it is test code
+(`CodebaseGraphQueries.TestFile`, the view's one rule of a file that declares a test, `ExtractNode.Test` or one the link
+finds by its type), then each of its top declarations (`CodebaseGraphQueries.TopDeclarations`: every type and member no
+type or member of the file holds, a namespace's among them, each with what it and the declarations inside it exercise by
+the link's `tests` edges, each declaration read once - the outermost it is or is inside found from its parent's); the
+repository's `outline` outlines the root's own files so too. `around` gives a node's place: what it is declared in,
+outermost first - its file, its namespace's part there, its type (`CodebaseGraphQueries.Containers`, by each extract's
+`ExtractNode.Parent`) - its siblings, every other declaration directly inside the nearest of those
+(`CodebaseGraphQueries.Siblings`, `CodebaseGraphQueries.Inside`: a file's top, or what a node contains with its other
+parts), its members, the declarations just before and just after it in its file (`CodebaseGraphQueries.Beside`, the
+outermost on each side), and its callers and callees as `node` groups them, each a section counted in its caption at
+`CodebaseGraphTool.NodeLinesAKind` a page. `impact` gives what a change of a node reaches, by the one walk of a change's
+impact the change-first pack leads with (`CodebaseContextPack.Impact`, over `CodebaseContextPack.Impacted`, the edges of
+`GraphRelations.Impact`) from the node and every other part of its declaration: each node it settles under the relation
+whose edge reached it - its callers at every distance, `overrides`, `overriddenBy`, `implementations`, `dispatchers`,
+`derived`, and its `tests` last, every test that reaches any of them - with how many edges its best path has and the path
+itself, each edge said as the pack says one (`CodebaseContextPack.Phrase`) with the node it leaves by its handle, nearest
+first and then best first, at `CodebaseGraphTool.RelatedLines` of each a page; a node the step may not read is neither
+listed nor gone through, only counted, and a hub is gone through, its many neighbours ranked down, never cut. `sites` answers "every place that decides this" of one datum
 (`data`: a symbol as `symbol` takes one - a handle, an id or a `path:line`, which names its one node, or a qualified or simple
 name - a key path, dotted - a name holding a dot or a bracket quoted in brackets, `Logging.LogLevel["Microsoft.AspNetCore"]`
 or `Logging.LogLevel['Microsoft.AspNetCore']`, or with its names' own dots as they are - or as .NET's configuration spells
@@ -6237,7 +6266,8 @@ under `could not be compared:` ahead of its other lines, never saying no declara
 declaration moved to another file said moved from where it was, a part of a type in each file it changed in listed
 for each, one taken out said as the base held it, whether or not another file still declares a part of it, and what
 went with its container said by the container alone - then their impact walked best first over
-`CodebaseContextPack.Impacted` - their tests, at full weight, under their own section, then their
+`CodebaseContextPack.Impacted` (`CodebaseContextPack.Impact`, the one walk of a change's impact, which the graph tool's
+`impact` answers too) - their tests, at full weight, under their own section, then their
 callers as far as they go, overrides both ways, implementations and dispatches, and derived types -
 then the task's seeds;
 its first line counts the lines the changes lead with, and with no base, its changes unread (and why, on one line:
@@ -6344,7 +6374,9 @@ page nor a range, its answer the file's numbered lines, so an outline given is n
 - the outlined reads (`outlinedReads`: how many, `tokens` what reading them whole would have cost, `outlineTokens` what
 the outlines given in their place cost) and escapes - are held in its `step.json` under `graph` and summed for the run's
 report (`FlowReports`).
-`query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
+`query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand - `--find`, `--node`, `--related`,
+`--outline` (a file the view holds; a path that names no node and is written as a file is, or is a directory the view holds
+files under; a symbol else), `--around`, `--impact`, `--body` and `--sites` - on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
 memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`: the credential slots,

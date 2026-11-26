@@ -296,8 +296,65 @@ public static class GraphRelations
     /// <summary>The elements and components a rule reaches: what is styled by it - the uses of the node where it is a rule, and nothing of any other node.</summary>
     public const string Styles = "styles";
 
+    /// <summary>The types the node is built on: those it inherits, implements or mixes in.</summary>
+    public const string Bases = "bases";
+
+    /// <summary>The members of a base type the node overrides.</summary>
+    public const string Overrides = "overrides";
+
+    /// <summary>The members that override the node.</summary>
+    public const string OverriddenBy = "overriddenBy";
+
+    /// <summary>The interface members that dispatch to the node: those it answers for its type.</summary>
+    public const string Dispatchers = "dispatchers";
+
+    /// <summary>What reads or writes the node, or names it, without calling it.</summary>
+    public const string Users = "users";
+
+    /// <summary>What the node reads or writes, or names, without calling it.</summary>
+    public const string Uses = "uses";
+
+    /// <summary>
+    /// The other parts of the node's declaration - a view and the type its <c>x:Class</c> names, a component and its
+    /// code-behind - which every other relation walks as the node itself.
+    /// </summary>
+    public const string Parts = "parts";
+
+    /// <summary>What the node, a test, exercises: each member it calls directly.</summary>
+    public const string Tested = "tested";
+
+    /// <summary>Every relation a <c>related</c> walk may follow, with what it reaches from a node, as the tool and its help say it: the one list of both.</summary>
+    public static IReadOnlyList<(string Name, string Meaning)> Described { get; } =
+    [
+        (Callers, "what calls it"),
+        (Callees, "what it calls"),
+        (Derived, "the types built on it"),
+        (Implementations, "what implements it or answers it for a type"),
+        (References, "what names or makes it"),
+        (Tests, "the tests that exercise it"),
+        (IncludedBy, "what imports it"),
+        (StyledBy, "the rules that style it"),
+        (Styles, "what a rule styles"),
+        (Bases, "the types it is built on"),
+        (Overrides, "what it overrides"),
+        (OverriddenBy, "what overrides it"),
+        (Dispatchers, "the interface members it answers"),
+        (Users, "what reads or writes it"),
+        (Uses, "what it reads or writes"),
+        (Parts, "the other parts of its declaration"),
+        (Tested, "what a test exercises"),
+    ];
+
     /// <summary>Every relation a <c>related</c> walk may follow.</summary>
-    public static IReadOnlyList<string> All { get; } = [Callers, Callees, Derived, Implementations, References, Tests, IncludedBy, StyledBy, Styles];
+    public static IReadOnlyList<string> All { get; } = [.. Described.Select(described => described.Name)];
+
+    /// <summary>
+    /// The relations a change of a node reaches what it reaches by, in the order its walk follows them
+    /// (<see cref="CodebaseContextPack.Impact"/>): its tests, its callers, what it overrides and what overrides it, its
+    /// implementations, the interface members that dispatch to it and the types derived from it - each from every node
+    /// reached, to the end of the walk.
+    /// </summary>
+    public static IReadOnlyList<string> Impact { get; } = [Tests, Callers, Overrides, OverriddenBy, Implementations, Dispatchers, Derived];
 
     /// <summary>The edges <paramref name="relation"/> follows: each kind, and which way from the node.</summary>
     /// <param name="relation">One of <see cref="All"/>.</param>
@@ -313,8 +370,23 @@ public static class GraphRelations
         IncludedBy => [(GraphSide.In, CodeEdgeKinds.Imports), (GraphSide.In, CodeEdgeKinds.ProjectReference)],
         StyledBy => [(GraphSide.Out, CodeEdgeKinds.Uses)],
         Styles => [(GraphSide.In, CodeEdgeKinds.Uses)],
+        Bases => [(GraphSide.Out, CodeEdgeKinds.Inherits), (GraphSide.Out, CodeEdgeKinds.Implements), (GraphSide.Out, CodeEdgeKinds.MixesIn)],
+        Overrides => [(GraphSide.Out, CodeEdgeKinds.Overrides)],
+        OverriddenBy => [(GraphSide.In, CodeEdgeKinds.Overrides)],
+        Dispatchers => [(GraphSide.In, CodeEdgeKinds.Dispatches)],
+        Users => [(GraphSide.In, CodeEdgeKinds.Uses)],
+        Uses => [(GraphSide.Out, CodeEdgeKinds.Uses)],
+        Parts => [(GraphSide.Out, CodeEdgeKinds.PartOf), (GraphSide.In, CodeEdgeKinds.PartOf)],
+        Tested => [(GraphSide.Out, CodeEdgeKinds.Tests)],
         _ => throw new ArgumentOutOfRangeException(nameof(relation), relation, "Not a relation a related walk follows."),
     };
+
+    /// <summary>
+    /// Whether a walk of <paramref name="relation"/> takes every other part of a node's declaration as the node itself, as
+    /// every relation does but <see cref="Parts"/>, which walks to those parts.
+    /// </summary>
+    /// <param name="relation">One of <see cref="All"/>.</param>
+    public static bool WalksPartsAsOne(string relation) => relation != Parts;
 
     /// <summary>
     /// The kind within a kind (<see cref="CodeSubKinds"/>) the node an edge <paramref name="relation"/> follows enters
@@ -336,6 +408,35 @@ public sealed record GraphStep(string To, GraphSide Side, string Kind, string Co
     /// <summary>Where the walk named this kind and side among those it follows, from 0.</summary>
     public int Order { get; init; }
 }
+
+/// <summary>
+/// One node a best-first walk settled (<see cref="CodebaseContextPack.Impact"/>, and the context pack's walk of its task):
+/// its best score, the source its best path began at, how many edges that path has, and the edge it ends with - so the
+/// whole path is read back from the nodes settled before it.
+/// </summary>
+/// <param name="Id">The node, by id.</param>
+/// <param name="Score">Its best score: its source's weight, carried on along the path.</param>
+/// <param name="Order">The order of the source its best path began at, from 0: what breaks a tie of scores first.</param>
+/// <param name="Hop">How many edges its best path has; 0 for a source.</param>
+public sealed record GraphWalked(string Id, double Score, int Order, int Hop)
+{
+    /// <summary>Why a source is one, as the line that names it says; null for a node the walk reached.</summary>
+    public string? Why { get; init; }
+
+    /// <summary>The edge its best path reached it by, followed from <see cref="From"/>; null for a source.</summary>
+    public GraphStep? By { get; init; }
+
+    /// <summary>The node <see cref="By"/> was followed from, by id - settled before it; null for a source.</summary>
+    public string? From { get; init; }
+}
+
+/// <summary>
+/// One declaration at the top of a file (<see cref="CodebaseGraphQueries.TopDeclarations"/>): a type or a member no type or
+/// member of the file holds, and what it and every declaration inside it exercise as tests.
+/// </summary>
+/// <param name="Card">The declaration, as its file declares it.</param>
+/// <param name="Tests">What it and the declarations inside it test, by the <c>tests</c> edges the link gave, each once.</param>
+public sealed record GraphTopDeclaration(GraphCard Card, IReadOnlyList<GraphCard> Tests);
 
 /// <summary>
 /// How near a node is to a step's own work, which breaks a tie between nodes <c>find</c> scores alike (part 08): a node of
