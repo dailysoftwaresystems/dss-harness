@@ -74,9 +74,53 @@ public sealed record CiCheckRun(string Name, string Status, string? Conclusion, 
     /// <summary>The status of a check run that has ended.</summary>
     public const string Completed = "completed";
 
+    /// <summary>The check run's own id, which its annotations are read by; null where the forge said none.</summary>
+    public long? Id { get; init; }
+
+    /// <summary>How many annotations the forge says the check run holds: the count its listing of them is held to.</summary>
+    public int Annotations { get; init; }
+
+    /// <summary>
+    /// The repository the check's workflow run is of, by its name alone, as the address a job points at names it - what
+    /// the job's workspace on its runner is named by; null for a check no workflow run made.
+    /// </summary>
+    public string? Repository { get; init; }
+
     /// <summary>What it came to, as <see cref="CiConclusions.Of"/> reads its conclusion; pending before it ended.</summary>
     public CiCheckState State
         => string.Equals(Status, Completed, StringComparison.Ordinal) ? CiConclusions.Of(Conclusion) : CiCheckState.Pending;
+}
+
+/// <summary>
+/// One annotation of a check run, as the forge keeps it: what a workflow wrote with <c>::error</c>, <c>::warning</c> or
+/// <c>::notice</c>, what a problem matcher a step registered made of a line it matched, or what the runner said of a step
+/// that failed - with its place where it names one, the path relative to the repository.
+/// </summary>
+/// <param name="Path">
+/// The file it names, relative to the repository, <c>/</c> its separator; null where it names none - the forge's own
+/// <c>.github</c>, which it writes for an annotation of no file.
+/// </param>
+/// <param name="StartLine">The first line it names; null where it names no file.</param>
+/// <param name="EndLine">The last line it names; null where it names no file.</param>
+/// <param name="StartColumn">The first column it names; null where it names none.</param>
+/// <param name="EndColumn">The last column it names; null where it names none.</param>
+/// <param name="Level"><c>failure</c>, <c>warning</c> or <c>notice</c>.</param>
+/// <param name="Title">Its title, where it was given one; null otherwise.</param>
+/// <param name="Message">Its message.</param>
+/// <param name="Details">The details it carries below its message, where it carries any; null otherwise.</param>
+public sealed record CiAnnotation(string? Path, int? StartLine, int? EndLine, int? StartColumn, int? EndColumn, string Level, string? Title, string Message, string? Details)
+{
+    /// <summary>The path the forge writes for an annotation that names no file.</summary>
+    public const string NoFile = ".github";
+
+    /// <summary>The severity a digest says it by: a <c>failure</c> is an error, a <c>warning</c> a warning, anything else a note.</summary>
+    public string Severity
+        => Level switch
+        {
+            "failure" => "error",
+            "warning" => "warning",
+            _ => "note",
+        };
 }
 
 /// <summary>One commit status the forge lists for a commit, the newest of its context.</summary>

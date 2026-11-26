@@ -201,7 +201,7 @@ public static class AgentTools
             },
             ["required"] = new JsonArray("query"),
             ["additionalProperties"] = false,
-        }.ToJsonString();
+        }.ToJsonString(AgentEnvelope.Written);
     }
 
     /// <summary>
@@ -222,7 +222,10 @@ public static class AgentTools
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)];
     }
 
-    /// <summary>An input's schema: an object of these members, each typed and said, the required ones required, nothing else taken.</summary>
+    /// <summary>
+    /// An input's schema: an object of these members, each typed and said, the required ones required, nothing else taken -
+    /// written as every JSON an agent's call carries is (<see cref="AgentEnvelope.Written"/>).
+    /// </summary>
     private static string Schema(params (string Name, string Type, string Description, bool Required)[] members)
     {
         var properties = new JsonObject();
@@ -240,6 +243,6 @@ public static class AgentTools
             ["properties"] = properties,
             ["required"] = new JsonArray([.. members.Where(member => member.Required).Select(member => (JsonNode)member.Name)]),
             ["additionalProperties"] = false,
-        }.ToJsonString();
+        }.ToJsonString(AgentEnvelope.Written);
     }
 }

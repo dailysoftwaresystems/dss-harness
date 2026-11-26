@@ -58,7 +58,9 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The workflows topic says what a leg step's red entry carries of the units its build failed - failedUnits, which the
-    /// output's schema declares - and that {run.red} says what the leg's line said of them.
+    /// output's schema declares - and that {run.red} says what the leg's line said of them, and what it carries of the
+    /// errors its phase printed - digest, the first four distinct said for a model with the rest counted, the tail then
+    /// holding only what no parser held.
     /// </summary>
     [Fact]
     public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsUnits()
@@ -76,9 +78,51 @@ public sealed partial class HelpTests
         foreach (var type in new[] { "build", "test", "run" })
         {
             Assert.Contains("\"failedUnits\":{\"type\":[\"object\",\"null\"]", WorkflowStepTypes.Find(type)!.Output, StringComparison.Ordinal);
+            Assert.Contains("\"digest\":", WorkflowStepTypes.Find(type)!.Output, StringComparison.Ordinal);
         }
 
         Assert.DoesNotContain("failedUnits", WorkflowStepTypes.Find("check-mutations")!.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic says what a red leg's entry carries of the errors its phase printed: digest, said for a
+    /// model - the first error whole with its stack rendered to its frames in the tree, the next distinct to four as
+    /// one line each, the rest counted by code and by file - and every line reaching a model once: the lines no parser
+    /// held said in the digest with how many it left out and no tail where it holds a problem, the tail whole and only
+    /// those the tail does not hold where it holds none; the ledger's --json keeps the whole digest typed, its bounds said, a red leg's
+    /// first error is said on {run.red}'s line and in a block below the text ledger's table, and the entry names the log
+    /// its digest's ranges number.
+    /// </summary>
+    [Fact]
+    public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsErrors()
+    {
+        var prose = Prose.Words(HelpText.Of("workflows").StandardOutput);
+
+        Assert.Contains(
+            "Each red leg's entry also carries, in digest, what the phase that did not pass printed, typed: the first error whole - its "
+                + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four as "
+                + "one line each, every test failure of the four with its stack, and the rest - what the four do not say - counted by "
+                + "code and by file, a count of none and an empty list left out; every line reaching a model once and none out of its reach: where the digest "
+                + "holds an error or a failure and the phase's log is one read away, it says the lines no parser held - the last 50, "
+                + "the nearest the failure, with how many it left out - and the entry's tail holds none, and otherwise - it holds "
+                + "neither, or no log of the phase is on this machine - the tail holds the phase's last lines whole and the digest says "
+                + "those lines no parser held that the tail does not; and in log, the log that phase wrote, whose lines the "
+                + "digest's ranges number as the file numbers them - the copy kept in the step's directory in an agent's worktree, "
+                + "else the run's own, a leg's a host ran brought back by its run as the leg ended - null only where a host's could "
+                + "not be brought back; the digest of a leg a host ran, made there, travels on its "
+                + "line. The ledger's --json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics "
+                + "of each severity, the first 50 failures and the last 50 lines no parser held, the rest counted, a stack held to its "
+                + "first 48 and last 16 frames with the cut counted - the text ledger says each red leg's first error in a block below "
+                + "its table, and {run.red} says it on its line. Where the run keeps a codebase graph of the tree the step's legs ran "
+                + "in, each red leg's digest is joined to it before the step's ledger is kept: each place inside the tree carries the "
+                + "declaration the graph holds enclosing it - its kind, its qualified name, its handle - the first error's as its "
+                + "symbol and each frame of a stack inside the tree with it in brackets after its line, where its file holds what its "
+                + "leg built, as the graph is asked and once it has answered: a leg in a copy built the tree as the copy was made of "
+                + "it, a leg in the tree itself the tree as it held it when the leg ended, and a place whose file was written since - "
+                + "a fold landing while the legs worked - carries none; a plain build, test or run "
+                + "command asks no graph, and its digest's symbols are null",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -200,10 +244,17 @@ public sealed partial class HelpTests
         // commands the publishing steps run, each with its own limit.
         Assert.Contains(
             "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
-                + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.",
+                + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing, "
+                + "as do {run.closure}, {run.claims}, {run.hotspots}, {run.reopened} and {run.counts}: of each item, the class record "
+                + "its newest class-closure check that ended done judged, whole, and each class's claim alone, the hotspots that check "
+                + "named, the classes its reviews reopened with how many rounds, as its newest routing counted them, and its counts - "
+                + "the rounds of review that routed it, each routing that ended done one round, its home audits, and of each class of "
+                + "that record the sites consolidated into its home (reads-home) and those deleted, the cells its pin covers "
+                + "(cellsPinned), the neighbours measured and those not, and how many rounds a review sent it back - a step known by "
+                + "its type, so no other step's closure member is read as an item's record, and an item no check judged has none.",
             workflows,
             StringComparison.Ordinal);
-        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "leftover", "notRun", "preExisting", "ran", "red"]);
+        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "claims", "closure", "counts", "hotspots", "leftover", "notRun", "preExisting", "ran", "red", "reopened"]);
         Assert.Contains(
             "push pushes the commit the run's commit steps recorded last, else the one the run started on - never what the branch "
                 + "names by then, which a hook or a build working in the main checkout could have moved - to the branch of the name "
@@ -318,6 +369,28 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The workflows topic says which check holds a round's items to the issues the run owes its next round, and what
+    /// settles one - an item that ends done with a commit of its own made, never one a person skipped - and where a
+    /// listed issue is shown.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowsTopic_SaysWhichCheckHoldsTheIssuesOwedTheNextRound_AndWhatSettlesOne()
+    {
+        Assert.Contains(
+            "in next-round.json, which run.nextRound reads as the issues no work item has settled, and the check that opens a round - "
+                + "a validate-plan the forEach beside it expands from, where that group runs in rounds, in an iteration of a repeat or as "
+                + "the group plan updates add a round to with no loop around it, and no other check - holds its "
+                + "items to: each issue named in an item's settles, none left unsettled, the settling items first, and the rounds going on "
+                + "while one is left - never holding the round the issue came from. A forEach item that names an issue in settles settles "
+                + "it once it ends done with a commit of its own made, whatever the run takes plan updates by, and next-round.json says "
+                + "which item did; one that ends done with nothing committed - an item a person skipped - settles nothing, and the issue "
+                + "stays owed. It lists the rest, proven, with a title and a description, in the run's pre-existing-issues.json, shown in "
+                + "the pull request's body and the handoff.",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows topic says what a workflow is, where it lives, what this build does with one and what it does not,
     /// and lists every key from the tables the reader itself reads - so what is listed is what is read.
     /// </summary>
@@ -336,7 +409,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
-                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, ci-read, ci-wait, fold, delete-agent, "
+                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, route-findings, ci-read, ci-wait, fold, delete-agent, "
                 + "refresh, rebase, commit, push, pull-request, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
@@ -499,12 +572,25 @@ public sealed partial class HelpTests
                 + "passed: the call cited or a later one for passed, one whose record was written after the failing call's for failed-fixed - "
                 + "or reasoned why not, every test of the pin declared, the arm one of the registry its "
                 + "worktree holds and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every "
-                + "planned axis and the claim naming each - and each home's touches since its base, the item's own commits left out, a record "
+                + "planned axis and the claim naming each, the arms the builder's answer lists for the item's own sweep (the step's arms) "
+                + "the arms the record names and no other, an id one arm however its case is written - and each home's touches since its "
+                + "base, the item's own commits left out, a record "
                 + "without a home audit refused where the home was touched by other work; a class's paths - the plan's and the record's, the "
                 + "paths changed, an arm's site and the touches - are read as the plan check reads them, either separator, and compared as this "
                 + "machine compares paths; a fold it cannot weigh fails it with the weighing's "
                 + "own code. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit "
-                + "makes), and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "makes - a home touched by other work, or a class the item's ledger says a review reopened a second time), and it answers "
+                + "passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "route-findings routes the review's findings by the class of each, keeping the item's ledger (closure-ledger.json in its "
+                + "agent's directory) of the rounds that reopened each class, a round counted once by the routing that made it however often "
+                + "that routing runs: every introduced finding - a defect the diff made - goes back in rework as itself, the reopened findings "
+                + "of one class go back as one send-back naming the class (reopenedClass) and the rounds that reopened it (rounds), carrying "
+                + "them all and graded by the worst of them, and a class reopened twice or more goes to homeAudit instead, for the next action "
+                + "is the home audit; it answers rework, homeAudit and reopened, the rounds per class. A reopened finding names a class of the "
+                + "item's - its classes' or its record's, exactly - and every finding is graded critical, high, medium, low, nit: each reviewer "
+                + "whose answer it routes is held to that at its own answer and asked again where it does not hold, and an answer that still "
+                + $"does not hold after its repairs fails the reviewer's step ({HarnessExit.CommandFailed}), as one its schema refuses does, "
+                + $"nothing routed; findings that reach the route unheld fail it ({HarnessExit.ConfigInvalid}), nothing routed. "
                 + "ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
                 + "in the main checkout where it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as "
                 + "check-ci-legs --json gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the "
@@ -517,7 +603,16 @@ public sealed partial class HelpTests
                 + $"({OrchestratorLayout.StepLogsDirectoryName}/<job>.<id>{PhaseLogs.Extension}, the job's id telling two of one name apart) "
                 + "given by reference in log, with how many lines it holds in lines and, in failing, the page of it where the job "
                 + "failed - the one holding its last line GitHub marks an error (##[error]), else its last page - each line by its number, "
-                + "both masked by the repository's runner secrets, and in unread why any of that could not be "
+                + "both masked by the repository's runner secrets; in digest, what the check digested to, said for a model as a leg's "
+                + "is: its annotations, read from the forge's check-runs API, each naming a file in its place, and its job's log, every "
+                + "line numbered as the kept log numbers it and read by every form a CI log holds - each finding said once, a problem "
+                + "matcher's line and its annotation one, a line the forge marked that no form read said among the lines no parser held - "
+                + "every file a tool on the runner named placed against the job's workspace there, <work>/<repository>/<repository>, "
+                + "read as the runner wrote it and named relative to it, a Go test's place - printed relative to its package's directory, "
+                + "which no file of the job's tells - left as printed; every line reaching a model once, as a leg's entry says them: "
+                + "where the digest holds an error or a failure, it says the lines no parser held and failing holds none, and where it "
+                + "holds neither, failing is the page whole and the digest says those lines no parser held that the page does not; and in unread why "
+                + "any of that could not be "
                 + "read; every check ended green - success, neutral or skipped - on two reads running that found the same checks, at its "
                 + "wait's end on the last alone, passes it; and no check within "
                 + $"appearSeconds ({CiChecksRequest.DefaultAppearSeconds}) - or waitMinutes where that is shorter - checks still running at waitMinutes ({CiChecksRequest.DefaultWaitMinutes}) "
@@ -541,10 +636,41 @@ public sealed partial class HelpTests
             "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree of the agent "
                 + "their in names, else the main checkout: test with its filter, exclude and labels and run with its inputs - a filter, "
                 + "an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, every arm the registry "
-                + "declares where it names none, and pending. Each answers passed, true where every leg passed; exitCode, the command's; "
+                + "declares where it names none, or those its arms expression yielded - the item's own, from the record its builder "
+                + "answered - and none where it yielded none, the step done and its swept saying so, no leg asked; and pending. A sweep "
+                + "whose base names a commit - a template naming one, or 'item', the newest commit the run's ledger gives the item the "
+                + "step is one of that a commit made - runs on a copy of that commit, made and taken away under the main tree's lock by "
+                + "the one owner of such copies: a copy an earlier attempt left at its path - a stop, a pause, a crash - is taken away "
+                + "before it is made again, one a stop cut off is taken away all the same, and its copy says the copy's path and what "
+                + "could not be taken away (left); it holds no tree while it sweeps, so other items folding into the main tree never "
+                + "move the bytes under it nor wait for it; an item whose ledger holds no commit that was made, and a base that named "
+                + "nothing as the step started, are refused, nothing swept; and 'item' is refused where the file is read in a step no "
+                + "forEach holds, a forEach that uses its file among them. Each answers passed, true where every leg passed; exitCode, the command's; "
                 + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
-                + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
-                + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. What "
+                + "line and, in tail, what it printed that its digest does not say, and of a sweep each arm that violated, survived or was unattributed, with its arm "
+                + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. Each "
+                + "red leg's entry also carries, in digest, what the phase that did not pass printed, typed: the first error whole - its "
+                + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four "
+                + "as one line each, every test failure of the four with its stack, and the rest - what the four do not say - counted "
+                + "by code and by file, a count of none and an empty list left out; every line reaching a model once and none out of its reach: where the digest "
+                + "holds an error or a failure and the phase's log is one read away, it says the lines no parser held - the last 50, "
+                + "the nearest the failure, with how many it left out - and the entry's tail holds none, and otherwise - it holds "
+                + "neither, or no log of the phase is on this machine - the tail holds the phase's last lines whole and the digest says "
+                + "those lines no parser held that the tail does not; and in log, the log that phase wrote, whose lines the "
+                + "digest's ranges number as the file numbers them - the copy kept in the step's directory in an agent's worktree, "
+                + "else the run's own, a leg's a host ran brought back by its run as the leg ended - null only where a host's could "
+                + "not be brought back; the digest of a leg a host ran, made there, travels on its "
+                + "line. The ledger's --json keeps the digest typed for a reader that asks, its bounds said - the first 50 diagnostics "
+                + "of each severity, the first 50 failures and the last 50 lines no parser held, the rest counted, a stack held to its "
+                + "first 48 and last 16 frames with the cut counted - the text ledger says each red leg's first error in a block below "
+                + "its table, and {run.red} says it on its line. Where the run keeps a codebase graph of the tree the step's legs ran "
+                + "in, each red leg's digest is joined to it before the step's ledger is kept: each place inside the tree carries the "
+                + "declaration the graph holds enclosing it - its kind, its qualified name, its handle - the first error's as its "
+                + "symbol and each frame of a stack inside the tree with it in brackets after its line, where its file holds what its "
+                + "leg built, as the graph is asked and once it has answered: a leg in a copy built the tree as the copy was made of "
+                + "it, a leg in the tree itself the tree as it held it when the leg ended, and a place whose file was written since - "
+                + "a fold landing while the legs worked - carries none; a plain build, test or run "
+                + "command asks no graph, and its digest's symbols are null. What "
                 + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
                 + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "
                 + "agent-clients'); where this machine has none, agentPolicy.isolation required fails the step "
@@ -555,8 +681,11 @@ public sealed partial class HelpTests
                 + "the tree holds write on it, and its legs work in the tree itself. A leg run refused part way, cut off, or ended with a "
                 + "leg it placed left with no line ends the step with the run's own code; one its legs ended - none could run, another "
                 + "run owns its records - is read by their verdicts. The step keeps the ledger in its directory "
-                + $"({OrchestratorLayout.StepLedgerFileName}) and, in an agent's worktree, the log of each red leg's phase that did not "
-                + "pass, whole, where this machine ran the leg "
+                + $"({OrchestratorLayout.StepLedgerFileName}) - written as its legs' run begins, naming the run and its records, and "
+                + "again as each leg ends, so a crash while they work is read where their work stopped (a write of it the file system "
+                + "refuses while they work is said once, and they work on: the write as their run ends is the one that must succeed) - "
+                + "and, in an agent's worktree, "
+                + "the log of each red leg's phase that did not pass, whole, as it is on this machine "
                 + $"({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, the phase named as its log is), "
                 + "each attempt's own.",
             prose,

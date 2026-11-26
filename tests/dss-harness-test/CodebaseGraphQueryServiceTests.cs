@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Nodes;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
@@ -189,18 +189,19 @@ public sealed class CodebaseGraphQueryServiceTests
         var second = await CliRunner.RunAsync(["query-codebase-graph", "run", "--find", "M", "--page", "2", "--json", "-C", tree.Tree], Token);
         var third = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 3 }, json: true, Token);
         var fourth = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 4 }, json: true, Token);
-        var past = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 5 }, json: true, Token);
+        var fifth = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 5 }, json: true, Token);
+        var past = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 6 }, json: true, Token);
         var before = await CliRunner.RunAsync(["query-codebase-graph", "run", "--find", "M", "--page", "0", "-C", tree.Tree], Token);
-        var pages = new[] { JsonNode.Parse(Assert.Single(first.Data))!.AsObject(), JsonNode.Parse(second.StandardOutput)!.AsObject(), JsonNode.Parse(Assert.Single(third.Data))!.AsObject(), JsonNode.Parse(Assert.Single(fourth.Data))!.AsObject() };
+        var pages = new[] { JsonNode.Parse(Assert.Single(first.Data))!.AsObject(), JsonNode.Parse(second.StandardOutput)!.AsObject(), JsonNode.Parse(Assert.Single(third.Data))!.AsObject(), JsonNode.Parse(Assert.Single(fourth.Data))!.AsObject(), JsonNode.Parse(Assert.Single(fifth.Data))!.AsObject() };
         var pastDocument = JsonNode.Parse(Assert.Single(past.Data))!.AsObject();
 
         Assert.Equal(HarnessExit.Success, outline.ExitCode);
         Assert.StartsWith("outline of src/Shapes.cs (6 declaration(s)):\n", Assert.Single(outline.Data), StringComparison.Ordinal);
-        Assert.Equal("page 1 of 4 · 79 results · ask again with page: 2 for the next", Assert.Single(text.Data).Split('\n')[0]);
+        Assert.Equal("page 1 of 5 · 82 results · ask again with page: 2 for the next", Assert.Single(text.Data).Split('\n')[0]);
         Assert.Equal(Assert.Single(text.Data), pages[0]["answer"]!.GetValue<string>());
         Assert.Equal(0, second.ExitCode);
-        Assert.Equal(["page 2 of 4 · 79 results · ask again with page: 3 for the next", "page 3 of 4 · 79 results · ask again with page: 4 for the next", "page 4 of 4 · the last"], pages[1..].Select(page => page["answer"]!.GetValue<string>().Split('\n')[0]));
-        Assert.Equal([(1, 4, 79, graph), (2, 4, 79, graph), (3, 4, 79, graph), (4, 4, 79, graph)], pages.Select(page => (page["page"]!.GetValue<int>(), page["pages"]!.GetValue<int>(), page["total"]!.GetValue<int>(), page["graph"]!.GetValue<string>())));
+        Assert.Equal(["page 2 of 5 · 82 results · ask again with page: 3 for the next", "page 3 of 5 · 82 results · ask again with page: 4 for the next", "page 4 of 5 · 82 results · ask again with page: 5 for the next", "page 5 of 5 · the last"], pages[1..].Select(page => page["answer"]!.GetValue<string>().Split('\n')[0]));
+        Assert.Equal([(1, 5, 82, graph), (2, 5, 82, graph), (3, 5, 82, graph), (4, 5, 82, graph), (5, 5, 82, graph)], pages.Select(page => (page["page"]!.GetValue<int>(), page["pages"]!.GetValue<int>(), page["total"]!.GetValue<int>(), page["graph"]!.GetValue<string>())));
 
         // A page's entries are its answer's lines past the header, each with what it counts; summed over the pages, the total.
         foreach (var page in pages)
@@ -211,7 +212,7 @@ public sealed class CodebaseGraphQueryServiceTests
             Assert.Equal(page["answer"]!.GetValue<string>().Split('\n')[1..], entries.Select(entry => entry["text"]!.GetValue<string>()));
         }
 
-        Assert.Equal(79, pages.Sum(page => page["entries"]!.AsArray().Sum(entry => entry!["counts"]!.GetValue<int>())));
+        Assert.Equal(82, pages.Sum(page => page["entries"]!.AsArray().Sum(entry => entry!["counts"]!.GetValue<int>())));
 
         // A body's head says something and counts nothing; each line it serves counts one, all of them the node's.
         var body = JsonNode.Parse(Assert.Single((await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Body = ["Twice"] }, json: true, Token)).Data))!.AsObject();
@@ -220,8 +221,8 @@ public sealed class CodebaseGraphQueryServiceTests
             [(0, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)")],
             body["entries"]!.AsArray().Select(entry => (entry!["counts"]!.GetValue<int>(), entry["node"]!.GetValue<string>())));
         Assert.Equal(4, body["total"]!.GetValue<int>());
-        Assert.Equal((HarnessExit.UsageError, "page 5 of 'find M': it has 4 pages (1 to 4)"), (past.ExitCode, past.Message));
-        Assert.Equal((5, 4, 79, graph), (pastDocument["page"]!.GetValue<int>(), pastDocument["pages"]!.GetValue<int>(), pastDocument["total"]!.GetValue<int>(), pastDocument["graph"]!.GetValue<string>()));
+        Assert.Equal((HarnessExit.UsageError, "page 6 of 'find M': it has 5 pages (1 to 5)"), (past.ExitCode, past.Message));
+        Assert.Equal((6, 5, 82, graph), (pastDocument["page"]!.GetValue<int>(), pastDocument["pages"]!.GetValue<int>(), pastDocument["total"]!.GetValue<int>(), pastDocument["graph"]!.GetValue<string>()));
         Assert.Empty(pastDocument["entries"]!.AsArray());
         Assert.Equal((HarnessExit.UsageError, $"{CodebaseGraphQueryService.CommandName}: FAIL - page is 0: pages start at 1"), (before.ExitCode, before.StandardError.Trim()));
     }
@@ -489,6 +490,28 @@ public sealed class CodebaseGraphQueryServiceTests
     }
 
     /// <summary>
+    /// The command's own help says what its --sites option takes - a key path dotted, a name holding a dot or a bracket
+    /// quoted in brackets in either quote mark or its names' dots as they are, or a path as .NET's configuration writes
+    /// one - as the graph's help does, so a later wording change to the option is held.
+    /// </summary>
+    [Fact]
+    public async Task TheCommandsSitesOption_SaysTheDatumFormsItTakes()
+    {
+        var help = await CliRunner.RunAsync([CodebaseGraphQueryService.CommandName, "--help"], Token);
+
+        Assert.Equal(HarnessExit.Success, help.ExitCode);
+        Assert.Contains(
+            Prose.Words(
+                "Every place that decides data - a name, a key path (dotted - a name holding a dot or a bracket quoted in "
+                + "brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as "
+                + ".NET's configuration writes one: A:B, A__B), a diagnostic id, or a quoted literal asked by its value "
+                + "alone: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal "
+                + "that holds it and every key it names, with the coverage lines."),
+            Prose.Words(help.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every read operation runs on an agent's view - a body read from the agent's worktree, as it holds the file - and none
     /// writes anything of the graph.
     /// </summary>
@@ -526,7 +549,7 @@ public sealed class CodebaseGraphQueryServiceTests
         Assert.Contains($"find - the nodes a query's words match, best first, generated code after every other, a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id, {CodebaseGraphTool.FindLines} a page;", topic, StringComparison.Ordinal);
         Assert.Contains($"no answer of a read is cut: each is pages of whole entries (GraphPages), every page's entries within {CodebaseGraphTool.MostCharacters} characters less what the pages reserve - an entry wider than that given in pieces, a page each, each marked with … where it goes on - and a block's head on the page that serves its first line; an answer of more than one page starts with the line 'page k of n', which gives the exact total and how to ask for the next on every page but the last, which says it is the last, and any page is asked with page, from 1, an answer with no header holding all of it; a page past the last is refused with the answer's range, and the totals a header says are counted, never estimated. An edit's answer and a wholeFile's are one page, said once it is done, and neither takes page.", topic, StringComparison.Ordinal);
         Assert.Contains("A step whose graph is tools is offered the tool - the API clients among their own, Claude Code through the engine's tool server - with the read operations, wholeFile only where its reads are narrowed and edit only on the API clients (the probe measured Claude Code takes an Edit after a ranged Read, so an agent that means to change a body reads its lines and Edits them), its schema naming those alone, and query-codebase-graph below runs its read operations by hand.", topic, StringComparison.Ordinal);
-        Assert.Contains($"The run's repository map is the tree at a glance: a header line - the commit it is of, how many files and declarations the graph holds, and that the graph tool answers for the tree as it is now - the projects and top directories with their counts, then the most central declarations one line each as find gives it, a declaration's centrality the number of files other than its own and a test's whose references bind to it, raised by how its name matches the run's task as find weighs a name's words - the share of the task's words its name holds whole, each weighed by how often the task says it and how rare it is among the view's names, a name that holds them all raised as far as {DssHarness.Core.Codebase.CodebaseGraphQueries.TaskRaise} more such files would raise it - no declaration of a file that declares a test and nothing generated. It is made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept in map.md (map-<a digest of the read rules>.md for steps whose read rules narrow them) with what it was made from in map.json under the run's graph, made under its own lock so steps that start together keep one, and never made again in the run, a resumed run included - the base moves as folds land and the map does not - cut at whole lines under codebaseGraph.mapTokens ({DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMapTokens} by default; 0 gives no map); one that cannot be made or read is said, and the step goes on without it. Every launch of a step that has a graph that begins a conversation of its own is given it as the <repository-map> part ahead of its context pack, the same bytes for every step that reads alike, so a client that caches a prefix reads it from the cache ('help agent-clients' says where each client sets its marks). A launch that goes on with a stored conversation on the API clients is told, in its one new user message, <codebase-changes> instead: the declarations its view changed since what that conversation was told of them - its pack and every delta after it - moved or changed with their new range and hash, removed - and the nodes of its own pack the conversation was not given, every one, told in pages of the step's graphPromptTokens, page 1 in the message and each later page by graph's changes with page, a page never too small to hold its first and last lines and a line; never a map or a pack again whole, for a conversation's prefix is never changed, and no earlier message, tool result, map or pack is ever sent changed. A launch the walk of the step's order moves to another client or provider begins a conversation of its own, and is given the map and its own pack, as Claude Code, whose every launch begins one, is. Each launch's first message is a line of the step's graph.jsonl - what of the graph it was given and what that cost, or why it was given no pack - and the step's figures are its last launch's.", topic, StringComparison.Ordinal);
+        Assert.Contains($"The run's repository map is the tree at a glance: a header line - the commit it is of, how many files and declarations the graph holds, and that the graph tool answers for the tree as it is now - the projects and top directories with their counts, then the most central declarations one line each as find gives it, a declaration's centrality the number of files other than its own and a test's whose references bind to it, raised by how its name matches the run's task as find weighs a name's words - the share of the task's words its name holds whole, each weighed by how often the task says it and how rare it is among the view's names, a name that holds them all raised as far as {DssHarness.Core.Codebase.CodebaseGraphQueries.TaskRaise} more such files would raise it - no declaration of a file that declares a test and nothing generated. It is made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept whole in pages in map.md with the pages after it in map.2.md and on (map-<a digest of the read rules>.md and on for steps whose read rules narrow them) with what it was made from in map.json under the run's graph, made under its own lock so steps that start together keep one, and never made again in the run, a resumed run included - the base moves as folds land and the map does not - paged at whole lines under codebaseGraph.mapTokens ({DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMapTokens} by default; 0 gives no map), no line dropped: page 1 holds the header and the whole lines that fit that size, and ends, where more pages follow, with a line naming which page of how many - what a kept map's count is read from - and the pages after it are asked of the graph tool's map where they go on past it - the one wording of that line serving every step of the map's ground of reads, with the tool and without it, for the map is one file every step of the ground reads. One that cannot be made or read is said, and the step goes on without it. Every launch of a step that has a graph that begins a conversation of its own is given it as the <repository-map> part ahead of its context pack, the same bytes for every step that reads alike, so a client that caches a prefix reads it from the cache ('help agent-clients' says where each client sets its marks). A launch that goes on with a stored conversation on the API clients is told, in its one new user message, <codebase-changes> instead: the declarations its view changed since what that conversation was told of them - its pack and every delta after it - moved or changed with their new range and hash, removed - and the nodes of its own pack the conversation was not given, every one, told in pages of the step's graphPromptTokens, page 1 in the message and each later page by graph's changes with page, a page never too small to hold its first and last lines and a line; never a map or a pack again whole, for a conversation's prefix is never changed, and no earlier message, tool result, map or pack is ever sent changed. A launch the walk of the step's order moves to another client or provider begins a conversation of its own, and is given the map and its own pack, as Claude Code, whose every launch begins one, is. Each launch's first message is a line of the step's graph.jsonl - what of the graph it was given and what that cost, or why it was given no pack - and the step's figures are its last launch's.", topic, StringComparison.Ordinal);
         Assert.Contains($"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand - --find <query>, --node <symbol>, --related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>], --body <symbol>... or --sites <data>, any of them with --page <n> - on the run's graph", topic, StringComparison.Ordinal);
         Assert.Contains("--json the same in one document holding the digest of the graph answered from, the page, the pages, the whole answer's total and the page's entries, each with what it counts toward the total, its section's caption and its node. Each call counts its page on the graph as it stands, keeping nothing: a script that reads page after page compares the digest to know they are of one graph.", topic, StringComparison.Ordinal);
         Assert.Contains($"It ends 0, {HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.", topic, StringComparison.Ordinal);
@@ -537,7 +560,7 @@ public sealed class CodebaseGraphQueryServiceTests
         Assert.Contains(
             string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
-                $"mapTokens the cap of each of the run's repository maps - made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept in map.md (map-<a digest of the read rules>.md for steps whose read rules narrow them) under the run's graph, and read as it is by every step of that ground after - from 0 to {DssHarness.Core.Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens; 0 asks for no map; absent, {DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMapTokens:N0}"),
+                $"mapTokens the size of a page of each of the run's repository maps - made once for each ground of reads the run's steps share - steps whose read rules are the same share one, and no map lists a declaration of a file its steps may not read - from the base as it stands when the first graphed reason step of that ground is given its prompt, kept whole in pages in map.md with the pages after it in map.2.md and on (map-<a digest of the read rules>.md and on for steps whose read rules narrow them) under the run's graph, and read as it is by every step of that ground after, no line dropped: the pages after the first kept with it - from 0 to {DssHarness.Core.Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens; 0 asks for no map; absent, {DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMapTokens:N0}"),
             topic,
             StringComparison.Ordinal);
     }

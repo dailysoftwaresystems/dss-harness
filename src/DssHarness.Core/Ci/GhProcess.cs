@@ -33,7 +33,11 @@ namespace DssHarness.Core.Ci;
 /// The variables it starts without; asked of git through <paramref name="processRunner"/> where none is given.
 /// </param>
 /// <param name="environment">Reads this process's environment; the process's own where none is given.</param>
-public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? localVariables = null, Func<string, string?>? environment = null)
+/// <param name="output">
+/// Where what a stop of the forge's tool, or of the git it asks first, could not reach or end is said, under the tool's own
+/// name (<see cref="UnreachedSaying"/>); nowhere where none is given.
+/// </param>
+public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? localVariables = null, Func<string, string?>? environment = null, IHarnessOutput? output = null)
 {
     /// <summary>The forge's command line. The one dependency, and there is no fallback to a second.</summary>
     public const string Executable = "gh";
@@ -239,7 +243,8 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
         }
 
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-        await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
+        Action<string> say = line => output?.Warn(Executable, line);
+        await _localVariables.ClearAsync(environment, say, cancellationToken).ConfigureAwait(false);
 
         UnattendedCommands.Apply(environment);
 
@@ -263,7 +268,7 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
                 Environment = environment,
                 Timeout = budget,
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken).SayingUnreached($"'{Executable} {string.Join(' ', arguments)}'", say).ConfigureAwait(false);
 
         if (result.TimedOut)
         {

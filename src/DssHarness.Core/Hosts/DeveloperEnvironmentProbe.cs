@@ -148,7 +148,7 @@ public sealed class DeveloperEnvironmentProbe(
                             FileName = vswhere,
                             Arguments = [environment.ToolsVersion is null ? "-latest" : "-sort", "-products", "*", "-requires", environment.RequiresComponent, "-format", "json", "-utf8"],
                         },
-                        token),
+                        token).SayingUnreached($"'{vswhere}'", line => _output?.Warn(DeveloperEnvironmentProvider.CommandName, line)),
                     $"'{vswhere}' to list the Visual Studio instances",
                     ProgramWait.Told(_output, DeveloperEnvironmentProvider.CommandName),
                     _clock,

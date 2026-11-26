@@ -91,14 +91,14 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
 
 /// <summary>
 /// A step's context pack: its page 1 - the text given at the head of its first message - what it was made of, and the
-/// pages after it, laid from the same walk as they are asked for (<see cref="Page"/>).
+/// pages after it, laid once whole from the same walk as the pack was (<see cref="Page"/>).
 /// </summary>
 /// <param name="Text">Page 1, line by line: its first line, the nodes, its last line; empty where the pack's page size is 0, or too small to hold its first and last lines.</param>
 /// <param name="Seeds">The nodes it was seeded from, each once, with why: what the step's records say it started from.</param>
 /// <param name="Nodes">The nodes page 1 lists, by id, each once, in the order it lists them.</param>
 /// <param name="Lines">Each line page 1 lists a node or a declaration taken out by, in order, as it writes it: what a delta gives of the pack a conversation was not given.</param>
 /// <param name="Tokens">Page 1's estimated tokens (<see cref="EstimatedTokens"/>).</param>
-/// <param name="Refused">How many nodes the step's read rule left out of the walk that page 1 was laid from.</param>
+/// <param name="Refused">How many nodes the step's read rule left out of the walk the pack was laid from, whole.</param>
 /// <param name="Near">How near each node is to the step's work, which the <c>graph</c> tool's <c>find</c> breaks a tie by.</param>
 public sealed record ContextPack(string Text, IReadOnlyList<ContextPackSeed> Seeds, IReadOnlyList<string> Nodes, IReadOnlyList<ContextPackLine> Lines, int Tokens, int Refused, GraphNearness Near)
 {
@@ -109,14 +109,14 @@ public sealed record ContextPack(string Text, IReadOnlyList<ContextPackSeed> See
     public bool More => Paged?.Page(1) is { Last: false };
 
     /// <summary>
-    /// Page <paramref name="page"/> of the pack, from 1: laid by going on with the walk page 1 was laid from, as far as it
-    /// needs; null where the pack ends before it, or has no page at all.
+    /// Page <paramref name="page"/> of the pack, from 1: laid with the pack, whole, when it was made - every page's last
+    /// line naming the total - and read from what was laid; null where the pack ends before it, or has no page at all.
     /// </summary>
     /// <param name="page">The page asked, from 1.</param>
     public GraphTextPage? Page(int page) => Paged?.Page(page);
 
-    /// <summary>How many pages the pack holds, where every one is laid; null while it may go on past those laid.</summary>
-    public int? Pages => Paged?.Known;
+    /// <summary>How many pages the pack holds; null where it has none.</summary>
+    public int? Pages => Paged?.Count;
 }
 
 /// <summary>One line of a pack that lists a node, or a declaration taken out.</summary>
@@ -157,8 +157,8 @@ public static class EstimatedTokens
 /// (<see cref="ContextPackRequest.Closure"/>, each site's declaration at the weight of a named symbol, its file's at a
 /// named file's where it names none the file carries), the working sets it is given, the declarations of the files its
 /// <c>writes</c> covers and every node its words match, each weighed by how well it matches. From all of them at once a
-/// walk goes best first over the edges <see cref="Walked"/> names, as far as the pages asked for need and with no count
-/// of hops: each node is reached once, at its best score - its seed's weight halved at each edge, weighed by the edge's
+/// walk goes best first over the edges <see cref="Walked"/> names, whole and with no count of hops: each node is reached
+/// once, at its best score - its seed's weight halved at each edge, weighed by the edge's
 /// confidence and shared among the neighbours of its kind the node it was reached from has, so a hub is gone through and
 /// its many neighbours are ranked down by how many they are, never cut. Under <see cref="ContextPackFrom.Changes"/> the
 /// declarations the work changed lead, then their impact set walked the same way from them - their tests first - then
@@ -217,7 +217,7 @@ public static partial class CodebaseContextPack
     /// <summary>
     /// The edges a change's impact set is walked over from the declarations it changed: their tests, their callers, the
     /// members they override and that override them, their implementations and what dispatches to them, and their
-    /// derived types - each from the node reached, as far as the pages asked for need.
+    /// derived types - each from the node reached, to the end of the walk.
     /// </summary>
     public static IReadOnlyList<(GraphSide Side, string Kind)> Impacted { get; } =
     [
@@ -230,7 +230,7 @@ public static partial class CodebaseContextPack
         .. GraphRelations.Edges(GraphRelations.Derived),
     ];
 
-    /// <summary>Makes the pack of <paramref name="request"/> from <paramref name="queries"/>' view: its page 1, and the rest as it is asked for.</summary>
+    /// <summary>Makes the pack of <paramref name="request"/> from <paramref name="queries"/>' view: its page 1, and the rest laid once whole with it.</summary>
     /// <param name="queries">The step's view, synced at its start.</param>
     /// <param name="request">The step's filled prompt and what it says of its work.</param>
     public static ContextPack Make(CodebaseGraphQueries queries, ContextPackRequest request)
@@ -294,7 +294,7 @@ public static partial class CodebaseContextPack
     /// </summary>
     private static double Carried(string kind, bool impact) => impact && string.Equals(kind, CodeEdgeKinds.Tests, StringComparison.Ordinal) ? 1 : 0.5;
 
-    /// <summary>The making of one pack: its seeds, its walks, and its pages, laid as they are asked for.</summary>
+    /// <summary>The making of one pack: its seeds, its walks, and its pages, laid once whole.</summary>
     private sealed class Packing(CodebaseGraphQueries queries, ContextPackRequest request)
     {
         private readonly HashSet<string> _refused = new(StringComparer.Ordinal);
@@ -319,6 +319,9 @@ public static partial class CodebaseContextPack
             _taskCaption = changed is { Lines.Count: > 0 } ? "the task:" : null;
 
             List<ContextPackSeed> seeds = [.. _seeded.Values.OrderBy(seed => seed.Order).Select(seed => new ContextPackSeed(seed.Id, seed.Why))];
+
+            // The pack is laid whole as it is made: every page's last line names the total, exact on every page and not
+            // only the last, and no later ask lays anything again.
             var page = request.Tokens == 0 ? null : new GraphTextPages(Lines(uncompared, changed), request.Tokens, number => number == 1 ? first : $"codebase graph: context pack page {Number(number)}", Last, ByFile);
             var one = page?.Page(1);
             List<string> nodes = [.. (one?.Lines ?? []).Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
@@ -339,7 +342,7 @@ public static partial class CodebaseContextPack
         }
 
         /// <summary>
-        /// Every line of the pack, in the order its pages give them, read as far as the pages asked for need: each differing
+        /// Every line of the pack, in the order its pages give them, read to the end of the walk: each differing
         /// file that could not be compared, then the declarations the work changed, then their impact set best first, then
         /// what the task gives best first - each node listed once, by the first that reaches it.
         /// </summary>
@@ -846,21 +849,21 @@ public static partial class CodebaseContextPack
 
         /// <summary>
         /// A page's last line: how many nodes it lists and its tokens of the page's size, and where the pack goes on - nothing
-        /// left out where it is one page; else which page, and how to ask for the next, or that it is the last - and how many
-        /// nodes the read rule left out of the walk so far, or in all on the last.
+        /// left out where it is one page; else which page of how many, and how to ask for the next, or that it is the last -
+        /// and how many nodes the read rule left out of the walk, its whole count on every page, for every line is laid
+        /// before any page is written.
         /// </summary>
         private string Last(GraphTextPageEnd end)
         {
             var nodes = end.Lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal).Count();
+            var of = $"context pack page {Number(end.Page)} of {Number(end.Pages)}";
             var where = end is { Last: true, Page: 1 } ? "nothing left out"
-                : end.Last ? $"context pack page {Number(end.Page)} of {Number(end.Pages!.Value)} · the last"
-                : request.Asks ? $"context pack page {Number(end.Page)} · ask graph for pack with page: {Number(end.Page + 1)} for the next"
-                : $"context pack page {Number(end.Page)} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
+                : end.Last ? $"{of} · the last"
+                : request.Asks ? $"{of} · ask graph for pack with page: {Number(end.Page + 1)} for the next"
+                : $"{of} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
             var line = $"{ReportText.Counted(nodes, "node")}, ~{Number(end.Tokens)} of {Number(request.Tokens)} tokens; {where}";
 
-            return _refused.Count == 0 ? line
-                : end.Last ? $"{line}; {Number(_refused.Count)} in files the step may not read left out"
-                : $"{line}; {Number(_refused.Count)} so far in files the step may not read left out";
+            return _refused.Count == 0 ? line : $"{line}; {Number(_refused.Count)} in files the step may not read left out";
         }
 
         /// <summary>Whether the step may read <paramref name="card"/>'s file, a node it may not counted as left out.</summary>

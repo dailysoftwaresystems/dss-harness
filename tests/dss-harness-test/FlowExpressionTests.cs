@@ -568,6 +568,28 @@ public sealed class FlowExpressionTests
     }
 
     /// <summary>
+    /// A list or an object fills a template as JSON escaped only where JSON must: a text inside it reaches the prompt as
+    /// it was written - an apostrophe, angle brackets, an ampersand, a word in another script - and a quote or a
+    /// backslash as JSON escapes them - at whatever depth it nests.
+    /// </summary>
+    [Fact]
+    public void AListFillsATemplate_AsJsonWithItsTextsAsWritten()
+    {
+        var value = FlowValue.Of(new JsonArray("item 'one''s class <b> & ação", "a \"quote\" and a \\ back"));
+
+        Assert.Equal("""["item 'one''s class <b> & ação","a \"quote\" and a \\ back"]""", value.AsTemplateText());
+
+        JsonNode deep = new JsonArray("x");
+
+        for (var level = 1; level < 2000; level++)
+        {
+            deep = new JsonArray(deep);
+        }
+
+        Assert.Equal(new string('[', 2000) + "\"x\"" + new string(']', 2000), FlowValue.Of(deep).AsTemplateText());
+    }
+
+    /// <summary>
     /// A value is the run's own copy: the JSON it was made of can change after and the value does not, and the list it
     /// hands out is a copy, so nothing that holds one - a step's runner given its work item among them - changes what
     /// another reads.

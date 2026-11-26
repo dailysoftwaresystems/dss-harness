@@ -41,8 +41,33 @@ public static partial class HelpTopics
         builder.AppendLine("                 machine) and maxParallelLegsTotal (the whole fleet), default project,");
         builder.AppendLine("                 localCopy, where this machine's own legs work for every leg at once");
         builder.AppendLine("                 ('help legs'), stallSeconds, the stall bound nothing more specific replaces");
-        builder.AppendLine("                 ('help runners'), and admission, how heavy legs share a machine");
-        builder.AppendLine("                 ('help admission')");
+        builder.AppendLine("                 ('help runners'), admission, how heavy legs share a machine");
+        builder.AppendLine("                 ('help admission'), and report, the thresholds a run report's");
+        builder.AppendLine("                 signals are computed by ('help orchestrators'):");
+
+        foreach (var (key, shipped, takes) in Orchestration.Flow.FlowReportThresholds.Keys)
+        {
+            builder.AppendLine($"                   {key}: {takes}, {shipped} where none is given");
+        }
+
+        builder.AppendLine("  results        matchers: a problem matcher for any other tool, in the shape editors");
+        builder.AppendLine("                 and CI take, so its output is digested as every tool's is - name,");
+        builder.AppendLine("                 unique, the tool its diagnostics name; pattern, a regex; severity,");
+        builder.AppendLine("                 error, warning or note, or a group of the pattern whose text is read");
+        builder.AppendLine("                 as editors read it (warn a warning; info, hint and notice a note;");
+        builder.AppendLine("                 anything else an error), error where it is left out; file, line,");
+        builder.AppendLine("                 column, code and message, the groups holding each, the whole match");
+        builder.AppendLine("                 the message where none is named; end, the pattern of the last line");
+        builder.AppendLine("                 of a diagnostic that runs on past its match; and stack, where the");
+        builder.AppendLine("                 tool prints a chain under it - frame, a pattern naming a frame's");
+        builder.AppendLine("                 file, line, column, symbol or module, and until, the line it ends");
+        builder.AppendLine("                 at, else the first line no frame matches. A predefined runner's or a");
+        builder.AppendLine("                 test invocation's matchers names the matchers that read its output;");
+        builder.AppendLine("                 one nothing names reads every build, test and runner phase, and a CI");
+        builder.AppendLine("                 job's log is read by all. Validated at load, a name no matcher");
+        builder.AppendLine("                 answers to refused, each pattern matched in time linear in what it");
+        builder.AppendLine("                 reads, so one holding a backreference, a lookaround or an atomic");
+        builder.AppendLine("                 group is refused, naming it");
         builder.AppendLine("  toolchains     compilers, as environment and cache variables (msvc, gcc, clang)");
         builder.AppendLine("  sanitizers     instrumentation overlays composed onto a build");
         builder.AppendLine("  buildConfigs   named configurations (debug, release, o1, o2)");
@@ -330,6 +355,44 @@ public static partial class HelpTopics
             + "applies to names a path caps nothing, and is refused. On a "
             + "leg a WSL or ssh host runs, the copy is kept beside that host's own log and crosses back over the host's "
             + "transport: 'sync --pull' takes the kept-on-failure directory within that host's run.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A test invocation may also name where its runner writes its structured results: results, paths under the "
+            + $"run's results directory, {{{LegPathNames.ResultsDirectory}}} - files or patterns, named as keepOnFailure names its own, "
+            + "and refused when config.json is read where one names anything else. Each run of the invocation has a results "
+            + "directory of its own, in the leg's records of the run (<run>/<leg>/results/<phase>/), made empty before the "
+            + $"runner starts; its args point the runner there through {{{LegPathNames.ResultsDirectory}}}, which nothing but a test "
+            + "invocation's args and results may name, so a file read there is that run's and never an earlier run's. Where "
+            + "the tests' failure is the leg's verdict, each file is read where it is - nothing is copied, nothing is read "
+            + "through a link, a file is read as a stream however large, a result or a case at a time - and digested with "
+            + "every other into the typed diagnostics and test failures the leg's entry carries, so a red result starts from "
+            + "what a file already holds instead of a log searched for it. A file is known by its own shape, never by its "
+            + "name: a TRX (dotnet test --logger trx, xUnit v3 --report-trx), the JUnit XML family (ctest --output-junit, "
+            + "gtest --gtest_output=xml, Catch2, jest-junit, vitest), Dart's --reporter json stream, and a SARIF log in its "
+            + "2.1 and 1.0 forms (csc -errorlog, gcc -fdiagnostics-format=sarif-file, clang -fdiagnostics-format=sarif) are "
+            + "read with their messages, their places and their durations, masked as the phase's log is - a TRX's and Dart's "
+            + "failures with their stacks, and what a JUnit case's own test printed (its failure's body, its system-out and "
+            + "system-err) read by the runner's parsers, a stack there by its runtime's own form: a case is said through one "
+            + "failure its test printed - the crash its program died of where the case crashed or timed out, so that test and "
+            + "the case are one failure, crashed where the case says only that its test failed, else the first - and a case "
+            + "that says only how its test ended (CTest's 'Failed') takes its message and its place from it, or where nothing "
+            + "printed is typed, says all its test printed. A skipped test is no failure. A file no form owns, a "
+            + "path naming nothing, a file a crash cut short past what it gave, and a line of the Dart stream that is no event "
+            + "are said in the digest's unparsed lines, not refused - the failure may have been before the file was written. "
+            + "The phase's own log is read by its runner's parsers all the same, beside what the files gave, each finding "
+            + "said once: what the files lack - a diagnostic, a crash, a host that died, a test that hung - is added, and a "
+            + "test both name - the console's printing of the failure a case was said through among them - is the file's, "
+            + "given what the log holds of it and the file lacks, its range in the log among it. Where the file kept none of a "
+            + "case's output, or nothing typed in it, the console's lines under that test's CTest status line are read as that "
+            + "output: the case is said through a failure printed there by the same rule, its message, its place and its range "
+            + "that failure's, and every other failure there is said as its own, so nothing the run printed of a failure is "
+            + "out of the digest's reach. A process that died of the error a case's test threw is a crash the files lack, said "
+            + "beside it. A pass reads nothing, as it keeps nothing. "
+            + "init seeds the arguments the "
+            + "shipped runners take for these files - ctest --output-junit, dotnet test --logger trx with --results-directory, "
+            + $"dart test --file-reporter - each writing into {{{LegPathNames.ResultsDirectory}}}, and names the files under results "
+            + "to match.");
         builder.AppendLine();
         builder.AppendLine("A leg on a host reached through WSL or ssh runs in that host's copy of its tree:");
         builder.AppendLine("the files the sync writes there from this tree, in a git repository of the host's own -");

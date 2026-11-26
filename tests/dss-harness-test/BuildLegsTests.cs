@@ -54,13 +54,14 @@ public sealed class BuildLegsTests
 
     /// <summary>
     /// A build's request carries nothing its use case would let pass without a word: a build's work names no set-up to
-    /// bring up, so its request has no member for one, and none can be given.
+    /// bring up, so its request has no member for one, and none can be given; the run's priority it carries is the one
+    /// its legs ask the dispatch queue at.
     /// </summary>
     [Fact]
     public void ABuildsRequest_CarriesNothingItsUseCaseWouldIgnore()
     {
         Assert.Equal(
-            ["Directory", "ForceLock", "Here", "InPlace", "Isolation", "Json", "KeepGoing", "LegNames", "LocalCopy", "Time", "UseStaged", "Watch"],
+            ["Directory", "ForceLock", "Here", "InPlace", "Isolation", "Json", "KeepGoing", "LegNames", "LocalCopy", "Priority", "Time", "UseStaged", "Watch"],
             typeof(BuildLegsRequest).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
     }
 }

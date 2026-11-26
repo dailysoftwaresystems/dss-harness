@@ -168,6 +168,7 @@ public sealed class SetUpService(
                     ErrorKept = StreamKept.Tail,
                 },
                 cancellationToken)
+            .SayingUnreached($"'{declared}'", line => _output.Warn(CommandName(direction), line))
             .ConfigureAwait(false);
 
         return new SetUpReport(direction, declared, values, _platform.PlatformKey, _output.Shown(root), new SetUpRan(line.Line, result.ExitCode, result.Duration));

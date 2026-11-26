@@ -1,0 +1,22 @@
+(lldb) target create "build/crash"
+Current executable set to '/home/runner/work/app/app/build/crash' (x86_64).
+(lldb) run
+Process 4123 launched: '/home/runner/work/app/app/build/crash' (x86_64)
+Process 4123 stopped
+* thread #1, name = 'crash', stop reason = signal SIGSEGV: invalid address (fault address: 0x0)
+    frame #0: 0x0000555555555159 crash`parse(text=0x0000000000000000) at crash.c:5:12
+   2
+   3   	static int parse(const char *text)
+   4   	{
+-> 5   	    return text[0] - '0';
+   6   	}
+   7
+   8   	int main(void)
+(lldb) bt
+* thread #1, name = 'crash', stop reason = signal SIGSEGV: invalid address (fault address: 0x0)
+  * frame #0: 0x0000555555555159 crash`parse(text=0x0000000000000000) at crash.c:5:12
+    frame #1: 0x0000555555555193 crash`main at crash.c:12:12
+    frame #2: 0x00007ffff7c29d90 libc.so.6`__libc_start_call_main(main=(crash`main at crash.c:9), argc=1, argv=0x00007fffffffe3d8) at libc_start_call_main.h:58:16
+    frame #3: 0x00007ffff7c29e40 libc.so.6`__libc_start_main_impl(main=(crash`main at crash.c:9), argc=1, argv=0x00007fffffffe3d8, init=<unavailable>, fini=<unavailable>, rtld_fini=<unavailable>, stack_end=0x00007fffffffe3c8) at libc-start.c:392:3
+    frame #4: 0x0000555555555085 crash`_start + 37
+(lldb) quit

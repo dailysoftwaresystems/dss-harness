@@ -265,7 +265,8 @@ public sealed partial class HelpTests
                 + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
                 + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
                 + "and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
-                + "goes with it and is never counted among what --delete-evidence guards.",
+                + "goes with it and is never counted among what --delete-evidence guards, as does a copy of a commit a run's sweep made "
+                + "in its directory and was cut off before taking away, git's record of it with it.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -307,8 +308,167 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, route-findings, ci-read, ci-wait, fold, delete-agent, refresh, rebase, commit, push, pull-request ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says what a run's report says of the run itself - its sessions and each of the times the
+    /// report computes, the wall, the active and the paused, beside its wait for a person and its budget - so a reader
+    /// knows which times the report holds and what each one counts.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysTheRunsTimesTheReportHolds()
+    {
+        Assert.Contains(
+            $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
+                + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+                + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
+                + "sessions), its wait for a person and its budget; the totals of its tokens by kind",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says a step's wait on the machine's dispatch queue keeps the class of it and each tenant
+    /// waited behind - in the step's measure and in the report's row of it - so a reader knows a wait behind another
+    /// repository's units can be told from one behind its own run's.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysAQueueWaitKeepsItsClassAndTheTenantsWaitedBehind()
+    {
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        foreach (var said in new[]
+        {
+            "its waits by cause whole across sessions - the machine holding every leg of it still to run among them, a wait on its dispatch queue keeping the class of it "
+                + "and each tenant waited behind - its run time",
+            "one row per step instance, in the order the run made them, with its state, its attempts, its waits by cause - a wait on the machine's dispatch queue naming the "
+                + "class of it and each tenant waited behind, so a reader can tell its own run's units from another repository's - its run time,",
+        })
+        {
+            Assert.Contains(said, orchestrators, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The orchestrators topic says the error rows of a run's report read each failed attempt's own first error and the
+    /// question its ending raised, from its measure entry - never the last attempt's error nor the step's newest
+    /// question - so a reader knows an attempt before the last keeps what it broke on and asked.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysEachFailedAttemptKeepsItsOwnFirstErrorAndItsOwnQuestion()
+    {
+        Assert.Contains(
+            "every attempt that failed, with why it ended, what it threw, the first error its digests read and the question "
+                + "its ending raised - each the attempt's own, kept by its measure entry, never the last attempt's",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says where the resume completes a cut-off attempt from, by the kind of step: a reason
+    /// step's stored stream, charging only what its record had not, and a machine step's ledger in its directory, its
+    /// legs and where its work stopped - so a reader knows what is read for each.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhereTheResumeCompletesACutAttemptFrom_ByTheKindOfStep()
+    {
+        Assert.Contains(
+            "an attempt a crash cut off is completed at the resume from the step's own records: a reason step's stored "
+                + "stream, charging only what its record had not, and a machine step's ledger in its directory, its legs and "
+                + "where its work stopped",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says no member of an analysis but its recommendation states a number of its own: its
+    /// impact a template, every figure a placeholder of one of its citations the tool writes with the cited value's unit -
+    /// a count with what it counts, a number that is no amount after its label - a placeholder standing apart from what
+    /// would make it another measure, another placeholder among them, a digit anywhere else in the impact, the summary, a
+    /// title, a cause or a thing noted refused but inside an id - a word that starts with a letter, holds a digit and the
+    /// report holds, a name of it or a word of its texts whole or in a piece, or a path a citation writes, the analysis's
+    /// own word read whole first - and the recommendation not read, stating proposed values, never a measurement; and
+    /// analysis.json keeping the written impact with its template beside it - as the evidence check and the analysis's
+    /// document hold them.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysAnImpactIsATemplate_WhoseFiguresTheToolWrites()
+    {
+        var help = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "each step it names is a row of the report's steps; and no member of the analysis but its recommendation states "
+                + "a number of its own. Its impact - the time and dollars it cost - is a template whose every figure is a "
+                + "placeholder naming one of its citations by its place in the evidence, {1} the first, which the tool writes "
+                + "as the cited value with the unit the report holds that member in, as the report writes it (a time in "
+                + "seconds, 412.3 s; the budget's reasoning in minutes, 90.0 minutes; a cost in dollars, 0.0200 USD; a cache "
+                + "share in percent, 28.0%; tokens, 180000 tokens; any other count with what it counts, 2 tries; a number "
+                + "that is no amount after its label, exit 20). A placeholder stands apart: one a letter, a number, a "
+                + "currency's sign, % or another placeholder touches, or a sign before it (${1}, {1}h, {1}%, {1}{2}, -{1}), "
+                + "is refused, and so are one past its evidence and one whose citation holds no number the report measures. "
+                + "A digit anywhere else - in the impact, the summary, a pain point's title or cause, or what was "
+                + "noted and why - is refused but inside an id: a word that starts with a letter, holds a digit and "
+                + "the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word "
+                + "of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, "
+                + "src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, "
+                + "a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of "
+                + "src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last - or a "
+                + "path a citation writes (c@1.exit), any citation's in the summary and what was noted, its own pain "
+                + "point's in a title, a cause and an impact. A word of the analysis is read whole first, its ends "
+                + "read off the same way, and where no id is it whole, each id standing whole inside it is read as "
+                + "one; a word that starts with a digit - a time, a date, a version - is never one. The recommendation "
+                + "is not read: it states the values it proposes - a key's exact text - and is never a measurement. So "
+                + "the summary, the titles, the causes, the impacts and what was noted cannot invent a measurement: "
+                + "their only figures are the citations, the report's own, and the impacts', written by the tool.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "analysis.json, the analysis - each impact as the tool wrote it, the template beside it as impactTemplate - or "
+                + "why it was refused, with what it cost;",
+            help,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says what an interrupt does to the agents a person calls on a run's records: the status and
+    /// the question end 130, and what a reporter or an analyst that was begun spent is still said and kept, at the model
+    /// that served it, as on every other exit.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysAnInterruptedRecordsAgent_Ends130_ItsSpendSaidAndKept()
+    {
+        var help = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "and exits 0 (130 where an interrupt stopped its reporter): the facts are the answer, and the words were a service; "
+                + "the person's question is refused - 12 where the workflow names no reporter or the reporter's own files do not "
+                + "read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model failed, "
+                + "21 where it could not be reached or its account is at its limit, 130 where an interrupt stopped the reporter - "
+                + "what a reporter that was begun spent said and kept in ask.json however it ended, at the model that served it,",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "every one named on every exit, and what it cost said, at the model that served it, refused, failed or interrupted (130).",
+            help,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says what a run's report says its reviews converged to: the counts by which a repository
+    /// sees whether its rounds converge, of each item and of the run.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhatTheReportSaysTheReviewsConvergedTo()
+    {
+        Assert.Contains(
+            "what its reviews converged to - the classes closed, each item's counts (its rounds of review and home audits, and of "
+                + "each class the sites consolidated and deleted, the cells pinned, the neighbours measured and not, and how often a "
+                + "review sent it back), the classes reopened, the hotspots, the issues carried to a later round, fixed there or "
+                + "left, and what its loops left - and the signals a reader starts from",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
             StringComparison.Ordinal);
     }
 
@@ -332,10 +492,18 @@ public sealed partial class HelpTests
             + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
             + "own end keeps it. Every command over an orchestrator - the three "
             + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
-            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL five seconds later), "
+            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL at once, each process killed waited for until it has gone), "
             + "removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json; stop-orchestrator --now does it again once it has ended the engine and its "
-            + "tree, and says what it ended. A session or group whose starter still runs is left; one whose id a later process "
+            + "tree, and says what it ended. A session or group whose starter still runs is left; one that holds the command "
+            + "itself - it runs in it, or descends from its leader - is said and left with its record, nothing in it signalled, for "
+            + "a command run from outside it to end, and delete-orchestrator, which would take that record with the orchestrator, "
+            + "and run-orchestrator, resume-orchestrator and answer-orchestrator, which would make the command a run's engine "
+            + "inside it, are refused (13), naming the record, nothing changed - each over a sweep taken at the act itself: "
+            + "delete-orchestrator its orchestrator's right before the removal, the others every run of the repository's, as "
+            + "list-orchestrator sweeps them, once their last look at the run's owner has found none live, before it is taken, "
+            + "so an owner gone since the command began - one an answer was handed to among them - is swept with the rest, and "
+            + "a refusal leaves the owner as it was; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
             + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
             + "that started it.",
@@ -346,7 +514,7 @@ public sealed partial class HelpTests
             + "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a "
             + "leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by "
-            + "stop-orchestrator --now - once its starter has gone",
+            + "stop-orchestrator --now - once its starter has gone, by one that runs outside it",
             layout,
             StringComparison.Ordinal);
     }

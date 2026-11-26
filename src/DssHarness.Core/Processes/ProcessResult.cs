@@ -25,11 +25,22 @@ public sealed record ProcessResult(
     public string? BeatLost { get; init; }
 
     /// <summary>
-    /// What a contained child's container could not reach when it was ended - at the child's own end or at a stop -
-    /// and why, or <see langword="null"/> where it reached everything it holds: a session ended on Linux or macOS
-    /// without the process table it is read from ends the child's group and nothing outside it.
+    /// What the child's end could not reach or end, and why, or <see langword="null"/> where it reached and ended
+    /// everything it was to: what a contained child's container could not reach when it was ended - at the child's own
+    /// end or at a stop - a session ended on Linux or macOS without the process table it is read from ending the child's
+    /// group and nothing outside it; and what of the child's tree a stop could not end - a process running as another
+    /// user, or one whose own security refuses this process its end - each passed over, every other ended. Data of the
+    /// run, said once by the caller that owns the operation's output (<see cref="UnreachedSaying"/>).
     /// </summary>
     public string? Uncontained { get; init; }
+
+    /// <summary>
+    /// The id of the process the runner started for the request - the program itself, or, for a contained, bound or
+    /// isolated child, <c>contain-exec</c>, which runs it - or <see langword="null"/> where the runner names none: what a
+    /// caller that started a program to read the machine's processes knows it by among them
+    /// (<see cref="Platform.ProcessTableReading.Reader"/>).
+    /// </summary>
+    public int? ProcessId { get; init; }
 
     /// <summary>The file stdout was written whole to, as the request named it (<see cref="ProcessRequest.OutputLog"/>).</summary>
     public string? OutputLog { get; init; }
@@ -41,7 +52,10 @@ public sealed record ProcessResult(
     /// Where a process the child left running holds its output once the child has ended - a server its build started,
     /// kept for the next phase by design - what that says: every character the child wrote was read, and what the process
     /// it left writes from then on is its own, never the child's, and is not read; <see langword="null"/> where the output
-    /// ended with the child.
+    /// ended with the child. Never a process a stop or a container's end ended: each is waited for until it has gone before
+    /// the output's end is looked for (<see cref="EndedProcesses"/>). Where the end could not reach or end a process it was
+    /// to (<see cref="Uncontained"/>), it says the holder is that process or one the child left running, never that the
+    /// child left it.
     /// </summary>
     public string? OutputHeld { get; init; }
 

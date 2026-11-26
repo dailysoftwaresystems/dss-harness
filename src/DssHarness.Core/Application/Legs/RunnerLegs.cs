@@ -304,6 +304,7 @@ public sealed class RunnerLegs(
             Watch = request.Watch,
             Isolation = request.Isolation,
             KeepGoing = request.KeepGoing,
+            Priority = request.Priority,
 
             // What each leg's runner would refuse as it starts that does not wait on the leg's build - its inputs, the
             // names its lines hold, the programs they start - asked before the leg waits for its slot: here, by this

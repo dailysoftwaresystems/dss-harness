@@ -58,6 +58,7 @@ namespace DssHarness.Core.Orchestration;
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
 /// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
 /// graph/map.md, map.json      the run's repository map of the steps no read rule narrows, made once from the base as it stood when the first of them was given its prompt, and what it was made from; read as it is by every one after
+/// graph/map.2.md, and on      the map's pages after its first, written with it and never again, each a whole page of the same size
 /// graph/map-&lt;reads&gt;.md, .json  the same, of the steps whose read rules are the same, named by their digest: no map holds a declaration of a file the steps given it may not read
 /// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
 /// graph/sync.jsonl            one line for each sync of the graph
@@ -129,6 +130,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a run's pre-existing issues are kept in.</summary>
     public const string PreExistingIssuesFileName = "pre-existing-issues.json";
 
+    /// <summary>The name of the file a run's issues owed its next round are kept in.</summary>
+    public const string NextRoundFileName = "next-round.json";
+
+    /// <summary>The name of the file an agent's item keeps its closure ledger in, under the agent's directory.</summary>
+    public const string ClosureLedgerFileName = "closure-ledger.json";
+
     /// <summary>The name of the file a run's record of affected tests is kept in.</summary>
     public const string AffectedTestsFileName = "affected-tests.json";
 
@@ -161,6 +168,21 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// given, the files of its reporter's attempt, and <c>ask.json</c>. The engine never reads it.
     /// </summary>
     public const string AsksDirectoryName = "asks";
+
+    /// <summary>
+    /// The directory one call of <c>analyze-orchestrator-report</c> is kept in - the files of its analyst's attempt, and
+    /// the analysis it answered with, beside the report it read. The engine never reads it.
+    /// </summary>
+    public const string AnalysisDirectoryName = "analysis";
+
+    /// <summary>The name of the file an analysis is kept in, with the report it read named by its hash.</summary>
+    public const string AnalysisFileName = "analysis.json";
+
+    /// <summary>The name of the file an analysis is said in as Markdown.</summary>
+    public const string AnalysisMarkdownFileName = "analysis.md";
+
+    /// <summary>The name of the file an analysis keeps the report it read in: the very bytes whose hash it names.</summary>
+    public const string AnalysisReportFileName = "report.json";
 
     /// <summary>The name of the file a run's live owner is kept in, beside the run's directory.</summary>
     public const string OwnerFileName = ".owner.json";
@@ -243,7 +265,7 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file the base's link result is kept in, in the graph's directory.</summary>
     public const string GraphSymbolsFileName = "symbols.jsonl";
 
-    /// <summary>The name of the file the run's repository map is kept in, in the graph's directory, made once and read as it is.</summary>
+    /// <summary>The name of the file the run's repository map's first page is kept in, in the graph's directory, made once and read as it is.</summary>
     public const string GraphMapFileName = "map.md";
 
     /// <summary>The name of the file what the run's repository map was made from is kept in, in the graph's directory.</summary>
@@ -520,6 +542,13 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The issues the run found and left: each proven, with a title and a description.</summary>
     public string PreExistingIssuesFile => Path.Combine(Directory, PreExistingIssuesFileName);
 
+    /// <summary>The issues the run owes its next round, with their size: what <c>run.nextRound</c> reads.</summary>
+    public string NextRoundFile => Path.Combine(Directory, NextRoundFileName);
+
+    /// <summary>The item's closure ledger, in its agent's directory: how often each of its classes a review reopened.</summary>
+    /// <param name="agent">The agent whose item the ledger is of.</param>
+    public string ClosureLedgerFile(string agent) => Path.Combine(AgentDirectory(agent), ClosureLedgerFileName);
+
     /// <summary>The test units each test step that keeps them ran, under the key it names: what <c>run.affectedTests</c> reads.</summary>
     public string AffectedTestsFile => Path.Combine(Directory, AffectedTestsFileName);
 
@@ -560,15 +589,27 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The run's repository map of the steps no read rule narrows, made once and read as it is by every one after.</summary>
     public string GraphMapFile => GraphMapFileOf(reads: null);
 
-    /// <summary>What that map was made from, kept beside it.</summary>
-    public string GraphMapMetaFile => GraphMapMetaFileOf(reads: null);
-
     /// <summary>
     /// The run's repository map of the steps whose read rules <paramref name="reads"/> names - their digest - made once
     /// and read as it is by every step of those rules: <see cref="GraphMapFileName"/> where it names none.
     /// </summary>
     /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
-    public string GraphMapFileOf(string? reads) => Path.Combine(GraphDirectory, reads is null ? GraphMapFileName : $"map-{reads}.md");
+    public string GraphMapFileOf(string? reads) => GraphMapPageFileOf(reads, 1);
+
+    /// <summary>
+    /// The file page <paramref name="page"/> of the run's repository map of the steps whose read rules
+    /// <paramref name="reads"/> names is kept in: the first in <see cref="GraphMapFileName"/> and every one after it
+    /// beside it (<c>map.2.md</c> and on), all written when the map is, the first last.
+    /// </summary>
+    /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
+    /// <param name="page">The page, from 1.</param>
+    public string GraphMapPageFileOf(string? reads, int page)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
+        return Path.Combine(GraphDirectory, reads is null
+            ? (page == 1 ? GraphMapFileName : $"map.{page.ToString(System.Globalization.CultureInfo.InvariantCulture)}.md")
+            : (page == 1 ? $"map-{reads}.md" : $"map-{reads}.{page.ToString(System.Globalization.CultureInfo.InvariantCulture)}.md"));
+    }
 
     /// <summary>What the map of the steps whose read rules <paramref name="reads"/> names was made from, kept beside it.</summary>
     /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
@@ -616,6 +657,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// facts it was given, the files of its reporter's attempt, and <c>ask.json</c>. The engine never reads them.
     /// </summary>
     public string AsksDirectory => Path.Combine(Directory, AsksDirectoryName);
+
+    /// <summary>Where the run's analyses are kept, one directory a call, beside the reports they read. The engine never reads it.</summary>
+    public string AnalysisDirectory => Path.Combine(Directory, AnalysisDirectoryName);
 
     /// <summary>
     /// The run's live owner: its process stamp, beside the run's directory. A live owner refuses a session; a dead one
@@ -668,10 +712,6 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string StepRecordFile(string instance) => Path.Combine(StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance)), StepRecordFileName);
 
-    /// <summary>The output of one step the run keeps and no agent owns, in the step's own directory.</summary>
-    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
-    public string StepOutputFile(string instance) => Path.Combine(StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance)), StepOutputFileName);
-
     /// <summary>The handoff of one step the run keeps and no agent owns, in the step's own directory.</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string StepHandoffFile(string instance) => Path.Combine(StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance)), HandoffFileName);
@@ -680,9 +720,4 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="agent">The agent's name.</param>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
     public string AgentStepRecordFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance)), StepRecordFileName);
-
-    /// <summary>The output of one step <paramref name="agent"/> runs, in the step's own directory.</summary>
-    /// <param name="agent">The agent's name.</param>
-    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
-    public string AgentStepOutputFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance)), StepOutputFileName);
 }

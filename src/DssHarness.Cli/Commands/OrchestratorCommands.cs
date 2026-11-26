@@ -148,7 +148,7 @@ internal static class DeleteOrchestratorCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Delete an orchestrator's directory, once every one of its agents with a worktree is deleted and no worktree is left below its directory under the worktrees root; an agent with no worktree goes with it.");
+        var command = new Command(Name, "Delete an orchestrator's directory, once every one of its agents with a worktree is deleted and no worktree is left below its directory under the worktrees root; an agent with no worktree goes with it. Refused when run from inside a session or group a step of it left running, whose record would go with it.");
         command.Arguments.Add(NameArgument);
         command.Options.Add(DeleteEvidenceOption);
         GlobalOptions.AddTo(command);

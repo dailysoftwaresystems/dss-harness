@@ -93,6 +93,13 @@ public static class WorkflowStepTypes
         /// such a step has none.
         /// </summary>
         public int? DefaultTimeoutMinutes { get; init; }
+
+        /// <summary>
+        /// Whether a step of the type answers the legs it ran - each leg's verdict and its red entries, as the engine writes
+        /// them (<see cref="LegStepRunner"/>) and no model does: what a red entry names, its log among it, is
+        /// the engine's own.
+        /// </summary>
+        public bool AnswersLegs => Output is { } output && (output == LegsOutput(arms: false) || output == LegsOutput(arms: true));
     }
 
     /// <summary>The keys every step takes, group or typed step alike.</summary>
@@ -200,11 +207,16 @@ public static class WorkflowStepTypes
         new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs, KeepGoingKey], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
-            [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
-            [],
+            [
+                .. LegKeys,
+                new("arms", "the arms it runs, by id, written out or as an expression yielding them - the item's own, from the record its builder answered; absent, every arm"),
+                new("pending", "drive only the arms with no recorded passed that still holds"),
+                new("base", "the commit whose copy the sweep runs on, other items folding into the main tree as it moves: a template naming one, or 'item', the newest commit the run's ledger gives the item of the forEach that holds the step; absent, the tree the step works in"),
+            ],
+            ["base"],
             "red",
             "SweepStepRunner: IMutationLegs through MutationService, over LegRunService, IAgentIsolation.ForExecutionAsync",
-            ["run(tree)"],
+            ["run(tree) where base names no commit"],
             "maxParallelProcesses",
             LegsOutput(arms: true)),
         new(
@@ -287,6 +299,7 @@ public static class WorkflowStepTypes
                 new("in", "the create-agent step whose agent's work it judges - its worktree, its stored streams, its fold - which it waits for through dependsOn") { Required = true },
                 new("classes", "an expression yielding the classes the item's plan declares") { Required = true },
                 new("record", "an expression yielding the closing record the builder answered") { Required = true },
+                new("arms", "the arms the item's own sweep runs, by id, written out or as an expression yielding them - held to the arms the record names, each class's own"),
                 new("base", "the commit the home's touches are counted from"),
                 new("touches", $"how many touches of a home by other work require a home audit; {DefaultTouches} where the file says nothing"),
                 new("hotspot", $"how many touches name a home a hotspot; {DefaultHotspot} where the file says nothing"),
@@ -298,6 +311,20 @@ public static class WorkflowStepTypes
             ["read main", "read the agent's tree where in names one"],
             null,
             ClassClosureOutput),
+        new(
+            "route-findings",
+            [
+                new("in", "the create-agent step whose agent's item the closure ledger is of, which it waits for through dependsOn") { Required = true },
+                new("findings", "an expression yielding the review's findings, each classed introduced or reopened") { Required = true },
+                new("classes", "an expression yielding the classes the item's plan declares, whose ids a reopened finding names") { Required = true },
+                new("record", "an expression yielding the closing record the builder answered, whose classes a reopened finding may name too") { Required = true },
+            ],
+            [],
+            null,
+            "RouteFindingsStepRunner: FlowClosureLedgerFile over OrchestrationStore",
+            ["read main"],
+            null,
+            RouteOutput),
         new(
             "ci-read",
             [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("failOn", "what a red leg does: never (the default) or red")],
@@ -571,15 +598,46 @@ public static class WorkflowStepTypes
     /// <summary>
     /// What a step that runs legs answers - <c>build</c>, <c>test</c>, <c>run</c> and, naming each red entry's
     /// <paramref name="arms"/>, <c>check-mutations</c>: whether it passed, the command's exit code, each leg's verdict,
-    /// the red legs alone with the tail of the phase that did not pass, and where the run's records are.
+    /// the red legs alone with the digest of the phase that did not pass - where one was read - and, where it holds
+    /// typed errors, only the lines no parser held as the tail, and the log the phase wrote where this machine holds it,
+    /// whose lines the digest's ranges number, and where the run's records are.
     /// </summary>
     private static string LegsOutput(bool arms) => ObjectOf(
-        ("passed", Flag),
-        ("exitCode", WholeNumber),
-        ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
-        ("runDirectory", TextOrNull),
-        ("isolation", IsolationOutput));
+        [
+            ("passed", Flag),
+            ("exitCode", WholeNumber),
+            ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
+            ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), ("digest", DigestOutput), ("log", TextOrNull), arms ? ("arm", TextOrNull) : ("failedUnits", FailedUnitsOutput)]))),
+            ("runDirectory", TextOrNull),
+            ("isolation", IsolationOutput),
+
+            // A sweep's alone: what it says where its arms named none and nothing was swept, and the copy of a commit
+            // it ran on, with what of it could not be taken away.
+            .. arms ? new[] { ("swept", Text), ("copy", ObjectOrNullOf(("path", Text), ("left", TextOrNull))) } : [],
+        ]);
+
+    /// <summary>
+    /// What a red entry's digest holds, as a model reads it: the counts by severity and outcome over the whole output,
+    /// the first problem said whole - its stack rendered to its frames in the tree with its causes under it, its log
+    /// range one read away - the next distinct problems to four in all, an error one line each and a test failure with
+    /// its rendered stack, the rest - what the four do not say - counted by code and by file, and the lines no parser
+    /// held; the first problem's message said once, in its saying, and a member that says nothing - a count of none, an
+    /// empty list, a null - left out. Null where the phase's output was never digested.
+    /// </summary>
+    private static string DigestOutput => ObjectOrNullOf(
+        ("errors", WholeNumber),
+        ("warnings", WholeNumber),
+        ("notes", WholeNumber),
+        ("failed", WholeNumber),
+        ("errored", WholeNumber),
+        ("timedOut", WholeNumber),
+        ("crashed", WholeNumber),
+        ("first", ObjectOrNullOf(("kind", Text), ("tool", TextOrNull), ("framework", TextOrNull), ("id", TextOrNull), ("outcome", TextOrNull), ("code", TextOrNull), ("severity", TextOrNull), ("file", TextOrNull), ("line", WholeNumberOrNull), ("column", WholeNumberOrNull), ("count", WholeNumber), ("log", WholeNumbersOrNull), ("stack", ListOf(Text)), ("said", Text))),
+        ("diagnostics", ListOf(ObjectOf(("said", Text), ("count", WholeNumber), ("log", WholeNumbersOrNull)))),
+        ("failures", ListOf(ObjectOf(("framework", Text), ("id", Text), ("message", TextOrNull), ("file", TextOrNull), ("line", WholeNumberOrNull), ("outcome", Text), ("stack", ListOf(Text))))),
+        ("byCode", ListOf(ObjectOf(("of", Text), ("count", WholeNumber)))),
+        ("byFile", ListOf(ObjectOf(("of", Text), ("count", WholeNumber)))),
+        ("unparsed", ListOf(Text)));
 
     /// <summary>
     /// What a step that runs the agents' work answers of the operating system's isolation it ran under: the mode, and the
@@ -614,12 +672,32 @@ public static class WorkflowStepTypes
     /// <summary>What an anchor check answers: whether it passed, and each finding as a line the check prints.</summary>
     private static string AnchorOutput => ObjectOf(("passed", Flag), ("findings", ListOf(Text)));
 
-    /// <summary>What a class-closure check answers: whether every class of the item is closed by its record, each problem as a line, the hotspots among its homes, and each home's touches.</summary>
+    /// <summary>
+    /// What a class-closure check answers: whether every class of the item is closed by its record, each problem as a
+    /// line, the hotspots among its homes, each home's touches, and the record it judged, as it read it - what the run's
+    /// words and its report gather of the item (<see cref="FlowClosureRecords"/>).
+    /// </summary>
     private static string ClassClosureOutput => ObjectOf(
         ("passed", Flag),
         ("problems", ListOf(Text)),
         ("hotspots", ListOf(ObjectOf(("class", Text), ("path", Text), ("touches", WholeNumber)))),
-        ("touches", ListOf(ObjectOf(("class", Text), ("path", Text), ("byOthers", WholeNumber), ("all", WholeNumber)))));
+        ("touches", ListOf(ObjectOf(("class", Text), ("path", Text), ("byOthers", WholeNumber), ("all", WholeNumber)))),
+        ("record", UntypedList));
+
+    /// <summary>
+    /// What routing the review's findings answers: the send-backs - every introduced finding as the review gave it, and one
+    /// whole class a first reopening, named by its own member - the classes reopened twice or more, whose send-back asks for
+    /// a home audit, and how many rounds reopened each class. <c>rework</c> is a list nothing types: its introduced
+    /// findings hold whatever members the repository's review schema gives a finding, which a closed shape here could not
+    /// name; a send-back among them is told apart by <see cref="FindingRoutes.SendBackMember"/>.
+    /// </summary>
+    private static string RouteOutput => ObjectOf(
+        ("rework", UntypedList),
+        ("homeAudit", ListOf(SendBackOutput)),
+        ("reopened", ListOf(ObjectOf((FindingRoutes.ClassMember, Text), (FindingRoutes.RoundsMember, WholeNumber)))));
+
+    /// <summary>One class sent back by the route: the class, how many rounds reopened it, the worst severity of its findings, and its findings.</summary>
+    private static string SendBackOutput => ObjectOf((FindingRoutes.SendBackMember, Text), (FindingRoutes.RoundsMember, WholeNumber), ("severity", Text), ("findings", UntypedList));
 
     /// <summary>How many touches of a home by other work require a home audit, where a workflow says nothing.</summary>
     public const int DefaultTouches = 1;
@@ -632,7 +710,7 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("commit", Text),
         ("checks", ListOf(ObjectOf(("name", Text), ("state", Text), ("conclusion", TextOrNull), ("url", Text)))),
-        ("red", ListOf(ObjectOf(("name", Text), ("job", TextOrNull), ("workflow", TextOrNull), ("step", TextOrNull), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("failing", ListOf(Text)), ("log", TextOrNull), ("lines", WholeNumberOrNull), ("conclusion", TextOrNull), ("description", TextOrNull), ("unread", TextOrNull)))),
+        ("red", ListOf(ObjectOf(("name", Text), ("job", TextOrNull), ("workflow", TextOrNull), ("step", TextOrNull), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("failing", ListOf(Text)), ("log", TextOrNull), ("lines", WholeNumberOrNull), ("digest", DigestOutput), ("conclusion", TextOrNull), ("description", TextOrNull), ("unread", TextOrNull)))),
         ("pending", UntypedList),
         ("unsettled", UntypedList));
 
@@ -650,6 +728,9 @@ public static class WorkflowStepTypes
 
     /// <summary>A schema of a whole number, or null.</summary>
     private static string WholeNumberOrNull => """{"type":["integer","null"]}""";
+
+    /// <summary>A list of whole numbers, or null where there is none.</summary>
+    private static string WholeNumbersOrNull => """{"type":["array","null"],"items":{"type":"integer"}}""";
 
     /// <summary>A schema of a number, whole or not.</summary>
     private static string Number => """{"type":"number"}""";

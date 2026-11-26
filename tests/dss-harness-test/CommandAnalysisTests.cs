@@ -120,6 +120,26 @@ public sealed class CommandAnalysisTests
     }
 
     /// <summary>
+    /// A <c>coproc</c>'s name is the word right after it, taken only before a compound command - a group, a subshell, a
+    /// loop, a conditional - however many blanks stand between: before a simple command, or a brace that opens no group,
+    /// that word is the program, and a word and a reserved word further on name nothing.
+    /// </summary>
+    [Fact]
+    public void ACoprocsName_IsTakenRightAfterIt_AndOnlyBeforeACompoundCommand()
+    {
+        static IReadOnlyList<(string, bool)> Read(string shell)
+            => [.. CommandAnalysis.Commands(shell).Select(command => (command.Words[0], command.Background))];
+
+        Assert.Equal([("make", true), ("x", false)], Read("coproc gen \t { make; }; x"));
+        Assert.Equal([("make", true), (":", true), ("x", false)], Read("coproc gen if make; then :; fi; x"));
+        Assert.Equal([("gen", true), ("x", false)], Read("coproc gen make; x"));
+        Assert.Equal([("gen", true), ("x", false)], Read("coproc gen {make; }; x"));
+
+        // Only the word where the reader stands can be the name: one further on, before a reserved word, is an argument.
+        Assert.Equal([("echo", true), ("z", false)], Read("coproc echo x for y; z"));
+    }
+
+    /// <summary>
     /// After <c>&amp;&amp;</c>, <c>||</c>, <c>|</c> and <c>|&amp;</c> the shell reads on past line ends, blank lines, comments
     /// and the here-documents the line named to the command they join: that command is joined, or given the pipe's input,
     /// as on one line. A line's end anywhere else separates.
@@ -264,6 +284,32 @@ public sealed class CommandAnalysisTests
 
         Assert.Equal(["a", "b", "$v", "c", "d", "x"], CommandAnalysis.ArithmeticAssigned("a = 1, b += 2, $v = 3, c++, --d, e == f, g <= h, i < $n, x[1] <<= 2"));
         Assert.Empty(CommandAnalysis.ArithmeticAssigned("i < n && $x != y"));
+    }
+
+    /// <summary>
+    /// An arithmetic expression assigns each name no letter, digit, <c>_</c> or <c>$</c> stands right before whose
+    /// <c>=</c> no second <c>=</c> follows - the character after it read again as the start of what follows, so each of a
+    /// chain of assignments is one, and a line break or the expression's end after it as any other - and each name a
+    /// <c>++</c> or a <c>--</c> stands against. A comparison is read on inside, so what its subscript or its braces assign
+    /// is assigned; the rest of the run a <c>++</c>'s name stands in begins no name.
+    /// </summary>
+    [Fact]
+    public void AnArithmeticAssignment_IsANameNoNameCharacterStandsBefore_WhoseEqualsNoSecondFollows()
+    {
+        Assert.Equal(["a", "b"], CommandAnalysis.ArithmeticAssigned("a=b=c"));
+        Assert.Equal(["a", "b"], CommandAnalysis.ArithmeticAssigned("a = b = c"));
+        Assert.Equal(["x", "y"], CommandAnalysis.ArithmeticAssigned("x+=y-=z"));
+        Assert.Equal(["a"], CommandAnalysis.ArithmeticAssigned("a="));
+        Assert.Equal(["a"], CommandAnalysis.ArithmeticAssigned("a=\n"));
+        Assert.Empty(CommandAnalysis.ArithmeticAssigned("a+==b"));
+
+        // A name a digit or a '$' stands right before is the end of another word.
+        Assert.Empty(CommandAnalysis.ArithmeticAssigned("1a = 2"));
+        Assert.Empty(CommandAnalysis.ArithmeticAssigned("$$a = 1"));
+
+        Assert.Equal(["i"], CommandAnalysis.ArithmeticAssigned("a[i++] == 2"));
+        Assert.Equal(["x"], CommandAnalysis.ArithmeticAssigned("${x=1} == 2"));
+        Assert.Equal(["a"], CommandAnalysis.ArithmeticAssigned("++a$b = 1"));
     }
 
     [Fact]
@@ -798,6 +844,9 @@ public sealed class CommandAnalysisTests
         // A {name} before the operator is a descriptor bash gives the redirect, never a word.
         Assert.Equal([new ShellRedirect(int.MaxValue, ">", "/dev/null")], Assert.Single(CommandAnalysis.Commands("echo {v}>/dev/null")).Redirects);
         Assert.Throws<NotSupportedException>(() => Commands("echo 'git push' | bash {v}>/dev/null"));
+
+        // Only a {name} where a word begins is one: a word before an operator is a word, a {name} after it or not.
+        Assert.Equal([["cat", "abc", "{v}", ">x"]], Commands("cat abc>x {v}"));
 
         // A descriptor moved onto the input is one duplicated onto it.
         Assert.Throws<NotSupportedException>(() => Commands("sh 3<<<'git push' <&3-"));

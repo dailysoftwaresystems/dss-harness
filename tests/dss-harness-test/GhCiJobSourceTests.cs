@@ -16,6 +16,37 @@ public sealed class GhCiJobSourceTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// What a stop of the forge's tool could not reach or end is said under its own name, by the command line asked, once
+    /// (<see cref="UnreachedSaying"/>): the tool's own, and the question of which variables git reads, which it hands its
+    /// sayer.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheForgesToolCouldNotReachOrEnd_IsSaidUnderItsName(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) =>
+            {
+                var runner = UnreachingRunner.For(stop, request => HostResults.Ok(request.Arguments.Contains("--local-env-vars") ? "GIT_DIR\n" : "[]"));
+
+                return new GhProcess(runner, new GitLocalVariables(runner), _ => null, harness.Output).RunAsync(temp.Path, ["pr", "list"], "so nothing was read", limit: null, token);
+            });
+
+        Assert.Equal(
+            [
+                UnreachedSaid.Warned(GhProcess.Executable, "'git rev-parse --local-env-vars'"),
+                .. stopped ? Array.Empty<string>() : [UnreachedSaid.Warned(GhProcess.Executable, "'gh pr list'")],
+            ],
+            said);
+    }
+
+    /// <summary>
     /// Every call is started so that it cannot ask - gh, a credential manager, git - without any variable git reads a
     /// repository from, and with its caller's limit, else gh's own five minutes.
     /// </summary>
@@ -90,23 +121,24 @@ public sealed class GhCiJobSourceTests
 
     /// <summary>
     /// A commit's check runs are read page by page until the count the forge gives is reached, each a job of a workflow run
-    /// where the address it points at names the run and the job, and a check of its own otherwise.
+    /// where the address it points at names the run and the job - and the repository the job ran a workflow of - and a
+    /// check of its own otherwise; each with its own id and the count of annotations the forge holds for it.
     /// </summary>
     [Fact]
     public async Task ACommitsCheckRuns_AreReadWhole_EachTheJobItIs()
     {
         var requests = new List<ProcessRequest>();
         var first = string.Join(",", Enumerable.Range(1, 100).Select(index =>
-            $$"""{"name":"test ({{index}})","status":"completed","conclusion":"success","html_url":"https://github.com/o/r/runs/{{index}}","details_url":"https://github.com/o/r/actions/runs/7/job/{{index}}"}"""));
+            $$$"""{"id":{{{1000 + index}}},"name":"test ({{{index}}})","status":"completed","conclusion":"success","html_url":"https://github.com/o/r/runs/{{{index}}}","details_url":"https://github.com/o/r/actions/runs/7/job/{{{index}}}","output":{"annotations_count":{{{index % 3}}}}}"""));
         var gh = Gh(
             requests,
             Exited(0, $$"""{"total_count":101,"check_runs":[{{first}}]}"""),
-            Exited(0, """{"total_count":101,"check_runs":[{"name":"license","status":"queued","conclusion":null,"html_url":"https://checks/license","details_url":"https://elsewhere/license"}]}"""));
+            Exited(0, """{"total_count":101,"check_runs":[{"id":null,"name":"license","status":"queued","conclusion":null,"html_url":"https://checks/license","details_url":"https://elsewhere/license","output":{"annotations_count":null}}]}"""));
 
         var checks = await new GhCiJobSource(gh).ListCheckRunsAsync("/repo", "abc123", Token);
 
         Assert.Equal(101, checks.Count);
-        Assert.Equal(new CiCheckRun("test (1)", "completed", "success", "https://github.com/o/r/runs/1", 7, 1), checks[0]);
+        Assert.Equal(new CiCheckRun("test (1)", "completed", "success", "https://github.com/o/r/runs/1", 7, 1) { Id = 1001, Annotations = 1, Repository = "r" }, checks[0]);
         Assert.Equal(new CiCheckRun("license", "queued", null, "https://checks/license", null, null), checks[^1]);
         Assert.Equal(
             [
@@ -205,6 +237,57 @@ public sealed class GhCiJobSourceTests
                 ["api", "repos/:owner/:repo/actions/jobs/456/logs"],
             ],
             requests.Select(request => request.Arguments.ToArray()));
+    }
+
+    /// <summary>
+    /// A check run's annotations are read from the check-runs API, page by page - each page the list itself - until the
+    /// count the check run gave for them is reached: each with its place where it names a file, the forge's <c>.github</c>
+    /// naming none and its line then no line of any file, a column the forge does not know as none, and its level, title,
+    /// message and details.
+    /// </summary>
+    [Fact]
+    public async Task ACheckRunsAnnotations_AreReadWhole_EachInItsPlace()
+    {
+        var requests = new List<ProcessRequest>();
+        var first = string.Join(",", Enumerable.Range(1, 100).Select(index =>
+            $$"""{"path":"src/a{{index}}.cs","start_line":{{index}},"end_line":{{index}},"start_column":null,"end_column":null,"annotation_level":"warning","title":"","message":"unused {{index}}","raw_details":null}"""));
+        var gh = Gh(
+            requests,
+            Exited(0, $"[{first}]"),
+            Exited(0, """[{"path":".github","start_line":43,"end_line":43,"start_column":5,"end_column":9,"annotation_level":"failure","title":"Build","message":"Process completed with exit code 1.","raw_details":"see the log"}]"""));
+
+        var annotations = await new GhCiJobSource(gh).ReadAnnotationsAsync("/repo", 70, 101, Token);
+
+        Assert.Equal(101, annotations.Count);
+        Assert.Equal(new CiAnnotation("src/a1.cs", 1, 1, null, null, "warning", null, "unused 1", null), annotations[0]);
+        Assert.Equal(new CiAnnotation(null, null, null, null, null, "failure", "Build", "Process completed with exit code 1.", "see the log"), annotations[^1]);
+        Assert.Equal(["warning", "error"], new[] { annotations[0].Severity, annotations[^1].Severity });
+        Assert.Equal(
+            [
+                ["api", "repos/:owner/:repo/check-runs/70/annotations?per_page=100&page=1"],
+                ["api", "repos/:owner/:repo/check-runs/70/annotations?per_page=100&page=2"],
+            ],
+            requests.Select(request => request.Arguments.ToArray()));
+    }
+
+    /// <summary>
+    /// Fewer annotations than the check run counts are never read as all of them, and an answer that is no list of them
+    /// is never read as none: either read fails, saying so.
+    /// </summary>
+    [Fact]
+    public async Task FewerAnnotationsThanCounted_OrNoList_FailTheRead()
+    {
+        var short_ = await Assert.ThrowsAsync<HarnessException>(
+            () => new GhCiJobSource(Gh([], Exited(0, """[{"path":"a.cs","annotation_level":"notice","message":"m"}]"""))).ReadAnnotationsAsync("/repo", 70, 3, Token));
+        var noList = await Assert.ThrowsAsync<HarnessException>(
+            () => new GhCiJobSource(Gh([], Exited(0, """{"message":"Not Found"}"""))).ReadAnnotationsAsync("/repo", 70, 3, Token));
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, "The annotations of check run 70 report 3 annotation(s) and only 1 came back, so some were never read. This is not a pass."),
+            (short_.ExitCode, short_.Message));
+        Assert.Equal(
+            (HarnessExit.CommandFailed, "gh answered no list for the annotations of check run 70, so CI was NOT read (this is not a pass)."),
+            (noList.ExitCode, noList.Message));
     }
 
     /// <summary>A run is read with its workflow's name and file, and each job with its id, which a check of it points at.</summary>

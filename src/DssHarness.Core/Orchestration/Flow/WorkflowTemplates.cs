@@ -51,6 +51,15 @@ public static class WorkflowTemplates
     /// <summary>The name of the workflow this tool ships, and that <c>init</c> declares in a config it creates.</summary>
     public const string ShippedWorkflowName = "implementation";
 
+    /// <summary>The name of the agent this tool's own report analyst runs as, shipped beside the reporter it takes after.</summary>
+    public const string AnalystAgent = "report-analyst";
+
+    /// <summary>The name of the prompt the report analyst is asked with.</summary>
+    public const string AnalystPrompt = "analyze";
+
+    /// <summary>The name of the schema the report analyst's answer is held to.</summary>
+    public const string AnalystSchema = "analysis";
+
     /// <summary>
     /// The prefix every embedded file of the implementation workflow carries, exactly as the build embeds
     /// it: the workflow's own directory tree under one root, kept with the separators of the machine
@@ -88,18 +97,32 @@ public static class WorkflowTemplates
         "self-audit", "summary", "diagnosis", "pre-existing",
     ];
 
+    /// <summary>
+    /// The files this build embeds as its own, apart from the workflow's: the report analyst's agent, prompt and
+    /// schema, read from the build alone (<see cref="TextOf(string)"/>) wherever the analyst runs, never a repository's - so
+    /// an analysis of one repository's run is the same analyst every repository's gets, and a copy in a repository is
+    /// never read. Embedded beside the workflow's files, but not one of them: <see cref="Files"/> is what a workflow's
+    /// definition names, and no export writes them, no init gives them back.
+    /// </summary>
+    public static IReadOnlyList<string> ToolOwnFiles =>
+    [
+        $"agents/{AnalystAgent}.md",
+        $"prompts/{AnalystPrompt}.md",
+        $"schemas/{AnalystSchema}.schema.json",
+    ];
+
     /// <summary>The agent files the item pipeline names: the workflow its rounds and its recovery both use.</summary>
     private static IReadOnlyList<string> PipelineAgents =>
     [
         "implementer", "review-scope", "reviewer-correctness", "reviewer-errors", "reviewer-tests",
-        "reviewer-types", "reviewer-comments", "reviewer-simplicity",
+        "reviewer-types", "reviewer-comments", "reviewer-simplicity", "reviewer-closure",
     ];
 
     /// <summary>The prompt files the item pipeline names, the two its uses hand it among them.</summary>
     private static IReadOnlyList<string> PipelinePrompts =>
     [
         "implement", "remedy", "redo", "undo", "unblock", "mend", "reconcile", "anchors",
-        "closure-record", "home-audit",
+        "closure-record", "home-audit", "rearm",
         "review-scope", "review", "rework",
     ];
 
@@ -124,6 +147,7 @@ public static class WorkflowTemplates
         $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-types.md",
         $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-comments.md",
         $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-simplicity.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-closure.md",
         .. PipelinePrompts.Select(prompt => $"item-pipeline/prompts/{prompt}.md"),
         .. PipelineSchemas.Select(schema => $"item-pipeline/schemas/{schema}.schema.json"),
         $"item-pipeline/item-pipeline{HarnessLayout.WorkflowFileExtension}",

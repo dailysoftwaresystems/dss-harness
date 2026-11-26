@@ -1,0 +1,143 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "painPoints",
+    "noted"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Where the run's time and money went, in three sentences at most, with no number of your own: a digit is refused and you are asked again but inside an id: a word that starts with a letter, holds a digit and the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last, or a path a citation writes (c@1.exit), a word of yours read whole first - the figures are the pain points', in their impacts and their evidence."
+    },
+    "painPoints": {
+      "type": "array",
+      "description": "Each thing to change, ordered by what it cost - the most first; empty where the report shows nothing a change would have paid for.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "severity",
+          "where",
+          "evidence",
+          "impact",
+          "cause",
+          "recommendation"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "One line a person who never saw the run understands: what to change, and where, with no number of your own: a digit is refused and you are asked again but inside an id: a word that starts with a letter, holds a digit and the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last, or a path a citation writes (c@1.exit), a word of yours read whole first."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "description": "How much it matters: critical, high, medium or low, as a review grades its findings."
+          },
+          "where": {
+            "type": "array",
+            "description": "The steps it names, each by the id of its row in the report's steps - its instance id; a step the report's steps do not hold is refused and you are asked again.",
+            "items": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "minItems": 1
+          },
+          "evidence": {
+            "type": "array",
+            "description": "The report's own values it rests on, each a citation: the section, the row by its id, the member and the value exactly as the report holds it. A citation the report does not hold is refused and you are asked again.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "section",
+                "row",
+                "of",
+                "said"
+              ],
+              "properties": {
+                "section": {
+                  "type": "string",
+                  "enum": [
+                    "theRun",
+                    "totals",
+                    "steps",
+                    "criticalPath",
+                    "errors",
+                    "people",
+                    "convergence",
+                    "signals"
+                  ],
+                  "description": "The report's section that holds it."
+                },
+                "row": {
+                  "type": "string",
+                  "description": "The id of the row that holds it, as the row's own id member says it - a step's and a critical path link's its instance, a failed attempt's <instance>@<attempt>, a signal's <kind>#<n>, a question's its id, a dollars group's its name, a convergence row's its id; empty where the member sits in the section itself (theRun, totals)."
+                },
+                "of": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "description": "The member of the row that holds it, a path of members joined by '.' where it is inside one: seconds, usd, tokens.input, budget.usd."
+                },
+                "said": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "description": "The value as the report holds it: a number as the report writes it (30, 0.03) - read for its value - a text word for word."
+                }
+              }
+            },
+            "minItems": 1
+          },
+          "impact": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "The time and dollars it cost, as a template with no number of your own: write every figure as a placeholder naming one of this point's citations by its place in evidence - {1} the first, {2} the second - and the tool writes it as the cited value with the unit the report holds that member in, as the report writes it (a time in seconds, 412.3 s; the budget's reasoning in minutes, 90.0 minutes; a cost in dollars, 0.0200 USD; a cache share in percent, 28.0%; tokens, 180000 tokens; any other count with what it counts, 2 tries; a number that is no amount after its label, exit 20), so write no unit beside it: build waited {1} on the critical path and cost {2}. A placeholder stands apart: one a letter, a number, a currency's sign, % or another placeholder touches, or a sign before it (${1}, {1}h, {1}%, {1}{2}, -{1}), is refused, and so are one past your evidence and one whose citation holds no number the report measures (a text of words). A digit anywhere else is refused and you are asked again - 412.3, 3600s, $0.02, 2x, a date or a time of day alike - but inside an id: a word that starts with a letter, holds a digit and the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last - or a path one of this point's citations writes (c@1.exit); a word of yours is read whole first, and a word that starts with a digit is never one."
+          },
+          "cause": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "What the records show of why: no guessing - where the cause is not in the report or the records, it goes under noted instead - with no number of your own: a digit is refused and you are asked again but inside an id: a word that starts with a letter, holds a digit and the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last, or a path a citation writes (c@1.exit), a word of yours read whole first."
+          },
+          "recommendation": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "The change to make: a configuration key, a workflow step's key, a prompt's line or a repository fix - the exact text where it is a key, as the configuration or the yml spells it. It states the values it proposes and is never a measurement, and it is not read: the figures are the impact's and the evidence's."
+          }
+        }
+      }
+    },
+    "noted": {
+      "type": "array",
+      "description": "What you saw and could not confirm, each with why; empty where you confirmed everything you said.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what",
+          "why"
+        ],
+        "properties": {
+          "what": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "What you saw, with no number of your own: a digit is refused and you are asked again but inside an id: a word that starts with a letter, holds a digit and the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last, or a path a citation writes (c@1.exit), a word of yours read whole first."
+          },
+          "why": {
+            "type": "string",
+            "pattern": "\\S",
+            "description": "Why you could not confirm it from the report or the run's records, with no number of your own: a digit is refused and you are asked again but inside an id: a word that starts with a letter, holds a digit and the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word of its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, src/3rdparty/zlib/inflate.c, C++20) or a piece of one between the characters no id is written with, a quote, a parenthesis, a colon, a slash, a plus or a comma among them (CS0246 and Parser2.cs of src/Parser2.cs(12,5): error CS0246), each read from its first letter or digit to its last, or a path a citation writes (c@1.exit), a word of yours read whole first."
+          }
+        }
+      }
+    }
+  }
+}

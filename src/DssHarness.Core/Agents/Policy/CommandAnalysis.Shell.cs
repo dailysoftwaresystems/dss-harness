@@ -1,4 +1,5 @@
 using System.Text;
+using DssHarness.Core.Text;
 using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Agents.Policy;
@@ -24,16 +25,18 @@ public static partial class CommandAnalysis
     private static IReadOnlyList<AnalyzedCommand> Script(string script, int nesting)
         => new ShellReader(script, nesting).Read();
 
-    /// <summary>A descriptor bash gives a redirect of its own, its number kept in the variable named: <c>{name}</c>, right before the operator.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"\G\{[A-Za-z_][A-Za-z0-9_]*\}")]
-    private static partial System.Text.RegularExpressions.Regex NamedDescriptor();
+    /// <summary>
+    /// A descriptor bash gives a redirect of its own, its number kept in the variable named: <c>{name}</c>, right before the
+    /// operator - where the reader stands (<see cref="LinearRegex.MatchFrom"/>).
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex NamedDescriptor = LinearRegex.Compile(@"\A\{[A-Za-z_][A-Za-z0-9_]*\}");
 
     /// <summary>
     /// The name a <c>coproc</c> gives the coprocess it begins, which bash takes only before a compound command: a group, a
-    /// subshell, a loop, a conditional or a case - the name and the blanks after it.
+    /// subshell, a loop, a conditional or a case - the name and the blanks after it, in the group <c>name</c>, where the
+    /// reader stands (<see cref="LinearRegex.MatchFrom"/>), the compound command's start matched after them too.
     /// </summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"\G[A-Za-z_][A-Za-z0-9_]*[ \t]+(?=\(|(?:\{|if|while|until|for|select|case)(?:[ \t\r\n;]|$))")]
-    private static partial System.Text.RegularExpressions.Regex CoprocName();
+    private static readonly System.Text.RegularExpressions.Regex CoprocName = LinearRegex.Compile(@"\A(?<name>[A-Za-z_][A-Za-z0-9_]*[ \t]+)(?:\(|(?:\{|if|while|until|for|select|case)(?:[ \t\r\n;]|$))");
 
     /// <summary>
     /// One simple command as the reader builds it: its words - each with how its characters stand to the shell, one of
@@ -544,9 +547,9 @@ public static partial class CommandAnalysis
                             command.Coproc = _open;
                             SkipBlanks();
 
-                            if (CoprocName().Match(text, _at) is { Success: true } name)
+                            if (LinearRegex.MatchFrom(CoprocName, text, _at) is { Success: true } named)
                             {
-                                _at += name.Length;
+                                _at += named.Groups["name"].Length;
                             }
                         }
 
@@ -1342,7 +1345,7 @@ public static partial class CommandAnalysis
             var at = _at;
             int? descriptor = null;
 
-            if (NamedDescriptor().Match(text, at) is { Success: true } named)
+            if (LinearRegex.MatchFrom(NamedDescriptor, text, at) is { Success: true } named)
             {
                 at += named.Length;
                 descriptor = int.MaxValue;

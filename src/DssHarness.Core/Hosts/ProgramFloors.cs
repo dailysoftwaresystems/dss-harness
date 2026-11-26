@@ -357,7 +357,9 @@ public sealed class ProgramFloors(LocalProgramResolver resolver, IProcessRunner 
             {
                 return await ProgramWait
                     .ToItsEndAsync(
-                        token => _processRunner.RunAsync(new ProcessRequest { FileName = copy, Arguments = floor.Args }, token),
+                        token => _processRunner
+                            .RunAsync(new ProcessRequest { FileName = copy, Arguments = floor.Args }, token)
+                            .SayingUnreached($"'{copy}'", line => _output?.Warn(ToolPackage.Command, line)),
                         $"'{copy}' to say its version",
                         ProgramWait.Told(_output, ToolPackage.Command),
                         _clock,

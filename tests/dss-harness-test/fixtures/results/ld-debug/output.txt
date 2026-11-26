@@ -1,0 +1,4 @@
+/usr/bin/ld: /tmp/ccFTMunN.o: in function `main':
+/home/runner/work/app/app/link.c:6:(.text+0x17): undefined reference to `parse_record'
+/usr/bin/ld: /home/runner/work/app/app/link.c:7:(.text+0x1f): undefined reference to `load_store'
+collect2: error: ld returned 1 exit status

@@ -464,9 +464,10 @@ public sealed class CodebaseContextPackTests
         Assert.True(cut.Tokens <= 300, cut.Text);
         Assert.True(cut.More);
         Assert.Equal(cut.Text, pages[0].Text);
-        Assert.EndsWith(" tokens; context pack page 1 · ask graph for pack with page: 2 for the next", cut.Text, StringComparison.Ordinal);
+        Assert.EndsWith($" tokens; context pack page 1 of {pages.Count} · ask graph for pack with page: 2 for the next", cut.Text, StringComparison.Ordinal);
         Assert.All(pages, page => Assert.True(page.Tokens <= 300, page.Text));
         Assert.All(pages.Skip(1), page => Assert.StartsWith($"codebase graph: context pack page {page.Page}\n", page.Text, StringComparison.Ordinal));
+        Assert.All(pages.Skip(1).SkipLast(1), page => Assert.EndsWith($" tokens; context pack page {page.Page} of {pages.Count} · ask graph for pack with page: {page.Page + 1} for the next", page.Text, StringComparison.Ordinal));
         Assert.EndsWith($" tokens; context pack page {pages.Count} of {pages.Count} · the last", pages[^1].Text, StringComparison.Ordinal);
         Assert.Equal((int?)pages.Count, cut.Pages);
         Assert.Null(cut.Page(pages.Count + 1));
@@ -550,6 +551,36 @@ public sealed class CodebaseContextPackTests
         Assert.Null(LineOrNull(pack, queries, "Chain.Third"));
         Assert.EndsWith("; 2 in files the step may not read left out", pack.Text, StringComparison.Ordinal);
         Assert.Equal(2, pack.Refused);
+    }
+
+    /// <summary>
+    /// A pack of several pages says on every page, the first among them, how many nodes the read rule left out of the
+    /// whole walk - a node reached only far into the walk, past what page 1 holds, counted on page 1 too - for the pack is
+    /// laid whole before any page is written. Red where page 1 is written before the walk goes past it: it then counts
+    /// only the nodes left out so far, none here.
+    /// </summary>
+    [Fact]
+    public async Task APackOfSeveralPages_SaysOnEveryPageHowManyTheReadRuleLeftOutOfTheWholeWalk()
+    {
+        // Far.Late calls the hub's last leaf, so the walk meets it only once it has gone through the hub's sixty callers.
+        using var tree = await TreeAsync(
+            ("src/Hub.cs", CodebaseGraphToolTests.HubFile(60)),
+            ("secret/Far.cs", "public static class Far\n{\n    public static void Late()\n    {\n        Demo.Hubs.Hub.C59();\n    }\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var request = new ContextPackRequest("Review it.", path => !path.StartsWith("secret/", StringComparison.Ordinal))
+        {
+            Worked = [new(Id(queries, "Demo.Hubs.Hub.M0"), Edited: false)],
+            Tokens = 600,
+        };
+
+        var pack = CodebaseContextPack.Make(queries, request);
+        var pages = Pages(pack);
+
+        Assert.True(pages.Count > 1, pack.Text);
+        Assert.DoesNotContain(Id(queries, "Demo.Hubs.Hub.C59"), pack.Nodes);
+        Assert.Equal(1, pack.Refused);
+        Assert.All(pages, page => Assert.EndsWith("; 1 in files the step may not read left out", page.Text, StringComparison.Ordinal));
+        Assert.DoesNotContain(pages, page => page.Text.Contains("secret/", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -12,7 +12,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// step: the view of a step that reads it where it starts (<see cref="FlowStepRunners.ReadsViewAtStart"/>) - the agent's
 /// it works in, the base for one that reads; the base by the paths the run's folds changed that the graph has not taken
 /// yet, after each fold and deletion and before its next attempt does anything; the target's view after a refresh or a
-/// rebase, where it has one; and the view of each agent that is no longer live dropped. Each only where the run has a graph, and none fails its step - the graph is a map - but one that
+/// rebase, where it has one; the view of a leg step's tree checked by the files its red legs' digests name, which their
+/// places' declarations are read from (<see cref="DeclarationsAsync"/>); and the view of each agent that is no longer live
+/// dropped. Each only where the run has a graph, and none fails its step - the graph is a map - but one that
 /// fails is said: a line of <c>sync.jsonl</c> that says why, and a warning that says what takes it up again.
 /// </summary>
 /// <param name="graph">Syncs the graph.</param>
@@ -248,6 +250,60 @@ public sealed class FlowGraphSyncs(
 
     /// <summary>What a base sync by a fold's paths that failed is taken up by.</summary>
     private const string FoldAgain = "the paths it owes are synced again by the next fold or deletion, and by this step's next attempt";
+
+    /// <summary>What a check of a leg step's view that failed leaves.</summary>
+    private const string Undeclared = "its red legs' places are said with no declaration, and the next check of that view asks again";
+
+    /// <summary>
+    /// The declarations a leg step's red legs' digests are joined with (<see cref="ResultDigest.Declared"/>), read where the
+    /// run's graph is: the view of the tree the step's legs ran in - the agent's it works in, the base for one that reads
+    /// and for a step of the main tree - checked first by <paramref name="files"/>, the files of the tree the digests'
+    /// places name, as every answer the graph gives checks the files it names
+    /// (<see cref="ICodebaseGraphService.CheckAsync"/>), and asked of each place by its line
+    /// (<see cref="CodebaseGraphQueries.AtLine(string, int)"/>): the declaration - a type, a member, a section - the graph holds there,
+    /// with its kind, its qualified name and its handle in the view; none where the line is held by no declaration, a file's
+    /// or a namespace's own lines. Null where the run keeps no graph of that tree - none at all, or no view of the agent's
+    /// worktree yet, which only a step that reads its view makes - or the agent is no longer live; and where the check
+    /// failed, said as every sync of the engine's own that fails is, the step going on with its places joined to none.
+    /// </summary>
+    /// <param name="run">The leg step's run.</param>
+    /// <param name="place">The run's place.</param>
+    /// <param name="context">The repository's context.</param>
+    /// <param name="files">The files of the tree the digests' places name, relative to it with forward separators.</param>
+    /// <param name="cancellationToken">Stops the check.</param>
+    public async Task<Func<string, int, EnclosingDeclaration?>?> DeclarationsAsync(FlowStepRun run, FlowRunPlace place, HarnessContext context, IReadOnlyList<string> files, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(place);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(files);
+
+        var layout = OrchestratorLayout.Of(context.Layout, place.Run);
+        CodebaseGraphQueries? checkedView = null;
+
+        async Task<bool> CheckAsync(CodebaseGraphSync request, CancellationToken token)
+        {
+            // An agent's worktree its run made no view of has no graph yet: a check would sync the whole view first.
+            if (request.Worktree is { } worktree && !fileSystem.FileExists(layout.GraphViewFile(worktree.Agent)))
+            {
+                return false;
+            }
+
+            checkedView = new CodebaseGraphQueries((await graph.CheckAsync(request, files, token).ConfigureAwait(false)).Read);
+            return true;
+        }
+
+        await SyncAsync(run, place, context, run.WorksIn, $"{run.Instance}:{run.Step.Type}", CheckAsync, cancellationToken, Undeclared).ConfigureAwait(false);
+
+        if (checkedView is not { } view)
+        {
+            return null;
+        }
+
+        return (file, line) => view.AtLine(file, line) is { } card && CodeNodeKinds.Declarations.Contains(card.Kind, StringComparer.Ordinal)
+            ? new EnclosingDeclaration(card.Kind, card.Qualified, card.Handle)
+            : null;
+    }
 
     /// <summary>What a base sync by a fold's paths of a graph whose manifest does not read is taken up by.</summary>
     private const string WholeAgain = "the paths the run's folds changed stay owed until a whole sync builds the graph again";

@@ -60,7 +60,7 @@ public sealed class SshHostNames(IProcessRunner processRunner, IHarnessOutput? o
                         Arguments = ["-G", host],
                         StandardInput = string.Empty,
                     },
-                    token),
+                    token).SayingUnreached($"'ssh -G {host}'", line => output?.Warn(Said, line)),
                 new WaitWatch($"ssh -G {host} to say the host it dials", told => output?.Info(Said, told.Line()), null, _clock),
                 cancellationToken)
             .ConfigureAwait(false);

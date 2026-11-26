@@ -1,0 +1,18 @@
+/home/runner/work/app/app/store.cpp(8,18): error: invalid operands to binary expression ('const Text' and 'int')
+    8 |     return value * 2;
+      |            ~~~~~ ^ ~
+/home/runner/work/app/app/store.cpp(14,12): note: in instantiation of function template specialization 'twice<Text>' requested here
+   14 |     return twice(value);
+      |            ^
+/home/runner/work/app/app/store.cpp(19,5): note: in instantiation of function template specialization 'apply<Text>' requested here
+   19 |     apply(Text{});
+      |     ^
+1 error generated.
+/home/runner/work/app/app/undeclared.cpp(3,5): error: use of undeclared identifier 'total'
+    3 |     total = count;
+      |     ^
+1 error generated.
+/home/runner/work/app/app/warn.cpp(3,9): warning: unused variable 'unused' [-Wunused-variable]
+    3 |     int unused = 3;
+      |         ^~~~~~
+1 warning generated.

@@ -56,6 +56,48 @@ public sealed class MutationServiceTests
         ["depth.control-after"] = "int depth = 4",
     };
 
+    /// <summary>
+    /// The arms' builder a sweep makes is handed the sweep's own output: what a stop of ninja listing a worker's dependency
+    /// records could not reach or end is said under the sweep, on the worker's line, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheArmsBuilderASweepMakes_SaysThroughTheSweepsOutput_WhatAStopCouldNotReachOrEnd(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var build = Directory.CreateDirectory(temp.Combine("build")).FullName;
+
+        File.WriteAllText(Path.Combine(build, NinjaDependencyCheck.ManifestFileName), string.Empty);
+
+        var request = new BuildRequest(
+            "native/workers/1",
+            temp.Path,
+            new ProjectConfig { Name = "app", Type = "cmake" },
+            new VariantKey("x86_64", "gcc", "debug", null),
+            harness.Platform.PlatformKey,
+            2,
+            temp.Combine("runs"))
+        {
+            BuildDirectory = build,
+        };
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => Service(
+                    harness,
+                    temp,
+                    HostDoubles.Loader(new HarnessConfig(), temp.Path, temp.Path),
+                    new RecordingInspector(host => new HostReport { Host = host }),
+                    runs: UnreachingRunner.For(stop))
+                .Builder()
+                .ReadGraphAsync(new HarnessConfig(), request, token));
+
+        Assert.Equal([UnreachedSaid.Warned(MutationService.CommandName, "native/workers/1: 'ninja -t deps'")], said);
+    }
+
     /// <summary>A registry read whole and every text there: the arms selected, every one where --arms is left out, in the registry's order.</summary>
     [Fact]
     public async Task ARegistryReadWhole_SelectsEveryArm_OrThoseArmsNames()
@@ -1977,6 +2019,33 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// Each unit a sweep admits on a machine that declares admission - its workers, here, before their builds - asks the
+    /// machine's dispatch queue at the priority the sweep was given, the run's, and at the least where none was given.
+    /// </summary>
+    [Theory]
+    [InlineData(3)]
+    [InlineData(null)]
+    public async Task EachUnitASweepAdmits_AsksTheQueueAtTheSweepsPriority(int? priority)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable(new MutationSettings(), new WorktreeSettings { PathBudgetReserve = 20 }, new AdmissionSettings { HeavyLegs = 2, SettleSeconds = [0, 0] });
+
+        InitRepository(temp.Path);
+
+        var gauge = new QueueNotingGauge(temp.Combine("state", "admission.json"));
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" });
+        var service = Service(harness, temp, HostDoubles.Loader(config, temp.Path, temp.Path), inspector, gauge: gauge);
+        var request = new MutationRequest(temp.Path, ["native"], null, SelfTest: true);
+
+        _ = await service.RunAsync(priority is { } given ? request with { Priority = given } : request, RunId.New(), TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(gauge.Noted);
+        Assert.All(gauge.Noted, noted => Assert.Equal(priority ?? 1, noted.Priority));
+        Assert.Contains(gauge.Noted, noted => noted.Unit == "native/worker-1");
+    }
+
+    /// <summary>
     /// A sweep reads what the leg's own build fetched from where the leg's configuration places that build - the copy of
     /// its tree in the tree's .legs where its key says one, never the tree's own - and makes no copy of its own: its
     /// workers are already copies of one reading, kept in the tree itself.
@@ -2028,10 +2097,12 @@ public sealed class MutationServiceTests
 
     /// <summary>
     /// A configuration a sweep can read: one CMake project, a gcc toolchain with the Ninja generator, one leg on Linux,
-    /// and the registry and its texts where <paramref name="settings"/> says, by default with report arguments.
+    /// and the registry and its texts where <paramref name="settings"/> says, by default with report arguments; the
+    /// machine's admission where <paramref name="admission"/> declares one.
     /// </summary>
-    private static HarnessConfig Sweepable(MutationSettings? settings = null, WorktreeSettings? worktrees = null) => new()
+    private static HarnessConfig Sweepable(MutationSettings? settings = null, WorktreeSettings? worktrees = null, AdmissionSettings? admission = null) => new()
     {
+        Defaults = new HarnessDefaults { Admission = admission },
         BuildConfigs = { ["debug"] = new BuildConfiguration() },
         Toolchains = { ["gcc"] = new ToolchainConfig { Generator = "Ninja" } },
         Projects = [new ProjectConfig { Name = "app", Type = "cmake" }],
@@ -2080,7 +2151,8 @@ public sealed class MutationServiceTests
     /// The service as the command builds it, its hosts measured by <paramref name="inspector"/> and reached through
     /// <paramref name="hosts"/> - or nothing able to reach one - every build it starts failing without building, and a
     /// self-test's fixture kept in <paramref name="temp"/>, never among the data of the user running the tests - reading
-    /// the repository through <paramref name="files"/>, or the harness's own file system.
+    /// the repository through <paramref name="files"/>, or the harness's own file system - its legs admitted, where the
+    /// configuration declares admission, by the memory <paramref name="gauge"/> reads, or 10% in use.
     /// </summary>
     private static MutationService Service(
         HarnessFactory harness,
@@ -2091,9 +2163,11 @@ public sealed class MutationServiceTests
         ScriptedHostCommands? hosts = null,
         IGitClient? git = null,
         KnownTrees? trees = null,
-        ISyncService? reading = null)
+        ISyncService? reading = null,
+        IMemoryGauge? gauge = null,
+        IProcessRunner? runs = null)
     {
-        var processes = Substitute.For<IProcessRunner>();
+        var processes = runs ?? Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
         var sync = SyncKit.ServiceDouble();
 
@@ -2116,7 +2190,7 @@ public sealed class MutationServiceTests
             // Each host's copy as the run's sync leaves it: a sync double writes nothing.
             SyncKit.CopiesSyncedBy(sync),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
-            AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),
+            AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), gauge ?? new ScriptedGauge(10), new ManualClock()),
             new ScriptedPageCache(),
             trees ?? new KnownTrees(),
             new KeepAwake(new HeldProcesses(), harness.Output),

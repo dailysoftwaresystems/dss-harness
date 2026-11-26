@@ -1054,6 +1054,130 @@ public sealed class RunnerRunServiceTests
         Assert.Equal("a known confound", result.Outcome.Message);
     }
 
+    /// <summary>
+    /// A failing step whose log printed a whole stack, as .NET prints a wrapped exception, is excused by the cause under
+    /// what was thrown: the record read from the stack - its type, its message, its causes - is what the entry is matched
+    /// against, so an excusal declared against the cause holds though the exception that reached the log wraps it; and
+    /// the cause's type with the message of the exception that wraps it is no match - both halves are of one exception.
+    /// </summary>
+    [Fact]
+    public async Task AFailingStepsStack_IsReadForItsCauses_ForWhatAnExpectedExceptionRecognises()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // .NET's own words for an exception that wraps another: its ToString, the cause after ' ---> ' and the end of its
+        // stack marked, as a step's program prints what it caught.
+        string thrown;
+
+        try
+        {
+            try
+            {
+                throw new ArgumentException("the argument was wrong");
+            }
+            catch (ArgumentException inner)
+            {
+                throw new InvalidOperationException("The operation is invalid.", inner);
+            }
+        }
+        catch (InvalidOperationException wrapped)
+        {
+            thrown = wrapped.ToString();
+        }
+
+        RunnerConfig Runner(TempDirectory directory, string message) => new()
+        {
+            Phases = [Phase("measure", "print-file", [directory.WriteFile("printed.txt", thrown + "\n")], successPattern: "all cases passed")],
+            ExpectedExceptions =
+            [
+                new ExpectedException
+                {
+                    ExceptionType = "ArgumentException",
+                    Messages = [message],
+                    Success = true,
+                    Warning = true,
+                    ResultCode = 0,
+                    Message = "a known confound",
+                    EarnedOn = "lin-gcc-release",
+                    EarnedAt = "2026-09-16",
+                    Mechanism = "the fixture server refuses the seventh connection of a session",
+                    Anchor = "D-TEST-RUNNER-GATE",
+                },
+            ],
+        };
+
+        // Each run in a tree of its own, as two runs are.
+        using var other = new TempDirectory();
+        var excused = await Service(factory).RunAsync(Config(), Request(temp, Runner(temp, "the argument was wrong")), TestContext.Current.CancellationToken);
+        var genuine = await Service(new HarnessFactory()).RunAsync(Config(), Request(other, Runner(other, "The operation is invalid.")), TestContext.Current.CancellationToken);
+
+        Assert.Contains(" ---> System.ArgumentException: the argument was wrong", thrown, StringComparison.Ordinal);
+        Assert.NotNull(excused.ExpectedException);
+        Assert.Equal((LegVerdict.Passed, "a known confound"), (excused.Verdict.Verdict, excused.Outcome.Message));
+        Assert.Null(genuine.ExpectedException);
+        Assert.NotEqual(LegVerdict.Passed, genuine.Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// A red run step's leg entry carries the digest of what the step printed, as a red build's and a red test's do:
+    /// the failing step's own log read once by the parsers chosen for a runner's steps, its thrown error the failure
+    /// the entry's verdict rests on - the same digest the expected-exception entry is matched against, never a second
+    /// reading of the log.
+    /// </summary>
+    [Fact]
+    public async Task ARedRunStepsEntry_CarriesItsDigestsFirst_TheThrownErrorItsLogPrinted()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // .NET's own words for an error a step's program did not catch: the head, a frame under it, both on one
+        // stream in one write, and a non-zero exit - the shape a step that dies leaves in its log.
+        const string printed = "System.InvalidOperationException: The operation is invalid.\n"
+            + "   at Demo.Corpus.Measure() in corpus/Program.cs:12";
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "say-and-exit", [printed, string.Empty, "7"])],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        Assert.NotNull(result.Entry.Digest);
+        Assert.Null(result.Entry.Digest!.First);
+        var failure = Assert.Single(result.Entry.Digest.Failures);
+        Assert.Equal(
+            ("dotnet", "errored", "System.InvalidOperationException", "The operation is invalid."),
+            (failure.Framework, failure.Outcome, failure.Exception?.Type, failure.Exception?.Message));
+    }
+
+    /// <summary>
+    /// A red run step's digest reads the places its step printed from the directory the step ran in, as a build's and a
+    /// test's are read from where their tools ran: a step that runs in a directory of its own and prints a path relative to
+    /// it names that directory's file, never the tree root's file of the same relative path.
+    /// </summary>
+    [Fact]
+    public async Task ARedRunStepsDigest_ReadsThePlacesItPrinted_FromTheDirectoryTheStepRanIn()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile("src/main.rs", "fn main() {}\n");
+        temp.WriteFile("tools/gen/src/main.rs", "fn main() {}\n");
+
+        // Rust's own words for a panic, the place relative to the package the step ran in.
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("gen", "say-and-exit", ["thread 'main' panicked at src/main.rs:12:5:\nno record named first", string.Empty, "101"]) with { WorkingDirectory = "tools/gen" }],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        var failure = Assert.Single(result.Entry.Digest!.Failures);
+        Assert.Equal(("rust", "tools/gen/src/main.rs", (int?)12), (failure.Framework, failure.File, failure.Line));
+    }
+
     [Fact]
     public async Task AnExpectedExceptionWhoseCheckIsNotConfirmed_LeavesTheFailureGenuine()
     {

@@ -1,5 +1,6 @@
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 using DssHarness.Core.Testing;
 
 namespace DssHarness.Core.Execution;
@@ -123,10 +124,18 @@ public sealed record LegEntry
     public IReadOnlyList<PhaseLogFile>? Logs { get; init; }
 
     /// <summary>
+    /// Where another machine ran the leg, the log of its phase that did not pass (<see cref="TailPhase"/>), brought back
+    /// to this machine as the leg ended - read through the host's copy a piece at a time - and kept in this run's records
+    /// as a local leg's own logs are (<see cref="LegRecords.PhaseLog"/>), so the whole of what that phase printed is one
+    /// read away here too. <see langword="null"/> for a leg this machine ran, whose <see cref="Logs"/> hold it, and where
+    /// none was brought back: the host listed no log of that phase, or it could not be read, which the leg's progress said.
+    /// </summary>
+    public string? LogBroughtBack { get; init; }
+
+    /// <summary>
     /// The last lines the leg's last phase that did not pass printed, on either stream in the order they
-    /// came, secrets masked: what a reader who cannot open its log - another host's, which stays on that
-    /// host - needs first. Empty for a leg that passed, and for one whose every phase passed, whatever else
-    /// decided its verdict.
+    /// came, secrets masked: what a reader who cannot open its log needs first. Empty for a leg that passed,
+    /// and for one whose every phase passed, whatever else decided its verdict.
     /// </summary>
     public IReadOnlyList<string> LogTail { get; init; } = [];
 
@@ -214,6 +223,18 @@ public sealed record LegEntry
     public KeptOnFailure? KeptOnFailure { get; init; }
 
     /// <summary>
+    /// What the leg's failing phase digested to, where its failure is the leg's verdict (<see cref="Results.PhaseDigest"/>):
+    /// a test's structured results files first - a TRX, a JUnit XML, Dart's JSON stream, a SARIF log - and the phase's
+    /// own log, a build's, a test's or a runner's failing step's, read by the parsers chosen for it beside them, what it
+    /// says that the files lack added; of a leg a host ran, the host's own, as its ledger carried it. The typed diagnostics and test failures, folded and held to the
+    /// digest's bounds, with the counts of each over the whole output and the first error in the order the tool met it;
+    /// each diagnostic's log range numbers the lines of that phase's log as the file numbers them. What the parsers did
+    /// not understand, and what a results path could not give, stays in its unparsed lines. <see langword="null"/> where
+    /// the leg passed, where something else decided its verdict, and where nothing was read and nothing said.
+    /// </summary>
+    public ResultDigest? Digest { get; init; }
+
+    /// <summary>
     /// The units the leg's build failed to build, where its build's own tool failed it and that failure is its verdict:
     /// each by its source, how many, and how far a tool that stops at its first failures got (<see cref="Build.FailedUnits"/>).
     /// <see langword="null"/> on every other leg.
@@ -292,6 +313,19 @@ public sealed record WorkedTree(string Path)
 
     /// <summary>What the leg's line says of the reading it tested, or <see langword="null"/> where none is known.</summary>
     public string? Said => Reading?.Said(Staged);
+
+    /// <summary>
+    /// What the leg built of each file of its tree its digest's places name, by the file's path relative to the tree with
+    /// forward separators: for a copy, the file as the run's reading of the tree it was made of read it - what the copy was
+    /// made from and checked against file by file as it was made, wherever the work then ran; for the tree itself, the file
+    /// as the tree held it as the leg's line was made, while the leg - and a step of an orchestrator run that ran it - still
+    /// held the tree. A named file it holds nothing of is one nothing proves the leg built as the tree holds it: one its copy
+    /// was not given, gone, or unreadable. <see langword="null"/> where nothing was taken: a line with no place in its tree,
+    /// a run on what is staged - which made no reading - and a leg a host ran for another machine, whose line that machine
+    /// makes. Never written out: it is the placing run's own, read where the run's digests are joined to the tree's graph
+    /// (<see cref="Orchestration.Flow.FlowStepLegs"/>).
+    /// </summary>
+    public IReadOnlyDictionary<string, FileSystem.FileContent>? Built { get; init; }
 }
 
 /// <summary>
@@ -446,7 +480,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
         }
 
         // Its line is kept: whatever of its tree the leg was to read, it has read.
-        watch?.Ended(entry.Leg);
+        watch?.Ended(entry);
 
         // The machine that dispatched the leg here says its verdict as it records it from this one's ledger.
         if (_dispatched)

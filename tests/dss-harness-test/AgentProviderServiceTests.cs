@@ -26,10 +26,11 @@ public sealed class AgentProviderServiceTests
                 "balanceKeyUsage is off: a run's steps take each provider's keys in order",
                 "prices of 'anthropic' (USD, read 2026-10-12): all 4 models priced",
                 "prices of 'zai' (USD, read 2026-10-12): glm-5.3 priced",
-                "tier best:     Claude Fable 5.1 (claude-fable-5-1), GLM 5.3 (glm-5.3)",
-                "tier high:     Claude Opus 5.5 (claude-opus-5-5), GLM 5.3 (glm-5.3)",
-                "tier balanced: Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.3 (glm-5.3)",
-                "tier fast:     Claude Haiku 5.5 (claude-haiku-5-5), GLM 5.3 (glm-5.3)",
+                "tier best:      Claude Fable 5.1 (claude-fable-5-1), GLM 5.3 (glm-5.3)",
+                "tier high:      Claude Opus 5.5 (claude-opus-5-5), GLM 5.3 (glm-5.3)",
+                "tier balanced:  Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.3 (glm-5.3)",
+                "tier fast:      Claude Haiku 5.5 (claude-haiku-5-5), GLM 5.3 (glm-5.3)",
+                "tier reporting: Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.3 (glm-5.3)",
                 "client 'claude-code' signs in with the machine's login and reads no key",
                 "client 'claude-code' reads its settings where the slot holds them, none needed: CLAUDE_EXECUTABLE (executable), absent, CLAUDE_CONFIG_DIR (configDir), absent",
                 "keys are read from .harness-config/workflows/.env/ (1 file) and from nowhere else",
@@ -214,7 +215,7 @@ public sealed class AgentProviderServiceTests
         Assert.Equal([false, true], document["providers"]!.AsArray().Select(provider => (bool?)provider!["keys"]![0]!["held"]));
         Assert.Equal(["glm-5.3"], document["providers"]![1]!["models"]!.AsArray().Select(model => (string?)model!["code"]));
         Assert.Equal(1000000, (int?)document["providers"]![1]!["models"]![0]!["contextTokens"]);
-        Assert.Equal(["best", "high", "balanced", "fast"], document["tiers"]!.AsArray().Select(tier => (string?)tier!["name"]));
+        Assert.Equal(["best", "high", "balanced", "fast", "reporting"], document["tiers"]!.AsArray().Select(tier => (string?)tier!["name"]));
         Assert.Equal("claude-code", (string?)document["clients"]![0]!["name"]);
         Assert.Equal("the machine's login", (string?)document["clients"]![0]!["signIn"]);
         Assert.Equal(

@@ -56,7 +56,10 @@ internal sealed record ArmRunRequest
 /// <see cref="ArmTestRunner.PhaseName"/> and <see cref="ArmTestRunner.ReportFileName"/>.
 /// </summary>
 /// <param name="Run">What the judge reads of it.</param>
-/// <param name="Duration">How long it ran, from the monotonic clock.</param>
+/// <param name="Duration">
+/// How long it ran, from the monotonic clock, over the window a bound is held against: from the moment it is begun - where
+/// the timer of a run given a bound starts - to the moment its phase ends, however it ended.
+/// </param>
 internal sealed record ArmRunResult(ArmRun Run, TimeSpan Duration)
 {
     /// <summary>
@@ -178,11 +181,16 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
 
         var steppedBy = SteppedBy();
 
+        // Over the window a bound is held against, however the run ended: from the timer's start to the phase's end, what
+        // this tool took to start the binary and read its end counted as the binary's own time is - so the unmutated run
+        // a bound is made from measures what a mutated run's timer counts, never only the part of it the program ran.
+        var ran = _clock.GetElapsedTime(started);
+
         // Hung only where the silence bound stopped it. The phase declares no wall-clock bound of its own: the arm's bound
         // is the timer above, whose stop never reaches here.
         if (phase.Stopped == PhaseStop.Silence)
         {
-            return new ArmRunResult(ArmRun.Hung(phase.StallSeconds), phase.Duration) { SteppedBy = steppedBy };
+            return new ArmRunResult(ArmRun.Hung(phase.StallSeconds), ran) { SteppedBy = steppedBy };
         }
 
         return new ArmRunResult(
@@ -190,7 +198,7 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
                 phase.ExitCode,
                 _fileSystem.FileExists(report) ? await ReadAsync(report, request.Told, cancellationToken).ConfigureAwait(false) : RunReport.None,
                 request.Diagnostic is { } diagnostic && DiagWindow.Appears(diagnostic, phase.Output.Lines())),
-            phase.Duration)
+            ran)
         {
             SteppedBy = steppedBy,
         };

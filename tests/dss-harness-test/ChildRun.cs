@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.Versioning;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 
@@ -25,6 +26,12 @@ internal static class ChildRun
     /// <summary>The child mode that runs a method (<see cref="TestChild"/>).</summary>
     internal const string Mode = "run-method";
 
+    /// <summary>The child mode that runs a method once the debug privilege is gone from the child's token, on Windows (<see cref="UnprivilegedAsync"/>).</summary>
+    internal const string UnprivilegedMode = "run-method-unprivileged";
+
+    /// <summary>How long a method run without the debug privilege is given before it is stopped, with all it started.</summary>
+    private static readonly TimeSpan UnprivilegedBound = TimeSpan.FromMinutes(8);
+
     /// <summary>Runs <paramref name="method"/> of <paramref name="type"/> in a child and answers its exit and streams.</summary>
     /// <param name="type">The type that declares the method.</param>
     /// <param name="method">The method's name: static, taking nothing.</param>
@@ -39,6 +46,58 @@ internal static class ChildRun
             .ConfigureAwait(false);
 
         return new ChildRunAnswer(result.ExitCode, result.StandardOutput.ReplaceLineEndings("\n"), result.StandardError.ReplaceLineEndings("\n"));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="method"/> of <paramref name="type"/> in a child, on Windows, whose own token holds no debug
+    /// privilege - removed for good before anything in the child touches System.Diagnostics.Process, whose first look at
+    /// another process enables that privilege where the token holds it, and the token read back to hold it no more, the
+    /// child failing, saying why, where it still does - and answers its exit and streams: a test of a process's own security
+    /// runs there, so an administrator's elevated run of the suite, a CI runner's, tests the refusal as any other does
+    /// rather than passing over every process's security. Stopped, with all it started, past a bound of minutes.
+    /// </summary>
+    /// <param name="type">The type that declares the method.</param>
+    /// <param name="method">The method's name: static, taking nothing.</param>
+    /// <param name="cancellationToken">Stops the child.</param>
+    [SupportedOSPlatform("windows")]
+    public static async Task<ChildRunAnswer> UnprivilegedAsync(Type type, string method, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentException.ThrowIfNullOrWhiteSpace(method);
+
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create())
+            .RunAsync(TestHost.ChildRequest(UnprivilegedMode, type.FullName!, method) with { Timeout = UnprivilegedBound }, cancellationToken)
+            .ConfigureAwait(false);
+        var (output, error) = (result.StandardOutput.ReplaceLineEndings("\n"), result.StandardError.ReplaceLineEndings("\n"));
+
+        return result.TimedOut
+            ? new ChildRunAnswer(-1, output, $"stopped past {UnprivilegedBound}: {error}")
+            : new ChildRunAnswer(result.ExitCode, output, error);
+    }
+
+    /// <summary>
+    /// The child's side of <see cref="UnprivilegedAsync"/>: the debug privilege removed from this process's token and read
+    /// back gone - the first thing the child does once its mode is read and its streams opened, nothing of
+    /// System.Diagnostics.Process touched yet - then the method run as <see cref="Run"/> runs it.
+    /// </summary>
+    /// <param name="output">The child's output.</param>
+    /// <param name="error">The child's error stream.</param>
+    /// <param name="arguments">The type's full name, then the method's name.</param>
+    internal static int RunUnprivileged(TextWriter output, TextWriter error, string[] arguments)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            error.Write("a token's privileges are Windows'");
+            return 1;
+        }
+
+        if (RefusedEnd.Removed(RefusedEnd.DebugPrivilege) is { } why)
+        {
+            error.Write(why);
+            return 1;
+        }
+
+        return Run(output, error, arguments);
     }
 
     /// <summary>The child's side: runs the method <c>arguments[1]</c> of the type <c>arguments[0]</c> names, writing what it returns.</summary>

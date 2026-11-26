@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -1310,8 +1309,7 @@ public sealed class AgentRunnerTests
     [Fact]
     public void TheRunnerIsRegistered_InAddDssHarness()
     {
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         Assert.IsType<AgentRunner>(provider.GetRequiredService<IAgentRunner>());

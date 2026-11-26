@@ -1,5 +1,4 @@
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Results;
 using DssHarness.Core.Anchors;
@@ -97,8 +96,7 @@ public sealed class AgentRequestTests
     [Fact]
     public void TheServicesThatAlreadyWereUseCases_Are()
     {
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, Core.Output.OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, Core.Output.OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         foreach (var service in new IUseCase[]

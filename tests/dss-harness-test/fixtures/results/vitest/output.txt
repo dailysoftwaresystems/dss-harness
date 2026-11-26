@@ -1,0 +1,41 @@
+
+ RUN  v2.1.8 /home/runner/work/app/app
+
+ ❯ src/store.test.ts (3 tests | 2 failed) 6ms
+   × Store > loads its record 3ms
+     → expected 3 to be 4 // Object.is equality
+   × Store > opens its file 1ms
+     → a store needs a path
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/store.test.ts > Store > loads its record
+AssertionError: expected 3 to be 4 // Object.is equality
+
+- Expected
++ Received
+
+- 4
++ 3
+
+ ❯ src/store.test.ts:7:27
+      5| test('loads its record', () => {
+      6|   const store = new Store('records.json');
+      7|   expect(store.charge(2)).toBe(4);
+       |                           ^
+      8| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/store.test.ts > Store > opens its file
+TypeError: a store needs a path
+ ❯ new Store src/store.ts:4:13
+ ❯ src/store.test.ts:12:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed (3)
+   Start at  10:12:03
+   Duration  412ms (transform 31ms, setup 0ms, collect 18ms, tests 6ms, environment 0ms, prepare 61ms)
+

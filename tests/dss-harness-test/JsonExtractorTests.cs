@@ -417,6 +417,22 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
         Assert.Null(editor.WithDigests(Editor).Problem("json", CodeFileText.Lines(Editor).Count));
     }
 
+    /// <summary>
+    /// The help says every spelling a key's path takes: an item by its place, a name that is empty, white space, or holds
+    /// a control character, a dot or a bracket quoted in brackets, and a key named by its own name - the forms its extract
+    /// holds, so a later wording change to them is held as the extract is.
+    /// </summary>
+    [Fact]
+    public void TheHelp_SaysEverySpellingAKeysPathTakes()
+    {
+        Assert.Contains(
+            "(an item by its place, [0]; a name that is empty or white space, holds a control character, a dot or a bracket "
+                + "quoted in brackets, [\"\"], Logging.LogLevel[\"Microsoft.AspNetCore\"]; the key named by its own name, "
+                + "Microsoft.AspNetCore)",
+            new JsonExtractor().Help.Reads,
+            StringComparison.Ordinal);
+    }
+
     private static FileExtract Read(string path, string text) => new JsonExtractor().Extract(new CodeFileInput(path, text));
 
     private static string OwnerOf(FileExtract extract, int line)

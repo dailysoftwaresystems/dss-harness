@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -11,18 +13,37 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// the run's dollars unknown past what was counted, never zero, naming the price missing (<see cref="FlowDollars"/>). A
 /// run budgeted in dollars never comes to one: the runner refuses it, on every client, a model without the prices its
 /// client is billed by before any client is taken, so the budget is charged a counted cost or nothing at all. Each turn is
-/// handed on as it is counted where the run's events are given - its cost, or why it could not be counted - so a run's
-/// budget is charged while its agent works, and what an asking ended part way had spent is still known.
+/// handed on as it is counted where the run's events are given - its tokens by kind, its cost or why it could not be
+/// counted, the model that served it and the price copied as it was counted - so a run's budget is charged while its
+/// agent works, and what an asking ended part way had spent is still known.
 /// </summary>
 /// <param name="providers">The configuration's providers, whose models' prices count each turn.</param>
 /// <param name="serving">The model the run starts on; null where none resolved, until a session names one.</param>
 /// <param name="events">Where each turn is handed on as it is counted - a reason step's, charged to the run's budget at once; null where only the totals are wanted.</param>
-public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFlowRunEvents? events = null) : IAgentEventSink
+/// <param name="effort">The effort the run starts at, where the step gives one; null otherwise.</param>
+public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFlowRunEvents? events = null, string? effort = null) : IAgentEventSink
 {
     private string? _serving = serving;
+    private string? _firstModel = serving;
+    private readonly Dictionary<string, (int Calls, int Failed, int Denied)> _tools = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _calls = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _denied = new(StringComparer.Ordinal);
+    private readonly List<(string Id, string Tool)> _open = [];
+    private readonly List<FlowTurnSpend> _turns = [];
+
+    /// <summary>
+    /// The pages past the first the run's <c>graph</c> calls asked for, by answer - its operation and its inputs less the
+    /// page, keyed as a kept result is (<see cref="Codebase.GraphPageStore.KeyOf"/>): the operation, how many pages past
+    /// the first were asked of that answer, and the deepest page it reached. One entry an answer, in the order the run
+    /// first asked of it.
+    /// </summary>
+    private readonly Dictionary<string, (string Op, int Asked, int Page)> _graphPages = new(StringComparer.Ordinal);
 
     /// <summary>Every token the run's turns used, of every kind.</summary>
     public long Tokens { get; private set; }
+
+    /// <summary>The tokens the run's turns used, by kind - input, output, the caches, the searches; <see cref="AgentUsage.None"/> where none was reported.</summary>
+    public AgentUsage Usage { get; private set; } = AgentUsage.None;
 
     /// <summary>
     /// What the run's turns cost at the configuration's prices, as far as each could be counted, and why the rest could
@@ -32,6 +53,27 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
 
     /// <summary>Whether any turn's usage was reported: where none was, nothing is known of what the run spent.</summary>
     public bool Reported { get; private set; }
+
+    /// <summary>Every turn the run's usage reports said, in order, each with its spend as it was counted.</summary>
+    public IReadOnlyList<FlowTurnSpend> Turns => _turns;
+
+    /// <summary>How many turns the run's conversation took.</summary>
+    public int TurnsTaken { get; private set; }
+
+    /// <summary>How many times the run's conversation was compacted.</summary>
+    public int Compactions { get; private set; }
+
+    /// <summary>The model the run began on and left, where a fallback moved it; null where none did.</summary>
+    public string? FallbackFrom { get; private set; }
+
+    /// <summary>Why the fallback moved it, as the walk said so.</summary>
+    public string? FallbackWhy { get; private set; }
+
+    /// <summary>The provider of the model that served the run's last counted turn; null where none was counted.</summary>
+    public string? Provider { get; private set; }
+
+    /// <summary>The effort the run goes on at - the one it began at, or the one a fallback moved it to.</summary>
+    public string? Effort { get; private set; } = effort;
 
     /// <summary>
     /// What the run spent, as an answer carries it: its dollars - what was counted, and why the rest is not known where a
@@ -48,29 +90,167 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
         switch (@event)
         {
             case SessionStarted started:
+                // The session says what it started on - the model and the effort - so a run read back from its stream
+                // alone knows both as the run that wrote it did.
                 _serving = started.Model;
+                Effort = started.Effort ?? Effort;
                 break;
 
             case FallbackStarted moved:
+                if (_firstModel is null)
+                {
+                    _firstModel = moved.FromModel;
+                }
+
+                FallbackFrom ??= moved.FromModel;
+                FallbackWhy ??= moved.Why;
                 _serving = moved.ToModel;
+                Effort = moved.ToEffort ?? Effort;
+                break;
+
+            case TurnFinished:
+                TurnsTaken++;
+                break;
+
+            case Compacted:
+                Compactions++;
+                break;
+
+            case ToolCallStarted call:
+                // A call is counted as it begins, by the tool the agent named - its id kept for the finish, which says how
+                // it ended but not the name.
+                _calls[call.Id] = call.Tool;
+                _open.Add((call.Id, call.Tool));
+                var use = _tools.GetValueOrDefault(call.Tool);
+                _tools[call.Tool] = (use.Calls + 1, use.Failed, use.Denied);
+                break;
+
+            case PermissionDenied denied:
+                // A denial is counted on its own. The call it refused - the newest of the tool's the run saw begin and not
+                // yet end - is no call that ran and failed, so its finish is not counted again as a failure.
+                var deniedUse = _tools.GetValueOrDefault(denied.Tool);
+                _tools[denied.Tool] = (deniedUse.Calls, deniedUse.Failed, deniedUse.Denied + 1);
+
+                if (_open.FindLastIndex(open => string.Equals(open.Tool, denied.Tool, StringComparison.Ordinal) && !_denied.Contains(open.Id)) is var at and >= 0)
+                {
+                    _ = _denied.Add(_open[at].Id);
+                }
+
+                break;
+
+            case ToolCallFinished finished:
+                // A call is counted failed as it ends, where it was not denied and did not end well. A call whose start
+                // the run never saw is counted by no name.
+                _ = _open.RemoveAll(open => string.Equals(open.Id, finished.Id, StringComparison.Ordinal));
+
+                if (_calls.Remove(finished.Id, out var tool))
+                {
+                    if (!_denied.Remove(finished.Id) && !finished.Ok && _tools.TryGetValue(tool, out var made))
+                    {
+                        _tools[tool] = (made.Calls, made.Failed + 1, made.Denied);
+                    }
+
+                    // A page of the graph the call asked for and was answered counts here, past the first: the one
+                    // measure of what a step reached for in pages, read from the call's own input - the graph tool by
+                    // the runtime's name whichever client called it, by the one reading of a stream's tool names.
+                    if (finished.Ok && string.Equals(AgentStreamCalls.ToolOf(tool), AgentGraphSupport.ToolName, StringComparison.Ordinal))
+                    {
+                        CountGraphPages(finished.Input);
+                    }
+                }
+
                 break;
 
             case UsageReported used:
-                var tokens = used.Turn.AllTokens;
                 var entry = _serving is { } model ? providers.Of(model) : null;
                 var usd = entry is { } priced ? AgentPrices.CostOf(priced.Provider, priced.Model, used.Turn) : null;
                 var uncounted = usd is not null ? null
                     : entry is { } listed ? AgentPrices.UnknownOf(listed.Provider, listed.Model, used.Turn)
                     : $"no provider lists '{_serving ?? "the run's model"}', whose prices the cost is counted at";
 
-                Tokens += tokens;
+                // The price is copied as the turn is counted, from the configuration as it stands now: one changed later
+                // never changes what a past turn cost, for the copy stands in the attempt's record.
+                var turn = new FlowTurnSpend(used.Turn, usd, uncounted, _serving, entry is { } costed ? FlowStepPrice.Of(costed.Provider, costed.Model) : null);
+
+                if (turn.Price is { } price)
+                {
+                    Provider = price.Provider;
+                }
+
+                Tokens += used.Turn.AllTokens;
+                Usage = Usage.Plus(used.Turn);
                 Dollars = Dollars.Plus(FlowDollars.Of(usd, uncounted));
                 Reported = true;
-                events?.Used(tokens, usd, uncounted);
+                _turns.Add(turn);
+                events?.Used(turn);
                 break;
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// The run's own account, as the runner hands it to the engine with its answer: what served it - the provider, the
+    /// model, the effort, where a fallback moved it from and why - with the turns it took, the tools it called, how
+    /// often its conversation was compacted, and the pages past the first its <c>graph</c> calls asked for. No spend:
+    /// that is the engine's own count, charged turn by turn into the attempt's entry as each was reported
+    /// (<see cref="Turns"/>).
+    /// </summary>
+    public FlowStepAttempt Account()
+        => new(
+            N: 0,
+            Provider: Provider,
+            Model: _serving ?? _firstModel,
+            Effort: Effort,
+            FallbackFrom: FallbackFrom,
+            FallbackReason: FallbackWhy,
+            Turns: TurnsTaken > 0 ? TurnsTaken : null,
+            Tools: _tools.Count > 0
+                ? [.. _tools.OrderBy(tool => tool.Key, StringComparer.Ordinal).Select(tool => new FlowStepToolUse(tool.Key, tool.Value.Calls, tool.Value.Failed, tool.Value.Denied))]
+                : null,
+            Compactions: Compactions > 0 ? Compactions : null,
+            GraphPages: _graphPages.Count > 0
+                ? new(
+                    _graphPages.Values.Sum(each => each.Asked),
+                    _graphPages.Values.OrderByDescending(each => each.Page).Select(each => new FlowStepGraphAsk(each.Op, each.Asked, each.Page)).First())
+                : null);
+
+    /// <summary>
+    /// One answered <c>graph</c> call's ask of a page past the first, counted by the answer it is a page of - its
+    /// operation and its inputs less the page, keyed as a kept result is, so every page of one answer is counted
+    /// together whatever order its members were written in: the answer's asks grow and its deepest page reaches where
+    /// the call asked. An input that does not read as a call with an operation and a page past the first counts
+    /// nothing - a misused call is answered with a usage line, not a page.
+    /// </summary>
+    /// <param name="input">The call's input, as its stream holds it.</param>
+    private void CountGraphPages(string input)
+    {
+        try
+        {
+            if (Json.JsonDepth.ParseNode(input) is JsonObject { } call
+                && call["op"] is JsonValue op && op.TryGetValue<string>(out var named) && !string.IsNullOrWhiteSpace(named)
+                && call["page"] is JsonValue page && page.TryGetValue<int>(out var asked)
+                && asked > 1)
+            {
+                var inputs = new JsonObject();
+
+                foreach (var (name, value) in call)
+                {
+                    if (name is not ("op" or "page"))
+                    {
+                        inputs[name] = value?.DeepClone();
+                    }
+                }
+
+                var answer = Codebase.GraphPageStore.KeyOf(named, inputs);
+                var held = _graphPages.GetValueOrDefault(answer, (Op: named, Asked: 0, Page: 0));
+                _graphPages[answer] = (named, held.Asked + 1, Math.Max(held.Page, asked));
+            }
+        }
+        catch (JsonException)
+        {
+            // An input that does not read is no page ask to count.
+        }
     }
 }
 

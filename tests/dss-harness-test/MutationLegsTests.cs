@@ -147,14 +147,26 @@ public sealed class MutationLegsTests
 
     /// <summary>
     /// A sweep's request carries nothing its use case would let pass without a word: check-mutations takes no timing, no
-    /// set-ups and no say in where a leg works, so its request has no member for any of them, and none can be given.
+    /// set-ups and no say in where a leg works, so its request has no member for any of them, and none can be given; the
+    /// run's priority it carries is the one each of its arms asks the dispatch queue at.
     /// </summary>
     [Fact]
     public void ASweepsRequest_CarriesNothingItsUseCaseWouldIgnore()
     {
         Assert.Equal(
-            ["ArmNames", "Directory", "ForceLock", "Held", "Here", "Isolation", "Json", "LegNames", "List", "Pending", "SelfTest", "UseStaged", "Watch"],
+            ["ArmNames", "Directory", "ForceLock", "Held", "Here", "Isolation", "Json", "LegNames", "List", "Pending", "Priority", "SelfTest", "UseStaged", "Watch"],
             typeof(MutationLegsRequest).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The sweep's service is asked what the request asked, the run's priority among it: a priority a flow's run declared
+    /// reaches the sweep, whose arms each ask the dispatch queue at it, and is never dropped where the request is handed on.
+    /// </summary>
+    [Fact]
+    public void ASweepsPriority_ReachesTheSweep()
+    {
+        Assert.Equal(3, MutationLegs.Request(new MutationLegsRequest { Directory = "tree", Priority = 3 }).Priority);
+        Assert.Equal(1, MutationLegs.Request(new MutationLegsRequest { Directory = "tree" }).Priority);
     }
 
     private static async Task<HarnessException> SweptAsync(MutationLegsRequest request)

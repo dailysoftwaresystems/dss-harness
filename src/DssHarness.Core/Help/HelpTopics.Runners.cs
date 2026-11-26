@@ -181,6 +181,10 @@ public static partial class HelpTopics
         builder.AppendLine();
         builder.AppendLine("  {treeDir} {buildDir} {harnessDir}   the leg's tree, its variant-keyed build");
         builder.AppendLine("                                      directory, and the tree's .harness-config");
+        builder.AppendLine($"  {{{LegPathNames.ResultsDirectory}}}                        a test run's own results directory, made");
+        builder.AppendLine("                                      empty for it: a test invocation's args and");
+        builder.AppendLine("                                      results alone name it ('help config'), and");
+        builder.AppendLine("                                      a run line naming it is refused");
         builder.AppendLine("  {leg} {os} {processor}              which leg this is, derived rather than typed:");
         builder.AppendLine("  {toolchain} {config} {variant}      an instrument that records what it measured");
         builder.AppendLine("  {host} {runId}                      cannot then be labelled wrongly by hand");
@@ -334,7 +338,9 @@ public static partial class HelpTopics
         builder.AppendLine("needs has to say 'persist'.");
         builder.AppendLine();
         builder.AppendLine("A leg that did not pass carries, in --json, the last lines its last failing phase printed as");
-        builder.AppendLine("logTail and that phase's name as tailPhase - a host's leg among them, whose log stays there.");
+        builder.AppendLine("logTail and that phase's name as tailPhase - a host's leg among them, whose log of that phase");
+        builder.AppendLine("is brought back into this run's records as the leg ends, named as logBroughtBack, so the whole");
+        builder.AppendLine("of it is one read away here too. Each leg's line carries its phases with their times as phases.");
         builder.AppendLine();
         builder.AppendLine("A leg's line in --json names each file its steps kept as keptOutputs, relative to the");
         builder.AppendLine($"tree - the path '{ToolPackage.Command} sync --pull' takes to bring it back from the host that");

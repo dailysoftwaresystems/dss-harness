@@ -6,7 +6,6 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
 using DssHarness.Core.Codebase;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
@@ -1007,6 +1006,27 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         var schema = JsonNode.Parse(AgentTools.All(AgentCommandSettings.Default).Single(tool => tool.Name == AgentTools.SearchFiles).Schema)!;
         Assert.Null(schema["properties"]!["max_results"]);
+    }
+
+    /// <summary>
+    /// What a tool is given and what it answers are written as every JSON an agent's call carries is - JSON's own escapes
+    /// alone: each tool's schema, the web search's among them, and a measure call's answer, whose cell reads as the
+    /// agent wrote it.
+    /// </summary>
+    [Fact]
+    public async Task EveryToolsSchema_AndAMeasuresAnswer_AreWrittenAsAnAgentReadsThem()
+    {
+        var tools = AgentTools.All(AgentCommandSettings.Default);
+
+        Assert.All(tools, tool => Assert.DoesNotContain("\\u", tool.Schema, StringComparison.Ordinal));
+        Assert.Contains("The pattern a file's path relative to the directory must match.", tools.Single(tool => tool.Name == AgentTools.FindFiles).Schema, StringComparison.Ordinal);
+        Assert.Contains("every one of this step's where it is left out", tools.Single(tool => tool.Name == AgentTools.WebSearch).Schema, StringComparison.Ordinal);
+
+        var runtime = Open(measure: new((_, _) => Task.FromResult(new AgentMeasureAnswer(Measured: true, Passed: true, "passed", null, null))));
+        var measured = await Call(runtime, AgentMeasureSupport.ToolName, "toolu_02", ("leg", "windows"), ("variant", "debug"), ("filter", ""), ("cell", "keep <List<T>> & the 'café'"));
+
+        Assert.True(measured.Ok, measured.Text);
+        Assert.Contains("\"cell\":\"keep <List<T>> & the 'café'\"", measured.Text, StringComparison.Ordinal);
     }
 
     /// <summary>A hit is given with as many lines around it as context asks - fifty, past the ten it was once held to - each numbered.</summary>
@@ -2028,8 +2048,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
     [Fact]
     public void TheHostAndTheFetch_AreRegistered_InAddDssHarness()
     {
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         Assert.Same(provider.GetRequiredService<HarnessFetch>(), provider.GetRequiredService<AgentToolHost>().Fetch);

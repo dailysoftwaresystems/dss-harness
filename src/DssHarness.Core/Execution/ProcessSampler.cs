@@ -160,9 +160,10 @@ public sealed class ProcessSampler(IProcessTable processTable, IHostPlatform pla
     }
 
     /// <summary>
-    /// Whether <paramref name="process"/> is inside the harness's own process tree, following a
-    /// parent link only when the parent started no later than the child. A recycled id otherwise
-    /// makes an unrelated process look like the harness's own child, and its contention invisible.
+    /// Whether <paramref name="process"/> is inside the harness's own process tree, following each parent link as the
+    /// table names it (<see cref="SampledProcess.ParentId"/>): the table's own relation of which process started which,
+    /// decided as it is read, which never names a later holder of a recycled id - one that would make an unrelated
+    /// process look like the harness's own child, and its contention invisible - so no start is compared here.
     /// </summary>
     /// <remarks>
     /// The parent links are followed to their end however many there are (<see cref="Chain"/>) - a make recursing three
@@ -180,22 +181,12 @@ public sealed class ProcessSampler(IProcessTable processTable, IHostPlatform pla
 
         var ancestry = Chain.Follow(
             process,
-            current =>
-            {
-                if (current.Id == harnessId
-                    || current.ParentId is not { } parentId
-                    || parentId <= 0
-                    || !byId.TryGetValue(parentId, out var parent))
-                {
-                    return ChainNext<SampledProcess>.End;
-                }
-
-                // The "parent" started after its child, so the id has been reused since. The link says nothing about
-                // this process, and following it would invent an ancestry.
-                return parent.StartedUtc is { } parentStart && current.StartedUtc is { } childStart && parentStart > childStart
+            current => current.Id == harnessId
+                || current.ParentId is not { } parentId
+                || parentId <= 0
+                || !byId.TryGetValue(parentId, out var parent)
                     ? ChainNext<SampledProcess>.End
-                    : ChainNext<SampledProcess>.To(parent);
-            },
+                    : ChainNext<SampledProcess>.To(parent),
             current => (current.Id, current.StartedUtc));
 
         return !ancestry.Cycled && ancestry.Members[^1].Id == harnessId;

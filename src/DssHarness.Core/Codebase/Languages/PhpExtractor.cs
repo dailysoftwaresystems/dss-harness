@@ -17,7 +17,7 @@ public sealed class PhpExtractor : ICodeGraphExtractor
     public string Language => "php";
 
     /// <inheritdoc/>
-    public int Version => 4;
+    public int Version => 5;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".php", ".phtml");

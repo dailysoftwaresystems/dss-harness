@@ -154,15 +154,16 @@ public sealed class TestInvocationResolverTests
 
     /// <summary>
     /// What a failed run keeps as evidence is merged per platform like every other setting, list and cap alike: a
-    /// platform's own replaces <c>all</c>'s, and one naming none keeps what <c>all</c> names.
+    /// platform's own replaces <c>all</c>'s, and one naming none keeps what <c>all</c> names. Its results are merged
+    /// the same way.
     /// </summary>
     [Fact]
     public void WhatIsKeptOnFailure_IsMergedPerPlatform_LikeEveryOtherSetting()
     {
         var settings = new TestConfig
         {
-            All = new TestInvocation { Runner = "ctest", SuccessPattern = "tests passed", KeepOnFailure = ["corpus-out"] },
-            Windows = new TestInvocation { KeepOnFailure = ["reports"] },
+            All = new TestInvocation { Runner = "ctest", SuccessPattern = "tests passed", KeepOnFailure = ["corpus-out"], Results = ["{buildDir}/junit.xml"] },
+            Windows = new TestInvocation { KeepOnFailure = ["reports"], Results = ["{buildDir}/out.trx"] },
         };
 
         var capped = new TestConfig
@@ -173,6 +174,8 @@ public sealed class TestInvocationResolverTests
 
         Assert.Equal(["reports"], TestInvocationResolver.Resolve(settings, PlatformNames.Windows).KeepOnFailure);
         Assert.Equal(["corpus-out"], TestInvocationResolver.Resolve(settings, PlatformNames.Linux).KeepOnFailure);
+        Assert.Equal(["{buildDir}/out.trx"], TestInvocationResolver.Resolve(settings, PlatformNames.Windows).Results);
+        Assert.Equal(["{buildDir}/junit.xml"], TestInvocationResolver.Resolve(settings, PlatformNames.Linux).Results);
         Assert.Null(TestInvocationResolver.Resolve(settings, PlatformNames.Linux).KeepOnFailureCapBytes);
         Assert.Equal(4096, TestInvocationResolver.Resolve(capped, PlatformNames.Windows).KeepOnFailureCapBytes);
         Assert.Equal(1024, TestInvocationResolver.Resolve(capped, PlatformNames.Linux).KeepOnFailureCapBytes);

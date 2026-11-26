@@ -285,6 +285,33 @@ public sealed class AgentPolicyTests
         }
     }
 
+    /// <summary>
+    /// A tilde at a path's start names what runs to a separator or the path's end - a final line break before it among
+    /// them - and the path goes on from the name's end: <c>~+</c> is where the shell stands, what follows it read there;
+    /// <c>~name</c> that user's home beside the user's own, a name of digits that goes on in letters a user's and not the
+    /// directory stack's. A tilde before more than a name - a blank, a letter after <c>~+</c> - is none the shell expands,
+    /// and the path is read as written.
+    /// </summary>
+    [Fact]
+    public void ATildesName_RunsToASeparatorOrThePathsEnd_AndThePathGoesOnFromIt()
+    {
+        const string Home = "/home/me";
+        var homes = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Home))!;
+
+        Assert.Equal("src", AgentPolicy.HomeExpanded("~+/src", Home));
+        Assert.Equal(".", AgentPolicy.HomeExpanded("~+", Home));
+        Assert.Equal(Path.Join(homes, "bob") + "/src", AgentPolicy.HomeExpanded("~bob/src", Home));
+        Assert.Equal(Path.Join(homes, "bob") + @"\src", AgentPolicy.HomeExpanded(@"~bob\src", Home));
+        Assert.Equal(Path.Join(homes, "bob"), AgentPolicy.HomeExpanded("~bob", Home));
+        Assert.Equal(Path.Join(homes, "bob") + "\n", AgentPolicy.HomeExpanded("~bob\n", Home));
+        Assert.Equal(Path.Join(homes, "12a") + "/x", AgentPolicy.HomeExpanded("~12a/x", Home));
+        Assert.Equal("~bob x/y", AgentPolicy.HomeExpanded("~bob x/y", Home));
+        Assert.Equal("~+x/y", AgentPolicy.HomeExpanded("~+x/y", Home));
+        Assert.Equal(
+            "'~12/x' names a directory of the stack pushd keeps, which this does not know",
+            Assert.Throws<NotSupportedException>(() => AgentPolicy.HomeExpanded("~12/x", Home)).Message);
+    }
+
     [Fact]
     public void NoCommandNamesASlotOrAClaudeCodeDirectory()
     {
@@ -906,7 +933,7 @@ public sealed class AgentPolicyTests
             [
                 "init", "create-worktree", "delete-worktree", "create-orchestrator", "delete-orchestrator", "list-agent-providers",
                 "run-orchestrator", "resume-orchestrator", "answer-orchestrator", "amend-orchestrator-request", "pause-orchestrator",
-                "stop-orchestrator", "ask-orchestrator-status", "ask-orchestrator", "create-agent", "seed-agent", "refresh-agent",
+                "stop-orchestrator", "ask-orchestrator-status", "ask-orchestrator", "analyze-orchestrator-report", "create-agent", "seed-agent", "refresh-agent",
                 "rebase-agent", "fold-agent", "delete-agent", "legs", "install-missing-tools", "update-tool", "sync", "build", "test",
                 "run", "check-mutations", "stop-run", "clean", "host-exec", "up", "down", "host-agent", "sync-serve", "host-hold",
                 "contain-exec", "isolate-exec", "workflow-cache",

@@ -14,6 +14,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
 using DssHarness.Core.Tools;
 
 namespace DssHarness.Tests;
@@ -126,15 +127,16 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// What a request says of the command it asks for beside its line - the run it is a leg of, the drive its WSL disk grows
-    /// on - is handed to the command, never added to its arguments; a run that is not a run id, and a blank drive, are
-    /// refused, and nothing runs.
+    /// What a request says of the command it asks for beside its line - the run it is a leg of, that run's priority, the
+    /// drive its WSL disk grows on - is handed to the command, never added to its arguments; a run that is not a run id, a
+    /// priority below the least a run has, and a blank drive, are refused, and nothing runs.
     /// </summary>
     [Theory]
-    [InlineData("20261008-120000-0a1b2c3d", "C:\\", null)]
-    [InlineData("../../somewhere", "C:\\", "the request names its run as '../../somewhere', which is not a run id")]
-    [InlineData("20261008-120000-0a1b2c3d", " ", "the request names a blank drive as where WSL keeps the distribution's disk")]
-    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, string drive, string? refusal)
+    [InlineData("20261008-120000-0a1b2c3d", 8, "C:\\", null)]
+    [InlineData("../../somewhere", 8, "C:\\", "the request names its run as '../../somewhere', which is not a run id")]
+    [InlineData("20261008-120000-0a1b2c3d", 0, "C:\\", "the request names its run's priority as 0, below the least a run has, 1")]
+    [InlineData("20261008-120000-0a1b2c3d", 8, " ", "the request names a blank drive as where WSL keeps the distribution's disk")]
+    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, int priority, string drive, string? refusal)
     {
         using var copy = new TempDirectory();
         using var error = new StringWriter();
@@ -148,6 +150,7 @@ public sealed class HostAgentServiceTests
                 Arguments = ["build", "--json"],
                 Nonce = Nonce,
                 RunId = run,
+                Priority = priority,
                 DiskImageDrive = drive,
             },
             HostAgentProtocol.JsonOptions);
@@ -167,7 +170,7 @@ public sealed class HostAgentServiceTests
         {
             Assert.Equal(HarnessExit.Success, exitCode);
             Assert.NotNull(ranFor);
-            Assert.Equal((run, drive, Nonce), (ranFor.RunId?.ToString(), ranFor.DiskImageDrive, ranFor.Nonce));
+            Assert.Equal((run, (int?)priority, drive, Nonce), (ranFor.RunId?.ToString(), ranFor.Priority, ranFor.DiskImageDrive, ranFor.Nonce));
             Assert.Equal(["build", "--json"], ranWith!);
         }
         else
@@ -214,6 +217,69 @@ public sealed class HostAgentServiceTests
 
         Assert.True(HostAgentProtocol.TryReadNoteLine(written[3], out var nonceOfNone, out var kindOfNone, out var lastOfNone, out var base64OfNone));
         Assert.Equal((Nonce, NoteSink.VerifiedKind, true, ""), (nonceOfNone, kindOfNone, lastOfNone, base64OfNone));
+    }
+
+    /// <summary>
+    /// A leg an ssh host admits tells the machine that dispatched it each stage of its admission there - and, where the
+    /// stage is the machine's queue, who stands ahead in it - by a note of one line of JSON its watch is told, while
+    /// every other note reaches the command's own reader, and one that does not read as this build writes is dropped. A
+    /// run nobody dispatched, with no watch, tells nobody.
+    /// </summary>
+    [Fact]
+    public void AHostsAdmissionStages_ReachTheDispatchersWatch_AsNotes()
+    {
+        var lines = new StringWriter();
+        var origin = CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, Arguments = ["check-mutations"], Nonce = Nonce }));
+        var notes = new HostNotes(origin, new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false));
+        var told = LegRunService.Told("linux", "linux/arm-1", watch: null, notes, origin)!;
+
+        told(new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"])));
+        notes.Write(NoteSink.ArmKind, "an arm's verdict");
+        notes.Write(LegRunService.AdmissionNote, "linux\nlinux/arm-1\nQueue");
+        told(new AdmissionTold(AdmissionStage.Taken));
+
+        var watch = new StagesWatch();
+        var command = new List<(string Kind, string Text)>();
+        var agent = new HostAgentLines(Nonce, LegRunService.NotesOf((kind, text) => command.Add((kind, text)), watch));
+
+        foreach (var line in lines.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            Assert.False(agent.Error(line.TrimEnd('\r')), "no piece of a note is relayed");
+        }
+
+        Assert.Equal(
+            [
+                ("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/them"]))),
+                ("linux", "linux/arm-1", new AdmissionTold(AdmissionStage.Taken)),
+            ],
+            watch.Told);
+        Assert.Equal([(NoteSink.ArmKind, "an arm's verdict")], command);
+        Assert.Null(LegRunService.Told("linux", "linux", watch: null, notes, CommandOrigin.Typed));
+    }
+
+    /// <summary>A watch that keeps each stage of its legs' admission it is told, in order.</summary>
+    private sealed class StagesWatch : ILegRunWatch
+    {
+        /// <summary>Each stage told, with the leg and what asked.</summary>
+        public List<(string Leg, string Asking, AdmissionTold Told)> Told { get; } = [];
+
+        public void Began(RunId run, string runDirectory)
+        {
+        }
+
+        public void Placed(IReadOnlyList<LegPlace> legs)
+        {
+        }
+
+        public void CopyMade(string leg)
+        {
+        }
+
+        public void Ended(LegEntry line)
+        {
+        }
+
+        public void Admitting(string leg, string asking, AdmissionTold told) => Told.Add((leg, asking, told));
     }
 
     /// <summary>
@@ -1628,7 +1694,7 @@ public sealed class HostAgentServiceTests
         var run = new HostAgentRequest { Kind = HostAgentRequestKind.Run };
         var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(run, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
 
-        Assert.Equal(15, HostAgentProtocol.Version);
+        Assert.Equal(16, HostAgentProtocol.Version);
         Assert.Equal(15, read.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(15), "host-agent: beat"), HostAgentProtocol.BeatOf(read));
         Assert.Null(HostAgentProtocol.BeatOf(new HostAgentRequest { Kind = HostAgentRequestKind.Run, BeatSeconds = 0 }));

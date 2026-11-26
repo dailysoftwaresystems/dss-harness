@@ -1,0 +1,84 @@
+node:assert:125
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+3 !== 2
+
+    at check (/home/runner/work/app/app/node_assert.js:4:10)
+    at Object.<anonymous> (/home/runner/work/app/app/node_assert.js:7:1)
+    at Module._compile (node:internal/modules/cjs/loader:1356:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)
+    at Module.load (node:internal/modules/cjs/loader:1197:32)
+    at Module._load (node:internal/modules/cjs/loader:1013:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)
+    at node:internal/main/run_main_module:28:49 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 3,
+  expected: 2,
+  operator: 'strictEqual'
+}
+
+Node.js v18.19.1
+node:internal/fs/utils:159
+    throw new ERR_INVALID_ARG_VALUE(encoding, 'encoding', reason);
+    ^
+
+TypeError [ERR_INVALID_ARG_VALUE]: The argument 'nope' is invalid encoding. Received 'encoding'
+    at new NodeError (node:internal/errors:405:5)
+    at assertEncoding (node:internal/fs/utils:159:11)
+    at getOptions (node:internal/fs/utils:335:5)
+    at Object.readFileSync (node:fs:462:13)
+    at readState (/home/runner/work/app/app/node_code.js:4:13)
+    at Object.<anonymous> (/home/runner/work/app/app/node_code.js:7:1)
+    at Module._compile (node:internal/modules/cjs/loader:1356:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)
+    at Module.load (node:internal/modules/cjs/loader:1197:32)
+    at Module._load (node:internal/modules/cjs/loader:1013:12) {
+  code: 'ERR_INVALID_ARG_VALUE'
+}
+
+Node.js v18.19.1
+/home/runner/work/app/app/node_new.js:4
+      throw new TypeError('a store needs a path');
+      ^
+
+TypeError: a store needs a path
+    at new Store (/home/runner/work/app/app/node_new.js:4:13)
+    at open (/home/runner/work/app/app/node_new.js:10:10)
+    at Object.<anonymous> (/home/runner/work/app/app/node_new.js:13:1)
+    at Module._compile (node:internal/modules/cjs/loader:1356:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)
+    at Module.load (node:internal/modules/cjs/loader:1197:32)
+    at Module._load (node:internal/modules/cjs/loader:1013:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)
+    at node:internal/main/run_main_module:28:49
+
+Node.js v18.19.1
+/home/runner/work/app/app/node_async.js:3
+  throw new RangeError(`no record named ${name}`);
+        ^
+
+RangeError: no record named missing
+    at load (/home/runner/work/app/app/node_async.js:3:9)
+    at async main (/home/runner/work/app/app/node_async.js:7:3)
+
+Node.js v18.19.1
+/home/runner/work/app/app/node_plain.js:3
+    throw new Error('the queue was drained');
+    ^
+
+Error: the queue was drained
+    at Runner.drain (/home/runner/work/app/app/node_plain.js:3:11)
+    at runAll (/home/runner/work/app/app/node_plain.js:8:10)
+    at Object.<anonymous> (/home/runner/work/app/app/node_plain.js:11:1)
+    at Module._compile (node:internal/modules/cjs/loader:1356:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)
+    at Module.load (node:internal/modules/cjs/loader:1197:32)
+    at Module._load (node:internal/modules/cjs/loader:1013:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)
+    at node:internal/main/run_main_module:28:49
+
+Node.js v18.19.1

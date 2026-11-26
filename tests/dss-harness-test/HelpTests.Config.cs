@@ -354,4 +354,30 @@ public sealed partial class HelpTests
             Prose.Words(config.StandardOutput),
             StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The config topic names every member of a problem matcher - its name, pattern, severity and how a severity group is
+    /// read, the groups of its place, its end and its stack's frame and until - and which phases each reads: those whose
+    /// runner or invocation names it in matchers, or every one where nothing names it, a CI job's log by all.
+    /// </summary>
+    [Fact]
+    public void ConfigTopic_NamesEveryMemberOfAMatcher_AndWhichPhasesItReads()
+    {
+        var config = Prose.Words(HelpText.Of("config").StandardOutput);
+
+        Assert.Contains(
+            "results matchers: a problem matcher for any other tool, in the shape editors and CI take, so its output is digested as "
+                + "every tool's is - name, unique, the tool its diagnostics name; pattern, a regex; severity, error, warning or note, or "
+                + "a group of the pattern whose text is read as editors read it (warn a warning; info, hint and notice a note; anything "
+                + "else an error), error where it is left out; file, line, column, code and message, the groups holding each, the whole "
+                + "match the message where none is named; end, the pattern of the last line of a diagnostic that runs on past its "
+                + "match; and stack, where the tool prints a chain under it - frame, a pattern naming a frame's file, line, column, "
+                + "symbol or module, and until, the line it ends at, else the first line no frame matches. A predefined runner's or a "
+                + "test invocation's matchers names the matchers that read its output; one nothing names reads every build, test and "
+                + "runner phase, and a CI job's log is read by all. Validated at load, a name no matcher answers to refused, each "
+                + "pattern matched in time linear in what it reads, so one holding a backreference, a lookaround or an atomic group is "
+                + "refused, naming it",
+            config,
+            StringComparison.Ordinal);
+    }
 }

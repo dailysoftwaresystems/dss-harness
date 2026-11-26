@@ -653,6 +653,129 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// An issue the triage answers next for is owed the run's next round, sized - never listed, never given to the
+    /// recovery - and <c>{run.preExisting}</c> says so; the run's own file of next-round issues holds it with its size,
+    /// and an answer whose size names no file the fix touches is refused, its course never taken.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueAnsweredNext_IsOwedTheRunsNextRound_Sized()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: tell
+                type: pause
+                always: true
+                question: 'what was there before: {run.preExisting}'
+                options: [ok, no]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var answer = (JsonObject)Course("next", "a broken test").Output!.DeepClone();
+        answer["size"] = new JsonObject
+        {
+            ["files"] = new JsonArray("src/Parser.cs"),
+            ["build"] = "the leg the parser tests build",
+            ["measureFirst"] = new JsonArray("the parser's cells of the universe"),
+        };
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer));
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+            _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            var asked = coordinator.OpenQuestions.Single(question => question.Kind == "pause");
+            Assert.Equal("what was there before: next round - a broken test (src/Parser.cs)", asked.Problem);
+        }
+
+        // The run's next round holds the issue, sized, by its id; its list of listed issues holds none.
+        var owed = store.ReadNextRound(layout);
+
+        Assert.NotNull(owed);
+        var issue = Assert.Single(owed.Issues);
+        Assert.Equal("nx-1", issue.Id);
+        Assert.Equal("a broken test", issue.Title);
+        Assert.Equal(["src/Parser.cs"], issue.Files);
+        Assert.Equal("the leg the parser tests build", issue.Build);
+        Assert.Equal(["the parser's cells of the universe"], issue.MeasureFirst);
+        Assert.Empty(store.ReadPreExistingIssues(layout)!.Issues);
+
+        var status = store.ReadWorkflowStatus(layout);
+
+        Assert.NotNull(status);
+        Assert.Equal(new WorkflowPreExisting(0, 0, 0, 0), status.Progress.PreExisting);
+    }
+
+    /// <summary>
+    /// An issue the triage answers next for with no file its fix touches - none at all, or one whose name is blank - is
+    /// refused, the triage failing: the course sizes the work, a size with no file sizes nothing, and the triage is held to
+    /// the rules the run's file of the issues keeps, so it never ends done with an issue the next write could not keep.
+    /// </summary>
+    /// <param name="files">The files the size names, as JSON.</param>
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("[\" \"]")]
+    [InlineData("[\"src/Parser.cs\", \"\"]")]
+    public async Task AnIssueAnsweredNext_ByASizeThatNamesNoFile_IsRefused(string files)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+                onFailure: continue
+            """);
+        var answer = (JsonObject)Course("next", "a broken test").Output!.DeepClone();
+        answer["size"] = new JsonObject
+        {
+            ["files"] = JsonNode.Parse(files),
+            ["build"] = "",
+            ["measureFirst"] = new JsonArray(),
+        };
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var triage = coordinator.Instances["triage"];
+
+        Assert.Equal(FlowInstanceState.Failed, triage.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, triage.Exit);
+        Assert.Equal(
+            "its answer's issue does not read back: its size names no file the fix touches: a next round's item is sized by its files",
+            triage.Error);
+    }
+
+    /// <summary>
     /// An issue a triage holds already - the same title at the same place, reported again by a later step, its other
     /// words different - raises nothing, and the run's records say which triage holds it: each found issue is triaged
     /// once, and a repeat worded differently stays the triage's to merge by the duplicate course.
@@ -1213,9 +1336,9 @@ public sealed class FlowPreExistingTests
 
     /// <summary>A triage answer that says no course the engine takes - none at all, or one it does not know - fails the triage step, and the issue vanishes nowhere unsaid.</summary>
     [Theory]
-    [InlineData("""{"title": "a broken test"}""", "its answer says no course: it is one of fix, list, duplicate, unproven")]
-    [InlineData("""{"course": 7, "title": "a broken test"}""", "its answer says no course: it is one of fix, list, duplicate, unproven")]
-    [InlineData("""{"course": "later", "title": "a broken test"}""", "its answer's course 'later' is none of fix, list, duplicate, unproven")]
+    [InlineData("""{"title": "a broken test"}""", "its answer says no course: it is one of fix, list, next, duplicate, unproven")]
+    [InlineData("""{"course": 7, "title": "a broken test"}""", "its answer says no course: it is one of fix, list, next, duplicate, unproven")]
+    [InlineData("""{"course": "later", "title": "a broken test"}""", "its answer's course 'later' is none of fix, list, next, duplicate, unproven")]
     public async Task ATriageAnswerWithNoCourseTheEngineTakes_FailsTheTriageStep(string answer, string error)
     {
         var definition = Parse("""
@@ -1401,5 +1524,451 @@ public sealed class FlowPreExistingTests
             var asked = resumed.OpenQuestions.Single(question => question.Kind == "pause");
             Assert.Equal("what was there before: listed - a broken test (src/Parser.cs); listed - a stale document (src/Parser.cs)", asked.Problem);
         }
+    }
+
+    /// <summary>
+    /// The run's words of the classes its items closed are gathered by their one owner from the steps that judge and
+    /// count them, known by their type: each item's record as its newest class-closure check that ended done judged it
+    /// - a check run again after a rework is the one that stands - whole, and each class's claim alone; the hotspots
+    /// that check named; the classes the item's newest routing says its reviews reopened, with how many rounds; and each
+    /// item's counts, read from that record and those routings. A plan audit's own closure member is no item's record,
+    /// and an item no check judged - one whose checks were skipped - has none; where the run holds none of these, each
+    /// says none.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsWords_GatherEachItemsNewestJudgedRecord_ByTheStepsThatJudgeAndCountIt()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: audit
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: items
+                forEach: 'audit.items'
+                dependsOn: [audit]
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: worker.md
+                    when: "item.name == 'a'"
+                  - name: closing
+                    type: class-closure
+                    in: make
+                    when: "item.name == 'a'"
+                    dependsOn: [make]
+                    classes: 'item.classes'
+                    record: 'item.record'
+                  - name: route
+                    type: route-findings
+                    in: make
+                    when: "item.name == 'a'"
+                    dependsOn: [closing]
+                    findings: 'item.findings'
+                    classes: 'item.classes'
+                    record: 'item.record'
+                  - name: reclosing
+                    type: class-closure
+                    in: make
+                    when: "item.name == 'a'"
+                    dependsOn: [route]
+                    classes: 'item.classes'
+                    record: 'item.record'
+              - name: tell
+                type: pause
+                always: true
+                question: |-
+                  records: {run.closure}
+                  claims: {run.claims}
+                  reopened: {run.reopened}
+                  hotspots: {run.hotspots}
+                  counts: {run.counts}
+                options: [ok]
+            """);
+        FlowStepResult Answer(JsonObject output) => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: output);
+        JsonObject Class(string @class, string claim) => new() { ["class"] = @class, ["claim"] = claim };
+        JsonObject Closed(string @class, string claim)
+        {
+            var closed = Class(@class, claim);
+            closed["sites"] = new JsonArray(new JsonObject { ["path"] = "src/Old.cs", ["after"] = "reads-home" }, new JsonObject { ["path"] = "docs/old.md", ["after"] = "deleted" });
+            closed["universe"] = new JsonObject { ["axes"] = new JsonArray(), ["cellsPinned"] = 3, ["cellsArmed"] = 0 };
+            closed["neighbours"] = new JsonArray(new JsonObject { ["cell"] = "md", ["result"] = "unmeasured", ["reason"] = "no reader" });
+            return closed;
+        }
+        JsonObject Item(string name) => new() { ["name"] = name, ["classes"] = new JsonArray(), ["record"] = new JsonArray(), ["findings"] = new JsonArray() };
+        JsonObject Checked(JsonArray record, JsonArray hotspots) => new()
+        {
+            ["passed"] = true,
+            ["problems"] = new JsonArray(),
+            ["hotspots"] = hotspots,
+            ["touches"] = new JsonArray(),
+            ["record"] = record,
+        };
+        var runner = new FakeRunner()
+            .On("audit", (FlowStepRun _) => Answer(new JsonObject
+            {
+                ["items"] = new JsonArray(Item("a"), Item("b")),
+                ["closure"] = new JsonArray(new JsonObject { ["class"] = "c-plan", ["missingSites"] = new JsonArray("src/Plan.cs"), ["missingCells"] = new JsonArray() }),
+            }))
+            .On("closing", (FlowStepRun _) => Answer(Checked(new JsonArray(Class("c-rate", "named a case: one format")), new JsonArray())))
+            .On("route", (FlowStepRun _) => Answer(new JsonObject
+            {
+                ["rework"] = new JsonArray(),
+                ["homeAudit"] = new JsonArray(),
+                ["reopened"] = new JsonArray(new JsonObject { ["class"] = "c-rate", ["rounds"] = 2 }),
+            }))
+            .On("reclosing", (FlowStepRun _) => Answer(Checked(
+                new JsonArray(Closed("c-rate", "the rate holds over every format"), Class("c-frame", "the frame's size is decided once")),
+                new JsonArray(new JsonObject { ["class"] = "c-rate", ["path"] = "src/Rates/Home.cs", ["touches"] = 6 }))));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "records: [{\"class\":\"c-rate\",\"claim\":\"the rate holds over every format\",\"sites\":[{\"path\":\"src/Old.cs\",\"after\":\"reads-home\"},{\"path\":\"docs/old.md\",\"after\":\"deleted\"}],"
+                + "\"universe\":{\"axes\":[],\"cellsPinned\":3,\"cellsArmed\":0},\"neighbours\":[{\"cell\":\"md\",\"result\":\"unmeasured\",\"reason\":\"no reader\"}]},"
+                + "{\"class\":\"c-frame\",\"claim\":\"the frame's size is decided once\"}]\n"
+                + "claims: 'c-rate': the rate holds over every format; 'c-frame': the frame's size is decided once\n"
+                + "reopened: 'c-rate' reopened in 2 round(s)\n"
+                + "hotspots: 'c-rate' home 'src/Rates/Home.cs' touched 6 times\n"
+                + "counts: 'items[0]': 1 review round(s), 0 home audit(s), classes 'c-rate' (1 site(s) consolidated, 1 deleted, 3 cell(s) pinned, "
+                + "0 neighbour(s) measured, 1 unmeasured, sent back 2 time(s)), 'c-frame' (0 site(s) consolidated, 0 deleted, 0 cell(s) pinned, "
+                + "0 neighbour(s) measured, 0 unmeasured, sent back 0 time(s))",
+            coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+
+        // A run whose items no check judged says none of each.
+        var none = new FlowCoordinator(
+            definition,
+            new FakeRunner().On("audit", (FlowStepRun _) => Answer(new JsonObject { ["items"] = new JsonArray(Item("b")), ["closure"] = new JsonArray() })),
+            new RunnerFacts(),
+            new JumpingClock());
+
+        _ = await none.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal("records: none\nclaims: none\nreopened: none\nhotspots: none\ncounts: none", none.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+    }
+
+    /// <summary>The issues a run owes its next round are their file's too: a resume by another engine restores them, and the run's words say what became of each.</summary>
+    [Fact]
+    public async Task TheIssuesARunOwesItsNextRound_AreRestoredAtAResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: later
+                type: orient
+                dependsOn: [think]
+              - name: tell
+                type: pause
+                dependsOn: [later]
+                question: 'what was there before: {run.preExisting}'
+                options: [ok, no]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var answer = (JsonObject)Course("next", "a broken test").Output!.DeepClone();
+        answer["size"] = new JsonObject { ["files"] = new JsonArray("src/Parser.cs"), ["build"] = "", ["measureFirst"] = new JsonArray() };
+        var first = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer));
+        first.Hold("later");
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+
+        FlowResumeState taken;
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Step == "triage" && step.State is FlowInstanceState.Done or FlowInstanceState.Failed));
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            coordinator.RequestPause("interrupt", all: true);
+            var end = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+
+            var owed = store.ReadNextRound(layout);
+
+            Assert.NotNull(owed);
+            Assert.Equal(("nx-1", "a broken test", "src/Parser.cs"), (owed.Issues[0].Id, owed.Issues[0].Title, owed.Issues[0].Files[0]));
+
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        }
+
+        using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = new FlowCoordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
+            var done = await resumed.RunAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, done.Status);
+
+            var asked = resumed.OpenQuestions.Single(question => question.Kind == "pause");
+            Assert.True(
+                asked.Problem == "what was there before: next round - a broken test (src/Parser.cs)",
+                asked.Problem);
+        }
+    }
+
+    /// <summary>
+    /// An issue the run owes its next round is given to a reader as the schema that types <c>run.nextRound</c> says it
+    /// is - each member that schema names, in order, every one present and of its type - for both are made from the one
+    /// list of the value's members; what settled it is the run's file's, never the value's.
+    /// </summary>
+    [Fact]
+    public void AnIssueOwed_IsGivenAsTheSchemaTypingRunNextRoundSays()
+    {
+        var issue = new FlowNextIssue("nx-1", "a broken test", "what it is", ["src/Parser.cs"], ["src/Parser.cs", "src/Lexer.cs"], "the parser", ["its cells"], "triage", DateTimeOffset.UnixEpoch) { SettledBy = "rounds#2.items[0]" };
+        var schema = FlowNextIssue.ValueSchema();
+
+        Assert.Empty(DssHarness.Core.Schemas.JsonSchemaSubset.SubsetProblems(schema));
+        Assert.Empty(DssHarness.Core.Schemas.JsonSchemaSubset.Problems(schema, issue.Value()));
+        Assert.Equal(
+            """{"id":"nx-1","title":"a broken test","description":"what it is","where":["src/Parser.cs"],"files":["src/Parser.cs","src/Lexer.cs"],"build":"the parser","measureFirst":["its cells"]}""",
+            issue.Value().ToJsonString());
+        Assert.Equal(
+            ["id", "title", "description", "where", "files", "build", "measureFirst"],
+            [.. ((JsonArray)schema["required"]!).Select(member => member!.GetValue<string>())]);
+        Assert.Equal(
+            ["id", "title", "description", "where", "files", "build", "measureFirst"],
+            [.. ((JsonObject)schema["properties"]!).Select(member => member.Key)]);
+    }
+
+    /// <summary>
+    /// An issue the run owes its next round is owed still where the engine stopped after the triage's end was written
+    /// and before the run's file of the issues was: the resume reads it from the triage's own recorded answer, the run's
+    /// words say it, and the file holds it again.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueOwedTheNextRound_IsOwedStill_WhereTheEngineStoppedBeforeItsFileWasWritten()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: later
+                type: orient
+                dependsOn: [think]
+              - name: tell
+                type: pause
+                dependsOn: [later]
+                question: 'what was there before: {run.preExisting}'
+                options: [ok, no]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var answer = (JsonObject)Course("next", "a broken test").Output!.DeepClone();
+        answer["size"] = new JsonObject { ["files"] = new JsonArray("src/Parser.cs"), ["build"] = "", ["measureFirst"] = new JsonArray() };
+        var first = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer));
+        first.Hold("later");
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Step == "triage" && step.State is FlowInstanceState.Done or FlowInstanceState.Failed));
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            coordinator.RequestPause("interrupt", all: true);
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Status);
+        }
+
+        // The engine stopped where the triage's end was written and the run's file of the issues was not: the file holds
+        // what the session's start wrote, no issue.
+        store.WriteNextRound(layout, new FlowNextRoundFile(1, "r1", clock.GetUtcNow(), []));
+        var taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+
+        using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = new FlowCoordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
+            Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(TestContext.Current.CancellationToken)).Status);
+
+            Assert.Equal("what was there before: next round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+        }
+
+        var owed = Assert.Single(store.ReadNextRound(layout)!.Issues);
+        Assert.Equal(("nx-1", "a broken test", "triage", (string?)null), (owed.Id, owed.Title, owed.FoundBy, owed.SettledBy));
+    }
+
+    /// <summary>
+    /// An issue the run owes its next round is held to by the check that opens a round alone - a validate-plan beside
+    /// the forEach that expands from it, in an iteration of a repeat - and never by another check, whose items are no
+    /// round's; it is settled by the work item that names it in settles once that item ended done with a commit of its
+    /// own made, whether the run takes plan updates or not: an item that ended done with nothing committed - as one a
+    /// person skipped does - settles nothing, and the next round holds the issue again. The run's file says which item
+    /// settled it and the run's words say it was fixed; and where the engine stopped after the item's end was written
+    /// and before the file took the settling, the resume settles it again from the item's own records.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueOwedTheNextRound_IsHeldByTheRoundsCheckAlone_AndSettledByAnItemWhoseWorkLanded()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: side-check
+                type: validate-plan
+                items: 'think.items'
+                dependsOn: [think]
+              - name: rounds
+                dependsOn: [think]
+                repeat:
+                  until: 'empty(run.nextRound)'
+                  maxIterations: 3
+                steps:
+                  - name: plan
+                    type: reason
+                    prompt: plan.md
+                    outputs: plan.json
+                  - name: item-check
+                    type: validate-plan
+                    items: 'plan.items'
+                    dependsOn: [plan]
+                  - name: items
+                    forEach: 'item-check.items'
+                    dependsOn: [item-check]
+                    steps:
+                      - name: checkpoint
+                        type: commit
+                        message: checkpoint
+              - name: later
+                type: orient
+                dependsOn: [rounds, side-check]
+              - name: tell
+                type: pause
+                dependsOn: [later]
+                question: 'what was there before: {run.preExisting}'
+                options: [ok, no]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var answer = (JsonObject)Course("next", "a broken test").Output!.DeepClone();
+        answer["size"] = new JsonObject { ["files"] = new JsonArray("src/Parser.cs"), ["build"] = "", ["measureFirst"] = new JsonArray() };
+        var later = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        JsonNode Settling() => new JsonArray(new JsonObject { ["name"] = "fix-the-parser", ["settles"] = "nx-1" });
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var given = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Step == "triage" && step.State is FlowInstanceState.Done or FlowInstanceState.Failed));
+
+            // Every check, the rounds' and the other, starts once the issue is owed; each says what it was given.
+            FlowStepResult Checked(FlowStepRun run, JsonNode items)
+            {
+                lock (given)
+                {
+                    given[run.Instance] = run.Read is { } read && read.TryGetValue("next", out var next) ? next.ToNode()?.ToJsonString() : null;
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["ok"] = true, ["problems"] = new JsonArray(), ["items"] = items });
+            }
+
+            var runner = new FakeRunner()
+                .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = new JsonArray() }, preExisting: [Issue("a broken test")]))
+                .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer))
+                .OnAsync("side-check", async run =>
+                {
+                    await watched.Seen;
+                    return Checked(run, new JsonArray());
+                })
+                .OnAsync("plan", async run =>
+                {
+                    await watched.Seen;
+                    return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = Settling() });
+                })
+                .On("item-check", run => Checked(run, Settling()))
+
+                // The first round's item lands nothing - its commit took no path - and the second's lands its fix.
+                .On("checkpoint", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+                {
+                    ["committed"] = run.Instance.StartsWith("rounds#2.", StringComparison.Ordinal),
+                    ["sha"] = run.Instance.StartsWith("rounds#2.", StringComparison.Ordinal) ? "0123456789abcdef0123456789abcdef01234567" : null,
+                    ["paths"] = new JsonArray(),
+                    ["ignored"] = new JsonArray(),
+                }))
+
+                // The step after the rounds holds the run until the test pauses it.
+                .OnAsync("later", _ =>
+                {
+                    later.TrySetResult();
+                    return new TaskCompletionSource<FlowStepResult>().Task;
+                });
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+            await later.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            coordinator.RequestPause("interrupt", all: true);
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Status);
+
+            var owed = """[{"id":"nx-1","title":"a broken test","description":"what it is","where":["src/Parser.cs"],"files":["src/Parser.cs"],"build":"","measureFirst":[]}]""";
+
+            Assert.Equal(
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    ["side-check"] = null,
+                    ["rounds#1.item-check"] = owed,
+                    ["rounds#2.item-check"] = owed,
+                },
+                given);
+            Assert.DoesNotContain(runner.Started, started => started.Instance.StartsWith("rounds#3.", StringComparison.Ordinal));
+        }
+
+        Assert.Equal("rounds#2.items[0]", Assert.Single(store.ReadNextRound(layout)!.Issues).SettledBy);
+
+        // The engine stopped where the item's end was written and the run's file of the issues was not.
+        var file = store.ReadNextRound(layout)!;
+        store.WriteNextRound(layout, file with { Issues = [.. file.Issues.Select(issue => issue with { SettledBy = null })] });
+        var taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+
+        using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
+            Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Status);
+
+            Assert.Equal("what was there before: fixed in a later round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+        }
+
+        Assert.Equal("rounds#2.items[0]", Assert.Single(store.ReadNextRound(layout)!.Issues).SettledBy);
     }
 }

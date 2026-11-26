@@ -19,6 +19,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="MaxInstances">The most step instances a run of this workflow may have, where the file says.</param>
 /// <param name="PushCheckpoints">Whether checkpoint commits are pushed as they are made.</param>
 /// <param name="HandoffSeconds">How long a paused reasoning step is given to write its handoff.</param>
+/// <param name="Priority">
+/// The run's priority, 1 where the file says nothing: what multiplies its tenant's share of the dispatch queue's fair
+/// order, so a run the repository needs first is taken first without taking the machine.
+/// </param>
 /// <param name="Budget">What a whole run's reasoning may cost, and the reserve that pauses the run first.</param>
 /// <param name="Recommendations">The file holding the repository's bar for recommendations, relative to the workflow's directory.</param>
 /// <param name="Advisor">The agent that recommends an answer to a question the engine raises itself.</param>
@@ -51,6 +55,7 @@ public sealed record WorkflowDefinition(
     int? MaxInstances = null,
     bool? PushCheckpoints = null,
     int? HandoffSeconds = null,
+    int? Priority = null,
     FlowBudget? Budget = null,
     string? Recommendations = null,
     FlowAdvisor? Advisor = null,
@@ -410,6 +415,7 @@ public sealed record WorkflowOutput(
 /// </param>
 /// <param name="CodebaseGraph">The shape of the run's one graph where the run's own workflow declares none (<see cref="FlowUse.GraphOf"/>).</param>
 /// <param name="Amends">Whether the used workflow declares an amend - never applied, for an amend is a run's own, and refused where the use says false.</param>
+/// <param name="Priority">The priority its steps' legs ask the machine's dispatch queue at, where the file says.</param>
 public sealed record FlowUseOwn(
     FlowBudget? Budget = null,
     int? MaxReasoningAgents = null,
@@ -423,7 +429,8 @@ public sealed record FlowUseOwn(
     FlowReporter? Reporter = null,
     IReadOnlyDictionary<string, FlowAnswer>? Answers = null,
     FlowCodebaseGraph? CodebaseGraph = null,
-    bool Amends = false)
+    bool Amends = false,
+    int? Priority = null)
 {
     /// <summary>Whether the used workflow declares nothing of its own, so every key stays the caller's.</summary>
     [JsonIgnore]
@@ -441,6 +448,7 @@ public sealed record FlowUseOwn(
             FlowUseKey.BackoffSeconds => BackoffSeconds is not null,
             FlowUseKey.MaxInstances => MaxInstances is not null,
             FlowUseKey.HandoffSeconds => HandoffSeconds is not null,
+            FlowUseKey.Priority => Priority is not null,
             FlowUseKey.Advisor => Advisor is not null,
             _ => throw new ArgumentOutOfRangeException(nameof(key), key, "no run-level key a use governs by"),
         };
@@ -458,7 +466,7 @@ public sealed record FlowUseOwn(
                 declared.Add("budget");
             }
 
-            if (MaxReasoningAgents is not null || MaxParallelProcesses is not null || MaxOpenAgents is not null || MaxRetries is not null || BackoffSeconds is not null || HandoffSeconds is not null)
+            if (MaxReasoningAgents is not null || MaxParallelProcesses is not null || MaxOpenAgents is not null || MaxRetries is not null || BackoffSeconds is not null || HandoffSeconds is not null || Priority is not null)
             {
                 declared.Add("limits");
             }
@@ -633,6 +641,20 @@ public sealed record FlowUse(
     }
 
     /// <summary>
+    /// The priority the legs of the step at <paramref name="path"/> ask the machine's dispatch queue at: the
+    /// <c>priority</c> of the use that governs it where one declares it (<see cref="Governing"/>), else the run's own, and
+    /// the least a run has where neither says - the one rule every leg step's request reads.
+    /// </summary>
+    /// <param name="definition">The resolved definition the run holds.</param>
+    /// <param name="path">The step's declaration path.</param>
+    public static int PriorityOf(WorkflowDefinition definition, string path)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return Governing(definition, path, FlowUseKey.Priority)?.Own.Priority ?? definition.Priority ?? Execution.DispatchOrder.LeastPriority;
+    }
+
+    /// <summary>
     /// The shape of the run's one codebase graph, settled once for the run: the run's own workflow's where it declares
     /// one - a governing use's then said as not applied (<see cref="NotApplied"/>) - else the first a use that governs
     /// itself declares, in declaration order - the uses in recoveries among them - and null where none does, every
@@ -674,6 +696,9 @@ public enum FlowUseKey
 
     /// <summary><c>handoffSeconds</c>: how long a paused reasoning step of it is given to write its handoff.</summary>
     HandoffSeconds,
+
+    /// <summary><c>priority</c>: what its steps' legs ask the machine's dispatch queue at.</summary>
+    Priority,
 
     /// <summary><c>advisor</c>: the agent that recommends an answer to its steps' questions.</summary>
     Advisor,
@@ -1046,8 +1071,8 @@ public sealed record WorkflowStep
     /// <summary>The values a <c>run</c> step hands its runner's inputs, each a template.</summary>
     public IReadOnlyDictionary<string, string> Inputs { get; init; } = NoInputValues;
 
-    /// <summary>The arms a sweep runs, by id; every arm where the file says nothing.</summary>
-    public IReadOnlyList<string> Arms { get; init; } = [];
+    /// <summary>The arms a sweep runs, by id, written out or as an expression yielding them - the item's own, for its sweep; every arm where the file says nothing.</summary>
+    public FlowList? Arms { get; init; } = null;
 
     /// <summary>Whether a sweep drives only the arms with no recorded <c>passed</c> that still holds.</summary>
     public bool? Pending { get; init; } = null;
@@ -1096,6 +1121,9 @@ public sealed record WorkflowStep
 
     /// <summary>An expression yielding the list of work items a plan check checks.</summary>
     public string? Items { get; init; } = null;
+
+    /// <summary>An expression yielding the findings a route-findings step routes by class.</summary>
+    public string? Findings { get; init; } = null;
 
     /// <summary>An expression yielding the pieces of a plan update, checked with the items.</summary>
     public string? Scope { get; init; } = null;

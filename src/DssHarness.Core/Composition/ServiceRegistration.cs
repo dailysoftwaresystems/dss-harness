@@ -1,6 +1,7 @@
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
+using DssHarness.Core.Application.Dispatch;
 using DssHarness.Core.Application.Hosting;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
@@ -103,13 +104,17 @@ public static class ServiceRegistration
         services.AddSingleton(origin);
 
         // The only registrations that observe the operating system: which system this is, how it
-        // expresses a file's permissions, and how it publishes its process table. Everything
-        // registered after them depends on these abstractions, never on the platform.
+        // expresses a file's permissions, how it publishes its process table, and how macOS's sandbox
+        // and Windows' container stand on it. Everything registered after them depends on these
+        // abstractions, never on the platform.
         services.AddSingleton<IHostPlatform, HostPlatform>();
         services.AddSingleton(_ => FilePermissionsFactory.Create());
+        services.AddSingleton(MacSandboxHost.ThisMachine);
+        services.AddSingleton(WindowsContainerHost.ThisMachine);
         services.AddSingleton(provider => ProcessTableFactory.Create(
             provider.GetRequiredService<IHostPlatform>(),
-            provider.GetRequiredService<IProcessRunner>()));
+            provider.GetRequiredService<IProcessRunner>(),
+            provider.GetRequiredService<IHarnessOutput>()));
 
         services.AddSingleton<IProcessIdentity, ProcessIdentity>();
 
@@ -195,6 +200,7 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, AnchorBalanceStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, AnchorCitationsStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, ClassClosureStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RouteFindingsStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiReadStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiWaitStepRunner>();
         services.AddSingleton<FoldLedger>();
@@ -248,8 +254,11 @@ public static class ServiceRegistration
         services.AddSingleton<IIsolationPlatform>(provider => new IsolationPlatform(
             provider.GetRequiredService<IHostPlatform>(),
             provider.GetRequiredService<IProcessRunner>(),
+            mac: provider.GetRequiredService<MacSandboxHost>(),
+            windows: provider.GetRequiredService<WindowsContainerHost>(),
             told: static told => Waits.Told(told),
-            clock: provider.GetRequiredService<TimeProvider>()));
+            clock: provider.GetRequiredService<TimeProvider>(),
+            output: provider.GetRequiredService<IHarnessOutput>()));
         services.AddSingleton<Agents.Isolation.IAgentIsolation>(provider => new Agents.Isolation.AgentIsolation(
             provider.GetRequiredService<IIsolationPlatform>(),
             provider.GetRequiredService<Git.IGitClient>(),
@@ -433,18 +442,20 @@ public static class ServiceRegistration
         services.AddSingleton(provider => new MachineSettingsFile(
             provider.GetRequiredService<IFileSystem>(),
             () => MachineSettingsFile.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
-        services.AddSingleton(provider => new HeavyLegSlots(
+        services.AddSingleton(provider => new MachineDispatchQueue(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHarnessOutput>(),
             provider.GetRequiredService<IProcessIdentity>(),
-            () => HeavyLegSlots.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>()),
-            () => provider.GetRequiredService<MachineSettingsFile>().Read().Admission?.HeavyLegs));
+            () => MachineDispatchQueue.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>()),
+            () => provider.GetRequiredService<MachineSettingsFile>().Read().Admission?.HeavyLegs,
+            provider.GetRequiredService<IHostPlatform>().PathComparer()));
+        services.AddSingleton<IShowQueue, ShowQueue>();
         services.AddSingleton(provider => new TreeHolders(
             provider.GetRequiredService<RunLock>(),
-            provider.GetRequiredService<HeavyLegSlots>(),
+            provider.GetRequiredService<MachineDispatchQueue>(),
             provider.GetRequiredService<IProcessIdentity>()));
         services.AddSingleton(provider => new LegAdmission(
-            provider.GetRequiredService<HeavyLegSlots>(),
+            provider.GetRequiredService<MachineDispatchQueue>(),
             provider.GetRequiredService<IMemoryGauge>()));
         services.AddSingleton<IWslPageCache, WslPageCache>();
         services.AddSingleton<RunStops>();

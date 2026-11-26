@@ -93,8 +93,9 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The layout topic says how a leg's records are named - the logs of line, and records and logs in --json - and how
-    /// the run a host ran a leg under is said: once, by the dispatcher, and as hostRunId.
+    /// The layout topic says how a leg's records are named - the logs of line, and records and logs in --json - how
+    /// the run a host ran a leg under is said: once, by the dispatcher, and as hostRunId - and where the log of the phase
+    /// such a leg did not pass is kept once brought back.
     /// </summary>
     [Fact]
     public async Task LayoutTopic_SaysHowALegsRecordsAndAHostsRunAreNamed()
@@ -106,7 +107,9 @@ public sealed partial class HelpTests
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
         Assert.Contains(
-            "A host runs a leg under a run of its own: the dispatcher names it once, '<leg>: run <id> on <host>', never relaying the host's own line, and the leg's --json holds it as hostRunId.",
+            "A host runs a leg under a run of its own: the dispatcher names it once, '<leg>: run <id> on <host>', never relaying the host's own line, and the leg's --json holds it as hostRunId. "
+                + "The log of the phase such a leg did not pass is brought back as it ends, into this run's records beside a local leg's ('<leg>/<phase>.log'), and the leg's --json names it as logBroughtBack; "
+                + "one that cannot be brought back is said on the leg's progress, and named on no line.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }

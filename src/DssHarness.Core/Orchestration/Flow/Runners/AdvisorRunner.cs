@@ -96,7 +96,7 @@ public sealed class AdvisorRunner(
                 null,
                 null,
                 [],
-                new NoEvents(),
+                FlowRunEvents.None,
                 Handoff: null,
                 Issue: null,
                 Visit: 1,
@@ -420,20 +420,4 @@ public sealed class AdvisorRunner(
             ["answers"] = string.Join("\n", call.Answers.Select(option => $"- {option.Answer}: {option.Does}{(option.Text ? " (takes a text)" : string.Empty)}")),
             ["record"] = call.Record ?? string.Empty,
         });
-
-    /// <summary>The events of an advice, which tells the coordinator nothing while it runs - its answer is all it says.</summary>
-    private sealed class NoEvents : IFlowRunEvents
-    {
-        public void LegPlaced(string leg, bool inACopy) { }
-
-        public void EveryLegPlaced() { }
-
-        public void LegCopyMade(string leg) { }
-
-        public void LegEnded(string leg) { }
-
-        public void Used(long tokens, double? usd, string? uncounted = null) { }
-
-        public void HandoffTaken() { }
-    }
 }

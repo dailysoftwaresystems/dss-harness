@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="5"
+	failures="3"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="3"
+	timestamp="2026-11-23T20:07:52"
+	>
+	<testcase name="reads_records" classname="reads_records" time="0.000856772" status="run">
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="folds_duplicates" classname="folds_duplicates" time="0.000839995" status="fail">
+		<failure message="Failed"/>
+		<properties/>
+		<system-out>check.c:9: expected 2 records, found 3
+</system-out>
+	</testcase>
+	<testcase name="parses_input" classname="parses_input" time="0.0133871" status="fail">
+		<failure message="SEGFAULT"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="waits_for_lock" classname="waits_for_lock" time="3.00163" status="fail">
+		<failure message="Timeout"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="keeps_bounds" classname="keeps_bounds" time="0.0011754" status="run">
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+</testsuite>

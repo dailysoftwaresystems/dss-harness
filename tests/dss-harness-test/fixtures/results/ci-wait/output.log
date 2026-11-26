@@ -1,0 +1,99 @@
+﻿2026-11-23T16:48:03.9764568Z Current runner version: '2.338.2'
+2026-11-23T16:48:03.9800719Z ##[group]Runner Image Provisioner
+2026-11-23T16:48:03.9802149Z Hosted Compute Agent
+2026-11-23T16:48:03.9803205Z Version: 20261111.635
+2026-11-23T16:48:03.9804542Z Commit: b8a594ea514ff44cadb5342986c68b1eac6e22ed
+2026-11-23T16:48:03.9805938Z Build Date: 2026-11-11T01:49:01Z
+2026-11-23T16:48:03.9807150Z Worker ID: {60ac6548-90eb-4e3b-afd5-e9630c1f3ccd}
+2026-11-23T16:48:03.9808471Z Region: eastus
+2026-11-23T16:48:03.9809518Z Cloud: Azure
+2026-11-23T16:48:03.9810565Z ##[endgroup]
+2026-11-23T16:48:03.9813286Z ##[group]Operating System
+2026-11-23T16:48:03.9814614Z Ubuntu
+2026-11-23T16:48:03.9815644Z 26.04.1
+2026-11-23T16:48:03.9816706Z LTS
+2026-11-23T16:48:03.9817741Z ##[endgroup]
+2026-11-23T16:48:03.9818668Z ##[group]Runner Image
+2026-11-23T16:48:03.9819682Z Image: ubuntu-26.04
+2026-11-23T16:48:03.9820783Z Version: 20261116.202.1
+2026-11-23T16:48:03.9823055Z Included Software: https://github.com/actions/runner-images/blob/ubuntu26/20261116.202/images/ubuntu/Ubuntu2604-Readme.md
+2026-11-23T16:48:03.9826152Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu26%2F20261116.202
+2026-11-23T16:48:03.9828013Z ##[endgroup]
+2026-11-23T16:48:03.9829884Z ##[group]GITHUB_TOKEN Permissions
+2026-11-23T16:48:03.9833077Z Metadata: read
+2026-11-23T16:48:03.9834063Z Statuses: write
+2026-11-23T16:48:03.9835376Z ##[endgroup]
+2026-11-23T16:48:03.9838429Z Secret source: Actions
+2026-11-23T16:48:03.9840038Z Cache mode: write
+2026-11-23T16:48:03.9841307Z Prepare workflow directory
+2026-11-23T16:48:04.0339296Z Prepare all required actions
+2026-11-23T16:48:04.0496208Z Complete job name: ci-check
+2026-11-23T16:48:04.0500100Z ##[group]Run cmake --build build
+2026-11-23T16:48:04.0500200Z [1/3] Building C object CMakeFiles/store.dir/native/src/store.c.o
+2026-11-23T16:48:04.0500300Z FAILED: CMakeFiles/store.dir/native/src/store.c.o
+2026-11-23T16:48:04.0500400Z /usr/bin/cc   -o CMakeFiles/store.dir/native/src/store.c.o -c /home/runner/work/dss-harness/dss-harness/native/src/store.c
+2026-11-23T16:48:04.0500500Z /home/runner/work/dss-harness/dss-harness/native/src/store.c:12:9: error: unknown type name 'uint32_t'
+2026-11-23T16:48:04.0500600Z    12 |         uint32_t count;
+2026-11-23T16:48:04.0500700Z       |         ^~~~~~~~
+2026-11-23T16:48:04.0500800Z ninja: build stopped: subcommand failed.
+2026-11-23T16:48:04.0500900Z ##[endgroup]
+2026-11-23T16:48:04.0501000Z ##[group]Run dotnet build
+2026-11-23T16:48:04.0501100Z /home/runner/work/dss-harness/dss-harness/src/App/Program.cs(12,35): error CS0103: The name 'response' does not exist in the current context [/home/runner/work/dss-harness/dss-harness/src/App/App.csproj]
+2026-11-23T16:48:04.0501200Z /home/runner/work/dss-harness/dss-harness/src/App/Service.cs(40,13): warning CS0219: The variable 'count' is assigned but its value is never used [/home/runner/work/dss-harness/dss-harness/src/App/App.csproj]
+2026-11-23T16:48:04.0501300Z ##[endgroup]
+2026-11-23T16:48:04.0501400Z ##[group]Run cl /nologo /TP -c native\src\store.cpp
+2026-11-23T16:48:04.0501500Z D:\a\dss-harness\dss-harness\native\src\store.cpp(7): error C2065: 'response': undeclared identifier
+2026-11-23T16:48:04.0501600Z ##[endgroup]
+2026-11-23T16:48:04.1883660Z ##[group]Run set -euo pipefail
+2026-11-23T16:48:04.1885064Z [36;1mset -euo pipefail[0m
+2026-11-23T16:48:04.1885973Z [36;1m[0m
+2026-11-23T16:48:04.1887205Z [36;1m# Green only when every rolled-up job succeeded. "skipped" is not a pass here:[0m
+2026-11-23T16:48:04.1889123Z [36;1m# package is skipped exactly when the test matrix did not succeed.[0m
+2026-11-23T16:48:04.1890905Z [36;1mif [ "$TEST_RESULT" = "success" ] && [ "$PACKAGE_RESULT" = "success" ]; then[0m
+2026-11-23T16:48:04.1892314Z [36;1m  STATE=success[0m
+2026-11-23T16:48:04.1893368Z [36;1m  DESCRIPTION="Tests and package passed"[0m
+2026-11-23T16:48:04.1894686Z [36;1melse[0m
+2026-11-23T16:48:04.1895497Z [36;1m  STATE=failure[0m
+2026-11-23T16:48:04.1896660Z [36;1m  DESCRIPTION="test: $TEST_RESULT, package: $PACKAGE_RESULT"[0m
+2026-11-23T16:48:04.1897900Z [36;1mfi[0m
+2026-11-23T16:48:04.1898640Z [36;1m[0m
+2026-11-23T16:48:04.1899835Z [36;1mecho "test: $TEST_RESULT, package: $PACKAGE_RESULT, so ci-check is $STATE"[0m
+2026-11-23T16:48:04.1901255Z [36;1m[0m
+2026-11-23T16:48:04.1902081Z [36;1mif [ "$EVENT" = "pull_request" ]; then[0m
+2026-11-23T16:48:04.1903598Z [36;1m  # GitHub gives a pull request from a fork a read-only token, whatever this job[0m
+2026-11-23T16:48:04.1905643Z [36;1m  # asks for, so the status cannot be posted from its run. Said plainly, instead[0m
+2026-11-23T16:48:04.1907189Z [36;1m  # of as the refusal the API would answer with.[0m
+2026-11-23T16:48:04.1908199Z [36;1m  if [ "$HEAD_REPOSITORY" != "$REPOSITORY" ]; then[0m
+2026-11-23T16:48:04.1909614Z [36;1m    echo "::error::A pull request from a fork cannot post the 'Pipeline / ci-check result' status that merging requires. A maintainer runs the change from a branch in $REPOSITORY."[0m
+2026-11-23T16:48:04.1910949Z [36;1m    exit 1[0m
+2026-11-23T16:48:04.1911398Z [36;1m  fi[0m
+2026-11-23T16:48:04.1911815Z [36;1m[0m
+2026-11-23T16:48:04.1912462Z [36;1m  gh api --silent --method POST "repos/$REPOSITORY/statuses/$HEAD_SHA" \[0m
+2026-11-23T16:48:04.1913253Z [36;1m    -f state="$STATE" \[0m
+2026-11-23T16:48:04.1913844Z [36;1m    -f context="Pipeline / ci-check result" \[0m
+2026-11-23T16:48:04.1914773Z [36;1m    -f description="$DESCRIPTION" \[0m
+2026-11-23T16:48:04.1915377Z [36;1m    -f target_url="$RUN_URL"[0m
+2026-11-23T16:48:04.1915902Z [36;1mfi[0m
+2026-11-23T16:48:04.1916562Z [36;1m[0m
+2026-11-23T16:48:04.1917236Z [36;1m# The job's conclusion must agree with the status it posts. Ending on a successful[0m
+2026-11-23T16:48:04.1918283Z [36;1m# post would show a green job beside a red status: merging reads the status, but[0m
+2026-11-23T16:48:04.1919422Z [36;1m# people read the job first. Derived from STATE, so the two cannot drift apart.[0m
+2026-11-23T16:48:04.1920248Z [36;1mif [ "$STATE" != "success" ]; then[0m
+2026-11-23T16:48:04.1921056Z [36;1m  echo "::error::ci-check is failing: test $TEST_RESULT, package $PACKAGE_RESULT."[0m
+2026-11-23T16:48:04.1921842Z [36;1m  exit 1[0m
+2026-11-23T16:48:04.1922265Z [36;1mfi[0m
+2026-11-23T16:48:04.2243133Z shell: /usr/bin/bash -e {0}
+2026-11-23T16:48:04.2244165Z env:
+2026-11-23T16:48:04.2249738Z   GH_TOKEN: ***
+2026-11-23T16:48:04.2250304Z   EVENT: pull_request
+2026-11-23T16:48:04.2250947Z   REPOSITORY: dailysoftwaresystems/dss-harness
+2026-11-23T16:48:04.2251760Z   HEAD_SHA: 1127a814458e6bbe8974bc07fbf6c6df64df045d
+2026-11-23T16:48:04.2252610Z   HEAD_REPOSITORY: dailysoftwaresystems/dss-harness
+2026-11-23T16:48:04.2253700Z   RUN_URL: https://github.com/dailysoftwaresystems/dss-harness/actions/runs/45209696025
+2026-11-23T16:48:04.2254840Z   TEST_RESULT: failure
+2026-11-23T16:48:04.2255415Z   PACKAGE_RESULT: skipped
+2026-11-23T16:48:04.2255994Z ##[endgroup]
+2026-11-23T16:48:04.2436858Z test: failure, package: skipped, so ci-check is failure
+2026-11-23T16:48:05.1483402Z ##[error]ci-check is failing: test failure, package skipped.
+2026-11-23T16:48:05.1504036Z ##[error]Process completed with exit code 1.
+2026-11-23T16:48:05.1696373Z Cleaning up orphan processes

@@ -138,6 +138,9 @@ public sealed class ClaudeCodeUpdateService(
     /// <summary>How each wait of the making ready <paramref name="asker"/> asked for is told: a line of its command.</summary>
     private Action<Waiting.WaitTold> Tell(ClaudeCodeAsker asker) => told => _output?.Info(asker.Command, told.Line());
 
+    /// <summary>How what a stop of npm, node or Claude Code's own program could not reach or end is said: under the asker's command, as a warning (<see cref="Processes.UnreachedSaying"/>).</summary>
+    private Action<string> Say(ClaudeCodeAsker asker) => line => _output?.Warn(asker.Command, line);
+
     /// <summary>
     /// Whether a program a person names is one this tool does not start as Claude Code: a batch file (<see cref="BatchFiles"/>),
     /// whose arguments cmd.exe reads again, or a PowerShell script, which only PowerShell starts.
@@ -195,6 +198,7 @@ public sealed class ClaudeCodeUpdateService(
         ArgumentNullException.ThrowIfNull(asker);
 
         var tell = Tell(asker);
+        var say = Say(asker);
 
         // A program a person named is that person's own choice: started as named, asked nothing of npm, and neither
         // installed, nor updated, nor second-guessed by this tool. The slot need hold no such name; where its files do
@@ -216,12 +220,12 @@ public sealed class ClaudeCodeUpdateService(
                 var named = _keys.Value(layout, appointed, executable);
 
                 return named is { Problem: null, Value: { Length: > 0 } namedProgram }
-                    ? await NamedAsync(namedProgram, executable, tell, cancellationToken).ConfigureAwait(false)
+                    ? await NamedAsync(namedProgram, executable, say, tell, cancellationToken).ConfigureAwait(false)
                     : Refused(HarnessExit.ConfigInvalid, named.Problem ?? $"the slot declares {executable} and gave no value for it");
             }
         }
 
-        var found = await _npm.FindAsync(tell, cancellationToken).ConfigureAwait(false);
+        var found = await _npm.FindAsync(say, tell, cancellationToken).ConfigureAwait(false);
 
         if (found.Npm is not { } npm)
         {
@@ -234,7 +238,7 @@ public sealed class ClaudeCodeUpdateService(
                         + $"installing it and bringing it up to date are a run's step's or a side-task's to do. Install Node.js 22 or later, which brings npm, and then run it by hand: {InstallCommand()}");
         }
 
-        var asked = await _npm.RootAsync(npm, tell, cancellationToken).ConfigureAwait(false);
+        var asked = await _npm.RootAsync(npm, say, tell, cancellationToken).ConfigureAwait(false);
 
         if (asked.Root is not { } root)
         {
@@ -258,7 +262,7 @@ public sealed class ClaudeCodeUpdateService(
         {
             // What the program answers of its own version has to agree with the package's: a pair that disagrees is
             // half an installation, and half an installation is refused as one that did not take.
-            var answered = await _install.VersionAsync(program, tell, cancellationToken).ConfigureAwait(false);
+            var answered = await _install.VersionAsync(program, say, tell, cancellationToken).ConfigureAwait(false);
 
             if (answered.Version is not { } answer)
             {
@@ -374,7 +378,7 @@ public sealed class ClaudeCodeUpdateService(
                 _clock)
             .ConfigureAwait(false);
         var answeredSince = since is { Program: { } sinceProgram, Problem: null }
-            ? await _install.VersionAsync(sinceProgram, tell, CancellationToken.None).ConfigureAwait(false)
+            ? await _install.VersionAsync(sinceProgram, say, tell, CancellationToken.None).ConfigureAwait(false)
             : null;
         var output = OutputOf(moved.Ran);
 
@@ -439,7 +443,7 @@ public sealed class ClaudeCodeUpdateService(
     }
 
     /// <summary>A program a person named: read for what it is, and refused where it is not one this tool can start.</summary>
-    private async Task<ClaudeCodeAnswer> NamedAsync(string program, string executable, Action<Waiting.WaitTold> tell, CancellationToken cancellationToken)
+    private async Task<ClaudeCodeAnswer> NamedAsync(string program, string executable, Action<string> say, Action<Waiting.WaitTold> tell, CancellationToken cancellationToken)
     {
         if (IsBatch(program))
         {
@@ -448,7 +452,7 @@ public sealed class ClaudeCodeUpdateService(
                 $"'{program}' is a batch file, which is never started (its arguments would be parsed twice); name the program it starts");
         }
 
-        var answered = await _install.VersionAsync(program, tell, cancellationToken).ConfigureAwait(false);
+        var answered = await _install.VersionAsync(program, say, tell, cancellationToken).ConfigureAwait(false);
 
         if (answered.Version is not { } version)
         {

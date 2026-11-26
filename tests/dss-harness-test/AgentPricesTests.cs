@@ -1,4 +1,5 @@
 using DssHarness.Core.Agents;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration.Flow;
 
@@ -257,6 +258,7 @@ public sealed class AgentModelTests
         Assert.Equal(["claude-opus-5-5", "glm-5.3"], tierConfig["high"]);
         Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["balanced"]);
         Assert.Equal(["claude-haiku-5-5", "glm-5.3"], tierConfig["fast"]);
+        Assert.Equal(["claude-sonnet-5-5", "glm-5.3"], tierConfig["reporting"]);
     }
 
 
@@ -272,7 +274,7 @@ public sealed class AgentModelTests
 
         Assert.Equal("balanced", config.Defaults.AgentTier);
         Assert.Equal(2, config.Providers.Count);
-        Assert.Equal(4, config.TierConfig.Count);
+        Assert.Equal(["best", "high", "balanced", "fast", "reporting"], config.TierConfig.Keys);
         Assert.Null(config.BalanceKeyUsage);
 
         // The shipped workflow resolves under what init writes: every step's tier is defined, every effort taken.
@@ -350,6 +352,65 @@ public sealed class AgentRunSpendTests
     }
 
     /// <summary>
+    /// The run's account counts the pages past the first its <c>graph</c> calls asked for, each as its call ends well,
+    /// whichever client called the tool - the API clients by the runtime's name, Claude Code by its served name: how many
+    /// in all, and the deepest page one answer reached with how many pages were asked of that answer - an answer its
+    /// operation and its inputs less the page, whatever order they were written in, so another query of the same
+    /// operation is another answer. A call that named no page past the first, a call of another tool, and a call answered
+    /// with a usage line - a page past an answer's last - count nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsAccount_CountsTheGraphPagesItsCallsAskedForPastTheFirst()
+    {
+        var (providers, problems) = AgentProviders.Resolve(new HarnessConfig
+        {
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["best"] = ["glm-5.3"] },
+            Providers =
+            [
+                new AgentProviderConfig
+                {
+                    Name = "zai",
+                    Type = "zai",
+                    Api = "https://api",
+                    ApiKeyNames = ["KEY"],
+                    Client = "glm",
+                    Currency = "USD",
+                    ReadOn = "2026-10-12",
+                    Models = [new AgentModelConfig { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["best"], Efforts = ["high"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072, PriceInputMiss = 1.4, PriceInputHit = 0.26, PriceOutput = 4.4 }],
+                },
+            ],
+        });
+
+        Assert.Empty(problems);
+
+        var spend = new AgentRunSpend(providers!, "glm-5.3");
+
+        async Task Asked(string id, string input, bool ok = true, string tool = AgentGraphSupport.ToolName)
+        {
+            await spend.EmitAsync(new ToolCallStarted(id, tool, AgentToolRunner.Harness));
+            await spend.EmitAsync(new ToolCallFinished(id, Ok: ok, TimeSpan.Zero, input, ok ? "a page" : "a usage line"));
+        }
+
+        // Claude Code calls the engine's tools by the names its tool server serves them under.
+        var served = DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServedName(AgentGraphSupport.ToolName);
+
+        await Asked("g1", """{"op":"find","query":"Total","page":2}""");
+        await Asked("g2", """{"op":"find","query":"Total","page":6}""", tool: served);
+        await Asked("g3", """{"op":"find","query":"Total"}""");
+        await Asked("g4", """{"op":"body","symbols":["Total"],"page":3}""");
+        await Asked("g5", """{"op":"find","query":"Total","page":9}""", ok: false);
+        await Asked("g6", """{"page":3,"query":"Total","op":"find"}""");
+        await Asked("g7", """{"op":"find","query":"Rate","page":2}""");
+        await Asked("g8", """{"op":"find","query":"Tax","page":5}""", tool: served);
+        await spend.EmitAsync(new ToolCallStarted("v1", AgentTools.ViewFile, AgentToolRunner.Harness));
+        await spend.EmitAsync(new ToolCallFinished("v1", Ok: true, TimeSpan.Zero, """{"path":"a.txt"}""", "the file"));
+
+        // Six pages past the first in all; the deepest answer is find Total's, three of them asked of it.
+        Assert.NotEqual(AgentGraphSupport.ToolName, served);
+        Assert.Equal(new FlowStepGraphPages(6, new FlowStepGraphAsk("find", 3, 6)), spend.Account().GraphPages);
+    }
+
+    /// <summary>
     /// Parts fold into one: the counted sums add, and the first reason a part could not be counted is kept - a later
     /// counted part never makes the whole known again, and a part said uncounted with no reason still says one.
     /// </summary>
@@ -380,7 +441,9 @@ public sealed class AgentRunSpendTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) => Spent.Add((tokens, usd, uncounted));
+        public void Used(FlowTurnSpend turn) => Spent.Add((turn.Usage.AllTokens, turn.Usd, turn.Uncounted));
+
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }

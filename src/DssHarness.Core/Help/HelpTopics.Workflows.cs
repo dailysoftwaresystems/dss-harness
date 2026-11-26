@@ -167,7 +167,8 @@ public static partial class HelpTopics
         builder.AppendLine("use; its maxInstances caps the instances its steps open, across every instance of the use");
         builder.AppendLine("and in the place of the run's own cap for them; its maxRetries and backoffSeconds are what");
         builder.AppendLine("its steps fall back to; its handoffSeconds bounds the handoff of its paused reasoning steps;");
-        builder.AppendLine("and its advisor recommends for its steps' questions in the place of the run's - its files");
+        builder.AppendLine("its priority is what its steps' legs ask the machine's dispatch queue at, in the place of");
+        builder.AppendLine("the run's; and its advisor recommends for its steps' questions in the place of the run's - its files");
         builder.AppendLine("read in its own directory, its prompt handed the inputs the use filled and the texts its");
         builder.AppendLine("steps see, its bar the workflow's own texts.recommendations where it declares one, and each");
         builder.AppendLine("recommendation credited to it. A question of its steps is answered nearest first: the");
@@ -223,10 +224,20 @@ public static partial class HelpTopics
         builder.AppendLine("whose triage failed, or met again after its fix was done, is raised anew; and it is never scheduled, as the");
         builder.AppendLine("recovery is not - and onAddress: recover: it reproduces the issue on the");
         builder.AppendLine("run's base commit, gives the recovery one that is in a step's way, related to the work or");
-        builder.AppendLine("critical, to fix at its root (a step it was in the way of runs again from where it stopped),");
-        builder.AppendLine("and lists the rest, proven, with a title and a description, in the run's");
-        builder.AppendLine("pre-existing-issues.json, shown at the end. Where a workflow has such a step, every other");
-        builder.AppendLine("reasoning step names it, so no issue is lost.");
+        builder.AppendLine("critical, to fix at its root (a step it was in the way of runs again from where it stopped);");
+        builder.AppendLine("sends a defect in code the run's change does not touch, that blocks nothing, to the run's next");
+        builder.AppendLine("round - sized, by its files, what must be built and what measured first, in next-round.json,");
+        builder.AppendLine("which run.nextRound reads as the issues no work item has settled, and the check that opens a");
+        builder.AppendLine("round - a validate-plan the forEach beside it expands from, where that group runs in rounds, in an");
+        builder.AppendLine("iteration of a repeat or as the group plan updates add a round to with no loop around it, and no");
+        builder.AppendLine("other check - holds its items to: each issue named in an item's settles, none left unsettled,");
+        builder.AppendLine("the settling items first, and the rounds going on while one is left - never holding the round the");
+        builder.AppendLine("issue came from. A forEach item that names an issue in settles settles it once it ends done with a");
+        builder.AppendLine("commit of its own made, whatever the run takes plan updates by, and next-round.json says which");
+        builder.AppendLine("item did; one that ends done with nothing committed - an item a person skipped - settles nothing,");
+        builder.AppendLine("and the issue stays owed. It lists the rest, proven, with a title and a description, in the run's");
+        builder.AppendLine("pre-existing-issues.json, shown in the pull request's body and the handoff. Where a workflow has");
+        builder.AppendLine("such a step, every other reasoning step names it, so no issue is lost.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
@@ -424,11 +435,46 @@ public static partial class HelpTopics
             + "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree "
             + "of the agent their in names, else the main checkout: test with its filter, exclude and labels and run with its "
             + "inputs - a filter, an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, "
-            + "every arm the registry declares where it names none, and pending. Each answers passed, true where every leg passed; "
+            + "every arm the registry declares where it names none, or those its arms expression yielded - the item's own, "
+            + "from the record its builder answered - and none where it yielded none, the step done and its swept saying so, "
+            + "no leg asked; and pending. A sweep whose base names a commit - a template naming one, or 'item', the newest "
+            + "commit the run's ledger gives the item the step is one of that a commit made - runs on a copy of that commit, "
+            + "made and taken away under the main tree's lock by the one owner of such copies: a copy an earlier attempt left "
+            + "at its path - a stop, a pause, a crash - is taken away before it is made again, one a stop cut off is taken away "
+            + "all the same, and its copy says the copy's path and what could not be taken away (left); it holds no tree while "
+            + "it sweeps, so other items folding into the main tree never move the bytes under it nor wait for it; an item "
+            + "whose ledger holds no commit that was made, and a base that named nothing as the step started, are refused, "
+            + "nothing swept; and 'item' is refused where the file is read in a step no forEach holds, a forEach that uses its "
+            + "file among them. Each answers passed, true where every leg passed; "
             + "exitCode, the command's; verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that "
-            + "did not pass, the ledger's line and the last lines it printed, and of a sweep each arm that violated, survived or "
+            + "did not pass, the ledger's line and, in tail, what it printed that its digest does not say, and of a sweep each arm that violated, survived or "
             + "was unattributed, with its arm and its line; runDirectory, null where the run made none; and isolation, what the "
-            + "work of its legs ran under. What its legs build, test and run is what the run's agents wrote, so the work of each "
+            + "work of its legs ran under. Each red leg's entry also carries, in digest, what the phase that did not pass printed, "
+            + "typed: the first error whole - its stack rendered to the frames inside the tree, its log's line range one read away - "
+            + "the next distinct errors to four as one line each, every test failure of the four with its stack, and the rest "
+            + "- what the four do not say - counted by code and by file, a count of none and an empty list left out; every line "
+            + "reaching a model once and none out of its reach: where the digest holds an error or a failure and the phase's log "
+            + "is one read away, it says the lines no parser held - the last "
+            + $"{Results.ResultDigest.Bound}, the nearest the failure, with how many it left out - and the entry's tail holds none, "
+            + "and otherwise - it holds neither, or no log of the phase is on this machine - the tail holds the phase's last lines "
+            + "whole and the digest says those lines no parser held that the tail does not; and in log, the "
+            + "log that phase wrote, whose lines the digest's ranges number as the file numbers them - the copy kept in the "
+            + "step's directory in an agent's worktree, else the run's own, a leg's a host ran brought back by its run as the leg "
+            + "ended - null only where a host's could not be brought back; the digest of a leg a host ran, made there, travels on "
+            + "its line. The ledger's --json keeps the digest typed for a reader "
+            + $"that asks, its bounds said - the first {Results.ResultDigest.Bound} diagnostics of each severity, the first "
+            + $"{Results.ResultDigest.Bound} failures and the last {Results.ResultDigest.Bound} lines no parser held, the rest "
+            + $"counted, a stack held to its first {Results.StackTrace.FirstKept} "
+            + $"and last {Results.StackTrace.LastKept} frames with the cut counted - the text ledger says each red leg's first "
+            + "error in a block below its table, and {run.red} says it on its line. Where the run keeps a codebase graph of the "
+            + "tree the step's legs ran in, each red leg's digest is joined to it before the step's ledger is kept: each place "
+            + "inside the tree carries the declaration the graph holds enclosing it - its kind, its qualified name, its handle - "
+            + "the first error's as its symbol and each frame of a stack inside the tree with it in brackets after its line, where "
+            + "its file holds what its leg built, as the graph is asked and once it has answered: a leg in a copy built the tree as "
+            + "the copy was made of it, a leg in the tree itself the tree as it held it when the leg ended, and a place whose file "
+            + "was written since - a fold landing while the legs worked - carries none; a "
+            + "plain build, test or run command asks no graph, and its digest's symbols are null. What its legs build, test and run is what the "
+            + "run's agents wrote, so the work of each "
             + "leg this machine runs - every phase it starts, a set-up's lines apart - runs inside the operating system's "
             + "isolation of the agents' work ('help agent-clients'); where this machine has none, agentPolicy.isolation "
             + $"required fails the step ({HarnessExit.ToolMissing}) with nothing run, and preferred runs its legs outside, each "
@@ -438,8 +484,12 @@ public static partial class HelpTopics
             + "a runner its run checks name, writes the tree holds write on it, and its legs work in the tree itself. A leg run "
             + "refused part way, cut off, or ended with a leg it placed left with no line ends the step with the run's own code; "
             + "one its legs ended - none could run, another run owns its records - is read by their verdicts. The step keeps the "
-            + $"ledger in its directory ({OrchestratorLayout.StepLedgerFileName}) and, in an agent's worktree, the log of each red "
-            + $"leg's phase that did not pass, whole, where this machine ran the leg ({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, "
+            + $"ledger in its directory ({OrchestratorLayout.StepLedgerFileName}) - written as its legs' run begins, naming the run "
+            + "and its records, and again as each leg ends, so a crash while they work is read where their work stopped (a write of it "
+            + "the file system refuses while they work is said once, and they work on: the write as their run ends is the one that "
+            + "must succeed) - and, in an "
+            + "agent's worktree, the log of each red "
+            + $"leg's phase that did not pass, whole, as it is on this machine ({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, "
             + "the phase named as its log is), each attempt's own.");
         builder.AppendLine();
         AppendWrapped(
@@ -466,13 +516,27 @@ public static partial class HelpTopics
             + "failing call's for failed-fixed - or reasoned why not, every test of the pin declared, the arm one of the registry its "
             + "worktree holds and mutating "
             + "the home's own file or a reason the class has nothing to mutate, the universe holding every planned axis and "
-            + "the claim naming each - and each home's touches since its base, the item's own commits left out, a record "
+            + "the claim naming each, the arms the builder's answer lists for the item's own sweep (the step's arms) the arms "
+            + "the record names and no other, an id one arm however its case is written - and each home's touches since its "
+            + "base, the item's own commits left out, a record "
             + "without a home audit refused where the home was touched by other work; a class's paths - the plan's and the "
             + "record's, the paths changed, an arm's site and the touches - are read as the plan check reads them, either "
             + "separator, and compared as this machine compares paths; a fold it cannot weigh fails it with "
             + "the weighing's own code. Its problems are the record's (1, which close-class repairs) apart from a missing "
-            + "home audit (2, which home-audit makes), and it answers passed, problems, hotspots - the homes touched hotspot "
-            + "times or more - and touches. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
+            + "home audit (2, which home-audit makes - a home touched by other work, or a class the item's ledger says a "
+            + "review reopened a second time), and it answers passed, problems, hotspots - the homes touched hotspot "
+            + "times or more - and touches. route-findings routes the review's findings by the class of each, keeping "
+            + "the item's ledger (closure-ledger.json in its agent's directory) of the rounds that reopened each class, a "
+            + "round counted once by the routing that made it however often that routing runs: every introduced finding - a "
+            + "defect the diff made - goes back in rework as itself, the reopened findings of one class go back as one "
+            + "send-back naming the class (reopenedClass) and the rounds that reopened it (rounds), carrying them all and "
+            + "graded by the worst of them, and a class reopened twice or more goes to homeAudit instead, for the next "
+            + "action is the home audit; it answers rework, homeAudit and reopened, the rounds per class. A reopened "
+            + "finding names a class of the item's - its classes' or its record's, exactly - and every finding is graded "
+            + $"{string.Join(", ", FindingRoutes.Severities)}: each reviewer whose answer it routes is held to that at its own "
+            + "answer and asked again where it does not hold, and an answer that still does not hold after its repairs fails "
+            + $"the reviewer's step ({HarnessExit.CommandFailed}), as one its schema refuses does, nothing routed; findings that "
+            + $"reach the route unheld fail it ({HarnessExit.ConfigInvalid}), nothing routed. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
             + "it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as check-ci-legs --json "
             + "gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the commit the run last "
             + $"pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore names - a job "
@@ -484,7 +548,16 @@ public static partial class HelpTopics
             + $"({OrchestratorLayout.StepLogsDirectoryName}/<job>.<id>{PhaseLogs.Extension}, the job's id telling two of one name apart) "
             + "given by reference in log, with how many lines it holds in lines and, in failing, the page of it where the job "
             + "failed - the one holding its last line GitHub marks an error (##[error]), else its last page - each line by its number, "
-            + "both masked by the repository's runner secrets, and in unread why any of that could not be "
+            + "both masked by the repository's runner secrets; in digest, what the check digested to, said for a model as a leg's "
+            + "is: its annotations, read from the forge's check-runs API, each naming a file in its place, and its job's log, every "
+            + "line numbered as the kept log numbers it and read by every form a CI log holds - each finding said once, a problem "
+            + "matcher's line and its annotation one, a line the forge marked that no form read said among the lines no parser "
+            + "held - every file a tool on the runner named placed against the job's workspace there, "
+            + "<work>/<repository>/<repository>, read as the runner wrote it and named relative to it, a Go test's place - "
+            + "printed relative to its package's directory, which no file of the job's tells - left as printed; every line "
+            + "reaching a model once, as a leg's entry says them: where the digest holds an error or a failure, it says the lines "
+            + "no parser held and failing holds none, and where it holds neither, failing is the page whole and the digest says "
+            + "those lines no parser held that the page does not; and in unread why any of that could not be "
             + "read; every check ended green - success, neutral or skipped - on two reads running that found the same checks, at "
             + "its wait's end on the last alone, passes it; and no check within "
             + $"appearSeconds ({CiChecksRequest.DefaultAppearSeconds}) - or waitMinutes where that is shorter - checks still running at waitMinutes "
@@ -585,7 +658,14 @@ public static partial class HelpTopics
             + "{carried.notRun} and {carried.red} besides: the same three of the checks upstream of it that ended since the "
             + "newest commit upstream of it was done, a check whose failure was passed over among those that did not check. "
             + "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
-            + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.");
+            + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing, "
+            + "as do {run.closure}, {run.claims}, {run.hotspots}, {run.reopened} and {run.counts}: of each item, the class record "
+            + "its newest class-closure check that ended done judged, whole, and each class's claim alone, the hotspots that check "
+            + "named, the classes its reviews reopened with how many rounds, as its newest routing counted them, and its counts - "
+            + "the rounds of review that routed it, each routing that ended done one round, its home audits, and of each class of "
+            + "that record the sites consolidated into its home (reads-home) and those deleted, the cells its pin covers "
+            + "(cellsPinned), the neighbours measured and those not, and how many rounds a review sent it back - a step known by "
+            + "its type, so no other step's closure member is read as an item's record, and an item no check judged has none.");
         builder.AppendLine();
         AppendWrapped(
             builder,

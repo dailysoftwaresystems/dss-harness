@@ -184,35 +184,88 @@ public sealed class ArchitectureTests
     }
 
     /// <summary>
-    /// No regex is made outside the one owner of the code's patterns: every <c>new Regex(</c> and every static
-    /// <c>Regex.IsMatch(</c> outside <c>Text\LinearRegex.cs</c> is a pattern compiled by its own rule, with a timeout
-    /// or an engine of its own, and the linear engine's refusal of what it cannot run in a line never reaches it. The
-    /// owner compiles every pattern the code holds as <c>NonBacktracking</c> with no timeout; nothing else compiles
-    /// one, so the walk holds no exception - a regex made anywhere else goes red here.
+    /// No regex is made outside the one owner of the code's patterns: no member of any of Core's types but the owner's own
+    /// (<c>Text\LinearRegex.cs</c>) is a source-generated pattern (<c>[GeneratedRegex]</c>), and no instruction of theirs
+    /// reaches a <see cref="Regex"/>'s constructor - a construction, however its source spells it, <c>new Regex(</c> or a
+    /// target-typed <c>new(</c>, or a derived type's own constructor, as the type the generator makes of a pattern has -
+    /// calls one of <see cref="Regex"/>'s static matches, each of which compiles its pattern by its own rule, or hands a
+    /// <see cref="RegexOptions"/> to any member of .NET's regular expressions; and no line of the command line's source
+    /// does any of these or names <see cref="RegexOptions"/>. A pattern compiled by its own rule has a timeout or an engine
+    /// of its own - the generator's backtracks - and the linear engine's refusal of what it cannot run in a line never
+    /// reaches it. The owner compiles every pattern the code makes as <c>NonBacktracking</c> with no timeout; nothing else
+    /// constructs one, so the walk holds no exception - a regex made anywhere else goes red here. Read from Core's own
+    /// metadata and instructions, never from its source's text, which a target-typed construction hides from.
     /// </summary>
     [Fact]
     public void NoRegexIsMadeOutsideLinearRegex()
     {
-        var made = new List<string>();
+        const BindingFlags Everything = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        var owner = typeof(DssHarness.Core.Text.LinearRegex);
+        var made = new SortedSet<string>(StringComparer.Ordinal);
 
-        foreach (var (relative, lines) in SourcesUnderSrc())
+        foreach (var type in owner.Assembly.GetTypes().Where(type => OutermostOf(type) != owner))
         {
-            for (var i = 0; i < lines.Count; i++)
+            foreach (var generated in type.GetMembers(Everything).Where(member => member.IsDefined(typeof(GeneratedRegexAttribute), inherit: false)))
             {
-                var text = lines[i];
+                made.Add($"{Name(type)}.{generated.Name}: [GeneratedRegex]");
+            }
 
-                if (text.Contains("new Regex(", StringComparison.Ordinal)
-                    || Regex.Match(text, @"(?<!\.)Regex\.IsMatch\(", RegexOptions.CultureInvariant).Success)
+            foreach (var method in type.GetMethods(Everything).Cast<MethodBase>().Concat(type.GetConstructors(Everything)))
+            {
+                if (method.GetMethodBody() is not { } body)
                 {
-                    made.Add($"{relative.Replace('/', '\\')}:{i + 1}: {text.Trim()}");
+                    continue;
+                }
+
+                var typeArguments = type.IsGenericTypeDefinition ? type.GetGenericArguments() : null;
+                var methodArguments = method.IsGenericMethodDefinition ? method.GetGenericArguments() : null;
+
+                foreach (var (_, token) in OperandsIn(body.GetILAsByteArray() ?? []))
+                {
+                    var compiles = type.Module.ResolveMember(token, typeArguments, methodArguments) switch
+                    {
+                        ConstructorInfo constructed when constructed.DeclaringType == typeof(Regex) => true,
+                        MethodInfo { IsStatic: true } called when called.DeclaringType == typeof(Regex) && StaticMatches.Contains(called.Name) => true,
+                        MethodBase handed => handed.DeclaringType?.Namespace == typeof(Regex).Namespace
+                            && handed.GetParameters().Any(parameter => parameter.ParameterType == typeof(RegexOptions)),
+                        _ => false,
+                    };
+
+                    if (compiles)
+                    {
+                        made.Add($"{Name(type)}.{method.Name}");
+                    }
                 }
             }
         }
 
-        made.RemoveAll(line => line.StartsWith("DssHarness.Core\\Text\\LinearRegex.cs:", StringComparison.Ordinal));
+        foreach (var (relative, lines) in SourcesUnderSrc().Where(source => source.Relative.StartsWith(@"DssHarness.Cli\", StringComparison.Ordinal)))
+        {
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (RegexMadeInText.Match(lines[i]).Success)
+                {
+                    made.Add($"{relative}:{i + 1}: {lines[i].Trim()}");
+                }
+            }
+        }
 
         Assert.Empty(made);
     }
+
+    /// <summary>The static members of <see cref="Regex"/> that compile the pattern they are handed, each by its own rule.</summary>
+    private static readonly HashSet<string> StaticMatches =
+        ["IsMatch", "Match", "Matches", "Replace", "Split", "Count", "EnumerateMatches", "EnumerateSplits"];
+
+    /// <summary>
+    /// A line of source that makes a regex: <c>new Regex(</c>, a target-typed <c>new(</c> a regex is given, one of its
+    /// static matches, a source-generated pattern, or a <see cref="RegexOptions"/> named.
+    /// </summary>
+    private static readonly Regex RegexMadeInText = DssHarness.Core.Text.LinearRegex.Compile(
+        @"new\s+(System\.Text\.RegularExpressions\.)?Regex\s*\(|\bRegex\??\s+\w+\s*(\{[^}]*\}\s*)?=\s*new\s*\(|(^|[^.\w])Regex\.(IsMatch|Match|Matches|Replace|Split|Count|EnumerateMatches|EnumerateSplits)\s*\(|\bGeneratedRegex\b|\bRegexOptions\b");
+
+    /// <summary>The type a nested type is nested in at the outermost; the type itself where it is nested in none.</summary>
+    private static Type OutermostOf(Type type) => type.DeclaringType is { } outer ? OutermostOf(outer) : type;
 
     /// <summary>
     /// No JSON is parsed or written without the one owner of its options: every <c>JsonSerializer</c> call, every
@@ -353,6 +406,7 @@ public sealed class ArchitectureTests
         // A streamed reader whose state is a JsonReaderState(JsonDepth.Reader) made once, outside the loop.
         [@"DssHarness.Core\Agents\Http\ApiAnswers.cs"] = "a Utf8JsonReader over a refusal's body, its state made of JsonDepth.Reader",
         [@"DssHarness.Core\Codebase\Languages\JsonOutline.cs"] = "a Utf8JsonReader over a JSON file's bytes, its state made of JsonDepth.Reader",
+        [@"DssHarness.Core\Json\JsonTokens.cs"] = "a Utf8JsonReader over each block a stream gives, its state made of JsonDepth.Reader",
 
         // A digest's input: four flat strings, one array, nothing that can nest.
         [@"DssHarness.Core\Web\Index\SitemapSettings.cs"] = "the writing of four flat strings whose bytes are hashed",
@@ -427,7 +481,12 @@ public sealed class ArchitectureTests
         [@"DssHarness.Core\Web\Search\WebSearchSources.cs|MostMaxPerStep"] = "P17: maxPerStep 1-1,000",
         [@"DssHarness.Core\Web\Search\WebSearchSources.cs|DefaultMaxPerStep"] = "P17: maxPerStep's default, 60",
         [@"DssHarness.Core\Web\Search\Kinds\SitemapKind.cs|MostRefreshDays"] = "a Range: the clock's whole span, refreshDays any number of days",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|MostAgeAfterMinutes"] = "a Range: the clock's whole span, ageAfterMinutes any number of minutes",
+        [@"DssHarness.Core\Execution\DispatchOrder.cs|LeastPriority"] = "plan 2.0 part 06: the run's priority, 1 by default, the least a run has",
         [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|MostMapTokens"] = "P16: the repository map's tokens 0-2,000",
+        [@"DssHarness.Core\Results\ResultDigest.cs|Bound"] = "plan 2.0 part 04, section 1 and the user's 2026-11-23 decision in section 3: a digest keeps the first 50 distinct diagnostics and 50 failures, its counts over the whole output",
+        [@"DssHarness.Core\Results\StackFrame.cs|FrameBound"] = "plan 2.0 README decision 25 and part 04's bounds: a stack keeps at most 64 frames, the first 48 and the last 16",
+        [@"DssHarness.Core\Results\StackFrame.cs|CauseBound"] = "plan 2.0 part 04's bounds: causedBy is followed at most 8 deep",
 
         // Page sizes and partitions: every entry stays reachable, so none bounds anything.
         [@"DssHarness.Core\Agents\Runtime\CodebaseGraphTool.cs|MostCharacters"] = "paging: PageRoom.GraphAnswer, the graph answer's page size",
@@ -435,6 +494,10 @@ public sealed class ArchitectureTests
         [@"DssHarness.Core\Pages\PageRoom.cs|Least"] = "paging: the least a page is given",
         [@"DssHarness.Core\Sync\SyncServe.cs|MostFilesInABatch"] = "partition: files cross in batches, every one of them",
         [@"DssHarness.Core\Web\Index\SitemapFill.cs|MostStaleLines"] = "compaction: fill.jsonl is written anew once its stale lines outnumber those kept, never emptied",
+
+        // A floor, not a cap: the least a wait is, which only ever waits longer and keeps a verdict from resting on a busy
+        // machine's own delay; nothing is cut or left out by it.
+        [@"DssHarness.Core\Mutations\PristineJudge.cs|LeastBound"] = "floor: a mutated run is waited for ten seconds at least, past what one measurement of a short run says",
 
         // Presentation, not a cap: a derived label's shape.
         [@"DssHarness.Core\Agents\SideTasks\SideTaskService.cs|MostNameCharacters"] = "presentation: the label of a derived side-task name; the prompt is kept whole",
@@ -570,6 +633,7 @@ public sealed class ArchitectureTests
         ["DssHarness.Core.Agents.SideTasks.SideTaskReports"] = "renders the report the side-task commands' use case answers",
         ["DssHarness.Core.Runs.RunStopReports"] = "renders the report the stop-run command's use case answers",
         ["DssHarness.Core.Worktrees.WorktreeReports"] = "renders the report the worktree commands' use case answers",
+        ["DssHarness.Core.Execution.QueueReports"] = "renders the report the queue command's use case answers",
 
         // The hidden process commands the program starts for its own machinery.
         ["DssHarness.Core.Processes.ContainExec"] = "the hidden command that places a contained child, which the program runs for itself",
@@ -582,6 +646,7 @@ public sealed class ArchitectureTests
 
         // The owners of an option's values, which Core's own sentences name.
         ["DssHarness.Core.Codebase.GraphRelations"] = "the graph's own edge names, which the option that follows one lists as its values",
+        ["DssHarness.Core.Orchestration.Flow.FlowRunReport"] = "what a report's dollars may be grouped by (Groupings), which --by lists as its values and Core's own refusal of another names",
     };
 
     /// <summary>The application layer's namespace, its use cases and their machinery.</summary>
@@ -684,7 +749,7 @@ public sealed class ArchitectureTests
             var typeArguments = type.IsGenericTypeDefinition ? type.GetGenericArguments() : null;
             var methodArguments = method.IsGenericMethodDefinition ? method.GetGenericArguments() : null;
 
-            foreach (var token in TokensIn(body.GetILAsByteArray() ?? []))
+            foreach (var (_, token) in OperandsIn(body.GetILAsByteArray() ?? []))
             {
                 switch (type.Module.ResolveMember(token, typeArguments, methodArguments))
                 {
@@ -752,8 +817,8 @@ public sealed class ArchitectureTests
         }
     }
 
-    /// <summary>The metadata tokens an IL body's instructions carry for a type, a method or a field, in order.</summary>
-    private static IEnumerable<int> TokensIn(byte[] il)
+    /// <summary>The metadata tokens an IL body's instructions carry for a type, a method or a field, each with the instruction that carries it, in order.</summary>
+    private static IEnumerable<(OpCode Code, int Token)> OperandsIn(byte[] il)
     {
         var at = 0;
 
@@ -766,7 +831,7 @@ public sealed class ArchitectureTests
             switch (code.OperandType)
             {
                 case OperandType.InlineField or OperandType.InlineMethod or OperandType.InlineTok or OperandType.InlineType:
-                    yield return BitConverter.ToInt32(il, at);
+                    yield return (code, BitConverter.ToInt32(il, at));
                     at += 4;
                     break;
 

@@ -19,6 +19,42 @@ public sealed class SetUpServiceTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// What a stop of a set-up's line could not reach or end is said under its direction, naming the set-up, once
+    /// (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfASetUpsLineCouldNotReachOrEnd_IsSaidUnderItsDirection(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = new HarnessConfig { SetUp = { ["db"] = SetUpScripts.SetUp("db") } };
+
+        SetUpScripts.Write(temp.Path);
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) =>
+            {
+                var runner = UnreachingRunner.For(stop);
+
+                return new SetUpService(
+                        HostDoubles.Loader(config, temp.Path, temp.Path),
+                        runner,
+                        harness.Platform,
+                        new ActionToolPolicy(harness.Platform),
+                        HostDoubles.Floors(harness.Platform, runner),
+                        new SetUpHolds(harness.FileSystem, harness.Output, harness.Identity, harness.Platform, () => Path.Combine(temp.Path, ".holds", "setups.json")),
+                        harness.Output)
+                    .RunAsync(temp.Path, SetUpDirection.Up, "db", NoInputs, token);
+            });
+
+        Assert.Equal([UnreachedSaid.Warned(SetUpService.CommandName(SetUpDirection.Up), "'db'")], said);
+    }
+
+    /// <summary>
     /// A set-up's line runs at the root of the tree the command is given a directory of, whichever directory inside it
     /// that is: this platform's line from the map, its quoted argument reaching the script as one word, the name matched
     /// ignoring case and reported as declared.

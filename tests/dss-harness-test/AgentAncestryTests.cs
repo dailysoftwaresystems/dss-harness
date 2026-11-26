@@ -7,7 +7,7 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// The process tree a command tells it runs under an agent by: a process of this tool's among the ones that started it,
-/// walked by each process's parent - a recycled id never read as a parent - and a tree that could not be read said, never
+/// walked by each process's parent as the table names it - a recycled id never named a parent there - and a tree that could not be read said, never
 /// read as one with no agent in it.
 /// </summary>
 public sealed class AgentAncestryTests
@@ -77,20 +77,21 @@ public sealed class AgentAncestryTests
     }
 
     /// <summary>
-    /// A process holding the id of the command's parent that started after the command is another process given a freed
-    /// id, not its parent: the walk ends there, and a process of the tool's that took the id is no ancestor.
+    /// The walk follows the parent the table names, and no start: the engine the table names as the command's parent is
+    /// its ancestor though a clock that stepped between their starts dates it after the command - and a process the table
+    /// names as no one's parent, as it names a later holder of a freed id (<see cref="SampledProcess.ParentId"/>), is
+    /// none, whatever its id.
     /// </summary>
     [Fact]
-    public void AProcessThatTookAFreedId_IsNoAncestor()
+    public void TheParentTheTableNames_IsTheAncestor_WhateverAClockSaysOfTheirStarts()
     {
-        var table = new ProcessTableReading(
-            [
-                new SampledProcess(30, null, "dssharness", Early.AddMinutes(10), "dssharness run-orchestrator implementation", "/home/me/.dotnet/tools/dssharness"),
-                new SampledProcess(Current, 30, "dssharness", Early.AddMinutes(4), "dssharness run-side-task --prompt x", "/home/me/.dotnet/tools/dssharness"),
-            ],
-            null);
+        var engine = new SampledProcess(30, null, "dssharness", Early.AddMinutes(10), "dssharness run-orchestrator implementation", "/home/me/.dotnet/tools/dssharness");
+        var command = new SampledProcess(Current, 30, "dssharness", Early.AddMinutes(4), "dssharness run-side-task --prompt x", "/home/me/.dotnet/tools/dssharness");
 
-        Assert.Equal(new AgentAncestryAnswer(null, null), AgentAncestry.Of(table, Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal, Files));
+        Assert.Equal(
+            (new AgentAncestryAnswer(engine, null), new AgentAncestryAnswer(null, null)),
+            (AgentAncestry.Of(new ProcessTableReading([engine, command], null), Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal, Files),
+                AgentAncestry.Of(new ProcessTableReading([engine, command with { ParentId = null }], null), Current, "/home/me/.dotnet/tools/dssharness", StringComparison.Ordinal, Files)));
     }
 
     /// <summary>

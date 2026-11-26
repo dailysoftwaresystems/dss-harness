@@ -497,6 +497,95 @@ public sealed class RunStopTests
         }
     }
 
+    /// <summary>
+    /// A --now asked from inside the very tree it would end - a step of a run stopping that run's dispatcher, an agent its
+    /// engine - ends nothing: the walk is refused before it holds still or ends any process, and the stop says it could not
+    /// end it, its record kept. Run where it would act on itself: a child asks it of its own parent, both this test's to
+    /// start and end. Its answer, the parent's own line once the child has gone and the parent standing after, say that
+    /// neither was held still nor ended; a walk that went on would hold both still - or end both - and say nothing.
+    /// </summary>
+    [Fact]
+    public async Task EndingWhereItStands_FromInsideTheTreeItWouldEnd_EndsNothing_AndSaysItCouldNotEnd()
+    {
+        var start = TestHost.StartOf(TestHost.ChildRequest("spawn-holder", "outlive", "300000", "end-own-parent"));
+        var lines = new List<string>();
+        var errors = new List<string>();
+        var caller = LearnedProcess.None;
+        var told = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        start.RedirectStandardOutput = true;
+        start.RedirectStandardError = true;
+
+        using var parent = Process.Start(start)!;
+
+        try
+        {
+            parent.OutputDataReceived += (_, line) =>
+            {
+                lock (lines)
+                {
+                    if (line.Data is not { } said)
+                    {
+                        _ = told.TrySetResult(false);
+                        return;
+                    }
+
+                    lines.Add(said);
+
+                    if (LearnedProcess.In(said, "caller=") is { } learned)
+                    {
+                        caller = learned;
+                    }
+
+                    if (said.StartsWith("after=", StringComparison.Ordinal))
+                    {
+                        _ = told.TrySetResult(true);
+                    }
+                }
+            };
+
+            parent.ErrorDataReceived += (_, line) =>
+            {
+                lock (lines)
+                {
+                    if (line.Data is { } said)
+                    {
+                        errors.Add(said);
+                    }
+                }
+            };
+
+            parent.BeginOutputReadLine();
+            parent.BeginErrorReadLine();
+
+            var after = await told.Task.WaitAsync(TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+
+            lock (lines)
+            {
+                Assert.True(after, $"the parent ended before it said the child's end: {string.Join(" | ", lines.Concat(errors))}");
+                Assert.Equal(
+                    [
+                        "after=0",
+                        $"caller={caller}",
+                        $"ended={ProcessEnded.CouldNotEnd}: the tree of pid {parent.Id} holds this very process (pid {caller}), and no process ends a tree it runs in",
+                        $"holder={caller}",
+                    ],
+                    lines.Order(StringComparer.Ordinal));
+            }
+
+            Assert.False(parent.HasExited, $"the parent {parent.Id} was ended by a stop asked from inside its tree");
+        }
+        finally
+        {
+            lock (lines)
+            {
+                caller.TryEnding();
+            }
+
+            Ended(parent);
+        }
+    }
+
     /// <summary>What every stop's --now answers where ending the process left it nothing more to do, worded once for each.</summary>
     [Fact]
     public void WhatAStopsNowAnswers_WhereThereIsNothingMoreToDo_IsWordedOnce()

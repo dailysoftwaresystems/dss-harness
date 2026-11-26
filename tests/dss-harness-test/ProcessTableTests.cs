@@ -11,6 +11,33 @@ public sealed class ProcessTableTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// What a stop of the program a table is read through could not reach or end - PowerShell on Windows, each of the two
+    /// readings of ps on macOS - is said under the tool, naming the reading, once each (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(PlatformId.Windows, false)]
+    [InlineData(PlatformId.Windows, true)]
+    [InlineData(PlatformId.MacOs, false)]
+    [InlineData(PlatformId.MacOs, true)]
+    public async Task WhatAStopOfTheTablesReaderCouldNotReachOrEnd_IsSaidNamingTheReading(PlatformId system, bool stopped)
+    {
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new ProcessTable(HostDoubles.Platform(system), UnreachingRunner.For(stop), new ScriptedKernel(), harness.Output).ReadAsync(token));
+
+        string[] names = system == PlatformId.Windows
+            ? ["PowerShell reading the process table"]
+            : stopped
+                ? ["'ps -A -ww -o pid=,comm=' reading the process table"]
+                : ["'ps -A -ww -o pid=,comm=' reading the process table", "'ps -A -ww -o pid=,ppid=,lstart=,args=' reading the process table"];
+
+        Assert.Equal([.. names.Select(name => UnreachedSaid.Warned(DssHarness.Core.Hosts.ToolPackage.Command, name))], said);
+    }
+
+    /// <summary>
     /// On macOS a process is named by the program it runs, read from a listing that holds the program alone: the path of
     /// a program may hold a space, and in the listing that carries the command line nothing says where the program ends.
     /// Named by the first word of that line, a tool kept under a volume whose name holds a space was a process called
@@ -212,6 +239,56 @@ public sealed class ProcessTableTests
             [(4242, @"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe"), (4, (string?)null)],
             reading.Processes.Select(process => (process.Id, process.Executable)));
         Assert.Contains("$_.ExecutablePath", wmi.Script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// On Windows, which goes on naming a creator once it has gone and gives its id out again, a process listed under the
+    /// id a child names that was made after the child is a later holder of the id, and the reading names no parent for
+    /// that child: made after as the walk of a tree orders a creator and its child - by their sequence numbers where both
+    /// were read, whatever a clock that stepped between their creations says, and by their creation times where either was
+    /// not. A child the reading could not date keeps the parent it names, and one whose parent is not listed keeps it too.
+    /// The order is stood in for, read as asked with the creation time WMI listed.
+    /// </summary>
+    [Fact]
+    public async Task OnWindows_AParentMadeAfterTheChildThatNamesIt_IsNoParent_AsTheWalkOrdersThem()
+    {
+        const char separator = (char)31;
+        var agent = new DateTimeOffset(2026, 11, 25, 10, 0, 0, TimeSpan.Zero);
+        var sequences = new Dictionary<int, ulong?> { [100] = 50, [201] = 60, [202] = 40, [203] = null, [204] = null, [206] = 70, [1] = 1 };
+        var asked = new List<(int Id, long Created)>();
+
+        static string Line(int id, int parent, DateTimeOffset? created, string name)
+            => string.Join(separator, id.ToString(CultureInfo.InvariantCulture), parent.ToString(CultureInfo.InvariantCulture), created?.ToString("o", CultureInfo.InvariantCulture) ?? string.Empty, name + ".exe", name, string.Empty);
+
+        var wmi = new ScriptedPowerShell
+        {
+            Output = string.Join(
+                '\n',
+                Line(100, 1, agent, "agent"),
+                Line(201, 100, agent.AddSeconds(-5), "stepped"),
+                Line(202, 100, agent.AddSeconds(5), "earlier"),
+                Line(203, 100, agent.AddSeconds(5), "after"),
+                Line(204, 100, agent.AddSeconds(-5), "before"),
+                Line(205, 100, null, "undated"),
+                Line(206, 999, agent.AddSeconds(5), "orphan"),
+                Line(1, 0, agent.AddDays(-1), "init")),
+        };
+
+        var table = new ProcessTable(HostDoubles.Platform(PlatformId.Windows), wmi)
+        {
+            MadeAt = (id, created) =>
+            {
+                asked.Add((id, created));
+                return new CreationOrder(created, sequences[id]);
+            },
+        };
+
+        var reading = await table.ReadAsync(Token);
+
+        Assert.Equal(
+            [(100, 1), (201, 100), (202, null), (203, 100), (204, null), (205, 100), (206, 999), (1, (int?)0)],
+            reading.Processes.Select(process => (process.Id, process.ParentId)));
+        Assert.Contains((100, agent.ToFileTime()), asked);
     }
 
     /// <summary>

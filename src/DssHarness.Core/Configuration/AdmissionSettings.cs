@@ -55,6 +55,26 @@ public sealed class AdmissionSettings
     public const double DefaultMinFreeGiB = 2;
 
     /// <summary>
+    /// The machine steps a machine runs at once when a section says nothing, as a line says it: its own logical processors,
+    /// which only it knows - the rule of an ssh host is read on the machine that surveys it, whose processors are not the
+    /// host's.
+    /// </summary>
+    public const string MachinesProcessors = "the machine's logical processors";
+
+    /// <summary>Reasoning agents the machine runs at once when a section says nothing.</summary>
+    public const int DefaultAgents = 8;
+
+    /// <summary>Minutes a waiting unit's tenant ages for, when a section says nothing: past it, the tenant's share doubles each further period.</summary>
+    public const double DefaultAgeAfterMinutes = 10;
+
+    /// <summary>
+    /// The most minutes a span of time holds (<see cref="TimeSpan.MaxValue"/>): the range of <c>ageAfterMinutes</c>, a fact
+    /// of the time the aging bound is kept as, never a choice of the tool's - an aging bound longer than any wait is one
+    /// under which no share ages, which a machine may ask for.
+    /// </summary>
+    public static readonly double MostAgeAfterMinutes = TimeSpan.MaxValue.TotalMinutes;
+
+    /// <summary>
     /// The GiB a count of bytes holds: 2^33, past which <see cref="MinFreeGiB"/> in bytes would pass a 64-bit count's
     /// range - the type's own bound, not one of the tool's, for no filesystem is weighed in more bytes than a count holds.
     /// </summary>
@@ -62,7 +82,8 @@ public sealed class AdmissionSettings
 
     /// <summary>
     /// Heavy legs the machine runs at once, across every command this user runs there, at least one: each takes a slot
-    /// before it starts, in the order they asked, and gives it back when its work ends.
+    /// before it starts, in the dispatch queue's fair order (<see cref="Execution.DispatchOrder"/>), and gives it back when
+    /// its work ends.
     /// </summary>
     public int? HeavyLegs { get; init; }
 
@@ -105,6 +126,29 @@ public sealed class AdmissionSettings
     /// disk lacks, and else as many as that takes, one leg at a time on a filesystem. Off where nothing says.
     /// </summary>
     public bool? ReclaimIdleBuilds { get; init; }
+
+    /// <summary>
+    /// Machine steps the machine runs at once, of the process class - every process a step starts, heavy or not - when a
+    /// section says nothing: the machine's logical processors. Each run's own <c>maxParallelProcesses</c> keeps capping its
+    /// counted types within it. The dispatch queue shows it as that class's capacity; no unit asks the class yet.
+    /// </summary>
+    public int? Processes { get; init; }
+
+    /// <summary>
+    /// Reasoning agents the machine runs at once, of every run and side-task on it, at least one. Each run's own
+    /// <c>maxReasoningAgents</c> keeps capping its agents within it. The dispatch queue shows it as that class's capacity;
+    /// no unit asks the class yet.
+    /// </summary>
+    public int? Agents { get; init; }
+
+    /// <summary>
+    /// Minutes a waiting unit's tenant's share of the dispatch queue holds before it doubles, doubling again each such
+    /// period after, so no weight setting starves a tenant and a debt its tenant carries is repaid the faster
+    /// (<see cref="Execution.DispatchOrder.ShareOf"/>): from 0, under which the share is past any cost - a tenant's debt is
+    /// gone in one round, though no round credits it past its weight times its priority - and each tenant's units go in
+    /// the order they asked, to the most a span of time holds (<see cref="MostAgeAfterMinutes"/>).
+    /// </summary>
+    public double? AgeAfterMinutes { get; init; }
 
     /// <summary>
     /// The rule a machine admits heavy legs by: each field its own section declares, or else the defaults' section's,
@@ -162,6 +206,19 @@ public sealed class AdmissionSettings
             return value;
         }
 
+        // A field whose built-in value is the admitting machine's own, which a rule read anywhere else cannot know - an ssh
+        // host's rule is read on the machine that surveys it: null where no section declares it, said as what it stands for,
+        // and decided by that machine as it admits.
+        TValue? Declared<TValue>(string key, Func<AdmissionSettings, TValue?> read, string builtIn, Func<TValue, string> said)
+            where TValue : struct
+        {
+            var from = sections.FirstOrDefault(section => section.Settings is { } settings && read(settings) is not null);
+            var value = from is null ? null : read(from.Settings!);
+
+            fields.Add(new AdmissionField(key, value is { } declared ? said(declared) : builtIn, from?.From ?? BuiltIn));
+            return value;
+        }
+
         var merged = new AdmissionSettings
         {
             HeavyLegs = Value("heavyLegs", settings => settings.HeavyLegs, DefaultHeavyLegs, count => Number(count)),
@@ -171,6 +228,9 @@ public sealed class AdmissionSettings
             MaxWaitMinutes = Value("maxWaitMinutes", settings => settings.MaxWaitMinutes, DefaultMaxWaitMinutes, Number),
             MinFreeGiB = Value("minFreeGiB", settings => settings.MinFreeGiB, DefaultMinFreeGiB, Number),
             ReclaimIdleBuilds = Value("reclaimIdleBuilds", settings => settings.ReclaimIdleBuilds, false, reclaim => reclaim ? "true" : "false"),
+            Processes = Declared("processes", settings => settings.Processes, MachinesProcessors, count => Number(count)),
+            Agents = Value("agents", settings => settings.Agents, DefaultAgents, count => Number(count)),
+            AgeAfterMinutes = Value("ageAfterMinutes", settings => settings.AgeAfterMinutes, DefaultAgeAfterMinutes, Number),
         };
 
         var problems = new List<string>();
@@ -193,6 +253,9 @@ public sealed class AdmissionSettings
                 (long)Math.Round(merged.MinFreeGiB.Value * DiskSpace.Gibibyte))
             {
                 ReclaimIdleBuilds = merged.ReclaimIdleBuilds.Value,
+                Processes = merged.Processes,
+                Agents = merged.Agents,
+                AgeAfter = TimeSpan.FromMinutes(merged.AgeAfterMinutes.Value),
             },
             fields);
     }
@@ -371,4 +434,17 @@ public sealed record AdmissionRule(
     /// (<see cref="AdmissionSettings.ReclaimIdleBuilds"/>).
     /// </summary>
     public bool ReclaimIdleBuilds { get; init; }
+
+    /// <summary>
+    /// Machine steps of the process class the machine runs at once (<see cref="AdmissionSettings.Processes"/>), or
+    /// <see langword="null"/> where no section declares a count: the admitting machine's own logical processors, which that
+    /// machine decides as it admits (<see cref="AdmissionSettings.MachinesProcessors"/>).
+    /// </summary>
+    public int? Processes { get; init; }
+
+    /// <summary>Reasoning agents of every run the machine runs at once (<see cref="AdmissionSettings.Agents"/>).</summary>
+    public int? Agents { get; init; }
+
+    /// <summary>How long a unit waits before its tenant's share of the dispatch queue begins to age (<see cref="AdmissionSettings.AgeAfterMinutes"/>).</summary>
+    public TimeSpan AgeAfter { get; init; } = TimeSpan.FromMinutes(AdmissionSettings.DefaultAgeAfterMinutes);
 }

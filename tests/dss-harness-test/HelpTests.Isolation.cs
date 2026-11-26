@@ -348,8 +348,9 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "each pointed by its variable into the cache directory of the child's write scope - the places it writes and the "
-                + "Unix sockets outside it reaches - under the isolation's own (dssharness-isolation/caches under XDG_CACHE_HOME, "
-                + "else ~/.cache - ~/Library/Caches on macOS - and under LOCALAPPDATA on Windows, each scope's directory beside a "
+                + $"Unix sockets outside it reaches - under the isolation's own ({UserState.IsolationDirectoryName}/caches under the "
+                + $"directory {UserState.Variable} names, where it names one, else under XDG_CACHE_HOME, else ~/.cache - "
+                + "~/Library/Caches on macOS - and under LOCALAPPDATA on Windows; each scope's directory beside a "
                 + ".scope file naming its places), so a package one child plants is run only by a child that writes everything it "
                 + "writes - the next launch of the agent, the next run of the leg - never by one that writes another tree or the "
                 + "main checkout, a commit's or a push's hooks among them, or reaches the user's SSH agent, and a scope's caches are "

@@ -52,8 +52,9 @@ inputs:
     kind: value
     description: The step whose failure the recovery puts right - the recovery's source, handed in as every fact of the caller is - which the remedy prompt names; absent where a round uses the pipeline.
 # What the pipeline gives the step that uses it, read when the use ends. An item a person answered
-# skip has no fold and no review, and each of these reads nothing for it: the use ends done with
-# none of them, as an output that reads nothing is no failure of the use.
+# skip has no fold and no review: what its fold gives reads nothing for it, and the use ends done
+# without it, as an output that reads nothing is no failure of the use; what its review loop left
+# reads each list of a routing that never ran as none, and so is empty.
 outputs:
   - name: written
     description: The paths the item's fold wrote; none where the item was skipped.
@@ -62,8 +63,8 @@ outputs:
     description: The anchor rows the item's fold carried; none where the item was skipped.
     from: fold.rows
   - name: leftover
-    description: The review findings still standing where the review loop ended at its bound, none of them acted on - empty where it ended clean, and none where the item was skipped.
-    from: fix.review.findings
+    description: What the review loop left where it ended at its bound, none of it acted on - its last routing's rework and home audits, as the loop's own leftover reads them; empty where it ended clean, and where the item was skipped, which no loop reviewed.
+    from: 'union(fix.route.rework ?? null, fix.route.homeAudit ?? null)'
 steps:
   - name: item-agent
     type: create-agent
@@ -169,6 +170,7 @@ steps:
     in: item-agent
     classes: 'input.item.classes'
     record: 'implement.latest.closure'
+    arms: 'implement.latest.arms'
     base: '{input.orient.startCommit}'
     dependsOn: [verify, mend]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
@@ -297,25 +299,113 @@ steps:
     dependsOn: [checkpoint]
     when: 'input.orient.hasRemote'
     onFailure: '{input.failTo}'
+  # The item's own arms - those its builder's answer lists, which each class-closure check holds to the arms its record
+  # names, and none where it lists none - swept on a copy of the commit its fold landed as, never the main tree as it
+  # moves, beside the review, holding no tree: the checkpoint and its push are done, no other item waits for this, and
+  # only the item's own release waits for its arms to stand.
+  - name: item-arms
+    type: check-mutations
+    pending: true
+    arms: 'implement.latest.arms'
+    base: item
+    dependsOn: [checkpoint-push]
+    when: "input.orient.hasLegs && input.orient.hasMutations && (item-blocked.answer ?? 'continue') != 'skip'"
+    onFailure: '{input.failTo}'
+  # An arm that is not as it should be - violated (1), survived (2) or unattributed (8) - goes back to the builder with
+  # the sweep's own words for it, and its change goes the way a rework's does - tested, checked against the classes,
+  # folded and committed - before the sweep runs again on the bytes the fix landed as. Every other failure of the sweep
+  # is the machine's, not the arm's, and goes where the pipeline's machine failures go.
+  - name: rearm
+    on:
+      step: item-arms
+      outcome: failure
+      codes: [1, 2, 8]
+    then: item-arms
+    maxVisits: 2
+    onFailure: pause
+    steps:
+      - name: rearm-work
+        type: reason
+        resume: implement
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
+        onPreExisting: triage-pre-existing-issue
+        graphFrom: changes
+        prompt: prompts/rearm.md
+        outputs: schemas/implement.schema.json
+      - name: rearm-verify
+        type: test
+        in: item-agent
+        filter: 'union(input.item.tests, implement.latest.tests)'
+        affected: '{input.testsKey}'
+        noTests: '{input.item.noTests}'
+        dependsOn: [rearm-work]
+        when: 'input.orient.hasLegs'
+        onFailure: '{input.failTo}'
+      - name: rearm-closure
+        type: class-closure
+        in: item-agent
+        classes: 'input.item.classes'
+        record: 'implement.latest.closure'
+        arms: 'implement.latest.arms'
+        base: '{input.orient.startCommit}'
+        dependsOn: [rearm-work, rearm-verify]
+        onFailure: '{input.failTo}'
+      - name: rearm-fold
+        type: fold
+        of: item-agent
+        within: 'input.item.ownedPaths'
+        allow:
+          new: 'implement.latest.newRows'
+        answers:
+          foldNewRows: allow
+          foldTwoChanges: merge
+          foldConflicts: fail
+          foldOutside: fail
+        dependsOn: [rearm-verify, rearm-closure]
+        onFailure: '{input.failTo}'
+      - name: rearm-checkpoint
+        type: commit
+        dependsOn: [rearm-fold]
+        onFailure: '{input.failTo}'
+        message: |-
+          {input.item.title}: arms repaired
+
+          Committed when the arm the item's own sweep found red was put right, before the sweep runs again.
+          Checked:
+          {carried.ran}
+          Not checked:
+          {carried.notRun}
+          Known red:
+          {carried.red}
+      - name: rearm-push
+        type: push
+        checkpoint: true
+        dependsOn: [rearm-checkpoint]
+        when: 'input.orient.hasRemote'
+        onFailure: '{input.failTo}'
   - name: fix
     dependsOn: [checkpoint-push]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
     repeat:
-      until: 'empty(review.findings)'
-      # The loop decides where its review ends (decideAfter), not where the whole
-      # iteration does: the until, the blocking and the bound are read on what review
-      # found, before revise acts on it, so the last rework of a round that ends at the
-      # bound is reviewed by the round after it, and what a bound-ended loop leaves is
-      # what its last review found, none of it acted on.
-      decideAfter: review
+      until: 'empty(route.rework) && empty(route.homeAudit)'
+      # The loop decides where its routing ends (decideAfter), not where the whole
+      # iteration does: the until, the blocking and the bound are read on what route
+      # made of the review's findings, before revise acts on it, so the last rework of
+      # a round that ends at the bound is reviewed by the round after it, and what a
+      # bound-ended loop leaves is what its last routing holds, none of it acted on.
+      decideAfter: route
       rounds: 3
       # Three rounds; past them the loop goes on only while a critical, high or medium finding
-      # stands, three rounds more at most. What is left then - a low or a nit after the three,
-      # anything after the six - is written to the backlog and named in the pull request and
-      # the handoff, for the person who reads them at the end; the run goes on.
-      blocking: "any(review.findings, it.severity != 'low' && it.severity != 'nit')"
+      # stands, three rounds more at most - graded as the review graded it, a class reopened
+      # by the worst of its findings, whether it goes back as rework or to a home audit. What
+      # is left then - a low or a nit after the three, anything after the six, rework and home
+      # audits alike - is written to the backlog and named in the pull request and the
+      # handoff, for the person who reads them at the end; the run goes on.
+      blocking: "any(union(route.rework, route.homeAudit), it.severity != 'low' && it.severity != 'nit')"
       blockersLimitRounds: 3
-      leftover: 'review.findings'
+      leftover: 'union(route.rework, route.homeAudit)'
     answers:
       loopBound: accept
     onFailure: '{input.failTo}'
@@ -421,9 +511,36 @@ steps:
             graphFrom: changes
             prompt: prompts/review.md
             outputs: schemas/review.schema.json
-      - name: revise
+          # The closure reviewer runs wherever the item has classes, never gated by
+          # review-scope: it judges the record against the data itself, measures cells
+          # of the universe, and classes every finding of the round reopened or
+          # introduced as the rest do.
+          - name: closure
+            type: reason
+            agent: reviewer-closure
+            tier: high
+            effort: xhigh
+            independent: true
+            when: '!empty(input.item.classes)'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graph: tools
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+      - name: route
+        type: route-findings
+        in: item-agent
+        findings: 'review.findings'
+        classes: 'input.item.classes'
+        record: 'implement.latest.closure'
         dependsOn: [review]
-        when: '!empty(review.findings)'
+        onFailure: '{input.failTo}'
+      - name: revise
+        dependsOn: [route]
+        when: '!empty(route.rework) || !empty(route.homeAudit)'
         onFailure: '{input.failTo}'
         steps:
           - name: rework
@@ -466,6 +583,7 @@ steps:
             in: item-agent
             classes: 'input.item.classes'
             record: 'implement.latest.closure'
+            arms: 'implement.latest.arms'
             base: '{input.orient.startCommit}'
             dependsOn: [rework, reverify, remend]
             onFailure: '{input.failTo}'
@@ -601,7 +719,9 @@ steps:
     answers:
       foldNewRows: allow
       foldTwoChanges: merge
-    dependsOn: [fix]
+    # The item is not released until its own arms are as they should be: the sweep runs beside the review, and a rearm
+    # it raised is not done until the fix is folded and the sweep has passed on the bytes it landed as.
+    dependsOn: [fix, item-arms]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
     onFailure: '{input.failTo}'
   - name: drop

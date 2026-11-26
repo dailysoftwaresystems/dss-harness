@@ -69,7 +69,8 @@ public static class WorkflowExpressions
     /// <summary>
     /// The run's own values an expression reads after <c>run</c>: its name, how it stands without its <c>always</c>
     /// steps - its status, whether it is done, failed, paused or stopped, and how many failed steps were passed over -
-    /// and the test units its record of affected tests holds, every entry's, each once.
+    /// the test units its record of affected tests holds, every entry's, each once, and the issues it owes its next
+    /// round, none of its ended work having settled them.
     /// </summary>
     public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> RunValues { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
     {
@@ -81,6 +82,8 @@ public static class WorkflowExpressions
         ["stopped"] = JsonSchemaSubset.Reading.Of("boolean"),
         ["passedOver"] = JsonSchemaSubset.Reading.Of("integer"),
         [AffectedTests] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("string")),
+        // Each issue as the engine gives it (FlowNextIssue.Value), typed by the schema made from the same members.
+        [NextRound] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Read(FlowNextIssue.ValueSchema())),
     };
 
     /// <summary>
@@ -90,6 +93,12 @@ public static class WorkflowExpressions
     public const string AffectedTests = "affectedTests";
 
     /// <summary>
+    /// The run's value that reads its issues owed its next round: each a defect a triage took from a round's work with
+    /// its size, none of the run's ended work having settled it - what the rounds go on while one is left of.
+    /// </summary>
+    public const string NextRound = "nextRound";
+
+    /// <summary>
     /// The run's values that say how it stands without its <c>always</c> steps, which only an <c>always</c> step - or a
     /// member of an <c>always</c> group - reads, so that none reads its own effect.
     /// </summary>
@@ -97,10 +106,31 @@ public static class WorkflowExpressions
 
     /// <summary>
     /// The run's texts after <c>run</c>, written by the engine from its step records for a template - what it checked,
-    /// what it has not yet, what it knows to be red, what its loops left, what its agents assumed, and the pre-existing
-    /// issues it took - never values for an expression.
+    /// what it has not yet, what it knows to be red, what its loops left, what its agents assumed, the pre-existing
+    /// issues it took, each item's class record as its closure check judged it, each class's closing claim alone, the
+    /// hotspots of those checks, the classes its reviews reopened with how many rounds, and each item's counts - never
+    /// values for an expression. What each says of the classes is gathered by one owner (<see cref="FlowClosureRecords"/>).
     /// </summary>
-    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting"];
+    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting", RunClosure, RunClaims, RunHotspots, RunReopened, RunCounts];
+
+    /// <summary>The run's text of each item's class record, whole, as the newest closure check of the item judged it - for the self-audit's instance-closure lens.</summary>
+    public const string RunClosure = "closure";
+
+    /// <summary>The run's text of each class's closing claim alone, as each item's newest closure check judged its record - the universe, never a case.</summary>
+    public const string RunClaims = "claims";
+
+    /// <summary>The run's text of every hotspot its items' closure checks named, with the touches that named each.</summary>
+    public const string RunHotspots = "hotspots";
+
+    /// <summary>The run's text of each class its reviews reopened, with how many rounds reopened it.</summary>
+    public const string RunReopened = "reopened";
+
+    /// <summary>
+    /// The run's text of each item's counts (<see cref="FlowClosureItem.Said"/>): its rounds of review and home audits, and
+    /// of each class the sites consolidated and deleted, the cells pinned, the neighbours measured and not, and how often
+    /// a review sent it back.
+    /// </summary>
+    public const string RunCounts = "counts";
 
     /// <summary>The texts after <c>carried</c>: the same three of what one commit carries, for its message and its variables alone.</summary>
     public static IReadOnlyList<string> CarriedTexts { get; } = ["ran", "notRun", "red"];

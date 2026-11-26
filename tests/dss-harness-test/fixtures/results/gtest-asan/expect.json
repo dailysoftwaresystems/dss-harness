@@ -1,0 +1,19 @@
+{
+  "read": {
+    "tests": "ctest"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["tests/store_test.cc"],
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "crashed StoreTest.Loads"
+  ],
+  "stack": {
+    "frames": 12,
+    "inTree": [
+      "/home/runner/work/app/app/tests/store_test.cc:7",
+      "/home/runner/work/app/app/tests/store_test.cc:22"
+    ]
+  }
+}

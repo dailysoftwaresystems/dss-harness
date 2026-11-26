@@ -1,0 +1,34 @@
+In file included from main.c:2:
+In file included from ./include/util.h:3:
+./include/types.h:5:5: error: unknown type name 'uint32_t'
+    uint32_t count;
+    ^
+main.c:6:17: error: call to undeclared function 'undeclared_helper'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+    int total = undeclared_helper(3);
+                ^
+2 errors generated.
+templ.cpp:6:18: error: invalid operands to binary expression ('const std::basic_string<char>' and 'int')
+    return value * 2;
+           ~~~~~ ^ ~
+templ.cpp:12:12: note: in instantiation of function template specialization 'twice<std::basic_string<char>>' requested here
+    return twice(value);
+           ^
+templ.cpp:18:12: note: in instantiation of function template specialization 'apply<std::basic_string<char>>' requested here
+    return apply(text).size();
+           ^
+1 error generated.
+macro.cpp:6:12: error: use of undeclared identifier 'check_value'
+    return CHECK(count);
+           ^
+macro.cpp:1:22: note: expanded from macro 'CHECK'
+#define CHECK(value) check_value(value)
+                     ^
+1 error generated.
+unused.c:3:9: error: unused variable 'unused_count' [-Werror,-Wunused-variable]
+    int unused_count = 3;
+        ^~~~~~~~~~~~
+1 error generated.
+missing.c:2:10: fatal error: 'nowhere/config.h' file not found
+#include "nowhere/config.h"
+         ^~~~~~~~~~~~~~~~~~
+1 error generated.

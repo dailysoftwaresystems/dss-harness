@@ -79,6 +79,7 @@ public static class WorkflowFileParser
         int? maxInstances = null;
         bool? pushCheckpoints = null;
         int? handoffSeconds = null;
+        int? priority = null;
         FlowBudget? budget = null;
         string? recommendations = null;
         IReadOnlyDictionary<string, string>? texts = null;
@@ -135,6 +136,10 @@ public static class WorkflowFileParser
 
                 case "handoffSeconds":
                     handoffSeconds = RequireInt(value, "handoffSeconds", problems);
+                    break;
+
+                case "priority":
+                    priority = RequireInt(value, "priority", problems);
                     break;
 
                 case "budget":
@@ -230,6 +235,7 @@ public static class WorkflowFileParser
                 maxInstances,
                 pushCheckpoints,
                 handoffSeconds,
+                priority,
                 budget,
                 recommendations,
                 advisor,
@@ -1366,8 +1372,9 @@ public static class WorkflowFileParser
             case "check-mutations":
                 step = step with
                 {
-                    Arms = StringListIn(keys, $"{where}.arms", problems) ?? [],
+                    Arms = FlowListIn(keys, $"{where}.arms", problems),
                     Pending = BooleanIn(keys, $"{where}.pending", problems),
+                    Base = ScalarIn(keys, $"{where}.base", problems),
                 };
                 break;
 
@@ -1451,9 +1458,19 @@ public static class WorkflowFileParser
                 {
                     Classes = ScalarIn(keys, $"{where}.classes", problems),
                     Record = ScalarIn(keys, $"{where}.record", problems),
+                    Arms = FlowListIn(keys, $"{where}.arms", problems),
                     Base = ScalarIn(keys, $"{where}.base", problems),
                     Touches = IntIn(keys, $"{where}.touches", problems),
                     Hotspot = IntIn(keys, $"{where}.hotspot", problems),
+                };
+                break;
+
+            case "route-findings":
+                step = step with
+                {
+                    Findings = ScalarIn(keys, $"{where}.findings", problems),
+                    Classes = ScalarIn(keys, $"{where}.classes", problems),
+                    Record = ScalarIn(keys, $"{where}.record", problems),
                 };
                 break;
 

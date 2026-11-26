@@ -1,0 +1,15 @@
+{"protocolVersion":"0.1.1","runnerVersion":"1.31.1","pid":38016,"type":"start","time":0}
+{"suite":{"id":0,"platform":"vm","path":"test\\store_test.dart"},"type":"suite","time":0}
+{"test":{"id":1,"name":"loading test\\store_test.dart","suiteID":0,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":1}
+{"count":1,"time":5,"type":"allSuites"}
+{"testID":1,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":249}
+{"group":{"id":2,"suiteID":0,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":3,"line":null,"column":null,"url":null},"type":"group","time":250}
+{"test":{"id":3,"name":"charge adds one","suiteID":0,"groupIDs":[2],"metadata":{"skip":false,"skipReason":null},"line":5,"column":3,"url":"file:///D:/a/app/app/dart/test/store_test.dart"},"type":"testStart","time":250}
+{"testID":3,"error":"Expected: <4>\n  Actual: <3>\n","stackTrace":"package:matcher           expect\ntest\\store_test.dart 6:5  main.<fn>\n","isFailure":true,"type":"error","time":262}
+{"testID":3,"result":"failure","skipped":false,"hidden":false,"type":"testDone","time":262}
+{"test":{"id":4,"name":"load finds its record","suiteID":0,"groupIDs":[2],"metadata":{"skip":false,"skipReason":null},"line":9,"column":3,"url":"file:///D:/a/app/app/dart/test/store_test.dart"},"type":"testStart","time":263}
+{"testID":4,"error":"Bad state: no record named first","stackTrace":"package:demo/store.dart 14:7  Store.load\ntest\\store_test.dart 10:13    main.<fn>\n","isFailure":false,"type":"error","time":264}
+{"testID":4,"result":"error","skipped":false,"hidden":false,"type":"testDone","time":264}
+{"test":{"id":5,"name":"keeps its records","suiteID":0,"groupIDs":[2],"metadata":{"skip":false,"skipReason":null},"line":13,"column":3,"url":"file:///D:/a/app/app/dart/test/store_test.dart"},"type":"testStart","time":265}
+{"testID":5,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":265}
+{"success":false,"type":"done","time":268}

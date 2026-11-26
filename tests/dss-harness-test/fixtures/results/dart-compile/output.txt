@@ -1,0 +1,10 @@
+bin/broken.dart:6:9: Error: Undefined name 'missingTotal'.
+  print(missingTotal);
+        ^^^^^^^^^^^^
+bin/broken.dart:5:15: Error: The method 'read' isn't defined for the type 'Store'.
+ - 'Store' is from 'package:demo/store.dart' ('lib/store.dart').
+Try correcting the name to the name of an existing method, or defining a method named 'read'.
+  print(store.read('first'));
+              ^^^^
+Error: AOT compilation failed
+Bad state: Generating AOT kernel dill failed!

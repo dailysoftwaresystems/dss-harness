@@ -299,6 +299,10 @@
         "noClass": {
           "type": "string",
           "description": "Where classes is empty, why the item decides nothing: what makes its work a document, a rename or a bump rather than a decision changed. Empty where classes is not."
+        },
+        "settles": {
+          "type": "string",
+          "description": "The id of the issue of the run's next round this item settles (nx-<n>), exactly as the run names it; empty or absent where it settles none. A defect the run took from its own rounds is a work item like any other: it decides a class, and it is built first."
         }
       }
     },

@@ -1,5 +1,4 @@
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,13 +6,13 @@ using Microsoft.Extensions.DependencyInjection;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The use cases of the commands that run legs as the tool's own registrations build them - the very services a command
-/// resolves - writing to a factory's output, so what they refuse is read in process as the command reads it, with no
-/// process spawned.
+/// The use cases of the commands that run legs as the tool's own registrations build them in a test
+/// (<see cref="TestRegistrations"/>) - the very services a command resolves - writing to a factory's output, so what they
+/// refuse is read in process as the command reads it, with no process spawned.
 /// </summary>
 /// <remarks>
-/// Only for what is refused before any leg is placed: a run that went on would measure this machine and keep its records
-/// in this user's own data, which a test's process has no business writing.
+/// Only for what is refused before any leg is placed: a run that went on would measure this machine and run its legs'
+/// steps for real, which no test's scene holds to what it pins.
 /// </remarks>
 internal static class LegUseCases
 {
@@ -21,8 +20,7 @@ internal static class LegUseCases
     /// <param name="harness">Whose output the operation writes to.</param>
     /// <param name="command">The command the operation runs as.</param>
     internal static ServiceProvider Of(HarnessFactory harness, string command)
-        => new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = command, Prompting = false }, OperationId.New(), output: _ => harness.Output)
+        => TestRegistrations.Of(new SessionOptions { Command = command, Prompting = false }, OperationId.New(), output: _ => harness.Output)
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
     /// <summary>

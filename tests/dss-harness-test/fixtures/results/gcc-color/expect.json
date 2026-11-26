@@ -1,0 +1,13 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "GNU"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["unused.c"],
+  "warnings": 1,
+  "first": null,
+  "diagnostics": [
+    "warning -Wunused-variable unused.c:3"
+  ]
+}

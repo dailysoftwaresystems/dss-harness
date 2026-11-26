@@ -103,6 +103,39 @@ public interface IWorktreeService : IUseCase
         bool asItsAgent = false,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Makes a copy of <paramref name="commit"/> at <paramref name="path"/> to work on beside the main checkout at
+    /// <paramref name="mainCheckoutRoot"/>, one no fold of the main tree moves: a detached worktree of git's, outside the
+    /// worktrees root, nobody's to keep. A copy an earlier attempt left at the same path - a stop, a pause or a crash
+    /// before it was taken away - is taken away first, as <see cref="RemoveCopyAsync"/> takes one, so making it again
+    /// never meets what is there. What was made is looked for, never taken on git's word.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose worktree the copy is.</param>
+    /// <param name="path">Where the copy goes.</param>
+    /// <param name="commit">The commit it is a copy of.</param>
+    /// <param name="cancellationToken">Stops the making before git is asked to make it; a copy half made is taken back by the next attempt's making.</param>
+    Task<WorktreeOutcome> CreateCopyAsync(string mainCheckoutRoot, string path, string commit, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Takes away the copy at <paramref name="path"/> a <see cref="CreateCopyAsync"/> made, whatever it holds: its
+    /// directory and git's record of it, forced, the record cleared where git cannot remove it, and looked for after -
+    /// never interrupted, for a copy taken away part way is one the next making meets. What could not be taken away is
+    /// said, with how to finish.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose worktree the copy is.</param>
+    /// <param name="path">The copy's directory.</param>
+    Task<WorktreeOutcome> RemoveCopyAsync(string mainCheckoutRoot, string path);
+
+    /// <summary>
+    /// Takes away, as <see cref="RemoveCopyAsync"/> takes one, every copy git records strictly inside
+    /// <paramref name="directory"/>: what a run that was cut off before it took its copies away left, so deleting the run
+    /// leaves no record of git's naming a directory that is gone. Never interrupted. Each copy that could not be taken
+    /// away is said, one line each; none where every one was, or there was none.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose worktrees the copies are.</param>
+    /// <param name="directory">The directory the copies were made in.</param>
+    Task<IReadOnlyList<string>> RemoveCopiesUnderAsync(string mainCheckoutRoot, string directory);
+
     /// <summary>Lists existing worktrees with the commit each was made from.</summary>
     /// <exception cref="HarnessException">The repository is not initialised.</exception>
     Task<IReadOnlyList<WorktreeListing>> ListAsync(
@@ -801,7 +834,7 @@ public sealed class WorktreeService(
                     () => identity.Membership == WorktreeMembership.AgentRepository
                         ? RemoveRepositoryAsync(removal, checksRan: !force)
                         : force
-                        ? RemoveForcedAsync(layout, worktreeName, path, identity.AdministrativeDirectory, inspector)
+                        ? RemoveForcedAsync(layout.MainCheckoutRoot, worktreeName, path, identity.AdministrativeDirectory, inspector, $"run '{ToolPackage.Command} {DeleteCommand} {worktreeName} --force'")
                         : RemoveCheckedAsync(removal))
                 .ConfigureAwait(false);
         }
@@ -1632,16 +1665,23 @@ public sealed class WorktreeService(
     /// Removes a worktree without checking it: its directory, and git's record of it, even when it
     /// is locked, its .git file is gone, or it belongs to another repository.
     /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose worktree it is.</param>
+    /// <param name="name">What the worktree is called where its removal is said.</param>
+    /// <param name="path">Its directory.</param>
+    /// <param name="administrativeDirectory">Its record's directory, where git named one; null where git's list is to be asked.</param>
+    /// <param name="inspector">Asks git's list for its record.</param>
+    /// <param name="finish">What finishes a removal that could not delete its directory, said after closing what holds it.</param>
     private async Task<WorktreeOutcome> RemoveForcedAsync(
-        HarnessLayout layout,
+        string mainCheckoutRoot,
         string name,
         string path,
         string? administrativeDirectory,
-        WorktreeInspector inspector)
+        WorktreeInspector inspector,
+        string finish)
     {
         // Forced twice, git removes a locked worktree as well.
         var removal = await _gitClient
-            .RunAsync(layout.MainCheckoutRoot, ["worktree", "remove", "--force", "--force", path], cancellationToken: CancellationToken.None)
+            .RunAsync(mainCheckoutRoot, ["worktree", "remove", "--force", "--force", path], cancellationToken: CancellationToken.None)
             .ConfigureAwait(false);
 
         // git leaves the directory when it cannot treat it as a worktree at all, and can report
@@ -1656,7 +1696,7 @@ public sealed class WorktreeService(
             {
                 return Failed(
                     $"Could not finish deleting '{path}'; part of it may already be gone: {ex.Message.TrimEnd('.')}. "
-                    + $"Close whatever is using it, then run '{ToolPackage.Command} {DeleteCommand} {name} --force'.");
+                    + $"Close whatever is using it, then {finish}.");
             }
         }
 
@@ -1674,15 +1714,117 @@ public sealed class WorktreeService(
             // With the directory gone, git clears the record it could not remove before, locked
             // or not. Its answer is not taken on trust: the record is looked for below.
             var clearing = await _gitClient
-                .RunAsync(layout.MainCheckoutRoot, ["worktree", "remove", "--force", "--force", path], cancellationToken: CancellationToken.None)
+                .RunAsync(mainCheckoutRoot, ["worktree", "remove", "--force", "--force", path], cancellationToken: CancellationToken.None)
                 .ConfigureAwait(false);
 
             clearingFailure = clearing.Succeeded ? null : clearing.FailureMessage;
         }
 
         return administrativeDirectory is null
-            ? await VerifiedByListAsync(layout, name, path, clearingFailure, inspector).ConfigureAwait(false)
+            ? await VerifiedByListAsync(mainCheckoutRoot, name, path, clearingFailure, inspector).ConfigureAwait(false)
             : Verified(name, path, administrativeDirectory, clearingFailure);
+    }
+
+    public async Task<WorktreeOutcome> CreateCopyAsync(string mainCheckoutRoot, string path, string commit, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckoutRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+        var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
+
+        // A copy an earlier attempt left - its directory, or git's record of it with the directory gone - is taken away
+        // first: git refuses to make a worktree where a directory is, whatever --force says, and where its record names a
+        // directory that is gone.
+        GitWorktree? recorded;
+
+        try
+        {
+            recorded = await inspector.FindRecordAsync(mainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return Failed($"The copy of commit {ReportText.Commit(commit)} at '{ReportText.Printable(path)}' was not made: whether git records one there already could not be told: {ex.Message.TrimEnd('.')}. Nothing was made.");
+        }
+
+        if (recorded is not null || _fileSystem.DirectoryExists(path))
+        {
+            var left = await RemoveCopyAsync(mainCheckoutRoot, path).ConfigureAwait(false);
+
+            if (!left.Succeeded)
+            {
+                return Failed(
+                    $"The copy of commit {ReportText.Commit(commit)} at '{ReportText.Printable(path)}' was not made: the copy an earlier attempt left there "
+                    + $"could not be taken away: {left.Outcome.Message.TrimEnd('.')}. Nothing was made.");
+            }
+        }
+
+        _fileSystem.CreateDirectory(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(path))!);
+
+        var made = await _gitClient
+            .RunAsync(mainCheckoutRoot, ["worktree", "add", "--detach", path, commit], cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!made.Succeeded)
+        {
+            return Failed($"git could not make the copy of commit {ReportText.Commit(commit)} at '{ReportText.Printable(path)}': {made.FailureMessage.TrimEnd('.')}.");
+        }
+
+        // git's exit code is not taken as proof the copy exists: a hook, a filter or a scanner can take it away between
+        // git's success and here.
+        return _fileSystem.DirectoryExists(path)
+            ? new WorktreeOutcome(CommandOutcome.Ok($"made a copy of commit {ReportText.Commit(commit)}", [path]), name, path) { BaseCommit = commit }
+            : Failed($"git reported the copy of commit {ReportText.Commit(commit)} made, but '{ReportText.Printable(path)}' does not exist.");
+    }
+
+    public Task<WorktreeOutcome> RemoveCopyAsync(string mainCheckoutRoot, string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckoutRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        // Never interrupted, as a worktree's forced removal is not: a copy taken away part way is one the next making meets.
+        return RemoveForcedAsync(
+            mainCheckoutRoot,
+            Path.GetFileName(Path.TrimEndingDirectorySeparator(path)),
+            path,
+            administrativeDirectory: null,
+            new WorktreeInspector(_gitClient, _fileSystem, _platform, _output),
+            $"make the copy again, which takes it away first, or delete '{ReportText.Printable(path)}' and run 'git worktree prune'");
+    }
+
+    public async Task<IReadOnlyList<string>> RemoveCopiesUnderAsync(string mainCheckoutRoot, string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckoutRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
+        IReadOnlyList<GitWorktree> listed;
+        string resolved;
+
+        try
+        {
+            resolved = inspector.ResolveLinks(directory);
+            listed = await _gitClient.ListWorktreesAsync(mainCheckoutRoot, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return [$"the copies git records inside '{ReportText.Printable(directory)}' could not be looked for, and any is left: {ex.Message.TrimEnd('.')}"];
+        }
+
+        var left = new List<string>();
+
+        foreach (var copy in listed.Where(worktree => !worktree.IsMain && PathContainment.IsStrictlyInside(resolved, worktree.Path, _platform.PathComparison)))
+        {
+            var removed = await RemoveCopyAsync(mainCheckoutRoot, copy.Path).ConfigureAwait(false);
+
+            if (!removed.Succeeded)
+            {
+                left.Add($"the copy '{ReportText.Printable(copy.Path)}' is left: {removed.Outcome.Message.TrimEnd('.')}");
+            }
+        }
+
+        return left;
     }
 
     /// <summary>
@@ -1749,7 +1891,7 @@ public sealed class WorktreeService(
                     return Failed($"git could not clear its record of worktree '{name}', whose directory is gone: {removal.FailureMessage}");
                 }
 
-                return await VerifiedByListAsync(layout, name, path, gitFailure: null, inspector).ConfigureAwait(false);
+                return await VerifiedByListAsync(layout.MainCheckoutRoot, name, path, gitFailure: null, inspector).ConfigureAwait(false);
             })
             .ConfigureAwait(false);
     }
@@ -1839,7 +1981,7 @@ public sealed class WorktreeService(
     /// name the record's directory beforehand.
     /// </summary>
     private async Task<WorktreeOutcome> VerifiedByListAsync(
-        HarnessLayout layout,
+        string mainCheckoutRoot,
         string name,
         string path,
         string? gitFailure,
@@ -1849,7 +1991,7 @@ public sealed class WorktreeService(
 
         try
         {
-            remaining = await inspector.FindRecordAsync(layout.MainCheckoutRoot, path, CancellationToken.None).ConfigureAwait(false);
+            remaining = await inspector.FindRecordAsync(mainCheckoutRoot, path, CancellationToken.None).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {

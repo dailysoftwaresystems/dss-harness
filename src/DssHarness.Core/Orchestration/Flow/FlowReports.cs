@@ -99,52 +99,36 @@ public static class FlowReports
 {
     /// <summary>Writes the report of a session, markdown and one JSON document beside it.</summary>
     /// <param name="fileSystem">Writes the two files, atomically.</param>
-    /// <param name="layout">The run's layout.</param>
-    /// <param name="flow">The run's state in one file, as the session left it.</param>
-    /// <param name="questions">The run's questions and answers, as the session left them.</param>
+    /// <param name="source">The run's records as the session left them, and the thresholds every report of the run is computed by - read by the one place that reads them for every report of a run.</param>
     /// <param name="summary">The session in words.</param>
     /// <param name="exitCode">The session's exit code.</param>
     /// <param name="endedAt">When the session ended.</param>
-    /// <param name="updates">The run's plan updates, as the session left them.</param>
     /// <returns>What is left for a person, the report's last section, one line each.</returns>
-    public static IReadOnlyList<string> Write(
-        IFileSystem fileSystem,
-        OrchestratorLayout layout,
-        FlowFile flow,
-        FlowQuestionsFile? questions,
-        string summary,
-        int exitCode,
-        DateTimeOffset endedAt,
-        FlowUpdatesFile? updates = null)
+    public static IReadOnlyList<string> Write(IFileSystem fileSystem, FlowRunReportSource source, string summary, int exitCode, DateTimeOffset endedAt)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
-        ArgumentNullException.ThrowIfNull(layout);
-        ArgumentNullException.ThrowIfNull(flow);
+        ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(summary);
 
+        // The report of the run is built by its one owner from the records alone; this, the session's end, writes it
+        // with the session's own members - its line, its code, when it ended and the handoffs it holds - and, in
+        // report.md, its questions, updates, handoffs and what is left for a person said in full - the detail a person
+        // reads - after the sections every form of the report holds.
+        var (layout, flow, questions, updates) = (source.Layout, source.Flow, source.Questions, source.Updates);
+        var report = FlowRunReport.Of(source);
         var left = LeftForAPerson(layout, flow, questions, updates);
         var handoffs = HandoffsOf(layout, flow);
 
-        var json = new JsonObject
+        report["session"] = new JsonObject
         {
-            ["schema"] = 1,
-            ["run"] = flow.Run,
-            ["definition"] = flow.Definition,
-            ["status"] = flow.Status,
             ["summary"] = summary,
             ["exitCode"] = exitCode,
             ["endedAt"] = FlowTimeConverter.Written(endedAt),
-            ["spent"] = SpentOf(flow.Spent),
-            ["steps"] = new JsonArray([.. flow.Steps.Select(StepOf)]),
-            ["graph"] = GraphOf(flow.Steps),
             ["handoffs"] = new JsonArray([.. handoffs.Select(HandoffOf)]),
-            ["questions"] = questions is null ? [] : new JsonArray([.. questions.Questions.Select(QuestionOf)]),
-            ["updates"] = updates is null ? [] : new JsonArray([.. updates.Updates.Select(UpdateOf)]),
-            ["leftForAPerson"] = new JsonArray([.. left.Select(line => JsonValue.Create(line))]),
         };
 
-        JsonStateFile.Write(fileSystem, layout.ReportJsonFile, json);
-        fileSystem.WriteAllTextAtomic(layout.ReportFile, MarkdownOf(flow, questions, handoffs, summary, exitCode, left, updates) + "\n");
+        JsonStateFile.Write(fileSystem, layout.ReportJsonFile, report);
+        fileSystem.WriteAllTextAtomic(layout.ReportFile, MarkdownOf(report, flow, questions, handoffs, summary, exitCode, left, updates) + "\n");
 
         return left;
     }
@@ -197,6 +181,30 @@ public static class FlowReports
                 ["records"] = records,
                 ["named"] = named,
             });
+    }
+
+    /// <summary>
+    /// What a run of an agent a person calls on a run's records cost, as every exit of the commands that run one says it
+    /// - the reporter's answer and the analyst's analysis alike: its dollars as far as they were counted, finer than a cent
+    /// where they are small, at least that and why where a turn's cost could not be counted, and an unknown amount where no
+    /// turn was reported; the model that served it and the tokens its turns used, each where it is known; and that it is
+    /// the person's, never the run's - or that it cost nothing, where no model was asked.
+    /// </summary>
+    /// <param name="what">What the run gave: <c>answer</c>, <c>analysis</c>.</param>
+    /// <param name="model">The model that served it; null where none was resolved.</param>
+    /// <param name="spent">What its turns spent and the tokens they used; null where no turn was reported.</param>
+    internal static string CostSaid(string what, string? model, (FlowDollars Dollars, long Tokens)? spent)
+    {
+        if (spent is null && model is not { Length: > 0 })
+        {
+            return $"This {what} cost nothing: no model worded it.";
+        }
+
+        var named = string.Join(
+            ", ",
+            new[] { model is { Length: > 0 } ? model : null, spent is { Tokens: var tokens } ? $"{tokens.ToString(CultureInfo.InvariantCulture)} tokens" : null }.OfType<string>());
+
+        return $"This {what} cost {spent?.Dollars.Said(format: "0.####") ?? "an unknown amount"}{(named.Length > 0 ? $" ({named})" : string.Empty)}. It is not counted in the run's budget.";
     }
 
     /// <summary>
@@ -261,6 +269,79 @@ public static class FlowReports
     /// <param name="summary">The line it ends on.</param>
     public static string AskStopped(int exitCode, string summary)
         => ReportJson.Stopped(exitCode, summary, AskDocument(string.Empty, null, null, null, null, null, string.Empty));
+
+    /// <summary>
+    /// The report document a stopped-early read holds: the same members, holding nothing but the code it exits with
+    /// and the line it ends on - the shape every answer of the read keeps.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line the command ends on.</param>
+    public static string ReportStopped(int exitCode, string summary)
+        => ReportJson.Stopped(exitCode, summary, new JsonObject { ["report"] = null });
+
+    /// <summary>
+    /// The <c>--json</c> document of <c>read-orchestrator-report</c> that answered: the code and the line, then the report
+    /// whole - the shape its stopped answer keeps (<see cref="ReportStopped"/>), the report there null.
+    /// </summary>
+    /// <param name="summary">The line the command ends on.</param>
+    /// <param name="report">The report.</param>
+    public static string ReportDocument(string summary, JsonObject report)
+        => ReportJson.Stopped(0, summary, new JsonObject { ["report"] = report });
+
+    /// <summary>
+    /// The <c>--json</c> document of <c>analyze-orchestrator-report</c>: the analysis apart from what it cost and
+    /// where it is kept - the report it read named by its hash, what the analyst's run spent (the person's, never the
+    /// run's) and the analysis's own directory.
+    /// </summary>
+    /// <param name="analysis">The analysis.</param>
+    /// <param name="reportHash">The hash of the report it read.</param>
+    /// <param name="analysed">What the analyst's run answered and spent.</param>
+    /// <param name="directory">Where the analysis is kept, under the run's <c>analysis/</c>.</param>
+    public static string AnalysisDocument(FlowAnalysis analysis, string reportHash, FlowAnalysed analysed, string directory)
+        => ReportJson.Stopped(0, "the run's report was analysed", AnalysisObject(analysis, reportHash, analysed, directory));
+
+    /// <summary>
+    /// The <c>--json</c> document of an <c>analyze-orchestrator-report</c> that gave no analysis: its code and its line,
+    /// the analysis null, and - where an analyst's run was made - the hash of the report it read, what the run cost and
+    /// the directory its records are kept in, so a script reads what the refusal spent and where.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line the command ends on.</param>
+    /// <param name="reportHash">The hash of the report the analyst read.</param>
+    /// <param name="analysed">What the analyst's run answered and spent.</param>
+    /// <param name="directory">Where the analysis's records are kept; empty where none was written.</param>
+    public static string AnalysisRefused(int exitCode, string summary, string reportHash, FlowAnalysed analysed, string directory)
+        => ReportJson.Stopped(exitCode, summary, AnalysisObject(null, reportHash, analysed, directory));
+
+    /// <summary>The analysis document's own members, held apart from the stopped wrapper.</summary>
+    private static JsonObject AnalysisObject(FlowAnalysis? analysis, string reportHash, FlowAnalysed analysed, string directory)
+    {
+        return new JsonObject
+        {
+            ["analysis"] = analysis?.Document(),
+            ["reportHash"] = reportHash,
+            ["cost"] = analysed.Model is null && analysed.Usd is null && analysed.Tokens is null
+                ? null
+                : WithUncounted(
+                    new JsonObject
+                    {
+                        ["model"] = analysed.Model,
+                        ["usd"] = analysed.Usd,
+                        ["tokens"] = analysed.Tokens,
+                    },
+                    analysed.Uncounted),
+            ["record"] = directory,
+        };
+    }
+
+    /// <summary>
+    /// The analysis document a stopped-early analyse holds: the same members, holding nothing but the code it exits
+    /// with and the line it ends on - the analysis null, as a refused one's is - the shape every answer of the analyse keeps.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line the command ends on.</param>
+    public static string AnalysisStopped(int exitCode, string summary)
+        => ReportJson.Stopped(exitCode, summary, AnalysisObject(null, string.Empty, new FlowAnalysed(null), string.Empty));
 
     /// <summary>Every handoff a run's steps hold, each by its step, who wrote it and its file in the step's own directory.</summary>
     /// <param name="layout">The run's layout.</param>
@@ -361,8 +442,18 @@ public static class FlowReports
             _ => "no recommendation was sought",
         };
 
+    /// <summary>A value of a record as text; "none" where it is none - a report line never shows a null. A number is its own text.</summary>
+    private static string TextOf(JsonNode? node)
+        => node switch
+        {
+            JsonValue value when value.TryGetValue<string>(out var text) && text.Length > 0 => text,
+            null => "none",
+            _ => node.ToString(),
+        };
+
     /// <summary>What a run spent, as the documents hold it: its dollars as far as they were counted, and why the rest is not known where a part's cost could not be.</summary>
-    private static JsonObject SpentOf(FlowBudgetRecord spent) => WithUncounted(
+    /// <summary>What the run has spent of its budget, as every document says it.</summary>
+    internal static JsonObject SpentOf(FlowBudgetRecord spent) => WithUncounted(
         new JsonObject
         {
             ["usd"] = spent.Usd,
@@ -380,7 +471,7 @@ public static class FlowReports
     };
 
     /// <summary>One plan update as the report's JSON document holds it: what raised it, word for word, and where it stands.</summary>
-    private static JsonObject UpdateOf(FlowUpdateEntry update) => new()
+    internal static JsonObject UpdateOf(FlowUpdateEntry update) => new()
     {
         ["id"] = update.Id,
         ["cause"] = update.Cause,
@@ -456,63 +547,6 @@ public static class FlowReports
                 : $"'{iteration}'";
     }
 
-    /// <summary>
-    /// The run's own figures of its codebase graph, as the report's JSON document holds them: what every reason step's
-    /// graph gave and saved, summed - the steps' own figures are on their steps. Null where no step was given a graph.
-    /// </summary>
-    /// <param name="steps">The run's step records.</param>
-    private static JsonObject? GraphOf(IReadOnlyList<FlowStepRecord> steps)
-    {
-        var served = steps.Where(step => step.Graph is not null).ToList();
-
-        return served.Count == 0
-            ? null
-            : new JsonObject
-            {
-                ["steps"] = served.Count,
-                ["packTokens"] = served.Sum(step => step.Graph?["pack"]?["tokens"]?.GetValue<int>() ?? 0),
-                ["calls"] = served.Sum(step => step.Graph?["calls"]?.GetValue<int>() ?? 0),
-                ["servedTokens"] = served.Sum(step => step.Graph?["servedTokens"]?.GetValue<int>() ?? 0),
-                ["bodies"] = served.Sum(step => step.Graph?["bodies"]?.GetValue<int>() ?? 0),
-                ["textHits"] = served.Sum(step => step.Graph?["textHits"]?.GetValue<int>() ?? 0),
-                ["edits"] = new JsonObject
-                {
-                    ["made"] = served.Sum(step => step.Graph?["edits"]?["made"]?.GetValue<int>() ?? 0),
-                    ["refused"] = served.Sum(step => step.Graph?["edits"]?["refused"]?.GetValue<int>() ?? 0),
-                },
-                ["wholeFileReads"] = new JsonObject
-                {
-                    ["count"] = served.Sum(step => step.Graph?["wholeFileReads"]?["count"]?.GetValue<int>() ?? 0),
-                    ["tokens"] = served.Sum(step => step.Graph?["wholeFileReads"]?["tokens"]?.GetValue<int>() ?? 0),
-                },
-                ["deniedReads"] = served.Sum(step => step.Graph?["deniedReads"]?.GetValue<int>() ?? 0),
-                ["escapes"] = new JsonObject
-                {
-                    ["count"] = served.Sum(step => step.Graph?["escapes"]?["count"]?.GetValue<int>() ?? 0),
-                    ["tokens"] = served.Sum(step => step.Graph?["escapes"]?["tokens"]?.GetValue<int>() ?? 0),
-                    ["lowConfidence"] = served.Sum(step => step.Graph?["escapes"]?["lowConfidence"]?.GetValue<int>() ?? 0),
-                    ["stated"] = served.Sum(step => step.Graph?["escapes"]?["stated"]?.GetValue<int>() ?? 0),
-                },
-            };
-    }
-
-    /// <summary>One step as the report's JSON document holds it.</summary>
-    private static JsonObject StepOf(FlowStepRecord step) => new()
-    {
-        ["instance"] = step.Instance,
-        ["state"] = step.State,
-        ["attempt"] = step.Attempt,
-        ["visit"] = step.Visit,
-        ["exit"] = step.Exit,
-        ["error"] = step.Error,
-        ["skippedBecause"] = step.SkippedBecause,
-        ["notRunBecause"] = step.NotRunBecause,
-        ["passedOver"] = step.Failure == "passedOver",
-        ["handledBy"] = step.HandledBy,
-        ["leftover"] = step.Leftover?.DeepClone(),
-        ["graph"] = step.Graph?.DeepClone(),
-    };
-
     /// <summary>One question as the documents hold it: its problem, its options, its recommendation and every answer it was given.</summary>
     private static JsonObject QuestionOf(FlowQuestionEntry question) => new()
     {
@@ -547,44 +581,16 @@ public static class FlowReports
         })]),
     };
 
-    /// <summary>The report as a person reads it.</summary>
-    private static string MarkdownOf(FlowFile flow, FlowQuestionsFile? questions, IReadOnlyList<FlowHandoffNamed> handoffs, string summary, int exitCode, IReadOnlyList<string> left, FlowUpdatesFile? updates = null)
+    /// <summary>The report as a person reads it: the run's report - the sections every form holds - with the session's own words at its head, and its questions, its plan updates, its handoffs and what is left for a person said in full.</summary>
+    private static string MarkdownOf(JsonNode report, FlowFile flow, FlowQuestionsFile? questions, IReadOnlyList<FlowHandoffNamed> handoffs, string summary, int exitCode, IReadOnlyList<string> left, FlowUpdatesFile? updates = null)
     {
         var text = new List<string>
         {
             $"# Run '{flow.Run}' - {flow.Definition}",
             $"{summary} (exit {exitCode.ToString(CultureInfo.InvariantCulture)})",
-            string.Empty,
-            "## Steps",
         };
 
-        foreach (var step in flow.Steps)
-        {
-            var said = $"- {step.Instance}: {step.State.ToLower(CultureInfo.InvariantCulture)}{(step.Visit > 1 ? $" (visit {step.Visit.ToString(CultureInfo.InvariantCulture)})" : string.Empty)}";
-            var why = step.SkippedBecause ?? step.NotRunBecause
-                ?? (step.Failure == "passedOver" ? "its failure was passed over (onFailure: continue)" : null)
-                ?? (step.HandledBy is not null ? $"its failure was handled by {step.HandledBy}" : null)
-                ?? step.Error;
-            text.Add(why is null ? said : $"{said} - {why}");
-        }
-
-        var handled = flow.Steps.Where(step => step.HandledBy is not null).ToList();
-
-        if (handled.Count > 0)
-        {
-            text.Add(string.Empty);
-            text.Add("## Failures a handler took");
-            text.AddRange(handled.Select(step => $"- {step.Step}, by {step.HandledBy}"));
-        }
-
-        var leftover = flow.Steps.Where(step => step.Leftover is not null).ToList();
-
-        if (leftover.Count > 0)
-        {
-            text.Add(string.Empty);
-            text.Add("## What the run's loops left");
-            text.AddRange(leftover.Select(step => $"- {step.Instance}: {FlowValue.Of(step.Leftover!.DeepClone()).AsTemplateText()}"));
-        }
+        FlowRunReport.MarkdownCore(report, text, updatesAndLeft: false);
 
         if (handoffs.Count > 0)
         {
@@ -667,10 +673,6 @@ public static class FlowReports
                 }
             }
         }
-
-        text.Add(string.Empty);
-        text.Add("## Spent");
-        text.Add($"- {flow.Spent.Dollars.Said()}, {flow.Spent.Tokens.ToString(CultureInfo.InvariantCulture)} tokens, {flow.Spent.Minutes.ToString("0.0", CultureInfo.InvariantCulture)} minutes of reasoning");
 
         if (left.Count > 0)
         {

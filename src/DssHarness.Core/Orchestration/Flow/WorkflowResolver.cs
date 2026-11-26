@@ -523,7 +523,7 @@ public static class WorkflowResolver
             notApplied.Add("answers");
         }
 
-        if (!governed && new[] { called.MaxReasoningAgents, called.MaxParallelProcesses, called.MaxOpenAgents, called.MaxRetries, called.MaxInstances, called.HandoffSeconds, called.BackoffSeconds }.Any(limit => limit is not null))
+        if (!governed && new[] { called.MaxReasoningAgents, called.MaxParallelProcesses, called.MaxOpenAgents, called.MaxRetries, called.MaxInstances, called.HandoffSeconds, called.BackoffSeconds, called.Priority }.Any(limit => limit is not null))
         {
             notApplied.Add("limits");
         }
@@ -566,7 +566,8 @@ public static class WorkflowResolver
             called.Reporter,
             called.Answers.Count == 0 ? null : called.Answers,
             called.CodebaseGraph,
-            called.Amend is not null);
+            called.Amend is not null,
+            called.Priority);
 
     /// <summary>
     /// V59: why a use at <paramref name="depth"/> places the steps of <paramref name="called"/> deeper than steps nest at

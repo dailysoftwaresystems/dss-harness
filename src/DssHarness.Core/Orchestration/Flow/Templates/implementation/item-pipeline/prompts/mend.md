@@ -6,7 +6,16 @@ The engine built your work and ran its tests, and the result is red. Repair it.
 
 The whole logs are under `{source.runDirectory}`. This is visit {visit} of this repair.
 
-Each entry names a leg, the phase that did not pass - the build, or the tests - and the last lines that phase printed.
+Each entry names a leg, the phase that did not pass - the build, or the tests - and what that phase printed,
+digested: in `digest`, the first error whole - its stack rendered to the frames inside the tree, its `log` naming the
+lines it was read from, as the entry's own `log` file numbers them - the next distinct errors to four as one line
+each, every test failure of the four with its stack, and the rest - what the four do not say - counted by code and by
+file, a count of none and an empty list left out. Each line reaches you once: where the digest holds an error or a
+failure and the entry names its `log`, its `unparsed` holds the lines no parser held - the last ones, nearest the
+failure, `unparsedLeftOut` saying how many more there were - and the `tail` is empty; otherwise the `tail` holds the
+phase's last lines and `unparsed` those lines no parser held that the `tail` does not. The entry's `log` is the file
+that phase wrote, on this machine - a leg another machine ran has its log brought back here - and null only where it
+could not be brought back.
 
 How the engine runs the tests, leg by leg: {input.orient.tests}
 
@@ -29,7 +38,8 @@ while one of its sites is left.
 
 ## What to do
 
-1. Read the output and find the first thing that went wrong.
+1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The lines
+   its `log` names are one read away in the entry's `log` file, where the cause needs more than the digest says.
 2. Find the cause in your change. Put the cause right; do not make the test pass by weakening it.
 3. Where a leg says it found no test to run, a unit your task gave or your answer added names tests that are not
    there: where your work was to write them, write them; a unit your answer added that names none, leave out of your

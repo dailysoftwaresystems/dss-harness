@@ -54,14 +54,20 @@ public sealed class ProcessOwner(OrchestrationStore store, IProcessIdentity iden
     /// <summary>
     /// Claims what <paramref name="ownerFile"/> records the owner of for this process: refused (13) where a live owner
     /// holds it, in the words <paramref name="refusal"/> gives from the owner's name; a dead one is reclaimed and said.
+    /// Once the owner is found gone, or none is recorded, and before this process takes it, <paramref name="taking"/>
+    /// decides what the claim still waits on: a refusal it throws goes on as the claim's, the owner file left as it was.
     /// </summary>
     /// <param name="ownerFile">The owner file.</param>
     /// <param name="what">What the file is, as a refusal names it.</param>
     /// <param name="thing">What is owned, as a line names it: <c>run 'r1'</c>, <c>side-task 'fix-it'</c>.</param>
     /// <param name="refusal">The refusal of a claim a live owner holds, from that owner's name, whole.</param>
+    /// <param name="taking">What is decided at the claim itself, once no live owner holds it; null where nothing is.</param>
     /// <returns>What is said of a dead owner's record reclaimed; null where none was recorded.</returns>
-    /// <exception cref="HarnessException">A live owner holds it (<see cref="HarnessExit.Refused"/>), or the owner does not read as one.</exception>
-    public string? Claim(string ownerFile, string what, string thing, Func<string, string> refusal)
+    /// <exception cref="HarnessException">
+    /// A live owner holds it (<see cref="HarnessExit.Refused"/>), the owner does not read as one, or <paramref name="taking"/>
+    /// refuses it, nothing written.
+    /// </exception>
+    public string? Claim(string ownerFile, string what, string thing, Func<string, string> refusal, Action? taking = null)
     {
         ArgumentNullException.ThrowIfNull(thing);
         ArgumentNullException.ThrowIfNull(refusal);
@@ -72,6 +78,8 @@ public sealed class ProcessOwner(OrchestrationStore store, IProcessIdentity iden
         {
             throw new HarnessException(HarnessExit.Refused, refusal(Named(held)));
         }
+
+        taking?.Invoke();
 
         _store.WriteOwner(ownerFile, what, new RunOwner(_identity.CurrentMachine, _identity.CurrentId, _clock.GetUtcNow(), _identity.Current));
 

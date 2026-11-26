@@ -152,7 +152,8 @@ public sealed class MutationFixtureTests
     [Fact]
     public void TheFixture_IsKeptAmongThisUsersOwnData_OrNowhere()
     {
-        Assert.EndsWith(Path.Combine(ToolPackage.Command, MutationFixture.DirectoryName), MutationFixtureStore.DefaultDirectory(), StringComparison.Ordinal);
+        // The tool's per-user state this process was given - the user's own, as UserState names it - holds it by its name.
+        Assert.Equal(Path.Combine(TestHost.UserStateDirectory, MutationFixture.DirectoryName), MutationFixtureStore.DefaultDirectory());
 
         var asked = 0;
         var nowhere = new MutationFixtureStore(

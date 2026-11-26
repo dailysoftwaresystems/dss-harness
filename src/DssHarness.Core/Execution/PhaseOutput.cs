@@ -2,6 +2,7 @@ using System.Text;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Execution;
 
@@ -60,6 +61,36 @@ public abstract class PhaseOutput
     /// stopping early reads no further.
     /// </summary>
     public abstract IEnumerable<string> Lines();
+
+    /// <summary>
+    /// Each line, as <see cref="Lines"/> gives it, with the numbers the file a reader opens gives it, by the one rule of
+    /// where lines end (<see cref="LineEnds"/>), which every reader of a file - a page of it, a view of it - counts by:
+    /// for a phase that ran, counted from the line after the header the harness wrote above its child's lines, so the
+    /// number a digest's log range names is the line the log holds, one read away. Numbered from 1 for output no log
+    /// holds, and for the lines of several logs one after another, which no one file numbers.
+    /// </summary>
+    /// <exception cref="PhaseOutputUnreadException">The log no longer holds what its phase left in it.</exception>
+    public IEnumerable<NumberedLine> NumberedLines()
+    {
+        var number = FirstLineInLog();
+
+        foreach (var line in Lines())
+        {
+            // What was read as one line is as many as the rule finds in it and the ending the log wrote after it: a
+            // carriage return the child printed alone ends a line of the file as a reader counts it.
+            var last = number + LineEnds.Count(string.Concat(line, LineEnding)) - 1;
+
+            yield return new NumberedLine(number, last, line);
+            number = last + 1;
+        }
+    }
+
+    /// <summary>The number, in the file a reader opens, of the first line <see cref="Lines"/> gives; 1 where no log holds it.</summary>
+    /// <exception cref="PhaseOutputUnreadException">The log no longer holds what its phase left in it.</exception>
+    protected virtual int FirstLineInLog() => 1;
+
+    /// <summary>The ending written after each line: the log's own, for a phase that ran.</summary>
+    protected virtual string LineEnding => "\n";
 
     /// <summary>
     /// <paramref name="text"/> as a child that printed it would have it read: for a phase made up rather than run, and the
@@ -165,6 +196,36 @@ public abstract class PhaseOutput
                 yield return line;
             }
         }
+
+        /// <remarks>
+        /// Counted from the header's own text by the one rule of where lines end - however many lines the header holds, a
+        /// command line that carries a line break among them - so the number is the file's as its reader counts it.
+        /// </remarks>
+        protected override int FirstLineInLog()
+        {
+            using var log = Open();
+
+            log.Seek(0, SeekOrigin.Begin);
+
+            var bytes = new byte[ReadBufferSize];
+            var header = new StringBuilder();
+            var decoder = Utf8NoBom.GetDecoder();
+            var chars = new char[Utf8NoBom.GetMaxCharCount(ReadBufferSize)];
+
+            for (var remaining = start; remaining > 0;)
+            {
+                var read = Read(log, bytes, (int)Math.Min(bytes.Length, remaining));
+
+                remaining -= read;
+                header.Append(chars.AsSpan(0, decoder.GetChars(bytes, 0, read, chars, 0, flush: remaining == 0)));
+            }
+
+            // The header ends with the ending of its last line, which closes that line rather than opening another.
+            return header.Length == 0 ? 1 : LineEnds.Count(header.ToString()) + 1;
+        }
+
+        /// <inheritdoc/>
+        protected override string LineEnding => PhaseRunner.LogLineEnding;
 
         /// <summary>
         /// The log, opened where the range begins once it is seen to hold what the phase left: as many bytes as the phase

@@ -80,6 +80,10 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
     /// <param name="scratchDirectory">Where the line to preprocess is written: never the build directory, whose files date its changes.</param>
     /// <param name="environment">The environment the build's phases start in, a developer environment's among it.</param>
     /// <param name="programDirectories">The directories the build's phases have added to their PATH.</param>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of the program could not reach or end
+    /// (<see cref="Processes.UnreachedSaying"/>).
+    /// </param>
     /// <param name="told">
     /// Told where the wait for the compiler stands, every <see cref="Waiting.Waits.SaidEvery"/> it lasts: the compiler is
     /// waited for to its end, however long it takes, never cut off at a budget. Nothing is told where null.
@@ -90,6 +94,7 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
         string scratchDirectory,
         IReadOnlyDictionary<string, string?> environment,
         ProgramDirectories programDirectories,
+        Action<string> say,
         Action<Waiting.WaitTold>? told = null,
         CancellationToken cancellationToken = default)
     {
@@ -141,6 +146,8 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
                         ProgramDirectories = programDirectories,
                     },
                     $"the {compiler.Language} compiler '{compiler.Program}' to preprocess one line",
+                    $"the {compiler.Language} compiler '{compiler.Program}'",
+                    say,
                     told,
                     _clock,
                     cancellationToken)

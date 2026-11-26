@@ -20,6 +20,57 @@ public sealed class BuildServiceTests
 {
     private const string Leg = "win-msvc-release";
 
+    /// <summary>
+    /// What a stop of a program the build asks of its build directory - a compiler its version, ninja its dead outputs or
+    /// its dependency records - could not reach or end is said under the build, on the leg's own line, once
+    /// (<see cref="UnreachedSaying"/>): the build is what hands each probe its sayer.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "compiler")]
+    [InlineData(true, "compiler")]
+    [InlineData(false, "cleandead")]
+    [InlineData(true, "cleandead")]
+    [InlineData(false, "deps")]
+    [InlineData(true, "deps")]
+    public async Task WhatAStopOfAProgramTheBuildAsksCouldNotReachOrEnd_IsSaidOnTheLegsLine(bool stopped, string asked)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (factory, request) = await TrackedTreeAsync(temp, token);
+        var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
+        var cl = temp.WriteFile(Path.Combine(ToolchainDirectory, "cl.exe"), "a compiler").Replace('\\', '/');
+
+        await BuildOnceAsync(factory, request, token);
+        IdentifiedAs(request, temp, cl, "19.51.36257.0");
+        await File.WriteAllTextAsync(Path.Combine(buildDirectory, NinjaDependencyCheck.ManifestFileName), string.Empty, token);
+        factory.StandardError.GetStringBuilder().Clear();
+
+        var answering = new VersionAnswering("1951 195136257 0");
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            factory,
+            stopped,
+            (stop, each) => BuildOnceAsync(
+                factory,
+                request,
+                each,
+                asked switch
+                {
+                    "compiler" => Service(factory, exitCode: 0, compilers: UnreachingRunner.For(stop, question => answering.RunAsync(question, each).GetAwaiter().GetResult())),
+                    "cleandead" => Service(factory, exitCode: 0, compilers: answering, deadOutputs: UnreachingRunner.For(stop, _ => HostResults.Ok("Cleaning...\n0 files.\n"))),
+                    _ => Service(factory, exitCode: 0, dependencies: UnreachingRunner.For(stop, _ => HostResults.Ok("app.o: #deps 1, deps mtime 1 (VALID)\n    app.h\n")), compilers: answering),
+                }));
+
+        var what = asked switch
+        {
+            "compiler" => $"the CXX compiler '{cl}'",
+            "cleandead" => "'ninja -t cleandead'",
+            _ => "'ninja -t deps'",
+        };
+
+        Assert.Equal([UnreachedSaid.Warned(BuildService.CommandName, $"{Leg}: {what}")], said);
+    }
+
     [Fact]
     public async Task AProjectDeclaringNoBuildOutputs_IsUnwitnessed_RatherThanPassedOnItsExitCode()
     {
@@ -35,6 +86,39 @@ public sealed class BuildServiceTests
         Assert.Equal(LegVerdict.Unwitnessed, result.Verdict.Verdict);
         Assert.Equal(LegExit.Unwitnessed, Verdicts.ExitCodeFor(result.Verdict.Verdict));
         Assert.Contains("declares no buildOutputs", result.Verdict.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A failing build's log is digested by the parsers its toolchain chose - an MSVC build's error read by the MSVC
+    /// form, with the first error in the order the compiler met it - and the leg's line carries it beside the units
+    /// and the tail.
+    /// </summary>
+    [Fact]
+    public async Task AFailingBuildsLog_IsDigestedByTheParsersItsToolchainChose()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (_, factory) = await TrackedWithFactoryAsync(temp, cancellationToken);
+        var service = Service(factory, exitCode: 1, phases: new Printing(1, "src/main.cpp(5): error C2065: 'x': undeclared identifier\n"));
+
+        var result = await service.BuildAsync(Config(), Request(temp, [App]), cancellationToken);
+
+        Assert.NotEqual(LegVerdict.Passed, result.Verdict.Verdict);
+
+        var first = result.Digest!.First!;
+
+        Assert.Equal(("msvc", "error", "C2065", "src/main.cpp", 5), (first.Tool, first.Severity, first.Code, first.File, first.Line));
+        Assert.Equal(1, result.Digest.Errors);
+        Assert.Equal(result.Digest, result.Line(Leg, false, TimeSpan.Zero).Digest);
+
+        // Its log range names the line the build's log holds, below the header the phase runner wrote above it.
+        var log = Directory.EnumerateFiles(temp.Path, "*.log", SearchOption.AllDirectories)
+            .Single(file => Path.GetFileName(file).EndsWith($"{result.TailPhase}.log", StringComparison.Ordinal));
+        var text = File.ReadAllText(log);
+        var lines = DssHarness.Core.Text.LineEnds.Spans(text, (start, end, _) => text[start..end]);
+
+        Assert.True(first.Log!.Value.From > 1);
+        Assert.Equal(["src/main.cpp(5): error C2065: 'x': undeclared identifier"], lines[(first.Log.Value.From - 1)..first.Log.Value.To]);
     }
 
     /// <summary>
@@ -2819,7 +2903,7 @@ public sealed class BuildServiceTests
         var runner = new RecordingRunner("app.o: #deps 1, deps mtime 1 (VALID)\n    app.h\n");
 
         _ = await new NinjaDependencyCheck(runner, new HarnessFactory().FileSystem)
-            .CheckAsync(buildDirectory, ProgramDirectories.None, "tools/ninja", cancellationToken: TestContext.Current.CancellationToken);
+            .CheckAsync(buildDirectory, ProgramDirectories.None, UnreachedSaid.Nowhere, "tools/ninja", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(Path.Combine(buildDirectory, "tools", "ninja"), Assert.Single(runner.Started).FileName);
     }
@@ -2841,7 +2925,7 @@ public sealed class BuildServiceTests
             .ThrowsAsync(new ProgramStartException("/opt/arm/bin/ninja", "'/opt/arm/bin/ninja' could not be started: Text file busy"));
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => new NinjaDependencyCheck(runner, new HarnessFactory().FileSystem)
-            .CheckAsync(buildDirectory, ProgramDirectories.None, "/opt/arm/bin/ninja", cancellationToken: TestContext.Current.CancellationToken));
+            .CheckAsync(buildDirectory, ProgramDirectories.None, UnreachedSaid.Nowhere, "/opt/arm/bin/ninja", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
         Assert.Contains("could not be started", failure.Message, StringComparison.Ordinal);
@@ -2987,6 +3071,22 @@ public sealed class BuildServiceTests
     {
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new ProcessResult(exitCode, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>Every phase prints <paramref name="output"/> and exits as told: a failing phase whose log says why.</summary>
+    private sealed class Printing(int exitCode, string output) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            foreach (var line in output.TrimEnd('\n').Split('\n'))
+            {
+                request.OnOutputLine?.Invoke(line.TrimEnd('\r'));
+            }
+
+            return Task.FromResult(new ProcessResult(exitCode, output, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
 
         public string? FindExecutable(string command) => command;
     }

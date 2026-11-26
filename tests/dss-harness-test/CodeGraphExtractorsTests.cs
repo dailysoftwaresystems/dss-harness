@@ -1,7 +1,6 @@
 using DssHarness.Core.Application;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,8 +18,7 @@ public sealed class CodeGraphExtractorsTests
     [Fact]
     public void TheContainersRegistry_HoldsEveryImplementationOfTheCore()
     {
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         var registry = provider.GetRequiredService<CodeGraphExtractors>();
@@ -296,6 +294,104 @@ public sealed class CodeGraphExtractorsTests
         Assert.Contains("A file goes to the claimants of its exact name, else of an ending `codebaseGraph.claims` maps, else of its extension, else to the fallback", architecture, StringComparison.Ordinal);
         Assert.Contains("by its exact name, else by an ending codebaseGraph.claims maps, else by its extension, else by the fallback", help, StringComparison.Ordinal);
         Assert.Contains("every key a literal or a name names is joined, however many keys share it", help, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README says the forms the query command's --sites datum takes - a key path dotted, its names' own dots as they
+    /// are or a name holding a dot or a bracket quoted in brackets in either quote mark, or a path as .NET's configuration
+    /// writes one - as the graph's own help does, so a later wording change to it is held.
+    /// </summary>
+    [Fact]
+    public void TheReadme_SaysTheDatumFormsTheSitesOperationTakes()
+    {
+        Assert.Contains(
+            Prose.Words(
+                "a key path (dotted - a name holding a dot or a bracket quoted in brackets, `Logging.LogLevel[\"Microsoft.AspNetCore\"]` "
+                + "or `Logging.LogLevel['Microsoft.AspNetCore']`, or with its names' own dots as they are, asking of every key it "
+                + "may mean - or as .NET's configuration writes one: `Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`)"),
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The architecture says the spellings a key's path takes as the one owner writes and reads them back, and the paths a
+    /// config's keys are named by, as the code holds them, so a later wording change to either is held.
+    /// </summary>
+    [Fact]
+    public void TheArchitecture_SaysTheSpellingsAKeysPathTakes_AsTheCodeWritesThem()
+    {
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            Prose.Words(
+                $"A key's path is written, and read back, by one owner (`{nameof(CodeKeyPaths)}`): each name joined by a dot, an item's "
+                + "place and a name empty, of white space, holding a control character, or holding a dot or a bracket - the characters a "
+                + $"path is parted by - in brackets, quoted as `{nameof(ReportText)}.{nameof(ReportText.Quoted)}` writes it and read back "
+                + $"by `{nameof(ReportText)}.{nameof(ReportText.Unquoted)}`, so a path is one line and one sequence of places "
+                + "(`targets.x64.callingConvention`, `limits[1].value`, `packages[\"\"].name`, `messages[\"Sure?\\nIt cannot be "
+                + "undone.\"]`, `Logging.LogLevel[\"Microsoft.AspNetCore\"]`); a place in single quotes is read as the same place "
+                + "(`['Microsoft.AspNetCore']`, its own mark and a backslash escaped as `Quoted` escapes a double quote - one escape "
+                + "rule, `ReportText.QuotedBy`, with the mark its parameter) and never written; a key node is named by its own name "
+                + "where it stands alone on a line (`Microsoft.AspNetCore`), every reader of data files - JSON, YAML, XML, MSBuild - "
+                + "writing its keys' paths through the owner."),
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words(
+                "keys of a `.resx`'s `data name=`, of a `.props` or `.targets`'s `PropertyGroup` children and of a `.config`'s "
+                + "`appSettings` `<add key>` and `connectionStrings` `<add name>` (`appSettings.Timeout`, `connectionStrings.Main`, "
+                + "`appSettings[\"Serilog.MinimumLevel\"]`, the value or connection string the summary)"),
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The architecture says what the linker's join and the queries' reading of a name take - the path as .NET's
+    /// configuration spells it, a literal writing a path in brackets in either quote mark, a path typed with single quotes
+    /// or needless quotes, the keys an environment variable's spelling reaches and the loose form of a dotted path - and
+    /// what Places reads and EndsWithPlaces decides, as the code holds them, so a later wording change to any of them is
+    /// held.
+    /// </summary>
+    [Fact]
+    public void TheArchitecture_SaysWhatTheJoinerAndTheQueriesRead_AsTheCodeHoldsThem()
+    {
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            Prose.Words(
+                "The linker joins each key to the code that names it: a string literal equal to the key's last segment, its whole "
+                + "path, the path as .NET's configuration spells it (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`, "
+                + "`Limits:1:Value`, `Logging:LogLevel:Microsoft.AspNetCore` naming `Logging.LogLevel[\"Microsoft.AspNetCore\"]`, read "
+                + $"by `{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.Dotted)}`) or a path that runs through a YAML alias or merge to it - "
+                + "the longest part of the path its file holds deciding, a mapping's own key shadowing a merged one's, each place "
+                + "looked for once and a path that comes round to itself through its references ending there - and a literal writing a "
+                + "path in brackets, in either quote mark (lodash's `\"a['b.c']\"`), names the key of the path the writer writes "
+                + $"(`{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.Canonical)}`), never the loose form of a key's path, its names' own "
+                + "dots as they are, which code splits as .NET's configuration does"),
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words(
+                $"one spelt as the one owner of a key path's spellings reads it (`{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.Dotted)}`) - a "
+                + "path typed with single quotes, with both quote marks or with quotes a name needs not read first as the writer writes "
+                + $"it (`{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.Canonical)}`), every rule after reading that form - or with some of "
+                + "its scopes, of a key path every key whose own name spells it as .NET's configuration reads a key's name - an "
+                + $"environment variable's, a settings file's flat key (`{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.Spellings)}`: "
+                + "`Payments__TimeoutSeconds` under a compose file's `environment`) - so a key path in any spelling finds the same keys, "
+                + "and, last of the rules, the loose form of a dotted path, its names' own dots written as they are, naming every key "
+                + $"whose path so written is that text (`{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.Unescaped)}`, one index built once a "
+                + "view, in the queries alone and never the linker, for code splits a dotted literal)"),
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words(
+                $"a path's places read by `{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.Places)}`, which reads a place in brackets only as a "
+                + "key's path writes one - an item's digits, a quoted name, whose dot parts nothing and whose own text is the last name "
+                + "(`Microsoft.AspNetCore` of `Logging.LogLevel[\"Microsoft.AspNetCore\"]`) - so `this[]` of `Canvas.this[]` and "
+                + "`operator[]` of `Vec::operator[]` are names; and a name written with some of its places ends a path only where one of "
+                + $"the path's places begins (`{nameof(CodeKeyPaths)}.{nameof(CodeKeyPaths.EndsWithPlaces)}`)"),
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

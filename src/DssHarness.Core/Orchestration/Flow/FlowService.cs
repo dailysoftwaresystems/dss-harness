@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -99,6 +100,34 @@ public interface IFlowService : IUseCase
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="cancellationToken">Stops the command.</param>
     Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The run's report, built from its records alone - the same bytes for the same records, whether the run has ended
+    /// or is still going (said so at the time of its last record, marked partial): the deterministic report the
+    /// session's end writes, in text, as one JSON document or as Markdown. Reads only: nothing of the run is written.
+    /// </summary>
+    /// <param name="startDirectory">The directory the command acts on.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="steps">The instances whose rows alone are wanted; null or empty for every one.</param>
+    /// <param name="by">How the dollars are regrouped - <c>step</c>, <c>agent</c>, <c>model</c>, <c>provider</c> or <c>type</c>; null for the model, as the report holds it.</param>
+    /// <param name="top">How many of the slowest, the most expensive and the most retried steps the signals name; null for the configured bound.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="markdown">Whether to answer as Markdown.</param>
+    /// <param name="cancellationToken">Stops the command.</param>
+    Task<CommandOutcome> ReadReportAsync(string startDirectory, string run, IReadOnlyList<string>? steps = null, string? by = null, int? top = null, bool json = false, bool markdown = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A run's report analysed by one agent, run only where a person calls for it: the deterministic report is given
+    /// to the tool's own analyst and its answer is held to the schema it ships and to the report's own numbers - a
+    /// citation the report does not hold is asked again for, then refused. The analysis is kept beside the report it
+    /// read, with the report's hash; what it costs is the person's, never the run's.
+    /// </summary>
+    /// <param name="startDirectory">The directory the command acts on.</param>
+    /// <param name="run">The run.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="markdown">Whether to answer as Markdown.</param>
+    /// <param name="cancellationToken">Stops the command.</param>
+    Task<CommandOutcome> AnalyzeReportAsync(string startDirectory, string run, bool json = false, bool markdown = false, CancellationToken cancellationToken = default);
 }
 
 /// <summary>How often the commands of a run look at what another process asked or recorded.</summary>
@@ -180,6 +209,12 @@ public sealed class FlowService(
 
     /// <summary>The command that asks a person's question of a run.</summary>
     public const string AskCommand = "ask-orchestrator";
+
+    /// <summary>The command that reads a run's report, built from its records alone.</summary>
+    public const string ReadReportCommand = "read-orchestrator-report";
+
+    /// <summary>The command that has a run's report analysed by one agent, where a person asks for it.</summary>
+    public const string AnalyzeReportCommand = "analyze-orchestrator-report";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
@@ -298,6 +333,8 @@ public sealed class FlowService(
             (layout, runContext) = await _sessions.CreateAsync(
                 context.Layout,
                 workflow,
+                EveryRun(context, RunCommand),
+                RunCommand,
                 run,
                 given,
                 checkout.Head,
@@ -362,7 +399,7 @@ public sealed class FlowService(
 
         try
         {
-            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+            reclaimed = await _sessions.ClaimAsync(context.Layout, layout, EveryRun(context, ResumeCommand), ResumeCommand, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -483,7 +520,7 @@ public sealed class FlowService(
 
             try
             {
-                reclaimedChange = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+                reclaimedChange = await _sessions.ClaimAsync(context.Layout, layout, EveryRun(context, AnswerCommand), AnswerCommand, cancellationToken).ConfigureAwait(false);
             }
             catch (HarnessException ex)
             {
@@ -601,7 +638,7 @@ public sealed class FlowService(
                     return NotBegun(changed);
                 }
 
-                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, cancellationToken).ConfigureAwait(false);
+                reclaimed = await _sessions.ClaimAsync(context.Layout, layout, EveryRun(context, AnswerCommand), AnswerCommand, cancellationToken).ConfigureAwait(false);
                 break;
             }
             catch (HarnessException ex)
@@ -969,6 +1006,267 @@ public sealed class FlowService(
         => AskAsync(startDirectory, run, question: null, json, cancellationToken);
 
     /// <inheritdoc/>
+    public async Task<CommandOutcome> ReadReportAsync(string startDirectory, string run, IReadOnlyList<string>? steps = null, string? by = null, int? top = null, bool json = false, bool markdown = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+
+        if (OrchestrationRules.NameProblem(run) is { } shape)
+        {
+            return CommandOutcome.Usage(shape);
+        }
+
+        if (by is not null && !FlowRunReport.Groupings.Contains(by, StringComparer.Ordinal))
+        {
+            return CommandOutcome.Usage($"--by takes {string.Join(", ", FlowRunReport.Groupings.Select(grouping => $"'{grouping}'"))}, not '{by}'");
+        }
+
+        if (top is < 1)
+        {
+            return CommandOutcome.Usage($"--top takes how many of the signal lists to name, from 1, not '{top?.ToString(System.Globalization.CultureInfo.InvariantCulture)}'");
+        }
+
+        // The command only reads: the report is built from the records as they stand, and nothing is written - not
+        // even the report the session's end writes, which this answers as the same builder would.
+        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
+        var layout = OrchestratorLayout.Of(context.Layout, run);
+
+        if (_store.ReadOrchestrator(layout) is null)
+        {
+            return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
+        }
+
+        if (_store.ReadFlow(layout) is not { } flow)
+        {
+            return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to report on");
+        }
+
+        // A row asked of an instance the run does not hold is refused, named: an empty table would say the run ran none.
+        var wanted = steps is { Count: > 0 } named ? named.ToHashSet(StringComparer.Ordinal) : null;
+        var unknown = wanted?.Where(instance => !flow.Steps.Any(step => step.Instance == instance)).Order(StringComparer.Ordinal).ToList() ?? [];
+
+        if (unknown.Count > 0)
+        {
+            return CommandOutcome.Usage($"--steps names {string.Join(", ", unknown.Select(instance => $"'{instance}'"))}, which run '{run}' does not hold");
+        }
+
+        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config, top), by, wanted));
+
+        if (json)
+        {
+            return CommandOutcome.Ok($"the report of run '{run}'")
+                with { Data = [FlowReports.ReportDocument($"the report of run '{run}'", report)], Quiet = true };
+        }
+
+        var text = markdown ? FlowRunReport.Markdown(report) : FlowRunReport.Text(report);
+        return CommandOutcome.Ok(text);
+    }
+
+    /// <summary>
+    /// A run's records as they stand, for its report - the one place the read verb, the analysis and the session's end
+    /// read them: its state, questions, updates, events (a torn last line said in its notes), its item agents' closure
+    /// ledgers, the issues it owed a later round and its frozen definition - read as the definition or why it cannot be
+    /// read, so the report says which it was rather than the read refusing the whole report - with the thresholds every
+    /// report of the run is computed by.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="flow">The run's state.</param>
+    /// <param name="thresholds">The thresholds its signals are computed by (<see cref="FlowReportThresholds.Of"/>).</param>
+    /// <param name="by">What the dollars are grouped by; null for the model.</param>
+    /// <param name="steps">The instances whose rows alone the steps table keeps; null for every one.</param>
+    private FlowRunReportSource SourceOf(OrchestratorLayout layout, FlowFile flow, FlowReportThresholds thresholds, string? by = null, IReadOnlySet<string>? steps = null)
+    {
+        var (events, torn) = FlowEventLog.Read(_fileSystem, layout.EventsFile);
+        var (definition, why) = _store.ReadDefinitionOrWhy(layout);
+
+        return new FlowRunReportSource(
+            layout,
+            flow,
+            _store.ReadFlowQuestions(layout),
+            _store.ReadFlowUpdates(layout),
+            events,
+            LedgersOf(layout, flow),
+            definition,
+            thresholds,
+            EventsTorn: torn is not null,
+            By: by,
+            Steps: steps,
+            NextRound: _store.ReadNextRound(layout),
+            DefinitionWhy: why);
+    }
+
+    /// <inheritdoc/>
+    public async Task<CommandOutcome> AnalyzeReportAsync(string startDirectory, string run, bool json = false, bool markdown = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+
+        if (OrchestrationRules.NameProblem(run) is { } shape)
+        {
+            return CommandOutcome.Usage(shape);
+        }
+
+        // The analysis runs only where a person calls for it: no run, no session's end and no view starts one. It
+        // reads the run's records and writes only its own directory under the run's - its cost the person's, never
+        // the run's, exactly as an ask's is.
+        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
+        var layout = OrchestratorLayout.Of(context.Layout, run);
+
+        if (_store.ReadOrchestrator(layout) is null)
+        {
+            return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run));
+        }
+
+        if (_store.ReadFlow(layout) is not { } flow)
+        {
+            return CommandOutcome.Refused($"run '{run}' holds no '{layout.FlowFile}' to analyse");
+        }
+
+        var (definition, definitionWhy) = _store.ReadDefinitionOrWhy(layout);
+
+        if (definition is null)
+        {
+            return CommandOutcome.Refused(definitionWhy is { } why
+                ? $"'{layout.DefinitionFile}' does not read: {why}, so run '{run}' holds no definition to analyse"
+                : $"'{layout.DefinitionFile}' is not there, so run '{run}' holds no definition to analyse");
+        }
+
+        var report = FlowRunReport.Of(SourceOf(layout, flow, FlowReportThresholds.Of(context.Config)));
+        var said = report.ToJsonString(ReportJson.Options);
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(said)));
+
+        var at = _clock.GetUtcNow();
+        var stamp = StampOf(at);
+        var directory = Path.Combine(layout.AnalysisDirectory, stamp);
+        var analysed = await new RecordsAgentRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates)
+            .AnalyzeAsync(new FlowAnalystCall(layout.Name, report, layout.Directory, stamp, new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, flow.StartCommit, definition, flow.Branch)), cancellationToken)
+            .ConfigureAwait(false);
+
+        // What a run of the analyst leaves is kept whatever it answered - the report it read, the very bytes its hash
+        // names, and the analysis or why it was refused, with what it cost - and every record is named on every exit.
+        if (analysed.Ran)
+        {
+            WriteAnalysis(directory, layout.Name, said, hash, analysed, at);
+        }
+
+        var cost = analysed.Ran
+            ? FlowReports.CostSaid("analysis", analysed.Model, analysed.Tokens is { } used ? (analysed.Dollars, used) : null)
+            : null;
+        var records = AnalysisRecordsOf(directory, analysed);
+
+        if (analysed.Analysis is not { } analysis)
+        {
+            var refused = analysed.Ran
+                ? $"analyze-orchestrator-report was refused: the analyst's run gave no analysis that holds: {analysed.WhyNot}"
+                : $"analyze-orchestrator-report was refused: no model analysed it: {analysed.WhyNot}";
+            var exit = analysed.ExitCode ?? HarnessExit.CommandFailed;
+
+            // The directory is named wherever any record of the call exists, by the same rule the text's records lines
+            // read, so a script is told where they are as a reader is.
+            return CommandOutcome.Failed(exit, refused, [.. cost is null ? [] : new[] { cost }, .. records])
+                with { Data = json ? [FlowReports.AnalysisRefused(exit, refused, hash, analysed, AnyAnalysisRecord(directory, analysed) ? directory : string.Empty)] : [] };
+        }
+
+        if (json)
+        {
+            return CommandOutcome.Ok($"run '{run}' analysed by {analysed.Model}")
+                with
+                {
+                    Data = [FlowReports.AnalysisDocument(analysis, hash, analysed, directory)],
+                    Quiet = true,
+                };
+        }
+
+        var body = markdown ? analysis.Markdown() : analysis.Text();
+        return CommandOutcome.Ok($"{body}\n\n{cost}\n\n{string.Join("\n", records)}");
+    }
+
+    /// <summary>
+    /// A call's own stamp - the name of its directory under the run's <c>asks/</c> or <c>analysis/</c>: the moment it was
+    /// made, in UTC to the second, and five hex digits drawn at random, so two calls in one second are two directories.
+    /// </summary>
+    /// <param name="at">When the call was made.</param>
+    private static string StampOf(DateTimeOffset at)
+        => $"{at.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}";
+
+    /// <summary>
+    /// The records an analysis left, one line each, as every exit names them: the report it read, the analysis or why it
+    /// was refused, the analysis in Markdown, and the analyst's stream - each where it was written; and that none was,
+    /// where no analyst ran.
+    /// </summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    /// <param name="analysed">What the analyst's run answered.</param>
+    private IReadOnlyList<string> AnalysisRecordsOf(string directory, FlowAnalysed analysed)
+    {
+        var records = AnalysisRecordFiles(directory)
+            .Where(record => _fileSystem.FileExists(record.Path))
+            .Select(record => $"{record.What}: {record.Path}")
+            .ToList();
+
+        return AnyAnalysisRecord(directory, analysed)
+            ? [$"records: {directory}", .. records]
+            : ["records: none was written, for no analyst ran"];
+    }
+
+    /// <summary>
+    /// Whether any record of the call exists: a file its analyst's run left behind, or a run that was made and its
+    /// records still to come - the one rule the text's records lines and the answer's record member read, so the two
+    /// name the same place whatever became of the run.
+    /// </summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    /// <param name="analysed">What the analyst's run answered.</param>
+    private bool AnyAnalysisRecord(string directory, FlowAnalysed analysed)
+        => analysed.Ran || AnalysisRecordFiles(directory).Any(record => _fileSystem.FileExists(record.Path));
+
+    /// <summary>The files a run of the analyst leaves in its own directory, by what each is.</summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    private static (string What, string Path)[] AnalysisRecordFiles(string directory)
+        =>
+        [
+            ("analysis", Path.Combine(directory, OrchestratorLayout.AnalysisFileName)),
+            ("analysisMarkdown", Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName)),
+            ("report", Path.Combine(directory, OrchestratorLayout.AnalysisReportFileName)),
+            ("stream", Path.Combine(directory, Agents.StoredStream.FileName)),
+        ];
+
+    /// <summary>
+    /// Writes what one run of the analyst leaves where the run keeps its analyses: the report it read - the very bytes
+    /// whose hash the analysis names - and, in JSON, the analysis or why none held, with what it cost; and the analysis
+    /// said as Markdown where one was given. The engine never reads any of them.
+    /// </summary>
+    /// <param name="directory">The analysis's own directory.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="report">The report the analyst read, as the bytes it was given.</param>
+    /// <param name="hash">The hash of those bytes.</param>
+    /// <param name="analysed">What the analyst's run answered and spent.</param>
+    /// <param name="at">When the analysis was made.</param>
+    private void WriteAnalysis(string directory, string run, string report, string hash, FlowAnalysed analysed, DateTimeOffset at)
+    {
+        _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.AnalysisReportFileName), report);
+        JsonStateFile.Write(
+            _fileSystem,
+            Path.Combine(directory, OrchestratorLayout.AnalysisFileName),
+            new JsonObject
+            {
+                ["schema"] = 1,
+                ["run"] = run,
+                ["at"] = FlowTimeConverter.Written(at),
+                ["reportHash"] = hash,
+                ["model"] = analysed.Model,
+                ["usd"] = analysed.Usd,
+                ["tokens"] = analysed.Tokens,
+                ["uncounted"] = analysed.Uncounted,
+                ["analysis"] = analysed.Analysis?.Document(),
+                ["refused"] = analysed.Analysis is null ? analysed.WhyNot : null,
+            });
+
+        if (analysed.Analysis is { } analysis)
+        {
+            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.AnalysisMarkdownFileName), $"{analysis.Markdown()}\n\nThe report it read is `{OrchestratorLayout.AnalysisReportFileName}` beside this file, its hash `{hash}`.\n");
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task<CommandOutcome> AskAsync(string startDirectory, string run, string? question, bool json, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
@@ -1013,7 +1311,7 @@ public sealed class FlowService(
 
         // The call's own record, in a directory the engine never reads: the facts as given, and what asking cost. The
         // files of the reporter's own attempt, where one runs, are kept by its runner under the same directory.
-        var stamp = $"{asOf.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}";
+        var stamp = StampOf(asOf);
         var asks = Path.Combine(layout.AsksDirectory, stamp);
         _fileSystem.WriteAllTextAtomic(Path.Combine(asks, "facts.md"), text + "\n");
 
@@ -1025,13 +1323,19 @@ public sealed class FlowService(
 
             return question is null
                 ? Answered(layout, CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, $"no model worded this: {none}"]), asks, text, null, null, null, null, json)
-                : CommandOutcome.Failed(
-                    HarnessExit.ConfigInvalid,
-                    $"ask-orchestrator was refused: {none}",
-                    [$"record: {Path.Combine(asks, AskFileName)}"]);
+                : Answered(
+                    layout,
+                    CommandOutcome.Failed(HarnessExit.ConfigInvalid, $"ask-orchestrator was refused: {none}"),
+                    asks,
+                    text,
+                    answer: null,
+                    whyNot: null,
+                    model: null,
+                    cost: null,
+                    json);
         }
 
-        var reported = await new ReporterRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates).ReportAsync(
+        var reported = await new RecordsAgentRunner(_contextLoader, _platform, agentRunner, _fileSystem, keyStore, isolation, updates).ReportAsync(
             new FlowReporterCall(
                 run,
                 definition.Name,
@@ -1050,11 +1354,17 @@ public sealed class FlowService(
 
         if (question is null)
         {
+            // The facts are the answer whatever became of the reporter's words, so the status succeeds where no model
+            // worded them - but an interrupt that stopped its reporter ends it as an interrupt ends every command, the
+            // facts and what the reporter spent still said and kept.
             return Answered(
                 layout,
                 reported.Answer is { } worded
                     ? CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, worded])
-                    : CommandOutcome.Ok(facts[0], [.. facts.Skip(1), string.Empty, $"no model worded this: {reported.WhyNot}"]),
+                    : new CommandOutcome(
+                        reported.ExitCode == HarnessExit.Cancelled ? HarnessExit.Cancelled : HarnessExit.Success,
+                        facts[0],
+                        [.. facts.Skip(1), string.Empty, $"no model worded this: {reported.WhyNot}"]),
                 asks,
                 text,
                 reported.Answer,
@@ -1075,10 +1385,19 @@ public sealed class FlowService(
                 reported.Model,
                 spent,
                 json)
-            : CommandOutcome.Failed(
-                reported.ExitCode ?? HarnessExit.CommandFailed,
-                $"ask-orchestrator was refused: no model worded an answer: {reported.WhyNot}",
-                [.. facts, string.Empty, $"record: {Path.Combine(asks, AskFileName)}"]);
+            : Answered(
+                layout,
+                CommandOutcome.Failed(
+                    reported.ExitCode ?? HarnessExit.CommandFailed,
+                    $"ask-orchestrator was refused: no model worded an answer: {reported.WhyNot}",
+                    [.. facts, string.Empty]),
+                asks,
+                text,
+                answer: null,
+                reported.WhyNot,
+                reported.Model,
+                spent,
+                json);
     }
 
     /// <summary>The name of the file one call of the two ask commands keeps its own record in.</summary>
@@ -1114,9 +1433,7 @@ public sealed class FlowService(
             [
                 .. outcome.Details ?? [],
                 string.Empty,
-                cost is not null || model is { Length: > 0 }
-                    ? $"This answer cost {cost?.Dollars.Said(format: "0.####") ?? "an unknown amount"}{(model is { Length: > 0 } ? $" ({model}{(cost is { Tokens: var tokens } ? $", {tokens.ToString(CultureInfo.InvariantCulture)} tokens" : string.Empty)})" : string.Empty)}. It is not counted in the run's budget."
-                    : "This answer cost nothing: no model worded it.",
+                FlowReports.CostSaid("answer", model, cost),
                 $"Record: {asks}",
             ],
         };
@@ -1180,7 +1497,7 @@ public sealed class FlowService(
 
         // The call's own record, as every call keeps one: the orchestrator's own facts, and why no model worded them.
         var now = _clock.GetUtcNow();
-        var asks = Path.Combine(layout.AsksDirectory, $"{now.ToUniversalTime():yyyyMMddTHHmmssZ}-{Random.Shared.Next(0x10000, 0xFFFFF).ToString("x", CultureInfo.InvariantCulture)}");
+        var asks = Path.Combine(layout.AsksDirectory, StampOf(now));
         _fileSystem.WriteAllTextAtomic(Path.Combine(asks, "facts.md"), string.Join("\n", facts) + "\n");
         WriteAsk(layout, asks, question: null, model: null, spent: null, whyNot: "the orchestrator holds no run");
 
@@ -1250,6 +1567,19 @@ public sealed class FlowService(
         await _children.SweepAsync(layout, command).ConfigureAwait(false);
         return (null, context, layout);
     }
+
+    /// <summary>
+    /// The sweep of every run of the repository, as <c>list-orchestrator</c> sweeps them, that each act making this process a
+    /// run's engine reads at the act itself - a new run's start (<see cref="FlowSessions.CreateAsync"/>) and a session's claim
+    /// of a run already made (<see cref="FlowSessions.ClaimAsync"/>), inside the section that decides the run's owner, once
+    /// its last look at the owner has found it gone or none and before the run is made or the owner taken - so a record kept
+    /// because its session holds this process refuses the engine whatever owner stood when the command began, one an answer
+    /// was handed to and waited on among them, and the refusal leaves the owner file as it was.
+    /// </summary>
+    /// <param name="context">The repository.</param>
+    /// <param name="command">The command sweeping, which its lines name.</param>
+    private Func<ChildSweep> EveryRun(HarnessContext context, string command)
+        => () => _children.SweepAsync(_store.Orchestrators(context.Layout), command).GetAwaiter().GetResult();
 
     /// <summary>
     /// The digest of the repository's entry for the workflow the run began with, as it reads now in the definition tree
@@ -1522,9 +1852,10 @@ public sealed class FlowService(
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
 
             FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
-            var questions = _store.ReadFlowQuestions(layout);
+            var source = SourceOf(layout, flow, FlowReportThresholds.Of(context.Config));
+            var questions = source.Questions;
             var exit = ExitOf(end, flow);
-            var left = FlowReports.Write(_fileSystem, layout, flow, questions, end.Summary, exit, _clock.GetUtcNow(), _store.ReadFlowUpdates(layout));
+            var left = FlowReports.Write(_fileSystem, source, end.Summary, exit, _clock.GetUtcNow());
             var named = RecordsOf(layout, inbox);
 
             var result = new FlowRunResult(
@@ -2028,6 +2359,21 @@ public sealed class FlowService(
             && FlowRetry.RunsAgain(exit, step.Cause is { } cause ? FlowRecordNames.Of<OutcomeCause>(cause) : OutcomeCause.None);
 
     /// <summary>
+    /// Each item agent's closure ledger the run's records name, read where each lies - for the report's convergence
+    /// and its reopened-twice signal; empty where none reads.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="flow">The run's state, whose steps name the agents they worked in.</param>
+    private List<(string Agent, FlowClosureLedgerFile Ledger)> LedgersOf(OrchestratorLayout layout, FlowFile flow)
+        => [.. flow.Steps
+            .Where(step => step.Agent is { Length: > 0 })
+            .Select(step => step.Agent!)
+            .Distinct(StringComparer.Ordinal)
+            .Select(agent => (Agent: agent, Ledger: _store.ReadClosureLedger(layout, agent)))
+            .Where(read => read.Ledger is not null)
+            .Select(read => (read.Agent, read.Ledger!))];
+
+    /// <summary>
     /// Every record a session of the run writes, by what it is and its path - the inbox where the session took or left an
     /// answer in it, and, where the run uses remote workflows, its own copy of them and the user's workflow cache the
     /// check that let the session begin read them from and fetched them into.
@@ -2204,9 +2550,9 @@ public sealed class FlowService(
 
     /// <summary>
     /// <c>stop-orchestrator --now</c>: the engine's process ended without asking it - only one of this machine's, only
-    /// the process its owner names by its start, and never this one - then its owner is removed and what its steps left
-    /// running is ended: a contained child's session, a leg's process group. A process that could not be ended is a
-    /// failure, said; what is left is what a crash leaves, less those processes.
+    /// the process its owner names by its start, and never this one nor one whose tree holds this one - then its owner is
+    /// removed and what its steps left running is ended: a contained child's session, a leg's process group. A process that
+    /// could not be ended is a failure, said; what is left is what a crash leaves, less those processes.
     /// </summary>
     private async Task<CommandOutcome> EndNowAsync(OrchestratorLayout layout, RunOwner held, bool json, CancellationToken cancellationToken)
     {
@@ -2223,7 +2569,7 @@ public sealed class FlowService(
 
         // Gone already or ended now, the engine leaves its steps' children to the sweep, which ends what its owner's end left.
         _owner.RemoveGone(layout);
-        var ended = await _children.SweepAsync(layout, StopCommand).ConfigureAwait(false);
+        var ended = (await _children.SweepAsync(layout, StopCommand).ConfigureAwait(false)).Ended;
         IReadOnlyList<string> endedWithIt = ended.Count == 0 ? [] : [$"what its steps left running was ended with it: {EndedChildSessions.Counted(ended)}"];
 
         if (ending.How == ProcessEnded.AlreadyGone)

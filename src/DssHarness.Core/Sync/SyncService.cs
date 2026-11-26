@@ -465,6 +465,24 @@ public interface ISyncService : IUseCase
         IReadOnlyList<string> paths,
         IReadOnlyList<IsolatedPath> hidden,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Brings one file of a copy back to this machine, to <paramref name="destination"/>: read through no link the copy
+    /// holds, a piece at a time, each checked as it arrives, and put in place only once what landed reads back as what was
+    /// read - as a pull brings each of its files back - so no side holds it whole, and the file at
+    /// <paramref name="destination"/> is either the whole of it or as it was. A leg's log another machine wrote, kept in
+    /// this machine's records of the run that asked for the leg.
+    /// </summary>
+    /// <param name="transport">How the copy is reached.</param>
+    /// <param name="sourceRoot">The copy's root on the far side.</param>
+    /// <param name="sourcePath">The file, relative to the copy's root, with forward separators.</param>
+    /// <param name="destination">Where it lands here, its directory made where it is not there.</param>
+    /// <param name="cancellationToken">Stops the transfer between pieces.</param>
+    /// <exception cref="HarnessException">
+    /// No file is at the path, it did not land intact, or it changed while it was read (<see cref="HarnessExit.CommandFailed"/>);
+    /// or the host stopped answering, as the transport says it.
+    /// </exception>
+    Task BringBackAsync(ISyncTransport transport, string sourceRoot, string sourcePath, string destination, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ISyncService"/>
@@ -1509,7 +1527,7 @@ public sealed class SyncService(
 
                 // Checked against the hash the far side took before sending, inside PullFileAsync, and again once it
                 // is written here.
-                await CopyVerifiedAsync(transport, sourceRoot, hidden, _localTransport, destinationRoot, path, transport.PieceBytes, written: null, cancellationToken).ConfigureAwait(false);
+                await CopyVerifiedAsync(transport, sourceRoot, path, hidden, _localTransport, destinationRoot, path, transport.PieceBytes, written: null, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (StopOf(ex, path, destinationRoot, brought.Count, cancellationToken) is { } stop)
             {
@@ -1520,6 +1538,26 @@ public sealed class SyncService(
         }
 
         return new SyncPull(brought, listed.Links);
+    }
+
+    /// <inheritdoc/>
+    public Task BringBackAsync(ISyncTransport transport, string sourceRoot, string sourcePath, string destination, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destination);
+
+        return CopyVerifiedAsync(
+            transport,
+            sourceRoot,
+            sourcePath,
+            hidden: null,
+            _localTransport,
+            Path.GetDirectoryName(destination) ?? throw new ArgumentException($"'{destination}' names no file in a directory.", nameof(destination)),
+            Path.GetFileName(destination),
+            transport.PieceBytes,
+            written: null,
+            cancellationToken);
     }
 
     /// <summary>
@@ -1710,7 +1748,7 @@ public sealed class SyncService(
 
                 // Counted as written before it is verified, because what has to be taken back is
                 // what reached the far side, and a file that arrived wrong is one of those.
-                await CopyVerifiedAsync(_localTransport, sourceRoot, hidden: null, transport, destinationRoot, path, transport.PieceBytes, () => landed.Add(path), cancellationToken)
+                await CopyVerifiedAsync(_localTransport, sourceRoot, path, hidden: null, transport, destinationRoot, path, transport.PieceBytes, () => landed.Add(path), cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -1732,10 +1770,11 @@ public sealed class SyncService(
     /// </summary>
     /// <param name="from">How the tree it is read from is reached.</param>
     /// <param name="fromRoot">That tree's root.</param>
+    /// <param name="fromPath">The file, relative to that root.</param>
     /// <param name="hidden">The places a pull's read never reaches, or null for a read that follows no link.</param>
     /// <param name="to">How the tree it is written to is reached.</param>
     /// <param name="toRoot">That tree's root.</param>
-    /// <param name="path">The file, relative to both roots.</param>
+    /// <param name="path">Where it lands, relative to that root: where a sync or a pull carries it, the path it had.</param>
     /// <param name="pieceBytes">The most bytes of it held at once: the far side's piece (<see cref="ISyncTransport.PieceBytes"/>).</param>
     /// <param name="written">Told once it is written, before it is read back; null where nothing needs telling.</param>
     /// <param name="cancellationToken">Stops the copy.</param>
@@ -1750,6 +1789,7 @@ public sealed class SyncService(
     private async Task CopyVerifiedAsync(
         ISyncTransport from,
         string fromRoot,
+        string fromPath,
         IReadOnlyList<IsolatedPath>? hidden,
         ISyncTransport to,
         string toRoot,
@@ -1758,20 +1798,20 @@ public sealed class SyncService(
         Action? written,
         CancellationToken cancellationToken)
     {
-        var first = await SyncPieces.ReadAsync(from, fromRoot, path, 0, pieceBytes, hidden, cancellationToken).ConfigureAwait(false);
-        var expected = first.Whole ?? throw new HarnessException(HarnessExit.CommandFailed, $"{from.Host} did not say what '{path}' holds as its first piece was read.");
+        var first = await SyncPieces.ReadAsync(from, fromRoot, fromPath, 0, pieceBytes, hidden, cancellationToken).ConfigureAwait(false);
+        var expected = first.Whole ?? throw new HarnessException(HarnessExit.CommandFailed, $"{from.Host} did not say what '{fromPath}' holds as its first piece was read.");
 
         if (!first.IsWholeFile)
         {
             await SyncPieces.SendAsync(
                     first,
-                    (offset, token) => SyncPieces.ReadAsync(from, fromRoot, path, offset, pieceBytes, hidden, token),
+                    (offset, token) => SyncPieces.ReadAsync(from, fromRoot, fromPath, offset, pieceBytes, hidden, token),
                     to,
                     toRoot,
                     path,
                     changed: () => new HarnessException(
                         HarnessExit.CommandFailed,
-                        $"'{path}' changed on {from.Host} while it was read a piece at a time to be copied to {to.Host}: it was "
+                        $"'{fromPath}' changed on {from.Host} while it was read a piece at a time to be copied to {to.Host}: it was "
                         + $"{expected.Content}, {ReportText.Counted(expected.Length, "byte")}, as its first piece was read. Nothing "
                         + "was put in its place."),
                     warn: message => _output.Warn(CommandName, message),
@@ -1791,7 +1831,7 @@ public sealed class SyncService(
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"'{path}' did not land intact, copied from {from.Host} to {to.Host}: it was read as {expected.Content} and "
+                $"'{fromPath}' did not land intact, copied from {from.Host} to {to.Host}: it was read as {expected.Content} and "
                 + $"reads back as {actual?.Content}.");
         }
     }

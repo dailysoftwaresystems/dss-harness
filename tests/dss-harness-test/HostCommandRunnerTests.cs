@@ -32,6 +32,28 @@ public sealed class HostCommandRunnerTests
         LocalDirectory = "/repo",
     };
 
+    /// <summary>
+    /// A pinned call run again without its pin answers what the ends of both attempts could not reach or end, the first's
+    /// ahead of the second's: dropped with the first attempt, what it left running was said nowhere.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null, null)]
+    [InlineData("pid 42 could not be ended", null, "pid 42 could not be ended")]
+    [InlineData(null, "pid 43 could not be ended", "pid 43 could not be ended")]
+    [InlineData("pid 42 could not be ended", "pid 43 could not be ended", "pid 42 could not be ended, and pid 43 could not be ended")]
+    public async Task APinnedCallRunAgain_AnswersWhatBothAttemptsCouldNotReachOrEnd(string? first, string? second, string? answered)
+    {
+        var processRunner = Substitute.For<IProcessRunner>();
+        processRunner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult(HostResults.Failed(255, "ssh: connect to host 192.0.2.10 port 2222: Connection timed out\n") with { Uncontained = first }),
+                Task.FromResult(HostResults.Ok("10.0.100 [/usr/lib/dotnet/sdk]\n") with { Uncontained = second }));
+
+        var result = await new HostCommandRunner(processRunner).RunAsync(Ssh() with { Pin = new SshPin("192.0.2.10", "[host.invalid]:2222") }, ListSdks, TestContext.Current.CancellationToken);
+
+        Assert.Equal((0, answered), (result.ExitCode, result.Uncontained));
+    }
+
     [Fact]
     public void Local_RunsTheProgramItself()
     {

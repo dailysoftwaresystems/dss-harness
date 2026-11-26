@@ -28,6 +28,14 @@ public sealed class RunnerConfig
     public List<string>? Legs { get; init; }
 
     /// <summary>
+    /// The problem matchers of <c>results.matchers</c> that read this runner's steps, by name, beside every matcher no
+    /// runner or invocation names. A matcher a runner or an invocation names reads only their output. Given empty in the
+    /// file, it is refused when the file is read; a name <c>results.matchers</c> does not declare is refused too.
+    /// </summary>
+    [Description("the matchers of results.matchers that read its steps' output ('help config')")]
+    public List<string>? Matchers { get; init; }
+
+    /// <summary>
     /// Whether this runner's steps change files of the tree - a formatter, a code generator - so its legs work in
     /// their trees themselves, whatever the leg's own <c>localCopy</c> key or the repository's default says: what it
     /// wrote in a copy the next sync would make the tree again. A leg a host would run is refused for it before any

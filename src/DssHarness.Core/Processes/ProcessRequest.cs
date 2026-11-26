@@ -84,8 +84,9 @@ public sealed record ProcessRequest
 
     /// <summary>
     /// Invoked for each stdout line as it arrives, in addition to capture.
-    /// Raised on background threads, so implementations must be thread safe. One that throws is handed no more lines,
-    /// and what it threw is raised once the child has gone.
+    /// Raised on background threads, so implementations must be thread safe, but never beside <see cref="OnErrorLine"/>:
+    /// the lines one read of a stream returned are handed on together, and no line of the other stream comes between them.
+    /// One that throws is handed no more lines, and what it threw is raised once the child has gone.
     /// </summary>
     public Action<string>? OnOutputLine { get; init; }
 
@@ -132,7 +133,8 @@ public sealed record ProcessRequest
 
     /// <summary>
     /// The child's time limit, or <see langword="null"/> for none: the bound its run was configured with - which ends it
-    /// where it runs on, and at which what it left asked to end and still standing is made to.
+    /// where it runs on, and at which what it left asked to end and still standing is made to - measured by the runner's
+    /// clock.
     /// </summary>
     public TimeSpan? Timeout { get; init; }
 
@@ -162,10 +164,11 @@ public sealed record ProcessRequest
     /// member when its last handle closes. So this process ending in any way, a hard
     /// kill among them, ends the child and all it started at once, as a host ends a dispatched leg whose dispatcher has
     /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
-    /// process ends. On every system its output is read, once it has ended, until every character it wrote has been: what
-    /// still holds the output then is something it left running, which the run would otherwise wait on for as long as it
-    /// lived. What that leftover writes after it is its own, said not read (<see cref="ProcessResult.OutputHeld"/>), and
-    /// once the run has let go of the output, it writes to a pipe nobody reads. On Linux and macOS the child starts as any
+    /// process ends. On every system its output is read, once it has ended - and at a stop once everything the stop ended
+    /// has gone - until every character it wrote has been: what still holds the output then is something it left running,
+    /// or at a stop one the stop could not end, said in <see cref="ProcessResult.Uncontained"/>, which the run would otherwise
+    /// wait on for as long as it lived. What that process writes after it is its own, said not read
+    /// (<see cref="ProcessResult.OutputHeld"/>), and once the run has let go of the output, it writes to a pipe nobody reads. On Linux and macOS the child starts as any
     /// other: an interrupt or a termination signal this process is given ends it with this process's stop, its terminal's
     /// hang-up reaches it as it reaches this process, and a kill of this process alone does not reach it - save under an
     /// operation's <see cref="ProcessScope"/>, a run's machine step's, which starts it apart from the terminal and records

@@ -88,6 +88,104 @@ internal static class AskOrchestratorStatusCommand
     }
 }
 
+/// <summary>Wires <c>DssHarness read-orchestrator-report</c>.</summary>
+internal static class ReadOrchestratorReportCommand
+{
+    internal const string Name = FlowService.ReadReportCommand;
+
+    private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run whose report is read.");
+
+    private static readonly Option<string[]> StepsOption = new("--steps")
+    {
+        Description = "The step instances whose rows alone the steps table keeps, by their instance ids - one the run does not hold refused, named; every one where none is given.",
+        AllowMultipleArgumentsPerToken = true,
+    };
+
+    private static readonly Option<string?> ByOption = new("--by")
+    {
+        Description = $"What the totals' dollars are grouped by (totals.dollarsBy): {string.Join(", ", FlowRunReport.Groupings)}; {FlowRunReport.Groupings[0]} where none is given.",
+    };
+
+    private static readonly Option<int?> TopOption = new("--top")
+    {
+        Description = $"How many of the slowest, the most expensive and the most retried steps the signals name; defaults.report.top where none is given ({new FlowReportThresholds().Top.ToString(System.Globalization.CultureInfo.InvariantCulture)} where the config says none).",
+    };
+
+    private static readonly Option<bool> MarkdownOption = new("--markdown")
+    {
+        Description = "Answer as Markdown, for a pull request, a ticket or the clipboard.",
+    };
+
+    /// <summary>Its --json, which a read that stops before it reads anything answers with its report's shape for, holding nothing.</summary>
+    private static readonly JsonAnswer JsonAnswerOfReport = new(OrchestrationArguments.Json, (_, exitCode, summary, _, _) => FlowReports.ReportStopped(exitCode, summary));
+
+    internal static Command Create()
+    {
+        var command = new Command(Name, "A run's report, built from its records alone - the same bytes for the same records, never a model's words: what the run was and how it stands, what it spent, one row per step with its waits and its run, the chain of steps a faster run must shorten, every failed attempt, every question a person answered, what its reviews converged to, and the deterministic flags a reader starts from. A run still going is said so at the time of its last record, marked partial. Reads only: nothing of the run is written.");
+        command.Arguments.Add(RunArgument);
+        command.Options.Add(StepsOption);
+        command.Options.Add(ByOption);
+        command.Options.Add(TopOption);
+        command.Options.Add(MarkdownOption);
+        command.Options.Add(OrchestrationArguments.Json);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(
+            command,
+            (context, cancellationToken) => context.Get<IFlowService>()
+                .ReadReportAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(RunArgument),
+                    context.ParseResult.GetValue(StepsOption),
+                    context.ParseResult.GetValue(ByOption),
+                    context.ParseResult.GetValue(TopOption),
+                    context.Json,
+                    context.ParseResult.GetValue(MarkdownOption),
+                    cancellationToken),
+            JsonAnswerOfReport);
+
+        return command;
+    }
+}
+
+/// <summary>Wires <c>DssHarness analyze-orchestrator-report</c>.</summary>
+internal static class AnalyzeOrchestratorReportCommand
+{
+    internal const string Name = FlowService.AnalyzeReportCommand;
+
+    private static readonly Argument<string> RunArgument = OrchestrationArguments.Orchestrator("The run whose report is analysed.");
+
+    private static readonly Option<bool> MarkdownOption = new("--markdown")
+    {
+        Description = "Answer as Markdown, for a pull request, a ticket or the clipboard.",
+    };
+
+    /// <summary>Its --json, which an analyse that stops before it analyses anything answers with its analysis's shape for, holding nothing.</summary>
+    private static readonly JsonAnswer JsonAnswerOfAnalysis = new(OrchestrationArguments.Json, (_, exitCode, summary, _, _) => FlowReports.AnalysisStopped(exitCode, summary));
+
+    internal static Command Create()
+    {
+        var command = new Command(Name, "Have one agent read a run's deterministic report and bring its pain points - run only where a person calls for it, never by a run, a session's end or a view. The analyst is the tool's own: it only reads, narrowed to the run's records, its answer held by the structured-output gate in its own conversation to the schema the tool ships and to the report's own values (a citation or a step the report does not hold, or a number of its own - outside an id the report or a citation holds - in the summary, a title, a cause, an impact or a thing noted, an impact's figures being placeholders of its citations that the tool writes with the report's unit, is asked again for, then refused; the recommendation states the values it proposes and is not read), ordered by what each point cost, with the change to make. What a run of the analyst leaves - the report it read, which its hash names, the analysis or why it was refused, with what it cost - is kept under the run's analysis/ and named on every exit; what it costs is the person's, never the run's. Refused (12) where tierConfig names no 'reporting' tier for the analyst to run on.");
+        command.Arguments.Add(RunArgument);
+        command.Options.Add(MarkdownOption);
+        command.Options.Add(OrchestrationArguments.Json);
+        GlobalOptions.AddTo(command);
+
+        CommandRunner.Wire(
+            command,
+            (context, cancellationToken) => context.Get<IFlowService>()
+                .AnalyzeReportAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(RunArgument),
+                    context.Json,
+                    context.ParseResult.GetValue(MarkdownOption),
+                    cancellationToken),
+            JsonAnswerOfAnalysis);
+
+        return command;
+    }
+}
+
 /// <summary>Wires <c>DssHarness ask-orchestrator</c>.</summary>
 internal static class AskOrchestratorCommand
 {

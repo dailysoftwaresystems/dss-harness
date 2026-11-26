@@ -1,0 +1,52 @@
+   Compiling app v0.1.0 (/home/runner/work/app/app)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running unittests src/lib.rs (target/debug/deps/app-1a2b3c4d5e6f7a8b)
+
+running 3 tests
+test store::tests::keeps_records ... ok
+test store::tests::reads_records ... FAILED
+test parser::tests::reads_form ... FAILED
+
+failures:
+
+---- store::tests::reads_records stdout ----
+thread 'store::tests::reads_records' panicked at src/store.rs:42:9:
+assertion `left == right` failed
+  left: 3
+ right: 4
+stack backtrace:
+   0: rust_begin_unwind
+             at /rustc/051478957371ee0084a7c0913941d2a8c4757bb9/library/std/src/panicking.rs:652:5
+   1: core::panicking::panic_fmt
+             at /rustc/051478957371ee0084a7c0913941d2a8c4757bb9/library/core/src/panicking.rs:72:14
+   2: core::panicking::assert_failed_inner
+   3: core::panicking::assert_failed
+             at /rustc/051478957371ee0084a7c0913941d2a8c4757bb9/library/core/src/panicking.rs:363:5
+   4: app::store::tests::reads_records
+             at ./src/store.rs:42:9
+   5: app::store::tests::reads_records::{{closure}}
+             at ./src/store.rs:40:23
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- parser::tests::reads_form stdout ----
+thread 'parser::tests::reads_form' panicked at src/parser.rs:18:30:
+index out of bounds: the len is 3 but the index is 5
+stack backtrace:
+   0: rust_begin_unwind
+             at /rustc/051478957371ee0084a7c0913941d2a8c4757bb9/library/std/src/panicking.rs:652:5
+   1: core::panicking::panic_fmt
+             at /rustc/051478957371ee0084a7c0913941d2a8c4757bb9/library/core/src/panicking.rs:72:14
+   2: core::panicking::panic_bounds_check
+             at /rustc/051478957371ee0084a7c0913941d2a8c4757bb9/library/core/src/panicking.rs:274:5
+   3: app::parser::tests::reads_form
+             at ./src/parser.rs:18:30
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    parser::tests::reads_form
+    store::tests::reads_records
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

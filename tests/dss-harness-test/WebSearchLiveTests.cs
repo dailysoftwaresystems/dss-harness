@@ -3,7 +3,6 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
@@ -62,8 +61,7 @@ public sealed class WebSearchLiveTests
         var records = Environment.GetEnvironmentVariable(RecordsVariable);
         Assert.SkipWhen(string.IsNullOrWhiteSpace(records), $"{RecordsVariable} is not set: the live check of the web search's sources runs only where the person said it might.");
 
-        using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+        using var provider = TestRegistrations.Of(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider();
 
         var main = Directory.CreateDirectory(Path.Combine(records!, "main")).FullName;

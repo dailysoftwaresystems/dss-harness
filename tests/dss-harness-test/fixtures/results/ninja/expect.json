@@ -1,0 +1,19 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "GNU"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["proj/src/main.c"],
+  "errors": 1,
+  "first": {
+    "tool": "gcc",
+    "code": null,
+    "file": "/home/runner/work/app/app/proj/src/main.c",
+    "line": 6,
+    "column": 5
+  },
+  "diagnostics": [
+    "error - /home/runner/work/app/app/proj/src/main.c:6"
+  ]
+}

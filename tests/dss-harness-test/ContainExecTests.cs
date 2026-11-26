@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.Versioning;
+using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
@@ -380,7 +382,8 @@ public sealed class ContainExecTests
 
     /// <summary>
     /// What the step says of a start is read as it said it: placed - with the start of the process that becomes the
-    /// program, where it said one - and what failed after, the start kept; a line that is neither says nothing.
+    /// program, where it said one, and the handle it created the program with, on Windows, where it said that - and what
+    /// failed after, the start kept; a line that is neither says nothing.
     /// </summary>
     [Fact]
     public void WhatTheStepSays_IsReadWithTheStartItSaid()
@@ -389,6 +392,8 @@ public sealed class ContainExecTests
         Assert.Equal(new ContainExec.StartHeard(true, null, 0), ContainExec.Heard("placed\n"));
         Assert.Equal(new ContainExec.StartHeard(true, ContainExec.Stage.Start, 2, "boot-1:42"), ContainExec.Heard("placed boot-1:42\nfailed start 2\n"));
         Assert.Equal(new ContainExec.StartHeard(false, null, 0), ContainExec.Heard("placed two words\n"));
+        Assert.Equal(new ContainExec.StartHeard(true, null, 0) { Program = 1234 }, ContainExec.Heard("program 1234\nplaced\n"));
+        Assert.Equal(new ContainExec.StartHeard(true, null, 0), ContainExec.Heard("program -1\nprogram twelve\nprogram 12 34\nplaced\n"));
     }
 
     /// <summary>
@@ -714,6 +719,992 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// What a contained child's job holds when the child ends of itself has gone before the end of the child's output is
+    /// looked for, on Windows: a job is ended as asynchronously as any process, and a member still ending then - still
+    /// holding the output it inherited - was taken for a process the child left running. The job's slow end is stood in
+    /// for: it ends only once the runner first asks whether what it ended has gone.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsJob_OnWindows_HasGoneBeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a job is Windows' alone; on Linux and macOS a contained child's session is asked to end and made to (AContainedChildsSessionMadeToEndAtItsBound_HasGoneBeforeTheEndOfItsOutputIsLookedFor).");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var ends = new SlowEnds();
+        var holder = LearnedProcess.None;
+
+        ends.SlowJobs();
+
+        try
+        {
+            var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "sleep", "300000") with
+                {
+                    Contained = true,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
+                },
+                cancellationToken).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal((0, false, $"holder={holder}\n", (string?)null), (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // The job's end was held back: what this test is about happened.
+            Assert.Equal(1, ends.HeldBack);
+            Assert.False(holder.Running, $"the holder {holder} outlived the job that held it");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A member of a contained child's job that, as the job is ended, makes another process holding the output it
+    /// inherited - once the job's members were first listed - has that one ended too when the child ends of itself, on
+    /// Windows, and gone before the end of the child's output is looked for: once every member kept has gone the job is
+    /// listed again, ended again for what that finds, and what it found waited for in turn. TerminateJobObject is as
+    /// asynchronous as any end, and a member's thread already inside a process's creation completes it, which the job's end
+    /// may miss; that end is stood in for - each job's end, held back until the runner first asks whether what it ended has
+    /// gone, ends the members the job held as it was asked, each alone - and the member makes the late process at the first
+    /// ask, before the end is made.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsJob_WhoseMemberMakesAnotherAsTheJobIsEnded_HasThatOneEndedToo_BeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a job is Windows' alone; on Linux and macOS a contained child's session is held still as one before it is killed, and a held process starts no other.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (asked, up) = (temp.Combine("asked.txt"), temp.Combine("up.txt"));
+        var ends = new SlowEnds();
+        var learnedLate = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (holder, late) = (LearnedProcess.None, LearnedProcess.None);
+
+        ends.SlowJobsByTheirListing();
+        ends.AtFirstAsk(_ =>
+        {
+            File.WriteAllText(asked, "asked");
+            late = learnedLate.Task.WaitAsync(LongBound, cancellationToken).GetAwaiter().GetResult();
+        });
+
+        try
+        {
+            var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "spawn-late-holder", asked, up, "300000") with
+                {
+                    Contained = true,
+                    OnOutputLine = line =>
+                    {
+                        holder = LearnedProcess.In(line, "holder=") ?? holder;
+
+                        if (LearnedProcess.In(line, "late=") is { } made)
+                        {
+                            learnedLate.TrySetResult(made);
+                        }
+                    },
+                },
+                cancellationToken).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(
+                (0, false, $"holder={holder}\nlate={late}\n", (string?)null),
+                (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // Both of the job's ends were held back, the late process made before the first was: what this test is about happened.
+            Assert.Equal((2, true), (ends.HeldBack, late.Id != 0));
+            Assert.False(late.Running, $"the late process {late} outlived the job that held it");
+        }
+        finally
+        {
+            late.TryEnding();
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A member of a contained child's job whose own security refuses its end to everyone - as a program that guards itself
+    /// against being ended by other software of the same user does - is waited for all the same when the child ends of
+    /// itself, on Windows, and has gone before the end of the child's output is looked for: the job's own end asks nothing
+    /// of it, and it is kept by a handle that only waits for its end and asks when it was created, which its security
+    /// grants. Opened to be ended as well, it would not be kept, nor its end waited for, and it would be taken for a process
+    /// the child left running. The job's slow end is stood in for: it ends only once the runner first asks whether what it
+    /// ended has gone. The run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), so the refusal holds against it on an administrator's elevated run as on
+    /// any other.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AContainedChildsJobMember_WhoseOwnSecurityRefusesItsEnd_IsWaitedForAllTheSame()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a job, and a process's own security, are Windows'.");
+
+        Assert.Equal(
+            new ChildRunAnswer(0, "exit 0, timed out False, output its holder, output held by nothing, refused True, held back 1, holder gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ContainExecTests), nameof(AJobMemberRefusingItsEndAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A tree whose processes' own security refuses them every right - its root's, and a grandchild's that has a child of
+    /// its own - still has every other process of it ended, on Windows, as the walk of a process known by its id alone
+    /// meets it: one that cannot be opened is passed over, its refusal said once - though the list of every process is read
+    /// again, and names it again, once the walk has ended more - and its children taken all the same, from the reading that
+    /// found it, by its listed id and creation time alone, since it refuses even the asking of when it was created. The walk
+    /// is made from a child of the suite whose token holds no debug privilege (<see cref="ChildRun.UnprivilegedAsync"/>),
+    /// which starts the root itself and ends it by the handle it was created with; the refusing grandchild is ended, its
+    /// refusal lifted by its owner's right, there too.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task ATreeWhoseProcessesRefuseTheirEnd_HasEveryOtherProcessOfItEnded_EachRefusalSaidOnce()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's.");
+
+        var refused = new Win32Exception(5).Message;
+
+        Assert.Equal(
+            new ChildRunAnswer(0, $"refused True, said pid {{root}} could not be ended: {refused} | pid {{middle}} could not be ended: {refused}, kept False False True, holder gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ContainExecTests), nameof(ATreeRefusingEveryRightAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// The program a bound child's step created, whose own security refuses its end to everyone, is ended at the child's
+    /// time limit all the same, on Windows, and has gone when the run answers - nothing holding the child's output, and
+    /// nothing said unended: the stop keeps it by a copy of the handle <c>contain-exec</c> got as it created it, copied out
+    /// of <c>contain-exec</c> as the start was said, granted before the program could refuse anything - never by one opened
+    /// by its id, which its security refuses, and which would leave the program running and taken for one the child left.
+    /// The run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), which holds the program by a handle of its own, got before it refuses,
+    /// that ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task ABoundChildsProgram_WhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItsStepCreatedItWith()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS the step becomes the program, which the runner created.");
+
+        Assert.Equal(
+            new ChildRunAnswer(0, "refused True, timed out True, output its id, output held by nothing, unended nothing, program gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ContainExecTests), nameof(ABoundProgramRefusingItsEndAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A child of the tree that Windows' list dates before the process that made it - a clock stepped back between their
+    /// creations - is kept and ended by the walk all the same, as their sequence numbers order them: the walk reads the
+    /// list, and each process's order, as the machine gives them (<see cref="ProcessEnds.Listed"/>,
+    /// <see cref="ProcessEnds.Made"/>), and the step of the clock is stood in for there (<see cref="ClockStepped"/>).
+    /// Ordered by creation time, the child would be taken for an earlier holder's of its creator's id, and left running.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AChildListedAsMadeBeforeItsCreator_ByAClockThatStepped_IsKeptAndEndedByTheWalk_AsTheirSequenceNumbersOrderThem()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the list of every process the walk reads, and a process's sequence number, are Windows'; on Linux and macOS the walk follows the parent the system names now, with no start compared.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-holder", "sleep", "300000", "sleep", "300000"));
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+        var holder = LearnedProcess.None;
+
+        try
+        {
+            holder = LearnedProcess.In(await root.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken) ?? string.Empty, "holder=")
+                ?? throw new InvalidOperationException($"the root {root.Id} never named its child");
+
+            var listed = SystemProcessList.Every() ?? throw new InvalidOperationException("Windows' list of every process could not be read");
+            var (made, maker) = (listed.First(process => process.Id == holder.Id).Created, listed.First(process => process.Id == root.Id).Created);
+
+            using var ended = new EndedProcesses(new ClockStepped(holder.Id, made - maker + TimeSpan.TicksPerHour));
+
+            Containment.EndTree(root, group: false, ended, [root.SafeHandle]);
+            await ended.GoneAsync("what the walk ended to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal((true, false), (ended.Kept(holder.Id) is not null, holder.Running));
+        }
+        finally
+        {
+            holder.TryEnding();
+
+            if (!root.HasExited)
+            {
+                root.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A walk asked from inside the tree it would end is refused though a clock stepped back between this process's
+    /// creation and its parent's dates this process before it: the chain of this process's parents orders each child and
+    /// its parent as the walk does, by their sequence numbers, reading the list and each order through the walk's own
+    /// (<see cref="ProcessEnds.Listed"/>, <see cref="ProcessEnds.Made"/>), the step stood in for there
+    /// (<see cref="ClockStepped"/>). The root is a child of the suite, and the walk is asked from a child of its own: ordered
+    /// by creation time, the chain would end at the step, and the walk would end the root and the very process asking.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AWalkAskedFromInsideItsOwnTree_IsRefused_ThoughAClockThatSteppedDatesTheAskerBeforeItsParent()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the list of every process the chain reads, and a process's sequence number, are Windows'; on Linux and macOS the chain follows the parent the system names now, with no start compared.");
+
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        bound.CancelAfter(LongBound * 2);
+
+        Assert.Equal(new ChildRunAnswer(0, "refused", ""), await ChildRun.MethodAsync(typeof(ContainExecTests), nameof(AWalkAskedFromAChildAsync), bound.Token));
+    }
+
+    /// <summary>The root's side of <see cref="AWalkAskedFromInsideItsOwnTree_IsRefused_ThoughAClockThatSteppedDatesTheAskerBeforeItsParent"/>: a child of its own asks the walk.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> AWalkAskedFromAChildAsync()
+    {
+        using var bound = new CancellationTokenSource(LongBound);
+        var answer = await ChildRun.MethodAsync(typeof(ContainExecTests), nameof(TheTreeOfItsParentEnded), bound.Token);
+
+        return answer is { Exit: 0, Error.Length: 0 } ? answer.Output : $"exit {answer.Exit}: {answer.Output} {answer.Error}";
+    }
+
+    /// <summary>The asker's side: the walk of its own parent's tree, this process dated an hour before that parent.</summary>
+    [SupportedOSPlatform("windows")]
+    private static string TheTreeOfItsParentEnded()
+    {
+        var listed = SystemProcessList.Every() ?? throw new InvalidOperationException("Windows' list of every process could not be read");
+        var self = listed.First(process => process.Id == Environment.ProcessId);
+        var parent = listed.First(process => process.Id == self.ParentId);
+
+        using var root = Process.GetProcessById(parent.Id);
+        using var ended = new EndedProcesses(new ClockStepped(self.Id, self.Created - parent.Created + TimeSpan.TicksPerHour));
+
+        try
+        {
+            Containment.EndTree(root, group: false, ended);
+            return "ended";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("holds this very process", StringComparison.Ordinal))
+        {
+            return "refused";
+        }
+    }
+
+    /// <summary>
+    /// A creator and the child Windows names as made by it are ordered by their sequence numbers where both were read, so a
+    /// step of the clock between their creations - a child's creation time set before its creator's - never makes a child
+    /// of the tree look made by an earlier holder of its creator's id; and by their creation times where either sequence
+    /// number was not.
+    /// </summary>
+    [Fact]
+    public void ACreatorAndItsChild_AreOrderedByTheirSequenceNumbers_ByTheirCreationTimesWhereEitherIsUnread()
+    {
+        var creator = new CreationOrder(Created: 200, Sequence: 7);
+
+        Assert.Equal(
+            (false, true, true, false, true, false),
+            (new CreationOrder(Created: 100, Sequence: 8).MadeBefore(creator),
+                new CreationOrder(Created: 300, Sequence: 6).MadeBefore(creator),
+                new CreationOrder(Created: 100, Sequence: null).MadeBefore(creator),
+                new CreationOrder(Created: 300, Sequence: null).MadeBefore(creator),
+                new CreationOrder(Created: 100, Sequence: 8).MadeBefore(creator with { Sequence = null }),
+                creator.MadeBefore(creator)));
+    }
+
+    /// <summary>
+    /// Windows gives every process a sequence number as it creates it, read from a handle that asks when the process was
+    /// created: this process's, and a higher one for a child it starts after it - what the walk of a tree and the chain of
+    /// a process's parents order a creator and its child by (<see cref="CreationOrder"/>), on every Windows the suite runs.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void EveryProcess_HoldsASequenceNumber_AChildAHigherOneThanTheProcessThatMadeIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's sequence number is Windows'.");
+
+        using var self = Process.GetCurrentProcess();
+        using var child = Process.Start(TestHost.StartOf(Child("sleep", "300000")))!;
+
+        try
+        {
+            var (parent, made) = (Containment.OrderOf(self.SafeHandle), Containment.OrderOf(child.SafeHandle));
+
+            Assert.True(parent.Sequence is not null && made.Sequence is not null, $"a sequence number went unread: {parent}, {made}");
+            Assert.True(parent.MadeBefore(made) && !made.MadeBefore(parent), $"the child {made} was not made after this process {parent}");
+        }
+        finally
+        {
+            child.Kill();
+        }
+    }
+
+    /// <summary>The child's side of <see cref="AContainedChildsJobMember_WhoseOwnSecurityRefusesItsEnd_IsWaitedForAllTheSame"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> AJobMemberRefusingItsEndAsync()
+    {
+        using var temp = new TempDirectory();
+        var go = temp.Combine("go.txt");
+        var ends = new SlowEnds();
+        var holder = LearnedProcess.None;
+        bool? mayEnd = null;
+
+        // The holder needs no handle of this process's got before it refuses: its job ends it whatever this process does.
+        File.WriteAllText(go, "go");
+        ends.SlowJobs();
+        ends.AtFirstAsk(asked => mayEnd = RefusedEnd.MayEnd(asked.Id));
+
+        try
+        {
+            var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "deny-terminate", go, temp.Combine("refused.txt"), "sleep", "300000") with
+                {
+                    Contained = true,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
+                },
+                CancellationToken.None).WaitAsync(LongBound);
+
+            // The member refused its end while it was kept, and the job's end was held back: what this test is about happened.
+            return $"exit {result.ExitCode}, timed out {result.TimedOut}, output {(result.StandardOutput == $"holder={holder}\n" ? "its holder" : result.StandardOutput)}, "
+                + $"output held {result.OutputHeld ?? "by nothing"}, refused {mayEnd == false}, held back {ends.HeldBack}, holder gone {!RefusedEnd.Stands(holder)}";
+        }
+        finally
+        {
+            RefusedEnd.End(holder);
+        }
+    }
+
+    /// <summary>The child's side of <see cref="ATreeWhoseProcessesRefuseTheirEnd_HasEveryOtherProcessOfItEnded_EachRefusalSaidOnce"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> ATreeRefusingEveryRightAsync()
+    {
+        using var temp = new TempDirectory();
+        var (go, rootRefused, middleRefused, last) = (temp.Combine("go.txt"), temp.Combine("root.txt"), temp.Combine("middle.txt"), temp.Combine("last.txt"));
+
+        File.WriteAllText(go, "go");
+
+        // The root refuses every right, its child does not; that child's child refuses every right, and has a child of its own.
+        var start = TestHost.StartOf(
+            Child("deny-everything", go, rootRefused, "spawn-holder", "sleep", "300000", "spawn-holder", "sleep", "300000", "deny-everything", go, middleRefused, "spawn-grandchild", last, "300000"));
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+        var (middle, holder) = (LearnedProcess.None, LearnedProcess.None);
+
+        try
+        {
+            Assert.True(Until(() => File.Exists(middleRefused) && File.Exists(last)), $"the tree of {root.Id} never stood");
+
+            middle = LearnedProcess.Of(int.Parse(File.ReadAllText(middleRefused), CultureInfo.InvariantCulture));
+            holder = LearnedProcess.Of(int.Parse(File.ReadAllText(last), CultureInfo.InvariantCulture));
+
+            var refusing = !RefusedEnd.MayEnd(root.Id) && !RefusedEnd.MayEnd(middle.Id);
+
+            using var byItsId = Process.GetProcessById(root.Id);
+            using var ended = new EndedProcesses(ProcessEnds.Machine);
+
+            var raised = Assert.Throws<AggregateException>(() => Containment.EndTree(byItsId, group: false, ended));
+            var said = string.Join(" | ", raised.InnerExceptions.Select(failure => failure.Message))
+                .Replace($"pid {root.Id} could", "pid {root} could", StringComparison.Ordinal)
+                .Replace($"pid {middle.Id} could", "pid {middle} could", StringComparison.Ordinal);
+            var kept = $"{ended.Kept(root.Id) is not null} {ended.Kept(middle.Id) is not null} {ended.Kept(holder.Id) is not null}";
+
+            await ended.GoneAsync("what of the tree could be ended to go", _ => { }, TimeProvider.System).WaitAsync(LongBound);
+
+            return $"refused {refusing}, said {said}, kept {kept}, holder gone {!holder.Running}";
+        }
+        finally
+        {
+            holder.TryEnding();
+            RefusedEnd.End(middle);
+
+            try
+            {
+                root.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or AggregateException)
+            {
+                // Gone already, or a process of its tree going.
+            }
+        }
+    }
+
+    /// <summary>The child's side of <see cref="ABoundChildsProgram_WhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItsStepCreatedItWith"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> ABoundProgramRefusingItsEndAsync()
+    {
+        using var temp = new TempDirectory();
+        var (held, refused) = (temp.Combine("held.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var learned = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var limit = TimeSpan.FromMinutes(1);
+        Process? program = null;
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Clock = clock }.RunAsync(
+                Child("say-pid-then", "deny-terminate", held, refused, "sleep", "300000") with
+                {
+                    Bound = true,
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (line.StartsWith("pid=", StringComparison.Ordinal) && int.TryParse(line[4..], NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+                        {
+                            learned.TrySetResult(id);
+                        }
+                    },
+                },
+                CancellationToken.None);
+
+            var id = await learned.Task.WaitAsync(LongBound);
+
+            // Opened before the program refuses its end, a handle keeps every right it was granted.
+            program = Process.GetProcessById(id);
+            _ = program.SafeHandle;
+            File.WriteAllText(held, "held");
+
+            Assert.True(Until(() => File.Exists(refused)), $"the program {id} never refused its end");
+
+            var refusing = !RefusedEnd.MayEnd(id);
+
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(LongBound);
+
+            return $"refused {refusing}, timed out {result.TimedOut}, output {(result.StandardOutput == $"pid={id}\n" ? "its id" : result.StandardOutput)}, "
+                + $"output held {result.OutputHeld ?? "by nothing"}, unended {result.Uncontained ?? "nothing"}, program gone {program.HasExited}";
+        }
+        finally
+        {
+            if (program is { HasExited: false })
+            {
+                program.Kill();
+            }
+
+            program?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// What a contained child's session holds that refuses to be asked to end, made to once what is left of the child's
+    /// time limit has passed at the child's own end, has gone before the end of the child's output is looked for, on Linux
+    /// and macOS: a killed process's end runs after the kill is answered, and a member still ending then - still holding
+    /// the output it inherited - was taken for a process the child left running. The slow end of the group the member is
+    /// killed with is stood in for: it ends only once the runner first asks whether what the session's end killed has
+    /// gone. The clock the bound is measured by is moved past it once the session's wait for what it asked to end has
+    /// begun.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsSessionMadeToEndAtItsBound_HasGoneBeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipWhen(
+            OperatingSystem.IsWindows(),
+            "a session is the C library's; on Windows a contained child's job is ended at once (AContainedChildsJob_OnWindows_HasGoneBeforeTheEndOfItsOutputIsLookedFor).");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learned = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = LearnedProcess.None;
+        var limit = TimeSpan.FromHours(1);
+
+        ends.SlowGroups();
+
+        try
+        {
+            // A table that reads nothing of the child's: what the session holds is found by its group, which needs none,
+            // and no program is started on the clock the test moves.
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram, new QuietProcessTable()) { Clock = clock, Ends = ends }.RunAsync(
+                Child("spawn-holder", "exit", "0", "ignore-term-and-sleep", "300000", temp.Combine("ready.txt")) with
+                {
+                    Contained = true,
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            learned.TrySetResult(found);
+                        }
+                    },
+                },
+                cancellationToken);
+
+            holder = await learned.Task.WaitAsync(LongBound, cancellationToken);
+
+            // The child's limit, and the session's wait for what it asked to end, which refuses.
+            await clock.WaitingAsync(2).WaitAsync(LongBound, cancellationToken);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(
+                (0, false, $"holder={holder}\n", (string?)null, (string?)null),
+                (result.ExitCode, result.TimedOut, result.StandardOutput, result.OutputHeld, result.Uncontained));
+
+            // The group's end was held back: what this test is about happened.
+            Assert.Equal(1, ends.HeldBack);
+            Assert.False(holder.Running, $"the holder {holder} outlived the session's end that killed it");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A member of a group that is ended which the group's listing does not show - one <c>/proc</c> hides, or whose reading
+    /// failed - is killed with the group, on Linux and macOS, never left held still: the group is held still as one before
+    /// it is listed, and killed as one once what it is listed to hold is kept. The member here is no descendant of the
+    /// group's leader - the walk of its tree never meets it - and the listing is stood in for, leaving it out.
+    /// </summary>
+    [Fact]
+    public async Task AGroupsMemberItsListingMisses_IsKilledWithTheGroup_NeverLeftHeldStill()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a process group is the C library's; on Windows a tree is ended by its handles and a job by itself.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var leader = Process.Start(TestHost.StartOf(Child("own-group-and-sleep", "300000")))!;
+        var missed = 0;
+
+        try
+        {
+            Assert.True(Until(() => GroupOf(leader.Id) == leader.Id), $"the process {leader.Id} never led a group of its own");
+
+            missed = Unreaped.Spawn("/bin/sleep", leader.Id, "sleep", "300");
+
+            Assert.Equal(leader.Id, GroupOf(missed));
+
+            using (var ended = new EndedProcesses(new ListingMisses(missed)))
+            {
+                Containment.EndTree(leader, group: true, ended);
+                await ended.GoneAsync("the group's leader to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+            }
+
+            // Its parent is this process, which has not reaped it: killed, it is a zombie; held still, it would be stopped.
+            Assert.True(Until(() => ProcessGoing.HasEnded(missed)), $"the member {missed} the listing missed was left held still");
+        }
+        finally
+        {
+            if (missed != 0)
+            {
+                Unreaped.Reap(missed);
+            }
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A zombie nobody reaps in a group asked to end never holds the wait for it, on Linux and macOS: once its leader has
+    /// gone the zombie is all the group holds, and a zombie has ended - its descriptors closed - whether or not anything
+    /// ever reaps it, so the end goes on to its kill long before the bound, which the clock it is measured by never reaches.
+    /// The zombie is this process's child, never reaped until the test ends, in the leader's group.
+    /// </summary>
+    [Fact]
+    public async Task AZombieNobodyReapsInAGroupAskedToEnd_NeverHoldsTheWaitForIt()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a process group is the C library's, and Windows keeps no zombie.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var leader = Process.Start(TestHost.StartOf(Child("own-group-and-sleep", "300000")))!;
+        var zombie = 0;
+
+        try
+        {
+            Assert.True(Until(() => GroupOf(leader.Id) == leader.Id), $"the process {leader.Id} never led a group of its own");
+
+            zombie = Unreaped.Spawn("/bin/sh", leader.Id, "sh", "-c", "exit 0");
+
+            Assert.True(Until(() => ProcessGoing.HasEnded(zombie)), $"the process {zombie} never ended");
+
+            var table = ProcessTableFactory.Create(new HostPlatform(), ContainingRunner());
+            var ending = await Containment.EndSessionAsync(leader.Id, table.ReadAsync, TimeSpan.FromHours(1), _ => { }, new TimerClock(), ProcessEnds.Machine, group: true)
+                .WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its group's end");
+        }
+        finally
+        {
+            if (zombie != 0)
+            {
+                Unreaped.Reap(zombie);
+            }
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a group asked to end has ended is the system's own word on each member it lists - gone, or a zombie - and on
+    /// macOS that word alone: a group whose member is still in its exit, which macOS's signal to a group passes over, has
+    /// not ended though nothing in it can be signalled, and an empty listing there is its end, the listing hiding none,
+    /// the signal deciding only where nothing could be listed. On Linux a group nothing in it can be signalled has ended,
+    /// and an empty listing of one that can be is no end, since <c>/proc</c> may hide a member. Asked of the rule itself,
+    /// the system named and each member's end stood in for - 1 still in its exit, 2 a zombie - since no process can be made
+    /// to stay in its exit on demand.
+    /// </summary>
+    [Theory]
+    [InlineData(PlatformId.MacOs, "1", false, false)]
+    [InlineData(PlatformId.MacOs, "1,2", true, false)]
+    [InlineData(PlatformId.MacOs, "2", false, true)]
+    [InlineData(PlatformId.MacOs, "", true, true)]
+    [InlineData(PlatformId.MacOs, null, false, true)]
+    [InlineData(PlatformId.MacOs, null, true, false)]
+    [InlineData(PlatformId.Linux, "", true, false)]
+    [InlineData(PlatformId.Linux, "1", true, false)]
+    [InlineData(PlatformId.Linux, "2", true, true)]
+    [InlineData(PlatformId.Linux, "1", false, true)]
+    [InlineData(PlatformId.Linux, null, true, false)]
+    public void AGroupAskedToEnd_HasEnded_AsTheSystemSaysEachMemberItListsHas(PlatformId system, string? listed, bool signalled, bool ended)
+    {
+        IReadOnlyList<int>? members = listed is null ? null : [.. listed.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(id => int.Parse(id, CultureInfo.InvariantCulture))];
+
+        Assert.Equal(ended, ProcessGoing.GroupHasEnded(system, () => members, () => signalled, member => member == 2));
+    }
+
+    /// <summary>
+    /// A process of a tree the system lists past its last reference - a zombie here, as on macOS is one still in its exit,
+    /// which nothing can take a reference to while it closes what it held - is held and kept as what the stop ended, on
+    /// Linux and macOS: its start is read all the same, so it is waited for until it has gone, never passed over as one
+    /// whose start cannot be read. The zombie is the child of the tree's root, which never reaps it.
+    /// </summary>
+    [Fact]
+    public async Task AProcessOfATreeTheSystemListsPastItsLastReference_IsKeptAsWhatTheStopEnded()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no zombie: a process's handle is signalled once it has run down.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-zombie-and-sleep", "300000"));
+
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+
+        try
+        {
+            var said = await root.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+
+            Assert.StartsWith("zombie=", said, StringComparison.Ordinal);
+
+            var zombie = int.Parse(said!["zombie=".Length..], CultureInfo.InvariantCulture);
+
+            using (var ended = new EndedProcesses(ProcessEnds.Machine))
+            {
+                Containment.EndTree(root, group: false, ended);
+
+                Assert.Equal(zombie, ended.Kept(zombie)?.Id);
+
+                await ended.GoneAsync("the tree to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+            }
+
+            Assert.True(root.WaitForExit(LongBound), $"the root {root.Id} outlived the end of its tree");
+        }
+        finally
+        {
+            if (!root.HasExited)
+            {
+                root.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The chain of what this process descends from, where a process of it is handed on while it is read - this one's
+    /// parent ends after it was read, this process is handed to the process above it, and the parent's id is given to a
+    /// process under another tree before that id's own parent is read - is read again from this process, never through the
+    /// id given out since: what the reading names then is the chain this process stands in. No system can be made to hand
+    /// a process on between two reads on demand, so the reading is stood in for.
+    /// </summary>
+    [Fact]
+    public void TheChainThisProcessStandsIn_WhereAProcessOfItIsHandedOnAsItIsRead_IsReadAgain_NeverThroughAnIdGivenOutSince()
+    {
+        var parents = new Parents(
+            new() { [10] = 20, [20] = 30, [30] = 1, [1] = 0 },
+            afterFirst: now =>
+            {
+                now[10] = 30;
+                now[20] = 99;
+                now[99] = 98;
+                now[98] = 1;
+            });
+
+        var chain = Containment.TheCallersChain(10, parents.Of);
+
+        Assert.Equal([10, 30, 1], chain);
+        Assert.DoesNotContain(99, chain);
+    }
+
+    /// <summary>
+    /// The chain of what this process descends from, where nothing of it changes as it is read, is read to its top - the
+    /// process whose parent is none - each parent as the reading names it; and where a parent's own parent cannot be read,
+    /// it ends at that parent, read once.
+    /// </summary>
+    [Fact]
+    public void TheChainThisProcessStandsIn_WhereNothingOfItChanges_IsReadToItsTop_OrToAParentThatCannotBeRead()
+    {
+        var stable = new Parents(new() { [10] = 20, [20] = 30, [30] = 1, [1] = 0 });
+        var unreadable = new Parents(new() { [10] = 20, [20] = null });
+
+        Assert.Equal([10, 20, 30, 1], Containment.TheCallersChain(10, stable.Of));
+        Assert.Equal([10, 20], Containment.TheCallersChain(10, unreadable.Of));
+        Assert.Equal(3, unreadable.Reads);
+    }
+
+    /// <summary>
+    /// A reading of each process's parent that stands in for the system's: <c>now</c> answers each, and <c>afterFirst</c>
+    /// changes it once the first reading has been answered - a process of the chain handed on between two reads.
+    /// </summary>
+    private sealed class Parents(Dictionary<int, int?> now, Action<Dictionary<int, int?>>? afterFirst = null)
+    {
+        /// <summary>How many parents were read.</summary>
+        public int Reads { get; private set; }
+
+        /// <summary>The parent <paramref name="id"/> stands under now; <see langword="null"/> where it cannot be read.</summary>
+        public int? Of(int id)
+        {
+            var parent = now.GetValueOrDefault(id);
+
+            if (Reads++ == 0)
+            {
+                afterFirst?.Invoke(now);
+            }
+
+            return parent;
+        }
+    }
+
+    /// <summary>
+    /// A zombie a test learned of is not running, on Linux and macOS: it has ended as the harness counts an end
+    /// (<see cref="ProcessGoing.HasEnded"/>), whatever its id still answers - so no assertion after a stop races the system's
+    /// reaping of what the stop killed. The zombie is the child of a process that never reaps it.
+    /// </summary>
+    [Fact]
+    public async Task AZombieATestLearnedOf_IsNotRunning_AsTheHarnessCountsAnEnd()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no zombie: a process's handle is signalled once it has run down.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-zombie-and-sleep", "300000"));
+
+        start.RedirectStandardOutput = true;
+
+        using var root = Process.Start(start)!;
+
+        try
+        {
+            var said = await root.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+            var zombie = LearnedProcess.In(said ?? string.Empty, "zombie=");
+
+            Assert.True(zombie is { Stamp: not null }, $"the root never named a zombie whose start could be read: '{said}'");
+            Assert.False(zombie.Value.Running, $"the zombie {zombie} was taken for a process that runs");
+        }
+        finally
+        {
+            if (!root.HasExited)
+            {
+                root.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A session's end asked from inside what it would end - by a process in the session, or in the group where a group is
+    /// ended, or by one that made a session or a group of its own and still descends from the leader - signals nothing and
+    /// holds nothing still, on Linux and macOS: it answers that it holds this very process, nothing of it reached, and the
+    /// caller and the leader run on after - the caller to say so, the leader to say the caller's end and stand. Every process
+    /// here is the test's own - the leader a child it starts, in a session or a group of its own, the caller that leader's -
+    /// so an end that acted on its caller could stop or end those two alone; the wait is bounded, and both are ended on every
+    /// path.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ASessionsEnd_FromInsideWhatItWouldEnd_SignalsNothing_AndSaysItHoldsThisVeryProcess(bool group, bool apart)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a session's or a group's end is Linux's and macOS's: a child there is held in a job.");
+
+        var kind = group ? "group" : "session";
+        var held = group ? "the process group a child apart from the terminal led" : "the contained child's session";
+        var (lines, leader, caller) = await FromInsideAsync(Child("lead-then", kind, "spawn-holder", "outlive", "300000", "end-own-leader", kind, apart ? "apart" : "inside"));
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"ending=Found=True HoldsThisProcess=True: {held} ({leader}) holds this very process (pid {caller}), in it or in its leader's tree, "
+                    + "and no process ends what it runs in: nothing in it was signalled",
+                $"holder={caller}",
+            ],
+            lines);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="request"/> - a leader, which starts a caller inside what it leads and outlives it, saying
+    /// <c>holder=</c>, then <c>after=</c> once the caller has ended - until the leader says <c>after=</c>, within the long
+    /// bound: every line said, in order of the text, the leader's id, and the caller's. The leader is asserted still standing;
+    /// the caller and the leader are both ended, whatever happened, on every path.
+    /// </summary>
+    internal static async Task<(string[] Lines, int Leader, LearnedProcess Caller)> FromInsideAsync(ProcessRequest request)
+    {
+        var start = TestHost.StartOf(request);
+        var lines = new List<string>();
+        var caller = LearnedProcess.None;
+        var told = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        start.RedirectStandardOutput = true;
+        start.RedirectStandardError = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            leader.OutputDataReceived += (_, line) =>
+            {
+                lock (lines)
+                {
+                    if (line.Data is not { } said)
+                    {
+                        _ = told.TrySetResult(false);
+                        return;
+                    }
+
+                    lines.Add(said);
+                    caller = LearnedProcess.In(said, "caller=") ?? LearnedProcess.In(said, "holder=") ?? caller;
+
+                    if (said.StartsWith("after=", StringComparison.Ordinal))
+                    {
+                        _ = told.TrySetResult(true);
+                    }
+                }
+            };
+
+            leader.ErrorDataReceived += (_, line) =>
+            {
+                lock (lines)
+                {
+                    if (line.Data is { } said)
+                    {
+                        lines.Add($"error: {said}");
+                    }
+                }
+            };
+
+            leader.BeginOutputReadLine();
+            leader.BeginErrorReadLine();
+
+            var after = await told.Task.WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            lock (lines)
+            {
+                Assert.True(after, $"the leader ended before it said the caller's end: {string.Join(" | ", lines)}");
+                Assert.False(leader.HasExited, $"the leader {leader.Id} was ended by an end asked from inside what it leads");
+
+                return ([.. lines.Order(StringComparer.Ordinal)], leader.Id, caller);
+            }
+        }
+        finally
+        {
+            lock (lines)
+            {
+                caller.TryEnding();
+            }
+
+            if (!leader.HasExited)
+            {
+                leader.Kill(entireProcessTree: true);
+                leader.WaitForExit(LongBound);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A child the system lists that no process answers the hold for yet - one being created, or one in its exit, can be
+    /// listed while nothing answers to its id - is asked again, never dropped as gone on that answer alone, on Linux and
+    /// macOS: it is held, and ended with its tree. No real child can be made to answer so on demand: the hold of the child is
+    /// stood in for, answering three times that no process carries its id before it holds it.
+    /// </summary>
+    [Fact]
+    public async Task AChildTheSystemListsThatNoHoldAnswersYet_IsAskedAgain_UntilItIsHeldAndEnded()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a hold is SIGSTOP; on Windows each process is ended as it is found, by its handle.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child("spawn-holder", "sleep", "300000", "sleep", "300000"));
+        var holder = LearnedProcess.None;
+
+        start.RedirectStandardOutput = true;
+
+        using var parent = Process.Start(start)!;
+
+        try
+        {
+            var said = await parent.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+
+            holder = LearnedProcess.In(said ?? string.Empty, "holder=") ?? LearnedProcess.None;
+
+            Assert.True(holder.Running, $"the child never named its holder: '{said}'");
+
+            var ends = new UnansweredAtFirst(holder.Id, times: 3);
+
+            using (var ended = new EndedProcesses(ends))
+            {
+                Containment.EndTree(parent, group: false, ended);
+                await ended.GoneAsync("the tree to go", _ => { }, TimeProvider.System).WaitAsync(LongBound, cancellationToken);
+            }
+
+            Assert.Equal(3, ends.Unanswered);
+            Assert.False(holder.Running, $"the child {holder} no hold answered at first was left running");
+            Assert.True(parent.WaitForExit(LongBound), $"the parent {parent.Id} outlived the end of its tree");
+        }
+        finally
+        {
+            holder.TryEnding();
+
+            if (!parent.HasExited)
+            {
+                parent.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The machine's ends, but for the hold of the process <c>unanswered</c> names, which answers that no process carries
+    /// its id the first <c>times</c> it is asked, and holds it after: a child the system lists that cannot be signalled yet.
+    /// </summary>
+    private sealed class UnansweredAtFirst(int unanswered, int times) : ProcessEnds
+    {
+        /// <summary>ESRCH: what a hold answers where no process carries the id.</summary>
+        private const int NoSuchProcess = 3;
+
+        /// <summary>How many holds of it were answered so.</summary>
+        public int Unanswered { get; private set; }
+
+        public override int Hold(int id)
+        {
+            if (id == unanswered && Unanswered < times)
+            {
+                Unanswered++;
+                return NoSuchProcess;
+            }
+
+            return base.Hold(id);
+        }
+    }
+
+    /// <summary>The machine's ends, but for a listing of a group that leaves out the process <c>missed</c> names: a member <c>/proc</c> hides, or whose reading failed.</summary>
+    private sealed class ListingMisses(int missed) : ProcessEnds
+    {
+        public override IReadOnlyList<int>? Members(int group) => base.Members(group)?.Where(member => member != missed).ToList();
+    }
+
+    /// <summary>
     /// A contained child that is stopped takes with it what it left outside its tree, at once, on
     /// every system: a holder of the output whose parent has gone, which no walk of the child's tree
     /// reaches, is ended by the job on Windows and by the session on Linux and macOS - and the run
@@ -795,6 +1786,38 @@ public sealed class ContainExecTests
             Assert.IsType<ProcessStoppedException>(raised);
             Assert.True(holder.AwaitGone(), $"the descendant {holder} in a group of its own outlived the stop");
             Assert.True(since < TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the descendant's end");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A contained child's descendant that made a session of its own while its parent stands - a daemonizing helper - is
+    /// ended with the child's session at a stop on Linux and macOS, through the child's tree as the process table names
+    /// each parent (<see cref="SampledProcess.ParentId"/>), whatever a clock says of their starts: the table here dates
+    /// every process in the reverse of the order it started in, as a clock stepped back between their starts - macOS's
+    /// are the wall clock's - or the second pass of a fall-back hour would. Cut by a start that reads earlier than its
+    /// parent's, the link left the descendant out of what the session's end reached, the child's end handed it on out of
+    /// the tree, and it held the output for as long as it lived.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsDescendantInASessionOfItsOwn_IsEndedThroughItsTreeAtAStop_WhateverAClockSaysOfTheirStarts()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "sessions are the C library's; on Windows every descendant is born in the job, which AContainedChild_Stopped_EndsWhatItLeftOutsideItsTree_AndTheOutputItHeldEnds holds.");
+
+        var holder = LearnedProcess.None;
+
+        try
+        {
+            var (raised, _) = await RunAndStopOn(
+                Child("spawn-holder", "sleep", "300000", "own-session-and-sleep", "300000") with { Contained = true },
+                line => (holder = LearnedProcess.In(line, "holder=") ?? holder).Id != 0,
+                ContainingRunner(new StartsReversed(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()))));
+
+            Assert.IsType<ProcessStoppedException>(raised);
+            Assert.True(holder.AwaitGone(), $"the descendant {holder} in a session of its own outlived the stop");
         }
         finally
         {
@@ -970,10 +1993,290 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A session's end reads the process table once, before anything is signalled or held, and reads the system again
+    /// once it holds the session's group in place - the system's own listing of every process - never through the table,
+    /// on Linux and macOS: on macOS, while a child of a process stands stopped, that process's runtime spins over reaping
+    /// its children and holds the lock every start of a program takes, so a table read through <c>ps</c> with the group -
+    /// here this process's own child - held never began, the group stood held for good, and every start of every other
+    /// test of the suite waited behind it. The leader is this process's child, leading a session of its own and refusing to
+    /// be asked to end, so the group is held as the system is read again; it is ended, and the system read once more, in
+    /// place, once it has gone.
+    /// </summary>
+    [Fact]
+    public async Task ASessionsEnd_ReadsTheTableOnceBeforeItHoldsAnything_AndTheSystemAgainInPlace()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a session is Linux's and macOS's; Windows ends a job, which needs no table.");
+
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        using var leader = Process.Start(TestHost.StartOf(Child("lead-then", "session", "ignore-term-and-sleep", "300000", ready)))!;
+
+        try
+        {
+            Assert.True(Until(() => getsid(leader.Id) == leader.Id && File.Exists(ready)), $"the process {leader.Id} never led a session of its own refusing to be asked to end");
+
+            var ends = new CountedEnds(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()));
+            var ending = await Containment.EndSessionAsync(leader.Id, ends.Table.ReadAsync, TimeSpan.Zero, _ => { }, TimeProvider.System, ends)
+                .WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.Equal([0], ends.HeldAtEachReading);
+            Assert.Equal([1, 1], ends.HeldAtEachListing);
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its session's end");
+        }
+        finally
+        {
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A process of a group's tree that left the group - here into a group of its own - and refuses to be asked to end is
+    /// still ended by the group's end, on Linux and macOS: the first reading finds it in the standing leader's tree, and once
+    /// the group is held it is told from a later process given its id by its start, read in place as that reading was
+    /// taken. No listing of every process read after the first names it here - none could tell it, below a leader that may
+    /// have gone, from a later holder of its id - so its start alone reaches it.
+    /// </summary>
+    [Fact]
+    public async Task AProcessOfAGroupsTreeThatLeftTheGroupAndRefusesToEnd_IsEndedByItsStart()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is Linux's and macOS's; Windows ends a job.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        var start = TestHost.StartOf(Child("lead-then", "group", "spawn-holder", "sleep", "300000", "lead-then", "group", "ignore-term-and-sleep", "300000", ready));
+        var holder = LearnedProcess.None;
+
+        start.RedirectStandardOutput = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            var said = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+
+            holder = LearnedProcess.In(said ?? string.Empty, "holder=") ?? LearnedProcess.None;
+
+            Assert.True(
+                Until(() => GroupOf(leader.Id) == leader.Id && GroupOf(holder.Id) == holder.Id && File.Exists(ready)),
+                $"the leader {leader.Id} never led a group with its holder {holder} in a group of its own refusing to be asked to end: '{said}'");
+
+            var ending = await Containment.EndSessionAsync(
+                leader.Id,
+                ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()).ReadAsync,
+                TimeSpan.Zero,
+                _ => { },
+                TimeProvider.System,
+                new Hiding(holder.Id),
+                group: true).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(holder.AwaitGone(), $"the holder {holder}, in the group's tree, outlived the group's end");
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its group's end");
+        }
+        finally
+        {
+            holder.TryEnding();
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A group's end holds what a member started before its own hold, on Linux and macOS: the system is read again round by
+    /// round until a round takes none. Here the leader, refusing to be asked to end, leads a group, and its child leads one
+    /// of its own with a child of its own in it - both outside the group; the process table is read as before either
+    /// started, and the first listing of every process lacks the grandchild - as one the child started after that listing
+    /// was read would. The round that holds the child is followed by one that finds the grandchild below it, held and ended
+    /// with the rest; read once, the grandchild was left running, outside the group, where nothing read after the kill finds
+    /// it.
+    /// </summary>
+    [Fact]
+    public async Task AGroupsEnd_HoldsWhatAMemberStartedBeforeItsOwnHold_ReadingTheSystemUntilARoundTakesNone()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is Linux's and macOS's; Windows ends a job.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        var start = TestHost.StartOf(Child(
+            "lead-then", "group", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
+        var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
+
+        start.RedirectStandardOutput = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            (child, grandchild) = await TwoHoldersAsync(leader, cancellationToken);
+
+            var ending = await Containment.EndSessionAsync(
+                leader.Id,
+                new Unseen(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()), [child.Id, grandchild.Id]).ReadAsync,
+                TimeSpan.Zero,
+                _ => { },
+                TimeProvider.System,
+                new ListedLate(grandchild.Id),
+                group: true).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(child.AwaitGone(), $"the child {child}, leading a group of its own, outlived the group's end");
+            Assert.True(grandchild.AwaitGone(), $"the grandchild {grandchild}, missing from the first listing of every process, outlived the group's end");
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its group's end");
+        }
+        finally
+        {
+            grandchild.TryEnding();
+            child.TryEnding();
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A group's end holds what a process of the leader's tree outside the group started after the first reading, on Linux
+    /// and macOS: each round holds every child of what is held. Here the leader, refusing to be asked to end, leads a group,
+    /// and its child leads one of its own with a child of its own in it; the process table is read as before either
+    /// started, so neither is in the first reading - nor in the group - and both are found below the held leader and ended.
+    /// </summary>
+    [Fact]
+    public async Task AGroupsEnd_HoldsWhatItsTreeStartedOutsideTheGroupAfterTheFirstReading()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is Linux's and macOS's; Windows ends a job.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        var start = TestHost.StartOf(Child(
+            "lead-then", "group", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
+        var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
+
+        start.RedirectStandardOutput = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            (child, grandchild) = await TwoHoldersAsync(leader, cancellationToken);
+
+            var ending = await Containment.EndSessionAsync(
+                leader.Id,
+                new Unseen(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()), [child.Id, grandchild.Id]).ReadAsync,
+                TimeSpan.Zero,
+                _ => { },
+                TimeProvider.System,
+                ProcessEnds.Machine,
+                group: true).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(child.AwaitGone(), $"the child {child}, leading a group of its own, outlived the group's end");
+            Assert.True(grandchild.AwaitGone(), $"the grandchild {grandchild}, in its parent's group, outlived the group's end");
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its group's end");
+        }
+        finally
+        {
+            grandchild.TryEnding();
+            child.TryEnding();
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A session's end reads the system again once all it killed has gone, and ends what still stands in the session, on
+    /// Linux and macOS: a process stops only once a call it is inside has returned, so a child whose creation was under way
+    /// as its parent was held joins the listing only after the last round. Here the leader, refusing to be asked to end - so
+    /// its group stands to be held and killed as one - has a child leading a group of its own with a child of its own in
+    /// it; the process table is read as before either started, and every listing read before
+    /// the kill lacks the grandchild - as such a child would be - so the child is held and killed, and the grandchild,
+    /// handed on to another parent, is found in the session and ended once the rest has gone.
+    /// </summary>
+    [Fact]
+    public async Task ASessionsEnd_LooksAgainOnceAllItKilledHasGone_ForAChildBornAsItsParentWasHeld()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a session is Linux's and macOS's; Windows ends a job.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        var start = TestHost.StartOf(Child(
+            "lead-then", "session", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
+        var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
+
+        start.RedirectStandardOutput = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            (child, grandchild) = await TwoHoldersAsync(leader, cancellationToken);
+
+            Assert.True(Until(() => getsid(leader.Id) == leader.Id), $"the leader {leader.Id} never led a session of its own");
+
+            var ending = await Containment.EndSessionAsync(
+                leader.Id,
+                new Unseen(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()), [child.Id, grandchild.Id]).ReadAsync,
+                TimeSpan.Zero,
+                _ => { },
+                TimeProvider.System,
+                new ListedOnceKilled(grandchild.Id)).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(child.AwaitGone(), $"the child {child}, in the session, outlived the session's end");
+            Assert.True(grandchild.AwaitGone(), $"the grandchild {grandchild}, listed only once its parent was killed, outlived the session's end");
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its session's end");
+        }
+        finally
+        {
+            grandchild.TryEnding();
+            child.TryEnding();
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The two holders <paramref name="leader"/> says - its child, which leads a group of its own, and that child's child,
+    /// in its parent's group, refusing a hangup - whichever line came first, once both stand where they put themselves. The
+    /// grandchild refuses a hangup: the system hangs up a group orphaned while a member of it is stopped, and the child is
+    /// held still as its own parent is killed, which would end the grandchild with nothing of the harness's reaching it.
+    /// </summary>
+    private static async Task<(LearnedProcess Child, LearnedProcess Grandchild)> TwoHoldersAsync(Process leader, CancellationToken cancellationToken)
+    {
+        var first = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+        var second = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+        var one = LearnedProcess.In(first ?? string.Empty, "holder=") ?? LearnedProcess.None;
+        var other = LearnedProcess.In(second ?? string.Empty, "holder=") ?? LearnedProcess.None;
+
+        Assert.True(
+            Until(() => (GroupOf(one.Id) == one.Id && GroupOf(other.Id) == one.Id) || (GroupOf(other.Id) == other.Id && GroupOf(one.Id) == other.Id)),
+            $"the leader {leader.Id} never held a child leading a group of its own with its own child in it: '{first}', '{second}'");
+
+        return GroupOf(one.Id) == one.Id ? (one, other) : (other, one);
+    }
+
+    /// <summary>
     /// A process group a sweep ends where the process table cannot be read is ended by its id, which needs no table, and
-    /// says what was not reached as a group's: where the table cannot be read at all, and where it reads once and not
-    /// again once the group was asked to end. One already ended, its table unread, is said as one that could not be told
-    /// to have nothing left - never taken for one that held nothing.
+    /// says what was not reached as a group's: where the table cannot be read at all, and where it reads but the system's
+    /// own listing of every process cannot be read again once the group was asked to end and held. One already ended, its
+    /// table unread, is said as one that could not be told to have nothing left - never taken for one that held nothing.
     /// </summary>
     [Theory]
     [InlineData("never")]
@@ -983,11 +2286,31 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is read from the process table on Linux and macOS; Windows records none to end.");
 
-        using var group = Process.Start(TestHost.StartOf(Child("own-group-and-sleep", "300000")))!;
+        // Read once, the group's leader has a child of its tree in a group of its own refusing to be asked to end, which the
+        // first reading finds and the end holds whether or not the system can be listed again.
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        var start = TestHost.StartOf(read == "once"
+            ? Child("lead-then", "group", "spawn-holder", "sleep", "300000", "lead-then", "group", "ignore-term-and-sleep", "300000", ready)
+            : Child("own-group-and-sleep", "300000"));
+        var holder = LearnedProcess.None;
+
+        start.RedirectStandardOutput = read == "once";
+
+        using var group = Process.Start(start)!;
 
         try
         {
-            Assert.True(Until(() => GroupOf(group.Id) == group.Id), $"the process {group.Id} never led a group of its own");
+            if (read == "once")
+            {
+                var said = await group.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+                holder = LearnedProcess.In(said ?? string.Empty, "holder=") ?? LearnedProcess.None;
+            }
+
+            Assert.True(
+                Until(() => GroupOf(group.Id) == group.Id && (read != "once" || (GroupOf(holder.Id) == holder.Id && File.Exists(ready)))),
+                $"the process {group.Id} never led a group of its own, with its holder {holder} in one of its own where asked");
 
             if (read == "ended")
             {
@@ -996,11 +2319,16 @@ public sealed class ContainExecTests
             }
 
             var platform = new HostPlatform();
-            IProcessTable table = read == "once"
-                ? new ReadOnce(ProcessTableFactory.Create(platform, ContainingRunner()), UnreadableTable.Raising)
-                : UnreadableTable.Raising;
-
-            var ending = await new LeftSessions(platform, table).EndAsync(group.Id, group: true).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+            var ending = read == "once"
+                ? await Containment.EndSessionAsync(
+                    group.Id,
+                    ProcessTableFactory.Create(platform, ContainingRunner()).ReadAsync,
+                    TimeSpan.Zero,
+                    _ => { },
+                    TimeProvider.System,
+                    new Unlisted(),
+                    group: true).WaitAsync(LongBound, TestContext.Current.CancellationToken)
+                : await new LeftSessions(platform, UnreadableTable.Raising).EndAsync(group.Id, group: true).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             Assert.Equal(
                 new HeldEnding(
@@ -1009,14 +2337,17 @@ public sealed class ContainExecTests
                     {
                         "never" => UnreadableTable.Unreached("its group was ended", group: true),
                         "ended" => UnreadableTable.Unreached("its group had already ended", group: true),
-                        _ => "the process table could not be read again once the process group a child apart from the terminal led had been asked "
-                            + $"to end ({UnreadableTable.PsNotStarted}): its group was ended, and what of its tree had left the group was not reached",
+                        _ => "the system's table of every process could not be read again once the process group a child apart from the terminal led had been asked "
+                            + "to end: its group and what the first reading found of its tree were ended, and not all that was started meanwhile outside the group was reached",
                     }),
                 ending);
             Assert.True(group.WaitForExit(LongBound), $"the group {group.Id} outlived its end");
+            Assert.True(read != "once" || holder.AwaitGone(), $"the holder {holder}, of the group's tree outside it, outlived the group's end");
         }
         finally
         {
+            holder.TryEnding();
+
             if (!group.HasExited)
             {
                 group.Kill();
@@ -1756,13 +3087,164 @@ public sealed class ContainExecTests
 
     private static int GroupOf(int process) => getpgid(process);
 
-    /// <summary>A process table read once from <paramref name="first"/>, and from <paramref name="then"/> ever after.</summary>
-    private sealed class ReadOnce(IProcessTable first, IProcessTable then) : IProcessTable
+    /// <summary>
+    /// The machine's process table as <paramref name="inner"/> reads it, every start dated in the reverse of the order the
+    /// processes started in - each child before its parent - as a clock stepped back between their starts would date them:
+    /// one start to each process, the same in every reading, so a tree read through it still joins each child to its
+    /// parent by the parent the system names.
+    /// </summary>
+    private sealed class StartsReversed(IProcessTable inner) : IProcessTable
     {
-        private int _reads;
+        public async Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            var reading = await inner.ReadAsync(cancellationToken);
 
-        public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
-            => (Interlocked.Increment(ref _reads) == 1 ? first : then).ReadAsync(cancellationToken);
+            return reading with
+            {
+                Processes = [.. reading.Processes.Select(process => process with
+                {
+                    StartedUtc = process.StartedUtc is { } started ? new DateTimeOffset(DateTimeOffset.MaxValue.UtcTicks - started.UtcTicks, TimeSpan.Zero) : null,
+                })],
+            };
+        }
+    }
+
+    /// <summary>
+    /// The machine's process table as <paramref name="inner"/> reads it, without the processes <paramref name="unseen"/>
+    /// names - as a reading taken before they started would be.
+    /// </summary>
+    private sealed class Unseen(IProcessTable inner, IReadOnlyList<int> unseen) : IProcessTable
+    {
+        public async Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            var reading = await inner.ReadAsync(cancellationToken);
+
+            return reading with { Processes = [.. reading.Processes.Where(process => !unseen.Contains(process.Id))] };
+        }
+    }
+
+    /// <summary>
+    /// The machine's ends, but for the first listing of every process, which lacks the process <paramref name="late"/>
+    /// names - as one started after that listing was read would be.
+    /// </summary>
+    private sealed class ListedLate(int late) : ProcessEnds
+    {
+        private int _listings;
+
+        public override IReadOnlyList<(int Id, int Parent)>? Parents()
+        {
+            var listed = base.Parents();
+
+            return Interlocked.Increment(ref _listings) == 1 ? listed?.Where(process => process.Id != late).ToList() : listed;
+        }
+    }
+
+    /// <summary>
+    /// The machine's ends, but for every listing of every process read before anything is killed, which lacks the process
+    /// <paramref name="late"/> names - as one whose creation was under way as its parent was held, joining the listing only
+    /// after the last round, would.
+    /// </summary>
+    private sealed class ListedOnceKilled(int late) : ProcessEnds
+    {
+        private int _killed;
+
+        public override void End(KeptProcess process)
+        {
+            Volatile.Write(ref _killed, 1);
+            base.End(process);
+        }
+
+        public override void EndGroup(int group)
+        {
+            Volatile.Write(ref _killed, 1);
+            base.EndGroup(group);
+        }
+
+        public override IReadOnlyList<(int Id, int Parent)>? Parents()
+        {
+            var listed = base.Parents();
+
+            return Volatile.Read(ref _killed) == 0 ? listed?.Where(process => process.Id != late).ToList() : listed;
+        }
+    }
+
+    /// <summary>The machine's ends, but for every listing of every process, which lacks the process <paramref name="hidden"/> names.</summary>
+    private sealed class Hiding(int hidden) : ProcessEnds
+    {
+        public override IReadOnlyList<(int Id, int Parent)>? Parents() => base.Parents()?.Where(process => process.Id != hidden).ToList();
+    }
+
+    /// <summary>The machine's ends, but for the system's listing of every process, which cannot be read.</summary>
+    private sealed class Unlisted : ProcessEnds
+    {
+        public override IReadOnlyList<(int Id, int Parent)>? Parents() => null;
+    }
+
+    /// <summary>
+    /// The machine's ends, counting each process held, and saying how many had been held as each listing of every process
+    /// was asked - and as each reading of the process table <see cref="Table"/> reads was.
+    /// </summary>
+    private sealed class CountedEnds(IProcessTable inner) : ProcessEnds
+    {
+        private int _held;
+        private readonly List<int> _heldAtEachReading = [];
+        private readonly List<int> _heldAtEachListing = [];
+
+        /// <summary>How many processes had been held as each reading of <see cref="Table"/> was asked, in order.</summary>
+        public IReadOnlyList<int> HeldAtEachReading
+        {
+            get
+            {
+                lock (_heldAtEachReading)
+                {
+                    return [.. _heldAtEachReading];
+                }
+            }
+        }
+
+        /// <summary>How many processes had been held as each listing of every process was asked, in order.</summary>
+        public IReadOnlyList<int> HeldAtEachListing
+        {
+            get
+            {
+                lock (_heldAtEachReading)
+                {
+                    return [.. _heldAtEachListing];
+                }
+            }
+        }
+
+        /// <summary>The process table, as <c>inner</c> reads it.</summary>
+        public IProcessTable Table => new Counting(this, inner);
+
+        public override int Hold(int id)
+        {
+            Interlocked.Increment(ref _held);
+            return base.Hold(id);
+        }
+
+        public override IReadOnlyList<(int Id, int Parent)>? Parents()
+        {
+            lock (_heldAtEachReading)
+            {
+                _heldAtEachListing.Add(Volatile.Read(ref _held));
+            }
+
+            return base.Parents();
+        }
+
+        private sealed class Counting(CountedEnds ends, IProcessTable inner) : IProcessTable
+        {
+            public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+            {
+                lock (ends._heldAtEachReading)
+                {
+                    ends._heldAtEachReading.Add(Volatile.Read(ref ends._held));
+                }
+
+                return inner.ReadAsync(cancellationToken);
+            }
+        }
     }
 
     private static int GetSidOfThisProcess() => getsid(0);

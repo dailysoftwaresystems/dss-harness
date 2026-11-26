@@ -13,6 +13,10 @@ TestResults/
 *.trx
 *.coverage
 
+# A test tool's own output the suite reads as a fixture is no test result of this repository's, whatever the
+# tool names it: the results fixtures keep each tool's file as the tool wrote it, a TRX among them.
+!/tests/dss-harness-test/fixtures/**/*.trx
+
 # NuGet: a package packed to anywhere other than build/ is still never committed
 *.nupkg
 

@@ -29,7 +29,7 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
 {
     /// <summary>The step types this build serves, in the order help says them: the tool registers a runner for each, and none other.</summary>
     public static IReadOnlyList<string> Served { get; } =
-        ["orient", "graphify-codebase", "validate-plan", "create-agent", "reason", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "class-closure", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
+        ["orient", "graphify-codebase", "validate-plan", "create-agent", "reason", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "class-closure", "route-findings", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase", "commit", "push", "pull-request"];
 
     /// <summary>
     /// The step types whose view of the run's codebase graph is synced where they start, before their runner is asked: a
@@ -94,6 +94,12 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
         => run.Step.Type is { } type && _byType.TryGetValue(type, out var runner) && runner is IFlowHandoffRunner handoff
             ? handoff.Account(run)
             : _none.Account(run);
+
+    /// <inheritdoc/>
+    public async Task<FlowCutAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+        => run.Step.Type is { } type && _byType.TryGetValue(type, out var runner) && runner is IFlowHandoffRunner handoff
+            ? await handoff.AttemptOf(run, cancellationToken).ConfigureAwait(false)
+            : null;
 
     /// <summary>
     /// The run <paramref name="run"/>'s step belongs to, and the repository's context loaded from its main checkout, as

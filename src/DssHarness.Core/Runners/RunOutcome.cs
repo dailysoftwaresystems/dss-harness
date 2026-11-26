@@ -30,8 +30,8 @@ public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, stri
 {
     /// <summary>Everything a check's expected message is matched against: the message, then each line the steps printed.</summary>
     /// <remarks>
-    /// Mirrors <see cref="RunFailure.Texts"/>, so a check reads the same way whether it is
-    /// confirming a failure or witnessing a run that passed.
+    /// Mirrors <see cref="RunFailure.Texts"/> of a failure whose log printed no stack, so a check reads the same way
+    /// whether it is confirming a failure or witnessing a run that passed.
     /// </remarks>
     public IEnumerable<string> Texts
     {
@@ -94,11 +94,20 @@ public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, stri
 /// <param name="ExceptionType">The exception's type name, as the run reported it.</param>
 /// <param name="Message">The exception's message, when one was reported.</param>
 /// <param name="Output">The failing unit's output, when it was captured: read from its log a line at a time, never held.</param>
-public sealed record RunFailure(string ExceptionType, string? Message = null, PhaseOutput? Output = null)
+/// <param name="Exception">
+/// The thrown error as the failing step's log printed it, where it printed a stack: its type, its message, its whole
+/// stack held to the frame bound and its causes - the record <see cref="ExpectedExceptionMatcher"/> matches an entry
+/// against, so what was expected is matched against what was thrown and not only against a first type name. Null
+/// where the log printed no stack.
+/// </param>
+public sealed record RunFailure(string ExceptionType, string? Message = null, PhaseOutput? Output = null, DssHarness.Core.Results.ExceptionRecord? Exception = null)
 {
     /// <summary>
-    /// Everything an entry's messages are matched against: the message, then each line the unit printed, as every
-    /// pattern read from a phase's output is matched against each line as its log keeps it.
+    /// Everything an entry's messages are matched against for the exception that reached the log: the message, then the
+    /// thrown error's own message where a record was read - and only where none was, each line the unit printed, as every
+    /// pattern read from a phase's output is matched against each line as its log keeps it. A cause's message is never
+    /// among them, nor a line that may be one: it is matched with that cause's type alone
+    /// (<see cref="ExpectedExceptionMatcher.Matches"/>).
     /// </summary>
     public IEnumerable<string> Texts
     {
@@ -107,6 +116,14 @@ public sealed record RunFailure(string ExceptionType, string? Message = null, Ph
             if (Message is not null)
             {
                 yield return Message;
+            }
+
+            // A stack read is the chain, each exception's message its own: a line the log printed under it may be a
+            // cause's, whose type is another's.
+            if (Exception is { } thrown)
+            {
+                yield return thrown.Message;
+                yield break;
             }
 
             foreach (var line in Output?.Lines() ?? [])

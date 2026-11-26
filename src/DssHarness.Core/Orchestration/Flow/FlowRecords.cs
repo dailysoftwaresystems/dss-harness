@@ -229,6 +229,11 @@ public sealed record FlowEvent(
 /// The record of an iteration of a repeat that decides at a step of its own (<c>decideAfter</c>): the decision read at
 /// that step's ending, and the visit it was read at; null until one is read, and for every other record.
 /// </param>
+/// <param name="Measure">
+/// What the instance's work measured, written by the engine as it runs: when it was ready, how long it waited and for
+/// what, and what each of its attempts used - the model that served it, the tokens of every kind, the dollars at the
+/// price of that moment. Null until the engine draws the instance, and for a step that never ran.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -280,7 +285,8 @@ public sealed record FlowStepRecord(
     long? EndedIn = null,
     long? ReportedIn = null,
     JsonObject? Inputs = null,
-    FlowLoopDecision? Decided = null)
+    FlowLoopDecision? Decided = null,
+    FlowStepMeasure? Measure = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -334,6 +340,7 @@ public sealed record FlowStepRecord(
                 ? "a skill it was given names no name, place, file, digest or folder"
             : (Inputs is not null || Decided is not null) && !Group ? "it holds what only a group's own record holds: a use's inputs, or a loop's decision"
             : Decided?.Problem() is { } decided ? $"its loop's decision: {decided}"
+            : Measure?.Problem() is { } measure ? $"its measure: {measure}"
             : null;
 }
 
@@ -573,12 +580,22 @@ public sealed record FlowHoldRecord(string Update, [property: JsonConverter(type
 /// that met it, so a resume after a crash asks as the session would have, and a grant of more recorded since goes on;
 /// left out where none did, as a record written before the mark was kept is read.
 /// </param>
-public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null)
+/// <param name="Unmeasured">
+/// What the run spent before its steps' measures were kept - a run a build that recorded the run's spend alone began -
+/// which no instance's measure holds and the totals above carry whole; left out where every part was measured.
+/// </param>
+public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes, string? Uncounted = null, int? ReserveMetAt = null, FlowUnmeasuredSpend? Unmeasured = null)
 {
     /// <summary>The dollars as the one fold holds them: what was counted, and why the rest is not known where it is not.</summary>
     [JsonIgnore]
     public FlowDollars Dollars => new(Usd, Uncounted);
 }
+
+/// <summary>What a run spent that no instance's measure holds, recorded before its steps were measured.</summary>
+/// <param name="Usd">Its dollars, as far as each part was counted.</param>
+/// <param name="Tokens">Its tokens.</param>
+/// <param name="Uncounted">Why a part of it could not be counted; null where every part was.</param>
+public sealed record FlowUnmeasuredSpend(double Usd, long Tokens, string? Uncounted = null);
 
 /// <summary>The safe pause a run is under or was ended by, as <c>flow.json</c> holds it.</summary>
 /// <param name="Cause">Who asked for the pause.</param>
@@ -866,6 +883,402 @@ public sealed record PreExistingProof(string Kind, string At, string? File = nul
 }
 
 /// <summary>
+/// The run's record of the issues its triages sent to its next round, <c>next-round.json</c>: each a defect the run
+/// took from a round's work and owes its next round as its first item, with its size, and - once a work item settled
+/// it - that item. What <c>run.nextRound</c> reads: the issues no work item of the run has settled, for the rounds to
+/// go on while one is left. Nothing else writes the file, and it holds nothing but the issue, its size and what settled
+/// it.
+/// </summary>
+/// <param name="Schema">The file's schema; 1.</param>
+/// <param name="Run">The run's name.</param>
+/// <param name="UpdatedAt">When this record was written.</param>
+/// <param name="Issues">Each issue owed a next round, in the order added.</param>
+public sealed record FlowNextRoundFile(
+    int Schema,
+    string Run,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset UpdatedAt,
+    IReadOnlyList<FlowNextIssue> Issues)
+{
+    /// <summary>What is wrong with this file; null when nothing is.</summary>
+    public string? Problem()
+        => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
+            : string.IsNullOrWhiteSpace(Run) ? "it names no run"
+            : Issues.Any(issue => issue.Problem() is { } problem) ? Issues.First(issue => issue.Problem() is not null).Problem()!
+            : Issues.Select((issue, at) => (issue, at)).Any(pair => !string.Equals(pair.issue.Id, $"nx-{(pair.at + 1).ToString(CultureInfo.InvariantCulture)}", StringComparison.Ordinal))
+                ? "ids are nx-<n>, in the order added"
+            : null;
+}
+
+/// <summary>
+/// One issue the run owes its next round, with its size: what the self-audit is told to make the round's first item of,
+/// which names it in <c>settles</c>, and what the check that opens the round holds its items to. It is settled by the
+/// work item that names it, once that item ended done with its work landed - a commit of its own made - never by one
+/// that ended done with nothing landed, as an item a person skipped does.
+/// </summary>
+/// <param name="Id">The issue's id: <c>nx-&lt;n&gt;</c>, in the order added.</param>
+/// <param name="Title">What it is, in a line.</param>
+/// <param name="Description">What it is, in the words the triage gave.</param>
+/// <param name="Where">The files it is in, as the repository spells them.</param>
+/// <param name="Files">The files fixing it touches, as the triage sized it.</param>
+/// <param name="Build">What must be built to fix it; empty where nothing must.</param>
+/// <param name="MeasureFirst">What must be measured before it is fixed; empty where nothing must.</param>
+/// <param name="FoundBy">The triage instance that sent it to the next round.</param>
+/// <param name="FoundAt">When it was sent.</param>
+public sealed record FlowNextIssue(
+    string Id,
+    string Title,
+    string Description,
+    IReadOnlyList<string> Where,
+    IReadOnlyList<string> Files,
+    string Build,
+    IReadOnlyList<string> MeasureFirst,
+    string FoundBy,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset FoundAt)
+{
+    /// <summary>
+    /// The work item that settled it - the instance of its <c>forEach</c> item that named it in <c>settles</c> and ended
+    /// done with a commit of its own made - or null while it is owed still.
+    /// </summary>
+    public string? SettledBy { get; init; }
+
+    /// <summary>What the run's words and its report say became of an issue the run owes its next round, while it is owed.</summary>
+    public const string OwedState = "next round";
+
+    /// <summary>What the run's words and its report say became of an issue the run owed its next round, once a work item settled it.</summary>
+    public const string SettledState = "fixed in a later round";
+
+    /// <summary>
+    /// What became of the issue, as the run's report says it: fixed in a later round, by the work item that settled it,
+    /// or owed the next round still - what a run that ended with it so left.
+    /// </summary>
+    public string Said()
+        => SettledBy is { } settled
+            ? $"'{Id}' {Title}: {SettledState}, by '{settled}'"
+            : $"'{Id}' {Title}: {OwedState}, not settled";
+
+    /// <summary>
+    /// Each member of the value <c>run.nextRound</c> and a round's plan check read of an issue, in order, with what it
+    /// holds of the issue: a text, or a list of texts. The one owner of that value's shape - its value
+    /// (<see cref="Value"/>) and the schema an expression reading it is typed by (<see cref="ValueSchema"/>) are both
+    /// made from it, so neither holds a member the other does not.
+    /// </summary>
+    private static readonly IReadOnlyList<(string Name, Func<FlowNextIssue, string>? Text, Func<FlowNextIssue, IReadOnlyList<string>>? Texts)> ValueMembers =
+    [
+        ("id", issue => issue.Id, null),
+        ("title", issue => issue.Title, null),
+        ("description", issue => issue.Description, null),
+        ("where", null, issue => issue.Where),
+        ("files", null, issue => issue.Files),
+        ("build", issue => issue.Build, null),
+        ("measureFirst", null, issue => issue.MeasureFirst),
+    ];
+
+    /// <summary>
+    /// The issue as <c>run.nextRound</c> and a round's plan check read it: its id, what it is, where it is, and its size -
+    /// the files the fix touches, what must be built, and what must be measured first.
+    /// </summary>
+    public JsonObject Value()
+        => new(ValueMembers.Select(member => KeyValuePair.Create(
+            member.Name,
+            member.Text is { } text ? (JsonNode?)JsonValue.Create(text(this)) : new JsonArray([.. member.Texts!(this).Select(path => (JsonNode?)path)]))));
+
+    /// <summary>The schema of one issue's <see cref="Value"/>: a closed object holding each of its members, every one required.</summary>
+    public static JsonObject ValueSchema()
+        => new()
+        {
+            ["type"] = "object",
+            ["additionalProperties"] = false,
+            ["required"] = new JsonArray([.. ValueMembers.Select(member => (JsonNode?)member.Name)]),
+            ["properties"] = new JsonObject(ValueMembers.Select(member => KeyValuePair.Create(
+                member.Name,
+                (JsonNode?)(member.Text is not null
+                    ? new JsonObject { ["type"] = "string" }
+                    : new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } })))),
+        };
+
+    /// <summary>What is wrong with this issue; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Id) || !Id.StartsWith("nx-", StringComparison.Ordinal) ? "its id is nx-<n>"
+            : string.IsNullOrWhiteSpace(Title) ? "it names nothing in its title"
+            : string.IsNullOrWhiteSpace(Description) ? "it says nothing in its description"
+            : Where.Count == 0 || Where.Any(path => string.IsNullOrWhiteSpace(path)) ? "it names no file it is in"
+            : Files.Count == 0 || Files.Any(path => string.IsNullOrWhiteSpace(path)) ? "its size names no file the fix touches: a next round's item is sized by its files"
+            : !FlowInstanceId.IsWellFormed(FoundBy) ? $"'{FoundBy}' is not an instance id"
+            : SettledBy is { } settled && !FlowInstanceId.IsWellFormed(settled) ? $"it says it was settled by '{settled}', which is not an instance id"
+            : null;
+}
+
+/// <summary>
+/// One item's closure ledger, <c>closure-ledger.json</c> in its agent's directory: which rounds of review reopened each
+/// of its classes, kept by the engine across the fix loop's iterations and across a resume. The <c>route-findings</c>
+/// step writes it and the <c>class-closure</c> check reads it: a class reopened a second time is the check's own cause
+/// for a home audit, whichever course asks for it.
+/// </summary>
+/// <param name="Schema">The file's schema; 1.</param>
+/// <param name="Agent">The agent whose item the ledger is of.</param>
+/// <param name="Classes">Each class of the item's record the run's reviews have reopened, with the routings that counted it.</param>
+public sealed record FlowClosureLedgerFile(int Schema, string Agent, IReadOnlyList<FlowClosureReopens> Classes)
+{
+    /// <summary>What is wrong with this file; null when nothing is.</summary>
+    public string? Problem()
+        => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
+            : string.IsNullOrWhiteSpace(Agent) ? "it names no agent"
+            : Classes.Any(entry => entry.Problem() is { } problem) ? Classes.First(entry => entry.Problem() is not null).Problem()
+            : Classes.GroupBy(entry => entry.Class, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice
+                ? $"it holds the class '{twice.Key}' twice, and a class holds one entry"
+            : null;
+
+    /// <summary>
+    /// The ledger with <paramref name="routing"/> counted for each of <paramref name="reopened"/>: a routing already
+    /// counted for a class - the same instance run again, after a crash, a stop or a resume - adds nothing, so a round
+    /// reopens a class once however often its routing runs. A class met for the first time joins after those the ledger
+    /// holds, in the order given.
+    /// </summary>
+    /// <param name="routing">The <c>route-findings</c> instance that routed the round.</param>
+    /// <param name="reopened">The classes its round reopened, by id.</param>
+    public FlowClosureLedgerFile Counting(string routing, IEnumerable<string> reopened)
+    {
+        ArgumentNullException.ThrowIfNull(reopened);
+
+        var classes = Classes.ToList();
+
+        foreach (var id in reopened)
+        {
+            var at = classes.FindIndex(entry => string.Equals(entry.Class, id, StringComparison.Ordinal));
+
+            if (at < 0)
+            {
+                classes.Add(new FlowClosureReopens(id, [routing]));
+            }
+            else if (!classes[at].By.Contains(routing, StringComparer.Ordinal))
+            {
+                classes[at] = classes[at] with { By = [.. classes[at].By, routing] };
+            }
+        }
+
+        return this with { Classes = classes };
+    }
+
+    /// <summary>The classes reopened twice or more, by id: those the class-closure check asks a home audit of.</summary>
+    public IReadOnlySet<string> ReopenedTwice()
+        => Classes.Where(entry => FlowClosureReopens.AsksItsHomeAudit(entry.Reopens)).Select(entry => entry.Class).ToHashSet(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// One class of an item's record, and the routings - each a <c>route-findings</c> instance, one a round of review - that
+/// found another instance of it. A class's count is how many routings name it, so the routing of one round run twice is
+/// counted once.
+/// </summary>
+/// <param name="Class">The class, by the id the item's plan or record knows it by, compared ordinally: an id is no path.</param>
+/// <param name="By">The routings that reopened it, each once, in the order they were counted.</param>
+public sealed record FlowClosureReopens(string Class, IReadOnlyList<string> By)
+{
+    /// <summary>The reopenings at which a class is sent to its home audit instead of back to its builder: the second.</summary>
+    public const int HomeAuditAt = 2;
+
+    /// <summary>
+    /// Whether a class reopened in <paramref name="reopens"/> rounds is owed its home audit: the one rule the route, the
+    /// class-closure check and the report read.
+    /// </summary>
+    /// <param name="reopens">How many rounds of review reopened it.</param>
+    public static bool AsksItsHomeAudit(int reopens) => reopens >= HomeAuditAt;
+
+    /// <summary>How many rounds of review reopened the class, one send-back a round.</summary>
+    [JsonIgnore]
+    public int Reopens => By.Count;
+
+    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Class) ? "an entry names no class"
+            : By.Count == 0 ? $"the class '{Class}' names no routing that reopened it"
+            : By.FirstOrDefault(routing => !FlowInstanceId.IsWellFormed(routing)) is { } wrong ? $"the class '{Class}' names '{wrong}', which is not an instance id"
+            : By.Distinct(StringComparer.Ordinal).Count() != By.Count ? $"the class '{Class}' names one routing twice"
+            : null;
+}
+
+/// <summary>
+/// What a run's class-closure checks and its routings say of its items' classes, gathered alike by the run's words
+/// (<c>{run.closure}</c>, <c>{run.claims}</c>, <c>{run.hotspots}</c>, <c>{run.reopened}</c>) and by its report: of each
+/// item, the newest check that ended done - the record it judged and the hotspots it named - and the newest routing that
+/// ended done - how many rounds reopened each class, as the item's ledger counted them at that routing. A step is known
+/// by its type, never by the shape of its output, so a plan audit's own closure member is no item's record; and an item
+/// no check judged - one a person skipped - has none.
+/// </summary>
+public static class FlowClosureRecords
+{
+    /// <summary>The type of the step that judges an item's record.</summary>
+    public const string CheckType = "class-closure";
+
+    /// <summary>The type of the step that routes a review's findings and counts the item's reopenings.</summary>
+    public const string RouteType = "route-findings";
+
+    /// <summary>One step of the run as the engine and its records both hold it.</summary>
+    /// <param name="Instance">Its instance id.</param>
+    /// <param name="Type">Its type; null for a group.</param>
+    /// <param name="Done">Whether it ended done.</param>
+    /// <param name="Output">What it answered; null for none.</param>
+    public readonly record struct Step(string Instance, string? Type, bool Done, JsonNode? Output);
+
+    /// <summary>
+    /// Each item's record as the newest check that judged it read it, one list of its entries an item, with the item, in
+    /// the order the items' checks were first met; an item whose record names no class is left out.
+    /// </summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<(string Item, IReadOnlyList<JsonObject> Record)> RecordsOf(IEnumerable<Step> steps)
+        => [.. NewestOfEach(steps, CheckType)
+            .Select(check => (check.Item, Record: (IReadOnlyList<JsonObject>)[.. (check.Output["record"] as JsonArray ?? []).OfType<JsonObject>()]))
+            .Where(item => item.Record.Count > 0)];
+
+    /// <summary>Each home the newest check of each item named a hotspot, with its class and how often the run touched it, and the item.</summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<(string Item, ClassClosureHotspot Hotspot)> HotspotsOf(IEnumerable<Step> steps)
+        => [.. NewestOfEach(steps, CheckType)
+            .SelectMany(check => (check.Output["hotspots"] as JsonArray ?? []).OfType<JsonObject>()
+                .Select(hotspot => (check.Item, new ClassClosureHotspot(TextOf(hotspot["class"]), TextOf(hotspot["path"]), CountOf(hotspot["touches"])))))];
+
+    /// <summary>
+    /// Each class the run's reviews reopened, with how many rounds reopened it, as the newest routing of each item that
+    /// ended done answered it - the item's ledger as that routing counted it.
+    /// </summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<(string Class, int Rounds)> ReopenedOf(IEnumerable<Step> steps)
+        => [.. NewestOf(steps, RouteType).SelectMany(ReopenedIn)];
+
+    /// <summary>
+    /// What each item's work did to its classes, so a repository can see whether its rounds converge: of each class of the
+    /// record the item's newest check judged, the sites consolidated into its home and those deleted, the cells pinned, the
+    /// neighbours measured and those not, and how many rounds its reviews sent it back - the item's ledger as its newest
+    /// routing counted it - whether it carries a home audit; and how many rounds of review routed the item, each routing
+    /// that ended done one round, however often it ran. In the order the items' checks were first met; an item whose record
+    /// names no class is left out, as <see cref="RecordsOf"/> leaves it.
+    /// </summary>
+    /// <param name="steps">The run's steps, in the order they were made.</param>
+    public static IReadOnlyList<FlowClosureItem> ItemsOf(IEnumerable<Step> steps)
+    {
+        var all = steps.ToList();
+        var routed = all
+            .Where(step => step.Done && string.Equals(step.Type, RouteType, StringComparison.Ordinal))
+            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
+            .ToDictionary(item => item.Key, item => item.Select(step => step.Instance).Distinct(StringComparer.Ordinal).Count(), StringComparer.Ordinal);
+        var sentBack = NewestOfEach(all, RouteType)
+            .ToDictionary(
+                route => route.Item,
+                route => (IReadOnlyList<(string Class, int Rounds)>)[.. ReopenedIn(route.Output)],
+                StringComparer.Ordinal);
+
+        return [.. NewestOfEach(all, CheckType)
+            .Select(check => (check.Item, Record: (IReadOnlyList<ClassClosureRecord>)[.. (check.Output["record"] as JsonArray ?? []).Select(ClassClosureRecord.In).OfType<ClassClosureRecord>()]))
+            .Where(item => item.Record.Count > 0)
+            .Select(item => new FlowClosureItem(
+                item.Item,
+                routed.GetValueOrDefault(item.Item),
+                [.. item.Record.Select(entry => new FlowClosureClass(
+                    entry.Class,
+                    entry.SitesConsolidated,
+                    entry.SitesDeleted,
+                    entry.CellsPinned,
+                    entry.NeighboursMeasured,
+                    entry.NeighboursUnmeasured,
+                    sentBack.GetValueOrDefault(item.Item, []).Where(reopened => string.Equals(reopened.Class, entry.Class, StringComparison.Ordinal)).Sum(reopened => reopened.Rounds),
+                    entry.HomeAudit is not null))]))];
+    }
+
+    /// <summary>The newest step of <paramref name="type"/> of each item that ended done, its output, in the order the items were first met.</summary>
+    private static IEnumerable<JsonObject> NewestOf(IEnumerable<Step> steps, string type)
+        => NewestOfEach(steps, type).Select(newest => newest.Output);
+
+    /// <summary>The newest step of <paramref name="type"/> of each item that ended done, with its item, in the order the items were first met.</summary>
+    private static IEnumerable<(string Item, JsonObject Output)> NewestOfEach(IEnumerable<Step> steps, string type)
+        => steps
+            .Where(step => step.Done && string.Equals(step.Type, type, StringComparison.Ordinal) && step.Output is JsonObject)
+            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
+            .Select(item => (item.Key, (JsonObject)item.Last().Output!));
+
+    /// <summary>Each class a routing's output says the item's reviews reopened, with how many rounds.</summary>
+    private static IEnumerable<(string Class, int Rounds)> ReopenedIn(JsonObject route)
+        => (route["reopened"] as JsonArray ?? []).OfType<JsonObject>()
+            .Select(entry => (TextOf(entry[FindingRoutes.ClassMember]), CountOf(entry[FindingRoutes.RoundsMember])));
+
+    /// <summary>A JSON text's value; empty where it is none.</summary>
+    private static string TextOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : string.Empty;
+
+    /// <summary>A JSON whole number's value; 0 where it is none.</summary>
+    internal static int CountOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<int>(out var count) ? count : 0;
+}
+
+/// <summary>
+/// What one item's work did to its classes (<see cref="FlowClosureRecords.ItemsOf"/>): the rounds of review that routed
+/// it, and each class of the record its newest check judged - said in one sentence by the run's words and the report
+/// alike (<see cref="Said"/>), and kept in the report's document as <see cref="ToJson"/> writes it.
+/// </summary>
+/// <param name="Item">The item, by its instance id.</param>
+/// <param name="ReviewRounds">How many rounds of review routed it.</param>
+/// <param name="Classes">Each class of its record, in the record's order.</param>
+public sealed record FlowClosureItem(string Item, int ReviewRounds, IReadOnlyList<FlowClosureClass> Classes)
+{
+    /// <summary>How many of its classes carry a home audit.</summary>
+    public int HomeAudits => Classes.Count(@class => @class.HomeAudit);
+
+    /// <summary>The item in one sentence: its rounds of review and home audits, and each class's counts.</summary>
+    public string Said()
+        => $"'{Item}': {Count(ReviewRounds)} review round(s), {Count(HomeAudits)} home audit(s), classes "
+            + string.Join(", ", Classes.Select(@class => $"'{@class.Class}' ({Count(@class.SitesConsolidated)} site(s) consolidated, {Count(@class.SitesDeleted)} deleted, "
+                + $"{Count(@class.CellsPinned)} cell(s) pinned, {Count(@class.NeighboursMeasured)} neighbour(s) measured, {Count(@class.NeighboursUnmeasured)} unmeasured, "
+                + $"sent back {Count(@class.SendBacks)} time(s){(@class.HomeAudit ? ", home audited" : string.Empty)})"));
+
+    /// <summary>The item as the report's document keeps it.</summary>
+    public JsonObject ToJson()
+        => new()
+        {
+            ["item"] = Item,
+            ["reviewRounds"] = ReviewRounds,
+            ["homeAudits"] = HomeAudits,
+            ["classes"] = new JsonArray([.. Classes.Select(@class => (JsonNode?)new JsonObject
+            {
+                ["class"] = @class.Class,
+                ["sitesConsolidated"] = @class.SitesConsolidated,
+                ["sitesDeleted"] = @class.SitesDeleted,
+                ["cellsPinned"] = @class.CellsPinned,
+                ["neighboursMeasured"] = @class.NeighboursMeasured,
+                ["neighboursUnmeasured"] = @class.NeighboursUnmeasured,
+                ["sendBacks"] = @class.SendBacks,
+                ["homeAudit"] = @class.HomeAudit,
+            })]),
+        };
+
+    /// <summary>The item the report's document keeps in <paramref name="node"/>, as <see cref="ToJson"/> wrote it.</summary>
+    /// <param name="node">One entry of the report's convergence <c>items</c>.</param>
+    public static FlowClosureItem In(JsonNode? node)
+        => new(
+            node?["item"] is JsonValue item && item.TryGetValue<string>(out var id) ? id : string.Empty,
+            FlowClosureRecords.CountOf(node?["reviewRounds"]),
+            [.. (node?["classes"] as JsonArray ?? []).OfType<JsonObject>().Select(@class => new FlowClosureClass(
+                @class["class"] is JsonValue named && named.TryGetValue<string>(out var name) ? name : string.Empty,
+                FlowClosureRecords.CountOf(@class["sitesConsolidated"]),
+                FlowClosureRecords.CountOf(@class["sitesDeleted"]),
+                FlowClosureRecords.CountOf(@class["cellsPinned"]),
+                FlowClosureRecords.CountOf(@class["neighboursMeasured"]),
+                FlowClosureRecords.CountOf(@class["neighboursUnmeasured"]),
+                FlowClosureRecords.CountOf(@class["sendBacks"]),
+                @class["homeAudit"] is JsonValue audited && audited.TryGetValue<bool>(out var audit) && audit))]);
+
+    private static string Count(int count) => count.ToString(CultureInfo.InvariantCulture);
+}
+
+/// <summary>What one item's work did to one of its classes, as its record and its routings count it.</summary>
+/// <param name="Class">The class, by its id.</param>
+/// <param name="SitesConsolidated">How many of its sites now read their home.</param>
+/// <param name="SitesDeleted">How many of its sites the work deleted.</param>
+/// <param name="CellsPinned">How many cells of its universe the pin covers.</param>
+/// <param name="NeighboursMeasured">How many of its neighbours were measured.</param>
+/// <param name="NeighboursUnmeasured">How many of its neighbours were not, each with its reason.</param>
+/// <param name="SendBacks">How many rounds of review sent it back.</param>
+/// <param name="HomeAudit">Whether its record carries a home audit.</param>
+public sealed record FlowClosureClass(string Class, int SitesConsolidated, int SitesDeleted, int CellsPinned, int NeighboursMeasured, int NeighboursUnmeasured, int SendBacks, bool HomeAudit);
+
+/// <summary>
 /// The run's live owner, <c>.orchestrators/&lt;run&gt;.owner.json</c>: the process that drives it. A live owner refuses
 /// a session (13); a dead one is reclaimed and said - and what its steps started is ended at the resume before anything
 /// is continued.
@@ -947,6 +1360,10 @@ public enum FlowChangeKind
 /// them in this change's own order - after the run's status, before the event - where the list differs from the one
 /// last written; null where the change says nothing of them.
 /// </param>
+/// <param name="NextRound">
+/// Every issue the run owes its next round, whole, where the change holds them: the records write the run's file of
+/// them as they write its listed issues; null where the change says nothing of them.
+/// </param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -959,7 +1376,8 @@ public sealed record FlowSnapshot(
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
     FlowHoldRecord? Hold = null,
     WorkflowPreExisting? PreExisting = null,
-    IReadOnlyList<PreExistingIssue>? Issues = null);
+    IReadOnlyList<PreExistingIssue>? Issues = null,
+    IReadOnlyList<FlowNextIssue>? NextRound = null);
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>
@@ -1013,6 +1431,7 @@ public sealed record FlowSnapshot(
 /// <param name="ReportedIn">A triage instance's: where the attempt that reported its issue began (<see cref="FlowStepRecord.ReportedIn"/>); null for every other.</param>
 /// <param name="Inputs">A use's scope's own record: what its with filled the used workflow's inputs with (<see cref="FlowStepRecord.Inputs"/>); null for every other.</param>
 /// <param name="Decided">An iteration's of a repeat that says decideAfter: the decision read at its deciding step (<see cref="FlowStepRecord.Decided"/>); null for every other.</param>
+/// <param name="Measure">What the instance's work measured (<see cref="FlowStepRecord.Measure"/>); null until the engine draws it.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1064,4 +1483,5 @@ public sealed record FlowSnapshotStep(
     long? EndedIn = null,
     long? ReportedIn = null,
     JsonObject? Inputs = null,
-    FlowLoopDecision? Decided = null);
+    FlowLoopDecision? Decided = null,
+    FlowStepMeasure? Measure = null);

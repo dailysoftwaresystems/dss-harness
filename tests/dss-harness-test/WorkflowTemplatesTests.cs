@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
@@ -19,6 +20,32 @@ public sealed class WorkflowTemplatesTests
     private static StringComparison PathComparison => new HostPlatform().PathComparison;
 
     /// <summary>
+    /// The repair prompts start from the digest: mend's first instruction names the digest's first - the first error
+    /// in the order the tool met it, the lines its log range names one read away in the log file the entry names, as
+    /// that file numbers them - and says what a red entry holds of it, and diagnose and rediagnose say the same, so no
+    /// model is told to search a log for what a file already holds, nor a directory for the file. The architecture says
+    /// what the prompt says, in its own words, never a sentence no prompt holds.
+    /// </summary>
+    [Fact]
+    public void TheRepairPrompts_StartFromTheDigestsFirst_NeverALogToSearch()
+    {
+        var mend = Prose.Words(WorkflowTemplates.TextOf("item-pipeline/prompts/mend.md")!);
+        var diagnose = Prose.Words(WorkflowTemplates.TextOf("prompts/diagnose.md")!);
+        var rediagnose = Prose.Words(WorkflowTemplates.TextOf("prompts/rediagnose.md")!);
+
+        Assert.Contains("1. Start from the digest's `first`: it is the first thing that went wrong, in the order the tool met it. The lines its `log` names are one read away in the entry's `log` file", mend, StringComparison.Ordinal);
+        Assert.Contains("Each line reaches you once: where the digest holds an error or a failure and the entry names its `log`, its `unparsed` holds the lines no parser held - the last ones, nearest the failure, `unparsedLeftOut` saying how many more there were - and the `tail` is empty; otherwise the `tail` holds the phase's last lines and `unparsed` those lines no parser held that the `tail` does not. The entry's `log` is the file that phase wrote, on this machine - a leg another machine ran has its log brought back here - and null only where it could not be brought back.", mend, StringComparison.Ordinal);
+        Assert.Contains(
+            "`mend.md` starts from the digest's `first`, the first thing that went wrong in the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and `rediagnose.md` say the same,",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains("1. Start from the digest's `first` - the first thing that went wrong, in the order the tool met it - and read the", diagnose, StringComparison.Ordinal);
+        Assert.Contains("the lines a digest's `log` names are those of the entry's own `log` file, numbered as that file numbers them.", diagnose, StringComparison.Ordinal);
+        Assert.Contains("each red entry's digest, its `first` the first thing that went wrong in the order the tool met it, the lines its `log` names those of the entry's own `log` file.", rediagnose, StringComparison.Ordinal);
+        Assert.DoesNotContain("Read the output and find the first thing that went wrong", mend + diagnose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// This build's own implementation workflow holds: parsed and validated against every rule a repository's is held to -
     /// a build whose own workflow does not hold is a build that says so, never one that writes a definition it refuses.
     /// </summary>
@@ -28,9 +55,9 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(89, Count(definition.Steps));
-        Assert.Equal(57, Count(definition.Recover!.Steps));
-        Assert.Equal(58, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(99, Count(definition.Steps));
+        Assert.Equal(67, Count(definition.Recover!.Steps));
+        Assert.Equal(62, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "finalTests" && input.Default == "affected");
         Assert.Equal(["affected", "all"], definition.Inputs.Single(input => input.Name == "finalTests").Options);
@@ -163,6 +190,7 @@ public sealed class WorkflowTemplatesTests
             ("cite", null, "changes"),
             ("close-class", null, "changes"),
             ("home-audit", null, "changes"),
+            ("rearm-work", null, "changes"),
             ("review-scope", "map", "changes"),
             ("correctness", null, "changes"),
             ("errors", null, "changes"),
@@ -170,6 +198,7 @@ public sealed class WorkflowTemplatesTests
             ("types", null, "changes"),
             ("comments", null, "changes"),
             ("simplicity", null, "changes"),
+            ("closure", "tools", "changes"),
             ("rework", null, "changes"),
             ("remend", null, "changes"),
             ("reclose-class", null, "changes"),
@@ -269,9 +298,15 @@ public sealed class WorkflowTemplatesTests
     {
         var carried = DirectoryDeclarations();
 
+        // Every file the workflow names is embedded, and nothing the workflow does not name rides its set: the only
+        // files embedded beyond the workflow's own are the tool's own analyst's - read from the build alone, never
+        // written into a repository, exported or given back.
+        var carriedSet = carried.ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(WorkflowTemplates.Files, file => carriedSet.Contains(file));
+
         Assert.Equal(
-            [.. WorkflowTemplates.Files.Order(StringComparer.Ordinal)],
-            [.. carried.Order(StringComparer.Ordinal)]);
+            [.. WorkflowTemplates.ToolOwnFiles.Order(StringComparer.Ordinal)],
+            [.. carried.Where(file => !WorkflowTemplates.Files.Contains(file, StringComparer.Ordinal)).Order(StringComparer.Ordinal)]);
 
         return;
 
@@ -537,9 +572,9 @@ public sealed class WorkflowTemplatesTests
         var triage = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/pre-existing.schema.json")!)!.AsObject();
 
         Assert.Equal(
-            ["course", "title", "description", "where", "proof", "blocks", "related", "critical", "why", "duplicates"],
+            ["course", "title", "description", "where", "proof", "size", "blocks", "related", "critical", "why", "duplicates"],
             triage["required"]!.AsArray().Select(member => member!.GetValue<string>()));
-        Assert.Equal(["fix", "list", "duplicate", "unproven"], triage["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Assert.Equal(["fix", "next", "list", "duplicate", "unproven"], triage["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()));
     }
 
     /// <summary>
@@ -553,7 +588,7 @@ public sealed class WorkflowTemplatesTests
         var agents = WorkflowTemplates.Files.Where(file =>
             file.StartsWith("agents/", StringComparison.Ordinal) || file.StartsWith("item-pipeline/agents/", StringComparison.Ordinal)).ToList();
 
-        Assert.Equal(18, agents.Count);
+        Assert.Equal(19, agents.Count);
 
         foreach (var agent in agents)
         {
@@ -613,7 +648,7 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Contains("rounds: 3", pipeline, StringComparison.Ordinal);
         Assert.Contains(
-            "blocking: \"any(review.findings, it.severity != 'low' && it.severity != 'nit')\"",
+            "blocking: \"any(union(route.rework, route.homeAudit), it.severity != 'low' && it.severity != 'nit')\"",
             pipeline,
             StringComparison.Ordinal);
         Assert.DoesNotContain("it.production && it.severity", pipeline, StringComparison.Ordinal);
@@ -621,8 +656,8 @@ public sealed class WorkflowTemplatesTests
         var fix = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items", "fix");
 
         Assert.Equal(3, fix.Repeat!.BlockersLimitRounds);
-        Assert.Equal("review.findings", fix.Repeat.Leftover);
-        Assert.Equal("review", fix.Repeat.DecideAfter);
+        Assert.Equal("union(route.rework, route.homeAudit)", fix.Repeat.Leftover);
+        Assert.Equal("route", fix.Repeat.DecideAfter);
         Assert.Equal(new FlowAnswer("accept", null, null), fix.Answers["loopBound"]);
     }
 
@@ -640,7 +675,7 @@ public sealed class WorkflowTemplatesTests
             .Where(resource => resource.Replace('\\', '/').Contains(".WorkflowTemplates/", StringComparison.Ordinal))
             .ToList();
 
-        Assert.Equal(WorkflowTemplates.Files.Count, shipped.Count);
+        Assert.Equal(WorkflowTemplates.Files.Count + WorkflowTemplates.ToolOwnFiles.Count, shipped.Count);
         Assert.DoesNotContain(shipped, resource =>
         {
             using var reader = new StreamReader(assembly.GetManifestResourceStream(resource)!);
@@ -679,11 +714,86 @@ public sealed class WorkflowTemplatesTests
         static bool GoesOn(WorkflowStep step) => step.Resume == "implement" || step.Steps.Any(GoesOn);
 
         Assert.Equal(
-            [("unblock", "item-blocked"), ("mend", "item-blocked"), ("close-class", "item-blocked"), ("home-audit", "item-blocked"), ("reconcile", "item-blocked"), ("cite", "item-blocked")],
+            [("unblock", "item-blocked"), ("mend", "item-blocked"), ("close-class", "item-blocked"), ("home-audit", "item-blocked"), ("reconcile", "item-blocked"), ("cite", "item-blocked"), ("rearm", "item-arms")],
             [.. items.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
         Assert.Equal(
             [("remend", "reverify"), ("reclose-class", "reverify"), ("rehome-audit", "reverify"), ("rereconcile", "reverify"), ("recite", "reverify")],
             [.. revise.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
+    }
+
+    /// <summary>
+    /// The review loop reads both lists its routing makes alike - the rework and the home audits: a class reopened twice
+    /// or more, graded by the worst of its findings, keeps the loop going past its rounds as a rework of that grade does,
+    /// and what the loop leaves at its bound holds it, so an audit still owed is written to the backlog and named in the
+    /// pull request; a loop whose routing left nothing blocks nothing and leaves nothing. The pipeline's own leftover
+    /// output reads the same lists of the loop's last routing, and is empty for an item a person answered skip, whose
+    /// loop never ran - never a failure of the use that built nothing.
+    /// </summary>
+    [Fact]
+    public void TheReviewLoop_ReadsTheHomeAuditsItsRoutingLeaves_AsItReadsTheRework()
+    {
+        var items = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items");
+        var repeat = StepAt(items.Steps, "fix").Repeat!;
+        var audit = new JsonObject { ["reopenedClass"] = "c-rate", ["rounds"] = 2, ["severity"] = "high", ["findings"] = new JsonArray() };
+        var nit = new JsonObject { ["title"] = "a name", ["severity"] = "nit", ["class"] = "introduced" };
+
+        (bool Blocking, string Leftover) Decided(JsonArray rework, JsonArray homeAudit)
+        {
+            // What the route answered, as the loop reads the step: its root, the tree walking the member read.
+            FlowValue Read(FlowExpression.Path path) => path.Root == "route"
+                ? FlowValue.Of(new JsonObject { ["rework"] = rework.DeepClone(), ["homeAudit"] = homeAudit.DeepClone(), ["reopened"] = new JsonArray() })
+                : throw new InvalidOperationException($"the loop reads '{path.Whole}'");
+
+            return (
+                FlowExpression.Parse(repeat.Blocking!).Evaluate(Read).AsBoolean(() => repeat.Blocking!),
+                FlowExpression.Parse(repeat.Leftover!).Evaluate(Read).ToNode()!.ToJsonString());
+        }
+
+        // The pipeline's output, read as the use ends: the loop's last routing, through the loop - and, for an item a person
+        // answered skip, whose loop never ran, a routing that reads nothing, which leaves nothing rather than failing the use.
+        var left = Assert.Single(items.Use!.Outputs, output => output.Name == "leftover").From;
+
+        string Left(JsonArray? rework, JsonArray? homeAudit)
+            => FlowExpression.Parse(left).Evaluate(path => path.Root == "fix"
+                ? rework is null || homeAudit is null
+                    ? FlowValue.Missing
+                    : FlowValue.Of(new JsonObject { ["route"] = new JsonObject { ["rework"] = rework.DeepClone(), ["homeAudit"] = homeAudit.DeepClone(), ["reopened"] = new JsonArray() } })
+                : throw new InvalidOperationException($"the output reads '{path.Whole}'")).ToNode()!.ToJsonString();
+
+        Assert.Equal((true, new JsonArray(audit.DeepClone()).ToJsonString()), Decided([], [audit.DeepClone()]));
+        Assert.Equal((false, new JsonArray(nit.DeepClone()).ToJsonString()), Decided([nit.DeepClone()], []));
+        Assert.Equal((false, "[]"), Decided([], []));
+        Assert.Equal(new JsonArray(nit.DeepClone(), audit.DeepClone()).ToJsonString(), Left([nit.DeepClone()], [audit.DeepClone()]));
+        Assert.Equal("[]", Left([], []));
+        Assert.Equal("[]", Left(null, null));
+        Assert.Equal("empty(route.rework) && empty(route.homeAudit)", repeat.Until);
+        Assert.Equal("union(route.rework, route.homeAudit)", repeat.Leftover);
+    }
+
+    /// <summary>
+    /// The item's own sweep runs the arms its builder's answer lists, pending, on the item's own commit; an arm that is
+    /// not as it should be - violated, survived or unattributed, the verdicts only an arm reaches - goes back to the
+    /// builder by the rearm, and every other failure of the sweep is the machine's. Each class-closure check of the item
+    /// - the first, the rearm's and the review fix's - holds the same answer's arms to the record it judges.
+    /// </summary>
+    [Fact]
+    public void TheItemsSweep_RunsTheArmsItsBuilderLists_AndOnlyAnArmsOwnVerdictsGoBackToTheBuilder()
+    {
+        var items = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items");
+        var sweep = StepAt(items.Steps, "item-arms");
+        var rearm = StepAt(items.Steps, "rearm");
+
+        Assert.Equal(
+            ("check-mutations", true, "implement.latest.arms", SweepStepRunner.ItemBase),
+            (sweep.Type, sweep.Pending, sweep.Arms?.Expression, sweep.Base));
+        Assert.Equal(("item-arms", "failure", "item-arms"), (rearm.On!.Step, rearm.On.Outcome, rearm.Then));
+        Assert.Equal([LegExit.Violated, LegExit.Survived, LegExit.Unattributed], rearm.On.Codes);
+        Assert.Equal(
+            [("class-closure", "implement.latest.arms"), ("rearm-closure", "implement.latest.arms"), ("reclass-closure", "implement.latest.arms")],
+            [
+                .. new[] { StepAt(items.Steps, "class-closure"), StepAt(items.Steps, "rearm", "rearm-closure"), StepAt(items.Steps, "fix", "revise", "reclass-closure") }
+                    .Select(step => (step.Name, step.Arms?.Expression)),
+            ]);
     }
 
     /// <summary>
@@ -745,6 +855,22 @@ public sealed class WorkflowTemplatesTests
             "The planner's, the plan audit's, the item audit's and the builders' prompts read `{text.closure}`, and the file says so: what a repository writes there weighs on what they decide a class covers.",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The pull request's body carries the counts by which a repository sees whether its rounds converge, as the report
+    /// does: each class's claim, each item's counts, the classes reopened, the hotspots and what became of each issue
+    /// carried to a later round - and of the closure's run texts it reads every one but the records whole, which are the
+    /// self-audit's.
+    /// </summary>
+    [Fact]
+    public void ThePullRequestsBody_CarriesEveryCountOfTheClosure()
+    {
+        var body = WorkflowTemplates.TextOf("prompts/pr-body.md")!;
+
+        Assert.Equal(
+            [WorkflowExpressions.RunClaims, WorkflowExpressions.RunCounts, WorkflowExpressions.RunHotspots, "preExisting", WorkflowExpressions.RunReopened],
+            [.. WorkflowExpressions.RunTexts.Where(text => body.Contains($"{{run.{text}}}", StringComparison.Ordinal)).Except(["ran", "notRun", "red", "leftover", "assumptions"]).Order(StringComparer.Ordinal)]);
     }
 
     /// <summary>
@@ -822,7 +948,7 @@ public sealed class WorkflowTemplatesTests
 
         // The prompts that name the graph today, so a new one is held as it comes.
         Assert.Equal(
-            ["item-pipeline/prompts/home-audit.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            ["item-pipeline/prompts/home-audit.md", "item-pipeline/prompts/rework.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
             [.. naming.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
 
         // A file of a workflow the shipped one uses is named under that workflow's place, as the embedded set holds it.
@@ -850,6 +976,7 @@ public sealed class WorkflowTemplatesTests
             "item-pipeline/prompts/closure-record.md",
             "item-pipeline/prompts/home-audit.md",
             "item-pipeline/prompts/mend.md",
+            "item-pipeline/prompts/rearm.md",
             "item-pipeline/prompts/redo.md",
             "item-pipeline/prompts/reconcile.md",
             "item-pipeline/prompts/rework.md",
@@ -885,9 +1012,9 @@ public sealed class WorkflowTemplatesTests
             Prose.Words(WorkflowTemplates.TextOf("item-pipeline/agents/implementer.md")!),
             StringComparison.Ordinal);
 
-        // The builders and the goings-on alone read the classes; no other shipped file does.
+        // The builders, the goings-on and the review alone read the classes; no other shipped file does.
         Assert.Equal(
-            [.. goesOn.Append("item-pipeline/prompts/implement.md").Append("item-pipeline/prompts/remedy.md").Order(StringComparer.Ordinal)],
+            [.. goesOn.Append("item-pipeline/prompts/implement.md").Append("item-pipeline/prompts/remedy.md").Append("item-pipeline/prompts/review.md").Order(StringComparer.Ordinal)],
             [.. WorkflowTemplates.Files
                 .Where(file => WorkflowTemplates.TextOf(file)!.Contains("{input.item.classes}", StringComparison.Ordinal))
                 .Order(StringComparer.Ordinal)]);
@@ -896,9 +1023,10 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "closure");
 
-        // Each class's arm is its own entry's: no flat list of arms beside the record, which nothing would read.
-        Assert.DoesNotContain(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
-        Assert.False(schema.GetProperty("properties").TryGetProperty("arms", out _));
+        // Each class's arm is its own entry's: the record names it there, and the answer gathers the ids into its own
+        // list, which the item's sweep runs.
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
+        Assert.Equal("array", schema.GetProperty("properties").GetProperty("arms").GetProperty("type").GetString());
 
         // The builders measure on declared legs alone, and name any other reference unmeasured; a neighbour's result is
         // what the call it cites answered for its cell, as the class-closure check holds it to that call's own record, and
@@ -1051,7 +1179,7 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(["item-problems", "item-audit"], StepAt(definition.Steps, "rounds", "items").DependsOn);
         Assert.Equal("item-check.items", StepAt(definition.Steps, "rounds", "items").ForEach);
         Assert.Equal(
-            "self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings)",
+            "self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings) && empty(run.nextRound)",
             StepAt(definition.Steps, "rounds").Repeat!.Until);
 
         Assert.Equal(["direction"], StepAt(recover, "redirect").DependsOn);

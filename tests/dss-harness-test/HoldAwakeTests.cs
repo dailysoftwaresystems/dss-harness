@@ -20,6 +20,38 @@ public sealed class HoldAwakeTests
 {
     private static readonly string[] Caffeinate = ["caffeinate", "-dimsu", "-w", "{pid}"];
 
+    /// <summary>
+    /// What the end of a hold's command could not reach or end is said under the command leaving the hold, naming the
+    /// host, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatTheEndOfAHoldCouldNotReachOrEnd_IsSaidNamingTheHost(bool stopped)
+    {
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+
+            command.OnErrorLine?.Invoke(HostAgentProtocol.CompletionLine(request.Nonce!, HarnessExit.Success));
+            return HostResults.Ok(string.Empty);
+        });
+        var error = new StringWriter();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            () => error.ToString(),
+            stopped,
+            (stop, token) =>
+            {
+                var registry = new HoldAwakeRegistry(new UnreachingHostCommands(hosts, stop), new ConsoleHarnessOutput(new StringWriter(), error, verbose: false));
+
+                registry.Reached(Reached(HostId.Ssh("mac"), hold: 600));
+                return registry.LeaveHoldsAsync("test", token);
+            });
+
+        Assert.Equal([UnreachedSaid.Warned("test", "ssh mac: the hold")], said);
+    }
+
     /// <summary>A hold is read back as written; one that is not there, or cannot be read, is no hold; ending one removes it.</summary>
     [Fact]
     public void AHold_IsReadBackAsWritten_AndEndingItRemovesIt()

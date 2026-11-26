@@ -22,7 +22,8 @@
           "path",
           "text",
           "severity",
-          "production"
+          "production",
+          "class"
         ],
         "properties": {
           "aspect": {
@@ -34,7 +35,8 @@
               "tests",
               "types",
               "comments",
-              "simplicity"
+              "simplicity",
+              "closure"
             ]
           },
           "path": {
@@ -59,6 +61,18 @@
           "production": {
             "type": "boolean",
             "description": "True where the finding is in code the product ships or runs; false in a test, a fixture, an example, documentation or a build script."
+          },
+          "class": {
+            "type": "string",
+            "description": "introduced: a defect this change made. reopened: another instance of a class the item's record claims to close - the record below names the class.",
+            "enum": [
+              "introduced",
+              "reopened"
+            ]
+          },
+          "reopens": {
+            "type": "string",
+            "description": "For reopened, the class id, exactly as the item's classes or its record name it; empty otherwise."
           }
         }
       }

@@ -365,7 +365,8 @@ public static class WorkflowValidator
                     MaxRetries: _definition.MaxRetries,
                     BackoffSeconds: _definition.BackoffSeconds,
                     MaxInstances: _definition.MaxInstances,
-                    HandoffSeconds: _definition.HandoffSeconds),
+                    HandoffSeconds: _definition.HandoffSeconds,
+                    Priority: _definition.Priority),
                 lead: string.Empty);
 
             if (_definition.Budget is { } budget)
@@ -452,6 +453,7 @@ public static class WorkflowValidator
             Within(limits.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, $"{lead}backoffSeconds");
             Within(limits.MaxInstances, 100, 100_000, $"{lead}maxInstances");
             Within(limits.HandoffSeconds, 30, 900, $"{lead}handoffSeconds");
+            Within(limits.Priority, Execution.DispatchOrder.LeastPriority, int.MaxValue, $"{lead}priority");
         }
 
         /// <summary>
@@ -690,6 +692,28 @@ public static class WorkflowValidator
                             WorksIn(entry, entry.Step.In);
                         }
 
+                        // The arms a sweep runs may be read where the step starts, as an expression the engine resolves -
+                        // the item's own, from the record its builder answered - and a base names the commit whose copy it
+                        // sweeps - a template naming one, or 'item', the newest commit the run's ledger gives this item -
+                        // so the bytes are the item's own and never the main tree as it moves.
+                        if (type.Type == "check-mutations")
+                        {
+                            if (entry.Step.Arms?.Expression is { } arms)
+                            {
+                                Expression(entry, arms, "arms");
+                            }
+
+                            // A base written empty is refused as every empty template is; 'item' is the work item of the
+                            // nearest forEach around the step, the forEach of a workflow that uses this one among them, as
+                            // the run's ledger attributes an item's commits (FlowInstanceId.ItemOf): a sweep no forEach
+                            // holds has no item whose commit it could sweep.
+                            if (string.Equals(entry.Step.Base?.Trim(), SweepStepRunner.ItemBase, StringComparison.Ordinal)
+                                && Nearest(entry, group => group.ForEach is not null) is null)
+                            {
+                                _problems.Add($"{where}: base is 'item', the newest commit the run's ledger gives the work item the step is one of, and no group holding '{entry.Path}' runs a forEach; sweep a commit a template names, or move the step into the forEach whose items it sweeps");
+                            }
+                        }
+
                         if (type.Type == "test")
                         {
                             TestRules(entry, where);
@@ -719,8 +743,24 @@ public static class WorkflowValidator
                         // hand needs no audit, and a hotspot of one touch is every home.
                         Expression(entry, entry.Step.Classes ?? string.Empty, "classes");
                         Expression(entry, entry.Step.Record ?? string.Empty, "record");
+
+                        if (entry.Step.Arms?.Expression is { } listed)
+                        {
+                            Expression(entry, listed, "arms");
+                        }
+
                         Positive(entry.Step.Touches, $"{where}: touches");
                         Positive(entry.Step.Hotspot, $"{where}: hotspot");
+
+                        break;
+
+                    case "route-findings":
+                        // The findings are read where the step starts, as an expression the engine resolves: the review's
+                        // own, each classed introduced or reopened by the reviewers that found them - and the item's classes
+                        // and its record, whose ids are the classes a reopened finding may name.
+                        Expression(entry, entry.Step.Findings ?? string.Empty, "findings");
+                        Expression(entry, entry.Step.Classes ?? string.Empty, "classes");
+                        Expression(entry, entry.Step.Record ?? string.Empty, "record");
 
                         break;
 

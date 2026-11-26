@@ -296,7 +296,7 @@ public sealed class HostConnector(
         // would reach the host through something else. Unsaid where ssh could not say, and ssh is then
         // left to itself, with the name declared looked up here all the same.
         var seen = SshSettings.Read(
-            await WaitedAsync(token => _hostCommands.ReadSshSettingsAsync(connection, token), "ssh to say what it would do", cancellationToken).ConfigureAwait(false));
+            await WaitedAsync(token => _hostCommands.ReadSshSettingsAsync(connection, token), "ssh to say what it would do", $"ssh reading its settings for {host}", cancellationToken).ConfigureAwait(false));
 
         // Through a jump host or a command, the name is theirs to look up: the jump host looks it up on its
         // side, where an address this machine found means nothing, and a command is given the name to
@@ -333,13 +333,14 @@ public sealed class HostConnector(
         // Waited for to its end: ssh's own ConnectTimeout, the bound the host's settings give, ends a connection that
         // never opens, and its keep-alive one that stops answering; a host merely slow to start a shell is waited for.
         var answered = $"{host} to answer over ssh";
-        var probe = await WaitedAsync(token => _hostCommands.ProbeShellAsync(connection, token), answered, cancellationToken).ConfigureAwait(false);
+        var probing = $"ssh probing the shell of {host}";
+        var probe = await WaitedAsync(token => _hostCommands.ProbeShellAsync(connection, token), answered, probing, cancellationToken).ConfigureAwait(false);
 
         if (!probe.Succeeded && window is { } waking)
         {
-            var probing = connection;
+            var waked = connection;
             (probe, connections) = await _wakeWindow
-                .KeepProbingAsync(probe, started, waking, token => WaitedAsync(each => _hostCommands.ProbeShellAsync(probing, each), answered, token), cancellationToken)
+                .KeepProbingAsync(probe, started, waking, token => WaitedAsync(each => _hostCommands.ProbeShellAsync(waked, each), answered, probing, token), cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -422,7 +423,7 @@ public sealed class HostConnector(
         }
 
         var pinned = SshSettings.Read(
-            await WaitedAsync(token => _hostCommands.ReadSshSettingsAsync(connection with { Pin = pin }, token), "ssh to say what it would do pinned", cancellationToken).ConfigureAwait(false));
+            await WaitedAsync(token => _hostCommands.ReadSshSettingsAsync(connection with { Pin = pin }, token), "ssh to say what it would do pinned", $"ssh reading its settings for {connection.Host} pinned", cancellationToken).ConfigureAwait(false));
 
         return pinned is not null && seen.DifferOnlyInWhereTheyGo(pinned) ? pin : null;
     }
@@ -453,6 +454,7 @@ public sealed class HostConnector(
             var version = await WaitedAsync(
                     token => _processRunner.RunAsync(new ProcessRequest { FileName = path, Arguments = ["-V"] }, token),
                     $"'{path} -V' to say its version",
+                    $"'{path} -V'",
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -479,12 +481,19 @@ public sealed class HostConnector(
         => WaitedAsync(
             token => _hostCommands.RunAsync(connection, new HostCommand { Program = program, Arguments = arguments }, token),
             $"'{program}' on {connection.Host} to answer",
+            $"'{program}' on {connection.Host}",
             cancellationToken);
 
     /// <summary>
     /// <paramref name="run"/>'s answer, waited for to its end (<see cref="ProgramWait"/>): told every few minutes it
-    /// lasts, and ended only by the person's token, or by ssh's own bounds, which the host's settings give.
+    /// lasts, and ended only by the person's token, or by ssh's own bounds, which the host's settings give - and what its
+    /// end could not reach or end said under the command, as <paramref name="what"/> (<see cref="UnreachedSaying"/>).
     /// </summary>
-    private Task<T> WaitedAsync<T>(Func<CancellationToken, Task<T>> run, string subject, CancellationToken cancellationToken)
-        => ProgramWait.ToItsEndAsync(run, subject, ProgramWait.Told(_output, ToolPackage.Command), _clock, cancellationToken);
+    private Task<ProcessResult> WaitedAsync(Func<CancellationToken, Task<ProcessResult>> run, string subject, string what, CancellationToken cancellationToken)
+        => ProgramWait.ToItsEndAsync(
+            token => run(token).SayingUnreached(what, line => _output?.Warn(ToolPackage.Command, line)),
+            subject,
+            ProgramWait.Told(_output, ToolPackage.Command),
+            _clock,
+            cancellationToken);
 }

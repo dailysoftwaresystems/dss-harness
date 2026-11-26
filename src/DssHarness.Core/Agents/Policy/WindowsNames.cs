@@ -11,7 +11,7 @@ namespace DssHarness.Core.Agents.Policy;
 /// a stream of it; and a short name (<c>GIT~1</c>, <c>harnes~1</c>), which the system gives as its long one where the path
 /// exists, may be any name it could shorten where it does not - one a command may make before the word is read.
 /// </summary>
-public static partial class WindowsNames
+public static class WindowsNames
 {
     /// <summary>
     /// <paramref name="path"/> with each segment as Windows reads it: what follows its first colon dropped - an NTFS stream
@@ -63,7 +63,7 @@ public static partial class WindowsNames
     {
         ArgumentNullException.ThrowIfNull(segment);
 
-        return ShortName().IsMatch(segment);
+        return ShortName.IsMatch(segment);
     }
 
     /// <summary>
@@ -81,7 +81,7 @@ public static partial class WindowsNames
         ArgumentNullException.ThrowIfNull(segment);
         ArgumentNullException.ThrowIfNull(name);
 
-        if (ShortName().Match(segment) is not { Success: true } match)
+        if (ShortName.Match(segment) is not { Success: true } match)
         {
             return false;
         }
@@ -166,6 +166,5 @@ public static partial class WindowsNames
     private static readonly Regex Separators = LinearRegex.Compile(@"([/\\]+)");
 
     /// <summary>A short name as Windows spells one: a stem of one to six characters, a <c>~</c> and its number, and an extension of up to three.</summary>
-    [GeneratedRegex(@"^(?<stem>[^~.\s/\\:*?""<>|]{1,6})~[0-9]{1,6}(\.(?<extension>[^.\s/\\:*?""<>|]{1,3}))?$")]
-    private static partial Regex ShortName();
+    private static readonly Regex ShortName = LinearRegex.Compile(@"^(?<stem>[^~.\s/\\:*?""<>|]{1,6})~[0-9]{1,6}(\.(?<extension>[^.\s/\\:*?""<>|]{1,3}))?$");
 }

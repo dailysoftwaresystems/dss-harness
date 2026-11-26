@@ -9,7 +9,7 @@ namespace DssHarness.Core.Processes;
 /// left at its own end - the way that process ends a contained child's session: every
 /// process still in the session or the group, and while its leader stands every one in its tree, asked to end, and what
 /// still stands then made to - at once, since the run that started it has ended, and every bound it was configured with
-/// passed with it.
+/// passed with it - and waited for until it has gone.
 /// </summary>
 /// <remarks>
 /// Windows has no such session or group to end: a child there is held in a job that ends every member when the last
@@ -29,7 +29,10 @@ public sealed class LeftSessions(IHostPlatform platform, IProcessTable table)
     /// </summary>
     /// <param name="leader">The id of its leader, which is the session's or the group's.</param>
     /// <param name="group">Whether it led a process group within its starter's session, rather than a session of its own.</param>
-    /// <returns>Whether anything was still in it to end, and what could not be reached, and why.</returns>
+    /// <returns>
+    /// Whether anything was still in it to end, and what could not be reached, and why: all of it, nothing signalled, where
+    /// it holds this very process (<see cref="HeldEnding.HoldsThisProcess"/>).
+    /// </returns>
     /// <exception cref="PlatformNotSupportedException">This is Windows, whose jobs end their children with their owner.</exception>
     public Task<HeldEnding> EndAsync(int leader, bool group)
     {
@@ -41,7 +44,7 @@ public sealed class LeftSessions(IHostPlatform platform, IProcessTable table)
                 $"{Noun(group)} {leader} cannot be ended on Windows, whose bound and contained children are held in a job that ends them with the process that held it, so none is ever left running for a sweep to end");
         }
 
-        return Containment.EndSessionAsync(leader, _table.ReadAsync, TimeSpan.Zero, Waits.Told, TimeProvider.System, group);
+        return Containment.EndSessionAsync(leader, _table.ReadAsync, TimeSpan.Zero, Waits.Told, TimeProvider.System, ProcessEnds.Machine, group);
     }
 
     /// <summary>What a child leads, as every line that names one calls it: a session of its own, or a process group within its starter's.</summary>

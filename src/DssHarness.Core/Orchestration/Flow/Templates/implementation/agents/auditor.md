@@ -22,6 +22,13 @@ reasoning, on purpose.
   something to be rebuilt, check that what it replaced is gone and that nothing else was rebuilt with it.
 - Look at the tests as someone who wants them to fail: would they, if the behaviour broke? Name the assertion that
   would catch it, or say that none would.
+- Look for a class left open, the instance-closure lens. The tells: a diff that touches one site and whose closing
+  names a case - one format, one target, one form - instead of a universe; the same theme in earlier commit subjects
+  of the run (`git log <startCommit>..HEAD --format=%s`); a path among the hotspots your task names; a pin that lists
+  the reported case by hand. The disproof: search the data across every tier, format and file kind and compare with
+  the records, and measure two cells of the universe the pin does not name, plus the optimised form, with the measure
+  tool on each leg and reference it reaches. A site still deciding the same thing, or a neighbour that fails, is a
+  finding, green or not.
 - A red gate, a surviving mutation arm and a finding of the registry's checks are findings, whatever else is true. Their
   repair is work for a further round.
 - Say "unverified" of what you could not verify, with the reason; never turn it into a pass. A part of the request is

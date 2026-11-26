@@ -69,7 +69,7 @@ public sealed class HarnessFactory
             CommandOrigin.Typed);
         LocalTransport = Local(FileSystem);
         RunLock = new RunLock(FileSystem, Output, Identity);
-        Slots = new HeavyLegSlots(FileSystem, Output, Identity, ScratchSlotsRecord());
+        Slots = new MachineDispatchQueue(FileSystem, Output, Identity, ScratchSlotsRecord());
         WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport, RunLock, ProcessContext);
 
         AnchorRegistryLocator = new AnchorRegistryLocator(GitClient);
@@ -163,10 +163,10 @@ public sealed class HarnessFactory
     /// The record of heavy legs a test's agents read, kept under a scratch directory of its own so no test ever reads
     /// the machine's real record: a dry run only reads it, and what it holds is the test's to say.
     /// </summary>
-    public HeavyLegSlots Slots { get; }
+    public MachineDispatchQueue Slots { get; }
 
     private static string ScratchSlotsRecord()
-        => Path.Combine(Path.GetTempPath(), "dh-test-" + Guid.NewGuid().ToString("N"), HeavyLegSlots.FileNameFor("tests"));
+        => Path.Combine(Path.GetTempPath(), "dh-test-" + Guid.NewGuid().ToString("N"), MachineDispatchQueue.FileNameFor("tests"));
 
     /// <summary>Claude Code's transcripts over <paramref name="fileSystem"/>, in <see cref="ClaudeConfigDirectory"/> where a test sets it.</summary>
     private ClaudeTranscripts TranscriptsOver(IFileSystem fileSystem)

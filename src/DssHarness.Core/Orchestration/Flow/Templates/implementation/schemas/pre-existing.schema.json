@@ -7,6 +7,7 @@
     "description",
     "where",
     "proof",
+    "size",
     "blocks",
     "related",
     "critical",
@@ -18,11 +19,12 @@
       "type": "string",
       "enum": [
         "fix",
+        "next",
         "list",
         "duplicate",
         "unproven"
       ],
-      "description": "fix: it blocks the reporting step, is related or is critical - the run's recovery fixes it at its root now. list: none of these holds - it is added to the run's list of pre-existing issues, shown at the end. duplicate: the list already holds it, and duplicates names its id. unproven: you could not reproduce it on the base commit - it is not listed."
+      "description": "fix: it blocks the reporting step, is related or is critical - the run's recovery fixes it at its root now. next: a defect in code the run's change does not touch that blocks nothing - it becomes the first work item of the run's next round, and nothing of this round is held for it. list: none of these holds - it is listed, proven, and shown in the pull request's body and the handoff. duplicate: the list already holds it, and duplicates names its id. unproven: you could not reproduce it on the base commit - it is not listed."
     },
     "title": {
       "type": "string",
@@ -91,6 +93,36 @@
     "blocks": {
       "type": "boolean",
       "description": "True only where the reporting step said it stops its own work and your check confirms it."
+    },
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "build",
+        "measureFirst"
+      ],
+      "description": "For next, the issue's size, which its work item is built to: the files the fix touches, what must be built, and what must be measured first. Each empty where the course is not next.",
+      "properties": {
+        "files": {
+          "type": "array",
+          "description": "The files fixing it touches, from the repository's root; for next, one at least.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "build": {
+          "type": "string",
+          "description": "What must be built to fix it; empty where nothing must."
+        },
+        "measureFirst": {
+          "type": "array",
+          "description": "What must be measured before it is fixed, as the measure tool takes each; empty where nothing must.",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
     "related": {
       "type": "boolean",

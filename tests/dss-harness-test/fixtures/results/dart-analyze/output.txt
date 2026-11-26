@@ -1,0 +1,8 @@
+Analyzing dart...
+
+  error - bin\broken.dart:5:15 - The method 'read' isn't defined for the type 'Store'. Try correcting the name to the name of an existing method, or defining a method named 'read'. - undefined_method
+  error - bin\broken.dart:6:9 - Undefined name 'missingTotal'. Try correcting the name to one that is defined, or defining the name. - undefined_identifier
+warning - lib\store.dart:1:8 - Unused import: 'dart:math'. Try removing the import directive. - unused_import
+warning - lib\store.dart:7:9 - The value of the local variable 'unused' isn't used. Try removing the variable or using it. - unused_local_variable
+
+4 issues found.

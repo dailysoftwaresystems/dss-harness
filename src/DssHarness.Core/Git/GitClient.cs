@@ -2097,12 +2097,17 @@ public sealed partial class GitClient(
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
         UnattendedCommands.Apply(environment);
 
+        // What a stop of git could not reach or end is said under git, by the command line asked for: the settings the tool
+        // adds of its own below name nothing the caller asked.
+        var asked = $"'{GitExecutable} {string.Join(' ', arguments)}'";
+        Action<string> say = line => _output.Warn(GitExecutable, line);
+
         // Cleared before every question, not only before every change. Each outranks the repository,
         // the working tree or the index that `-C <directory>` would otherwise select, so a hook, or a
         // command started from another checkout, steers every answer git gives: the harness would then
         // read one tree's status and act on another's. A caller that genuinely wants a different index
         // passes it below, after the inherited one is gone.
-        await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
+        await _localVariables.ClearAsync(environment, say, cancellationToken).ConfigureAwait(false);
 
         // Set once the inherited ones are gone, by their one owner (GitOwnSettings): no file-system monitor; none of the
         // repository's hooks but where a command runs them on purpose - a hook is the repository's code, which every other
@@ -2155,7 +2160,7 @@ public sealed partial class GitClient(
             Isolation = hooks?.Isolation,
         };
 
-        var result = await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        var result = await _processRunner.RunAsync(request, cancellationToken).SayingUnreached(asked, say).ConfigureAwait(false);
 
         return new GitCommandResult(
             result.ExitCode,

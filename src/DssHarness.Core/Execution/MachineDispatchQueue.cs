@@ -7,7 +7,11 @@ using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Execution;
 
-/// <summary>A heavy leg that asked its machine for a slot: holding one, or waiting its turn.</summary>
+/// <summary>
+/// A heavy leg that asked its machine for a slot: holding one, or waiting its turn. Its members are the ones every build
+/// that shares the record reads - a build that found one it does not know would refuse the record whole - so what the
+/// dispatch queue keeps of the unit beyond them is kept beside it (<see cref="QueuedUnit"/>).
+/// </summary>
 /// <param name="Machine">The machine it runs on, by the name it had then, for whoever reads the entry.</param>
 /// <param name="ProcessId">The process that asked, which holds the slot until it gives it back or ends.</param>
 /// <param name="RunId">The run the leg is part of.</param>
@@ -62,7 +66,7 @@ internal interface IHeldByProcess
 
 /// <summary>
 /// A leg making room on one filesystem of its machine from other trees' idle builds, held for as long as it lists and
-/// removes them (<see cref="HeavyLegSlots.MakeRoomOn"/>).
+/// removes them (<see cref="MachineDispatchQueue.MakeRoomOn"/>).
 /// </summary>
 /// <param name="Machine">The machine it runs on, by the name it had then, for whoever reads the entry.</param>
 /// <param name="ProcessId">The process making the room, which holds the entry until it gives it back or ends.</param>
@@ -84,11 +88,11 @@ public sealed record RoomMaking(string Machine, int ProcessId, string RunId, Dat
 /// </summary>
 public sealed class RoomMakingHold : IDisposable
 {
-    private readonly HeavyLegSlots? _slots;
+    private readonly MachineDispatchQueue? _slots;
     private readonly RoomMaking? _entry;
     private bool _left;
 
-    private RoomMakingHold(HeavyLegSlots? slots, RoomMaking? entry, RoomMaking? by)
+    private RoomMakingHold(MachineDispatchQueue? slots, RoomMaking? entry, RoomMaking? by)
     {
         _slots = slots;
         _entry = entry;
@@ -102,7 +106,7 @@ public sealed class RoomMakingHold : IDisposable
     public bool Held => _entry is not null;
 
     /// <summary>The making held, given back once disposed.</summary>
-    internal static RoomMakingHold Taken(HeavyLegSlots slots, RoomMaking entry) => new(slots, entry, null);
+    internal static RoomMakingHold Taken(MachineDispatchQueue slots, RoomMaking entry) => new(slots, entry, null);
 
     /// <summary>Nothing held, another leg making room there.</summary>
     internal static RoomMakingHold Behind(RoomMaking by) => new(null, null, by);
@@ -121,11 +125,10 @@ public sealed class RoomMakingHold : IDisposable
 }
 
 /// <summary>One of the heavy legs in line, and whether it holds a slot: what a dry run reads to say where a holder's leg stands.</summary>
-/// <param name="Entry">The leg's entry in the record, in the order it asked.</param>
+/// <param name="Entry">The leg's entry in the record.</param>
 /// <param name="HoldsSlot">
-/// Whether it holds one of the machine's slots - the front of the line, each fewer legs from the front than the fewest
-/// any leg up to it allows at once, or than the machine's own count where it declares one, as the record's own reading of
-/// a place is weighed by.
+/// Whether it holds one of the machine's slots: the queue granted it one (<see cref="QueuedUnit.HeldSinceUtc"/>), or, for
+/// an entry an older build wrote, the front of the line its build reads holds it.
 /// </param>
 public sealed record SlotInLine(SlotEntry Entry, bool HoldsSlot);
 
@@ -170,22 +173,99 @@ internal sealed record RoomStanding(bool Fits, DiskSpace? Disk, long Claimed, IR
 
 /// <summary>Where a leg stands among the heavy legs asking its machine for a slot.</summary>
 /// <param name="Holding">Whether it holds a slot.</param>
-/// <param name="Holders">The legs holding the machine's slots, first in line first: itself among them where it holds one.</param>
-/// <param name="InLineAhead">The legs ahead of it in line, first first: those holding slots, then those waiting.</param>
+/// <param name="Holders">The legs holding the machine's slots, in the order they asked: itself among them where it holds one.</param>
+/// <param name="InLineAhead">
+/// The legs ahead of it in the queue's one order (<see cref="DispatchOrder"/>), first first: those holding slots, then those
+/// the queue serves before it.
+/// </param>
 /// <param name="Slots">
 /// How many heavy legs may run at once while it waits: the machine's own count where its settings file declares one, else
-/// the fewest any leg up to it in line allows, its own included.
+/// the fewest any leg ahead of it allows, its own included.
 /// </param>
-internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holders, IReadOnlyList<SlotEntry> InLineAhead, int Slots)
+/// <param name="TenantsAhead">
+/// Who stands ahead of it in the heavy class, as a wait on the queue is told (<see cref="QueueAhead"/>): each unit ahead's
+/// tenant, in the order they stand, an entry an older build asked named by the tenant <see cref="MachineDispatchQueue.LocalTenant"/>
+/// - the local tenant, whose repository was not said. <see langword="null"/> where it holds, for nothing waits on its place.
+/// </param>
+internal sealed record SlotStanding(
+    bool Holding,
+    IReadOnlyList<SlotEntry> Holders,
+    IReadOnlyList<SlotEntry> InLineAhead,
+    int Slots,
+    QueueAhead? TenantsAhead = null)
 {
     /// <summary>How many legs are ahead of it in line.</summary>
     public int Ahead => InLineAhead.Count;
 }
 
+/// <summary>The classes of unit the machine's dispatch queue serves, each with a capacity of its own.</summary>
+public enum DispatchClassName
+{
+    /// <summary>Heavy legs: a build, a test, a run that builds, a step marked heavy, a unit of a sweep.</summary>
+    Heavy,
+
+    /// <summary>Machine steps' processes, heavy or not: shown with their capacity, and asked by no unit yet.</summary>
+    Process,
+
+    /// <summary>Reasoning agents of every run and side-task: shown with their capacity, and asked by no unit yet.</summary>
+    Agent,
+}
+
+/// <summary>One class of unit the dispatch queue serves, with its capacity, its holders and its waiting units.</summary>
+/// <param name="Class">The class.</param>
+/// <param name="Capacity">
+/// How many units of it the machine takes at once; <see langword="null"/> where no section declares admission, and the
+/// machine takes every unit at once.
+/// </param>
+/// <param name="Holders">The units holding, in the order they asked.</param>
+/// <param name="Waiting">The units waiting, in the order the queue serves them.</param>
+/// <param name="Asked">
+/// Whether any unit asks the class yet: the heavy class's are every heavy leg's; the process and agent classes are
+/// configured and shown, and asked by nothing until their units are queued.
+/// </param>
+public sealed record DispatchClass(
+    DispatchClassName Class,
+    int? Capacity,
+    IReadOnlyList<DispatchUnit> Holders,
+    IReadOnlyList<DispatchUnit> Waiting,
+    bool Asked);
+
+/// <summary>One unit of a dispatch class, as the queue says it: its entry, and what the fair order weighs it by.</summary>
+/// <param name="Entry">Its entry in the slots' record: its tree, leg, command, process and run.</param>
+/// <param name="Queued">
+/// What the queue keeps of it beside its entry - its tenant, weight, priority, cost and aging bound, and since when it
+/// holds; <see langword="null"/> for an entry an older build wrote, which that build admits by the order the line was asked in.
+/// </param>
+/// <param name="Waited">How long it has waited, by when it asked; <see langword="null"/> where it holds.</param>
+/// <param name="Share">
+/// What its tenant is credited each round it waits (<see cref="DispatchOrder.ShareOf"/>): its weight times its priority,
+/// doubled for each whole aging period it has waited - past any number where its aging bound is no minutes or its
+/// doublings pass what a number holds, and then a debt is gone in one round; <see langword="null"/> where it holds, or an
+/// older build asked it.
+/// </param>
+/// <param name="Deficit">
+/// Its tenant's deficit, the credit a unit's cost is charged against as it starts, as the queue last kept it - below
+/// nothing where its tenant still owes for a unit it started; <see langword="null"/>
+/// where it holds, or an older build asked it.
+/// </param>
+public sealed record DispatchUnit(SlotEntry Entry, QueuedUnit? Queued, TimeSpan? Waited, double? Share, double? Deficit)
+{
+    /// <summary>The unit as a line names it: its tree, its leg, its command and its process (<see cref="SlotEntry.Describe"/>).</summary>
+    public string Said => Entry.Describe();
+}
+
 /// <summary>
-/// The heavy legs asking this machine for a slot, in the order they asked: each leg holds one while it is fewer legs from
-/// the front of the line than every leg up to it allows at once, so slots are given in turn, and each is given back when
-/// its leg's work ends.
+/// The machine's dispatch queue, one per machine and per user of it: the admission owner of the heavy legs every command
+/// this user runs there asks for, kept in one record whichever repository or worktree a command runs in, and fair by
+/// tenant. A unit holds a slot once the queue grants it one - a mark written in the same change of the record that
+/// grants it (<see cref="QueuedUnit.HeldSinceUtc"/>) - and the units waiting are granted the slots left, in the fair
+/// order (<see cref="DispatchOrder"/>): deficit round-robin over their tenants, each tenant's deficit credited its
+/// share each round and a unit started once its tenant owes nothing, charged its estimated cost as it starts, so
+/// a tenant with a burst of short arms and a tenant with one long build each get the machine in proportion, and neither
+/// waits for the other's whole burst - a long unit leaves its tenant owing what it cost, paid back by its share each
+/// round, the faster once its next unit has waited past its aging bound. The unit the fair order puts first and that does
+/// not fit beside the holders holds back every unit behind it, so no unit is passed for ever. Each slot is given back when
+/// its unit's work ends.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -197,17 +277,26 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// </para>
 /// <para>
 /// Each entry carries the count its own command's rule allows, since commands of repositories that declare different
-/// counts share one record: a leg starts only while it is fewer legs from the front than the fewest any leg up to it
-/// allows, so the legs holding slots are always the front of the line, no leg ever runs beside more legs than its own
-/// configuration allows, and none passes a leg that asked before it. A command whose rule declares no admission never
+/// counts share one record: no unit is granted a slot beside more holders than the fewest any holder or it allows, so
+/// no leg ever runs beside more legs than its own configuration allows. A command whose rule declares no admission never
 /// joins the line. Where the machine's settings file declares its own count (<see cref="Configuration.MachineSettings"/>),
 /// that count is every leg's, read again at each look: what a machine can hold is the machine's, and a worktree whose
 /// config.json was committed before the machine's count was raised would else hold every leg behind it to the old one.
 /// A file that cannot be read at a look refuses a leg's own admission, before its work; a unit of a leg whose work has
 /// begun - an arm of a sweep - is weighed instead by the count the file declared as that work began, which its place
 /// carries (<see cref="SlotPlace.WorkBegunBy"/>), and the refusal said once: a file put wrong mid-sweep would else end a
-/// leg that has run with a configuration's error. The entries keep the members a build before this one reads - one that
-/// found a member it does not know would refuse the record - and such a build still weighs each entry's own count.
+/// leg that has run with a configuration's error.
+/// </para>
+/// <para>
+/// The slots' record keeps the members every build sharing it reads, and nothing more: a build that found a member it
+/// does not know would refuse the record whole, and with it every heavy leg it runs. What the queue keeps of each unit
+/// beyond them - its tenant, weight, priority, cost, aging bound and its hold mark - and each tenant's deficit
+/// are kept in a record of their own beside it (<see cref="QueuePathFor"/>), read and written only while the slots'
+/// record is held, so the two change as one; a row whose entry has left the slots' record counts for nothing, and goes
+/// with the next change. An entry with no row is an older build's, which admits its own leg while the leg is fewer from
+/// the front of the line than every count up to it allows: it is counted holding exactly where that build holds it, and
+/// while one of them waits no unit behind it is granted a slot, since that build counts every unit ahead of its own -
+/// so builds of both kinds on one machine never run more legs than its count.
 /// </para>
 /// <para>
 /// Named by what tells this machine from every other, never by its name, which a Mac takes from each network it joins:
@@ -218,32 +307,47 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// </para>
 /// <para>
 /// A slot is held by its process, never by a timeout: an entry whose process has ended - a command that crashed, or
-/// was killed, holding a slot - is reclaimed by whoever looks next, and said to be. Told by the process alone, unlike
-/// the run lock's entries, which may name another machine.
+/// was killed, holding a slot - is reclaimed by whoever looks next, and said to be, its hold mark with it. Told by the
+/// process alone, unlike the run lock's entries, which may name another machine.
 /// </para>
 /// <para>
 /// Beside the slots, the room each admitted leg's build still needed as it was placed, by the filesystem it fills, claimed
 /// whole as it was let start and held, like its slot, until its work ends: a command counts the room its own legs need as
 /// it places them, and two commands each placing one leg on one host both found it room and filled its disk between them.
-/// Kept in a record of its own beside the slots', which a build from before it never reads: one that found a member it
-/// does not know in the slots' record would refuse that record.
+/// Kept in a record of its own beside the slots', which a build from before it never reads.
 /// </para>
 /// <para>
 /// And, in a third record beside them, the leg making room on each filesystem from other trees' idle builds, held while it
 /// lists and removes them and, like a slot, by its process: one leg at a time on a filesystem
-/// (<see cref="MakeRoomOn"/>), so the next reads the room the one before made.
+/// (<see cref="MakeRoomOn"/>), so the next reads the room the one before made. And how long each unit held its slot, for
+/// what the next unit of its name is expected to cost (<see cref="UnitDurations"/>).
 /// </para>
 /// </remarks>
 /// <param name="fileSystem">Reads and writes the record.</param>
 /// <param name="output">Says what was reclaimed, and what could not be given back.</param>
 /// <param name="identity">This process, and how the liveness of another is told.</param>
-/// <param name="path">Names the slots' record, asked the first time a leg asks for a slot; the room's is named beside it.</param>
+/// <param name="path">Names the slots' record, asked the first time a leg asks for a slot; the others are named beside it.</param>
 /// <param name="machineSlots">
 /// The count of heavy legs this machine's settings file declares, read at each look, or <see langword="null"/> where it
 /// declares none; none is read where left out. Refused with the file's <see cref="Configuration.ConfigException"/> where
 /// the file cannot be read.
 /// </param>
-public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, Func<string> path, Func<int?>? machineSlots = null)
+/// <param name="tenants">
+/// How two tenants are told apart - a tenant names its repository by its path, so as this machine compares paths;
+/// ordinal where left out.
+/// </param>
+/// <param name="clock">
+/// The time of day a unit asks, is granted and gives its slot back at, and its wait is counted to - the system's where left
+/// out. Only what is kept in the records is read from it: a wait itself is measured by its leg on the monotonic clock.
+/// </param>
+public sealed class MachineDispatchQueue(
+    IFileSystem fileSystem,
+    IHarnessOutput output,
+    IProcessIdentity identity,
+    Func<string> path,
+    Func<int?>? machineSlots = null,
+    IEqualityComparer<string>? tenants = null,
+    TimeProvider? clock = null)
 {
     /// <summary>The command name this reports under.</summary>
     public const string CommandName = "admission";
@@ -260,10 +364,20 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
     private const string MakingConsequence = "Until it can be, no leg makes room on this machine from other trees' idle builds.";
 
+    private const string QueueSubject = "The record of what the dispatch queue keeps of the heavy legs admitted onto this machine";
+
+    /// <summary>
+    /// The tenant every unit of a local command is charged to: within it, the unit's repository names its own
+    /// (<see cref="TenantOf"/>); a unit whose repository was not said is charged to it alone.
+    /// </summary>
+    public const string LocalTenant = "local";
+
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
     private readonly IProcessIdentity _identity = identity;
     private readonly Func<int?> _machineSlots = machineSlots ?? (() => null);
+    private readonly IEqualityComparer<string> _tenants = tenants ?? StringComparer.Ordinal;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly Lazy<MachineWideList<SlotEntry>> _record = new(() => Record<SlotEntry>(fileSystem, path, Subject, Consequence));
 
     // The settings file's refusal last said at a look that weighed a unit by the count its leg's work began by: said once,
@@ -274,6 +388,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     // name, naming it again says so a second time.
     private Lazy<MachineWideList<RoomClaim>>? _claims;
     private Lazy<MachineWideList<RoomMaking>>? _making;
+    private UnitDurations? _durations;
 
     /// <summary>Slots kept in the record at <paramref name="path"/>.</summary>
     /// <param name="fileSystem">Reads and writes the record.</param>
@@ -281,11 +396,12 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="identity">This process, and how the liveness of another is told.</param>
     /// <param name="path">The record.</param>
     /// <param name="machineSlots">The count this machine's settings file declares, read at each look; none where left out.</param>
-    public HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, string path, Func<int?>? machineSlots = null)
-        : this(fileSystem, output, identity, () => path, machineSlots)
+    /// <param name="tenants">How two tenants are told apart; ordinal where left out.</param>
+    /// <param name="clock">The time of day kept in the records; the system's where left out.</param>
+    public MachineDispatchQueue(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, string path, Func<int?>? machineSlots = null, IEqualityComparer<string>? tenants = null, TimeProvider? clock = null)
+        : this(fileSystem, output, identity, () => path, machineSlots, tenants, clock)
     {
     }
-
 
     /// <summary>
     /// The record of <paramref name="platform"/>'s machine, for the user running this process. Where the machine can be
@@ -315,6 +431,31 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="slots">The slots' record.</param>
     public static string MakingPathFor(string slots) => Path.ChangeExtension(slots, ".making.json");
 
+    /// <summary>
+    /// The record of what the dispatch queue keeps of each unit beyond its entry in the slots' record at
+    /// <paramref name="slots"/> - its tenant, weight, priority, cost, aging bound and hold mark - and of each tenant's
+    /// deficit, a debt whether or not the tenant has a unit waiting: one of its own beside it, which a build before it
+    /// never reads.
+    /// </summary>
+    /// <param name="slots">The slots' record.</param>
+    public static string QueuePathFor(string slots) => Path.ChangeExtension(slots, ".queue.json");
+
+    /// <summary>
+    /// The directory of the records of how long each unit held its slot (<see cref="UnitDurations"/>), beside the slots'
+    /// record at <paramref name="slots"/>.
+    /// </summary>
+    /// <param name="slots">The slots' record.</param>
+    public static string DurationsPathFor(string slots) => Path.ChangeExtension(slots, ".durations");
+
+    /// <summary>
+    /// The tenant a unit of <paramref name="repository"/> is charged to: <c>local/&lt;repository&gt;</c>, its path
+    /// forward-slashed, for a local command - every worktree, leg copy and host copy of one repository naming it alike
+    /// (<see cref="Repository.IHarnessContextLoader.RepositoryOfAsync"/>) - or <see cref="LocalTenant"/> where none was said.
+    /// </summary>
+    /// <param name="repository">The repository the unit's tree is of, as its main checkout is spelt on this machine.</param>
+    public static string TenantOf(string? repository)
+        => string.IsNullOrWhiteSpace(repository) ? LocalTenant : $"{LocalTenant}/{repository.Replace('\\', '/').Trim('/')}";
+
     /// <summary>The slots' record, as a refusal names it for whoever must look at what it holds.</summary>
     /// <exception cref="HarnessException">No directory of this user's own could be named to keep it in.</exception>
     public string Location => File.Path;
@@ -330,6 +471,12 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
     private MachineWideList<RoomMaking> Making
         => (_making ??= new(() => Record<RoomMaking>(_fileSystem, () => MakingPathFor(File.Path), MakingSubject, MakingConsequence))).Value;
+
+    /// <summary>How long each unit held its slot, kept beside the slots' record.</summary>
+    private UnitDurations Durations => _durations ??= new UnitDurations(_fileSystem, _output, DurationsPathFor(File.Path));
+
+    /// <summary>The record of what the queue keeps of each unit beyond its entry, beside the slots'.</summary>
+    private string QueuePath => QueuePathFor(File.Path);
 
     /// <summary>
     /// Holds the making of room on <paramref name="filesystem"/> from other trees' idle builds for <paramref name="forLeg"/>,
@@ -394,7 +541,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     {
         try
         {
-            var read = _machineSlots();
+            var read = _machineSlots?.Invoke();
 
             Volatile.Write(ref _unreadSaid, null);
             return read;
@@ -418,11 +565,13 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     }
 
     /// <summary>
-    /// Records a leg as asking for a slot, last in line, and returns its place; given back when the place is disposed.
+    /// Records a unit as asking for a slot, last in line, with what the queue keeps of it beside its entry - its tenant,
+    /// weight, priority, aging bound and what its name's history says it costs - both written in one change of the slots'
+    /// record, and returns its place; given back when the place is disposed.
     /// </summary>
     /// <param name="runId">The run the leg is part of.</param>
     /// <param name="command">The command running it.</param>
-    /// <param name="leg">The leg.</param>
+    /// <param name="leg">The leg, or a unit of its work, named <c>&lt;leg&gt;/&lt;unit&gt;</c>.</param>
     /// <param name="host">The host its tree is on, as the command line names it.</param>
     /// <param name="tree">The tree it works in, on that host.</param>
     /// <param name="variant">Its build variant, where it has one.</param>
@@ -431,16 +580,37 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// The reading of the machine's rule the leg's work began by, where what asks is a unit of that work; see
     /// <see cref="SlotPlace.WorkBegunBy"/>.
     /// </param>
+    /// <param name="repository">
+    /// The repository the unit's tree is of, as its main checkout is spelt on this machine: what names its tenant
+    /// (<see cref="TenantOf"/>) and the history its cost is read from; <see langword="null"/> where none was said.
+    /// </param>
+    /// <param name="priority">The run's priority, at least 1.</param>
+    /// <param name="ageAfter">How long a unit waits before its tenant's share begins to age (<see cref="AdmissionRule.AgeAfter"/>).</param>
+    /// <param name="weight">The tenant's weight, above 0: 1 for every tenant of a local command.</param>
     /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
-    internal SlotPlace Ask(string runId, string command, string leg, string host, string tree, string? variant, int slots, AdmissionReading? workBegunBy = null)
+    internal SlotPlace Ask(
+        string runId,
+        string command,
+        string leg,
+        string host,
+        string tree,
+        string? variant,
+        int slots,
+        AdmissionReading? workBegunBy = null,
+        string? repository = null,
+        int priority = DispatchOrder.LeastPriority,
+        TimeSpan? ageAfter = null,
+        double weight = DispatchOrder.LocalWeight)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(slots, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(priority, DispatchOrder.LeastPriority);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(weight);
 
         var entry = new SlotEntry(
             _identity.CurrentMachine,
             _identity.CurrentId,
             runId,
-            DateTimeOffset.UtcNow,
+            _clock.GetUtcNow(),
             command,
             leg,
             host,
@@ -449,14 +619,33 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
             _identity.Current,
             variant);
 
-        File.Change((entries, afterwards) => [.. Live(entries, entry => entry, "a heavy-leg slot", afterwards), entry]);
+        var unit = new QueuedUnit(
+            entry,
+            TenantOf(repository),
+            priority,
+            Durations.CostOf(repository, command, leg),
+            (ageAfter ?? TimeSpan.FromMinutes(AdmissionSettings.DefaultAgeAfterMinutes)).TotalMinutes)
+        {
+            Weight = weight,
+        };
 
-        return new SlotPlace(this, entry, workBegunBy);
+        File.Change((entries, afterwards) =>
+        {
+            List<SlotEntry> line = [.. Live(entries, entry => entry, "a heavy-leg slot", afterwards), entry];
+            var kept = Queued();
+
+            Keep(kept, kept with { Units = [.. RowsOf(kept, line).Values, unit] });
+            return line;
+        });
+
+        return new SlotPlace(this, entry, unit, repository, workBegunBy);
     }
 
     /// <summary>
     /// Where <paramref name="place"/> stands now among the legs asking this machine for a slot, reclaiming those whose
-    /// process has ended. A place the record lost - a record removed by hand - is asked for again, last in line.
+    /// process has ended, and granting the slots left to the units waiting, in the fair order, in the same change of the
+    /// record (<see cref="DispatchOrder.Read"/>): a unit holds a slot once it is granted one, until it gives it back. A place
+    /// the record lost - a record removed by hand - is asked for again, last in line, holding nothing.
     /// </summary>
     /// <param name="place">The place a leg was given, and has not given back.</param>
     /// <exception cref="ObjectDisposedException">The place was given back: a leg that gave its place back asks again.</exception>
@@ -474,13 +663,22 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
         return File.Update((entries, afterwards) =>
         {
             var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards);
-            var line = live.Contains(place.Entry) ? live : [.. live, place.Entry];
-            var ahead = line.IndexOf(place.Entry);
-            var holders = Holding(line, machine);
+            var lost = !live.Contains(place.Entry);
+            var line = lost ? [.. live, place.Entry] : live;
+            var kept = Queued();
+            var rows = RowsOf(kept, line);
 
-            return (
-                line.SequenceEqual(entries) ? null : line,
-                new SlotStanding(ahead < holders.Count, holders, [.. line.Take(ahead)], machine ?? line.Take(ahead + 1).Min(entry => entry.Slots)));
+            // Lost from either record, it asks again: its entry last in line, and its row as it asked, holding nothing.
+            if (lost || !rows.ContainsKey(place.Entry))
+            {
+                rows[place.Entry] = place.Unit;
+            }
+
+            var reading = DispatchOrder.Read(line, rows, kept.Tenants, machine, _clock.GetUtcNow(), _tenants, grant: true);
+
+            Keep(kept, reading.Record);
+
+            return (line.SequenceEqual(entries) ? null : line, reading.StandingOf(place.Entry, machine));
         });
     }
 
@@ -554,18 +752,28 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     }
 
     /// <summary>
-    /// Gives <paramref name="entry"/>'s slot, or its place in line, back, and the room it claimed where it claimed any.
-    /// One that cannot be is said and fails nothing: this process's other legs no longer count it, and it leaves the
-    /// record with the next change this process makes to it, or is reclaimed as a dead holder's is once this process has
-    /// ended.
+    /// Gives <paramref name="place"/>'s slot, or its place in line, back, and the room it claimed where it claimed any;
+    /// its row beside the slots' record counts for nothing once its entry has gone, and leaves with the next change. One
+    /// that cannot be is said and fails nothing: this process's other legs no longer count it, and it leaves the record
+    /// with the next change this process makes to it, or is reclaimed as a dead holder's is once this process has ended.
+    /// Where its unit was taken and ran, how long it held its slot is kept for what the next unit of its name costs.
     /// </summary>
-    internal void Leave(SlotEntry entry, bool claimed)
+    /// <param name="place">The place given back.</param>
+    /// <param name="held">How long its unit held its slot, from when it was let start to when its work ended; <see langword="null"/> where it never started.</param>
+    internal void Leave(SlotPlace place, TimeSpan? held)
     {
+        var entry = place.Entry;
+
         File.GiveBack(kept => kept == entry, ex => CouldNotGiveBack(entry, "its heavy-leg slot", ex));
 
-        if (claimed)
+        if (place.Claimed)
         {
             Claims.GiveBack(kept => kept.Holder == entry, ex => CouldNotGiveBack(entry, "the room it claimed", ex));
+        }
+
+        if (held is { } ran)
+        {
+            Durations.Record(place.Repository, entry.Command, entry.Leg, ran, _clock.GetUtcNow());
         }
     }
 
@@ -576,48 +784,111 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
             + "leaves the record with the next change this process makes to it, or once this process has ended.");
 
     /// <summary>
-    /// The legs holding slots: the front of the line, each fewer legs from the front than the fewest any leg up to it
-    /// allows at once - or, where the machine declares its own count (<paramref name="machine"/>), than that count, whatever
-    /// any entry's command allowed.
-    /// </summary>
-    private static List<SlotEntry> Holding(IReadOnlyList<SlotEntry> line, int? machine)
-    {
-        var holding = new List<SlotEntry>();
-        var fewest = int.MaxValue;
-
-        foreach (var entry in line)
-        {
-            fewest = machine ?? Math.Min(fewest, entry.Slots);
-
-            if (holding.Count >= fewest)
-            {
-                break;
-            }
-
-            holding.Add(entry);
-        }
-
-        return holding;
-    }
-
-    /// <summary>
-    /// The entries still standing in the order they asked, first in line first, each with whether it holds a slot - the
-    /// front of the line, as the record's own reading of a place is weighed by - with nothing reclaimed and nothing
-    /// written: what a dry run reads to say where a holder's leg stands, and where in the line it is. An entry whose
-    /// process has ended is passed over without a word, and stays until a leg asks or looks again.
+    /// The entries still standing in the queue's one order - the holders first, in the order they asked, then the units
+    /// waiting, in the order the queue serves them (<see cref="DispatchOrder.Read"/>) - each with whether it holds a slot,
+    /// with nothing reclaimed, granted or written: what a dry run reads to say where a holder's leg stands, and how many
+    /// are ahead of it. An entry whose process has ended is passed over without a word, and stays until a leg asks or looks
+    /// again.
     /// </summary>
     /// <exception cref="HarnessException">The record could not be named, read or written, or this machine's settings file could not be read.</exception>
     public IReadOnlyList<SlotInLine> Line()
     {
-        var machine = MachineSlots(place: null);
+        var reading = Standing(MachineSlots(place: null));
 
-        return File.Update<IReadOnlyList<SlotInLine>>((entries, _) =>
+        return [.. reading.Holders.Select(entry => new SlotInLine(entry, true)), .. reading.Waiting.Select(entry => new SlotInLine(entry, false))];
+    }
+
+    /// <summary>
+    /// The queue as it stands, changing nothing: each class's capacity, its holders and its waiting units, by tenant, the
+    /// waiting ones in the order the queue serves them, each with what the fair order weighs it by. The heavy class's
+    /// capacity is the machine's own count where its settings file declares one, else the fewest any holder or the next
+    /// unit served allows, and with no unit in line the count <paramref name="inForce"/> declares; the process and agent
+    /// classes are <paramref name="inForce"/>'s, shown, and asked by nothing yet.
+    /// </summary>
+    /// <param name="inForce">
+    /// The rule a heavy leg of the tree the command was typed in would be admitted by, read through
+    /// <see cref="AdmissionSettings.InForce"/>; <see langword="null"/> where no section declares admission.
+    /// </param>
+    /// <exception cref="HarnessException">The record could not be named, read or written, or this machine's settings file could not be read.</exception>
+    public IReadOnlyList<DispatchClass> Queue(AdmissionRule? inForce)
+    {
+        var machine = MachineSlots(place: null);
+        var reading = Standing(machine);
+        var now = _clock.GetUtcNow();
+        var next = reading.Holders.Concat(reading.Waiting.Take(1)).ToList();
+
+        return
+        [
+            new DispatchClass(
+                DispatchClassName.Heavy,
+                machine ?? (next.Count > 0 ? next.Min(entry => entry.Slots) : inForce?.HeavyLegs),
+                [.. reading.Holders.Select(entry => new DispatchUnit(entry, reading.Rows.GetValueOrDefault(entry), null, null, null))],
+                [.. reading.Waiting.Select(entry => reading.Rows.GetValueOrDefault(entry) is { } row
+                    ? new DispatchUnit(entry, row, now - entry.AskedUtc, DispatchOrder.ShareOf(row, now), reading.DeficitOf(row.Tenant))
+                    : new DispatchUnit(entry, null, now - entry.AskedUtc, null, null))],
+                Asked: true),
+            new DispatchClass(DispatchClassName.Process, inForce is null ? null : inForce.Processes ?? Environment.ProcessorCount, [], [], Asked: false),
+            new DispatchClass(DispatchClassName.Agent, inForce?.Agents, [], [], Asked: false),
+        ];
+    }
+
+    /// <summary>The queue as it stands, read under the slots' record's lock with nothing reclaimed, granted or written.</summary>
+    private DispatchOrder.Reading Standing(int? machine)
+        => File.Update((entries, _) =>
         {
             var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards: null);
-            var holding = new HashSet<SlotEntry>(Holding(live, machine));
+            var kept = Queued();
 
-            return ((IReadOnlyList<SlotEntry>?)null, (IReadOnlyList<SlotInLine>)[.. live.Select(entry => new SlotInLine(entry, holding.Contains(entry)))]);
+            return ((IReadOnlyList<SlotEntry>?)null, DispatchOrder.Read(live, RowsOf(kept, live), kept.Tenants, machine, _clock.GetUtcNow(), _tenants, grant: false));
         });
+
+    /// <summary>
+    /// What the queue keeps beside the slots' record, read as it stands - nothing where no unit has asked of this build -
+    /// or a refusal naming it: never read as empty, which is the reading that would let units start beside its holders.
+    /// Read only while the slots' record is held.
+    /// </summary>
+    private DispatchRecord Queued()
+        => MachineWideFile.Read<DispatchRecord>(
+            _fileSystem,
+            QueuePath,
+            ex => ex is System.Text.Json.JsonException
+                ? $"{QueueSubject} '{QueuePath}' is not readable as JSON: {ex.Message.TrimEnd('.')}. Remove it once no heavy leg runs or waits on this machine."
+                : $"{QueueSubject} '{QueuePath}' could not be read: {ex.Message.TrimEnd('.')}. {Consequence}")
+            ?? DispatchRecord.Empty;
+
+    /// <summary>
+    /// Writes <paramref name="record"/> beside the slots' record where it is not what <paramref name="kept"/> holds - only
+    /// while the slots' record is held, so the two change as one - and refuses, naming it, where it cannot be written.
+    /// </summary>
+    private void Keep(DispatchRecord kept, DispatchRecord record)
+    {
+        if (kept.Units.SequenceEqual(record.Units) && kept.Tenants.SequenceEqual(record.Tenants))
+        {
+            return;
+        }
+
+        MachineWideFile.Written($"{QueueSubject} '{QueuePath}'", Consequence, () =>
+        {
+            _fileSystem.CreateDirectory(Path.GetDirectoryName(QueuePath)!);
+            JsonStateFile.Write(_fileSystem, QueuePath, record);
+        });
+    }
+
+    /// <summary>The rows <paramref name="kept"/> holds of the entries of <paramref name="line"/>, by entry: a row whose entry has gone counts for nothing.</summary>
+    private static Dictionary<SlotEntry, QueuedUnit> RowsOf(DispatchRecord kept, IReadOnlyList<SlotEntry> line)
+    {
+        var standing = new HashSet<SlotEntry>(line);
+        var rows = new Dictionary<SlotEntry, QueuedUnit>();
+
+        foreach (var row in kept.Units)
+        {
+            if (standing.Contains(row.Holder))
+            {
+                rows[row.Holder] = row;
+            }
+        }
+
+        return rows;
     }
 
     /// <summary>
@@ -670,17 +941,25 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 /// <summary>A leg's place among the heavy legs asking its machine for a slot, given back - with any room it claimed - when disposed.</summary>
 public sealed class SlotPlace : IDisposable
 {
-    private readonly HeavyLegSlots _slots;
+    private readonly MachineDispatchQueue _slots;
 
-    internal SlotPlace(HeavyLegSlots slots, SlotEntry entry, AdmissionReading? workBegunBy = null)
+    internal SlotPlace(MachineDispatchQueue slots, SlotEntry entry, QueuedUnit unit, string? repository, AdmissionReading? workBegunBy = null)
     {
         _slots = slots;
         Entry = entry;
+        Unit = unit;
+        Repository = repository;
         WorkBegunBy = workBegunBy;
     }
 
     /// <summary>What the record holds for the leg.</summary>
     public SlotEntry Entry { get; }
+
+    /// <summary>What the queue keeps of the unit beside its entry, as it asked: holding nothing.</summary>
+    public QueuedUnit Unit { get; }
+
+    /// <summary>The repository its tree is of, as its main checkout is spelt on this machine; <see langword="null"/> where none was said.</summary>
+    internal string? Repository { get; }
 
     /// <summary>
     /// The reading of the machine's rule its leg's work began by (<see cref="Runs.PlacedLeg.AdmittedBy"/>), where the place
@@ -696,8 +975,17 @@ public sealed class SlotPlace : IDisposable
     /// <summary>Whether the leg claimed room on its machine, which is given back with the place.</summary>
     internal bool Claimed { get; set; }
 
-    /// <summary>Gives the place back. Calling it twice is not an error; the second call does nothing.</summary>
-    public void Dispose()
+    /// <summary>Gives the place back, its unit never having started. Calling it twice is not an error; the second call does nothing.</summary>
+    public void Dispose() => GiveBack(held: null);
+
+    /// <summary>
+    /// Gives the place back once its unit's work has ended, <paramref name="held"/> after it was let start: kept for what
+    /// the next unit of its name costs. Calling it twice is not an error; the second call does nothing.
+    /// </summary>
+    /// <param name="held">How long the unit held its slot, from when it was let start to when its work ended.</param>
+    internal void Ran(TimeSpan held) => GiveBack(held);
+
+    private void GiveBack(TimeSpan? held)
     {
         if (Left)
         {
@@ -705,6 +993,6 @@ public sealed class SlotPlace : IDisposable
         }
 
         Left = true;
-        _slots.Leave(Entry, Claimed);
+        _slots.Leave(this, held);
     }
 }

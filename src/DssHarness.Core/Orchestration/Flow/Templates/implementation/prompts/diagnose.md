@@ -6,8 +6,8 @@ The step `{source.step}` ended with exit code {source.code}:
 
 {source.error}
 
-What it found, where it is a check - each red leg, check or finding with the lines where it failed and where its whole
-output is:
+What it found, where it is a check - each red leg, check or finding with what it printed, digested: the first error
+whole, the next distinct to four, and where its whole output is:
 
 {source.red}
 
@@ -51,7 +51,9 @@ Where a line says that a step left no output, that thing was not read or did not
 
 ## What to do
 
-1. Read the failure, and the output and logs it names, and find the first thing that went wrong.
+1. Start from the digest's `first` - the first thing that went wrong, in the order the tool met it - and read the
+   output and logs an entry names where the cause needs more than the digest says: the lines a digest's `log` names
+   are those of the entry's own `log` file, numbered as that file numbers them.
 2. Find the cause in the code and the configuration, and reproduce it where the repository's tools let you; say in
    the evidence whether you did.
 3. Decide the course by the cause:

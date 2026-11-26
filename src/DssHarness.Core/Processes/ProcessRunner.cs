@@ -17,8 +17,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private const int ErrorFileNotFound = 2;
 
     /// <summary>
-    /// How often the end of what a child wrote is looked for once the child has ended and something it left running still
-    /// holds its output: a look's pace, never a bound.
+    /// How often the end of what a child wrote is looked for once the child has ended and its output has not - each look
+    /// ending the read that waits on it (<see cref="StreamCapture.Look"/>): a look's pace, never a bound.
     /// </summary>
     private static readonly TimeSpan DrainLook = TimeSpan.FromMilliseconds(20);
 
@@ -78,10 +78,16 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>
-    /// What a child's own waits - its leftovers' ending, its output held - are measured and told by: the system's clock, or
-    /// a test's.
+    /// What a child's time limit and its own waits - what a stop ended going, its leftovers' ending, its output held - are
+    /// measured and told by: the system's clock, or a test's.
     /// </summary>
     internal TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// How what a stop ends - and what a contained child's container ends at its own end - is ended and seen to have gone:
+    /// the machine's own, or a test's standing in for a process whose end is slow.
+    /// </summary>
+    internal ProcessEnds Ends { get; init; } = ProcessEnds.Machine;
 
     /// <summary>
     /// How child output is decoded, and child input encoded, on every platform. Left unset,
@@ -207,8 +213,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             WorkingDirectory = request.WorkingDirectory ?? string.Empty,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = request.StandardOutputEncoding ?? Utf8NoBom,
-            StandardErrorEncoding = Utf8NoBom,
+            StandardOutputEncoding = OutputDecoding(request).Encoding,
+            StandardErrorEncoding = AsDotNetReadsIt.Encoding,
 
             // Every child gets an input of its own, never this process's. A tool that reads its input would
             // otherwise consume what was meant for the harness. And on Windows a child that inherits an input
@@ -315,6 +321,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         var statusName = throughStep ? StatusName(windows) : null;
         using var status = statusName is null ? null : OpenedStatus(statusName, request.FileName, resolved);
 
+        // The program the step created, on Windows, by a copy of the handle the step created it with, held for as long as
+        // the run: a stop ends and waits for it by that, whatever its own security refuses another.
+        using var program = new CreatedProgram();
+
         if (throughStep)
         {
             // Placed before it runs a line of its own, through this tool's own step: the container
@@ -376,7 +386,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         var stopwatch = Stopwatch.StartNew();
 
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // The child's time limit, on the runner's clock - its timer the clock's - cancelled too as the caller gives up, as a
+        // source linked to the caller's would be; a source cancelled lets go of its timer.
+        using var timeoutSource = new CancellationTokenSource(Timeout.InfiniteTimeSpan, Clock);
+        using var callerGaveUp = cancellationToken.Register(static source => ((CancellationTokenSource)source!).Cancel(), timeoutSource);
         using var reaching = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token);
 
         // Waited for before the step starts, so a step however quick to say how its start went is
@@ -406,6 +419,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             throw;
         }
 
+        var limitFrom = Clock.GetTimestamp();
+
         if (request.Timeout is { } budget)
         {
             timeoutSource.CancelAfter(budget);
@@ -413,7 +428,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // What is left of the child's time limit, at which what it left asked to end and still standing is made to: none
         // where it was given none.
-        TimeSpan? Left() => request.Timeout is { } limit ? (limit > stopwatch.Elapsed ? limit - stopwatch.Elapsed : TimeSpan.Zero) : null;
+        TimeSpan? Left() => request.Timeout is { } limit && Clock.GetElapsedTime(limitFrom) is var spent
+            ? (limit > spent ? limit - spent : TimeSpan.Zero)
+            : null;
 
         var stopped = false;
         var placed = false;
@@ -433,20 +450,33 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
                 placed = true;
                 started = heard.Started;
+
+                // Copied out of the step while it stands, waiting on the program: a step that has gone holds no handle.
+                if (windows && heard.Program is { } value)
+                {
+                    program.Handle = Containment.CopiedFrom(process.SafeHandle, value);
+                }
             }
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
                 stopped = true;
-                uncontained = await StopAsync(request, grouped, job, process, Left()).ConfigureAwait(false);
+                uncontained = await StopAsync(request, resolved, grouped, job, process, Left(), program.Handle).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Nothing the step says can be read, so nothing it starts is run blind: it goes.
-                KillTree(process);
+                // Nothing the step says can be read, so nothing it starts is run blind: it goes, with its tree - none of it
+                // waited for, since its output is never read - and what of it could not be ended is said with it.
+                string? unended;
+
+                using (var ended = new EndedProcesses(Ends))
+                {
+                    EndTree(process, grouped: false, ended, program: null);
+                    unended = Unended(process, ended);
+                }
 
                 throw new ProgramStartException(
                     request.FileName,
-                    $"'{resolved}' could not be started: what contain-exec said of its start could not be read: {ex.Message}",
+                    $"'{resolved}' could not be started: what contain-exec said of its start could not be read: {ex.Message}{(unended is null ? string.Empty : $"; {unended}")}",
                     ex);
             }
         }
@@ -462,9 +492,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // Both streams are read from the moment the child runs: a child that fills a pipe nobody is
         // reading blocks forever. Until the step has said the program started, nothing but the step
-        // writes them, and it writes nothing there.
-        var standardOutput = new StreamCapture(OutputOf(process, request), request.OnOutputLine, request.OutputKept, request.CutLine, request.OnLineInPieces, request.OutputLog);
-        var standardError = new StreamCapture(process.StandardError, request.OnErrorLine, request.ErrorKept, request.CutLine, request.OnLineInPieces, request.ErrorLog);
+        // writes them, and it writes nothing there. Each read of either is kept and handed on under
+        // the one gate the two share, so what one read of a stream returned is never parted by a line
+        // of the other's.
+        var streams = new Lock();
+        var standardOutput = new StreamCapture(process.StandardOutput.BaseStream, OutputDecoding(request), streams, request.OnOutputLine, request.OutputKept, request.CutLine, request.OnLineInPieces, request.OutputLog);
+        var standardError = new StreamCapture(process.StandardError.BaseStream, AsDotNetReadsIt, streams, request.OnErrorLine, request.ErrorKept, request.CutLine, request.OnLineInPieces, request.ErrorLog);
 
         // Written while both output streams are being read, so a child that answers as it reads
         // can never block this on a full output pipe, nor this block it on a full input pipe.
@@ -490,7 +523,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 // contained child is ended through its container, which reaches what detached itself
                 // from its parent as surely as what did not.
                 stopped = true;
-                uncontained = await StopAsync(request, grouped, job, process, Left()).ConfigureAwait(false);
+                uncontained = await StopAsync(request, resolved, grouped, job, process, Left(), program.Handle).ConfigureAwait(false);
             }
         }
 
@@ -502,8 +535,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             // What a contained child starts is ended with it, at its own end as at a stop: a
             // leftover holding the output - a server started in the background, a build's node -
-            // would otherwise keep the reading below from ever ending.
-            uncontained = await EndContainerAsync(job, process, Left()).ConfigureAwait(false);
+            // would otherwise keep the reading below from ever ending. Ended, it has gone before
+            // the reading's end is looked for, so it is never taken for a process left running.
+            uncontained = await EndContainerAsync(job, process, Left(), resolved).ConfigureAwait(false);
         }
 
         // The child has ended, and a contained child's session with it, at its own end or at a stop: its record has nothing
@@ -520,14 +554,16 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // The process has exited, but what it wrote just before exiting can still be in the pipes: both streams are read
         // until every character the child wrote is - to their end, which comes as the child and all it left go, or, where
-        // something it left running still holds them, until each pipe holds nothing more and the reading waits on it. What
-        // that process writes from then on is its own - a server its build started, kept for the next phase by design - and
-        // is said not read; the child's own output is never cut at a number of seconds, nor a run held for as long as such
-        // a process lives. Told every five minutes while a busy leftover keeps the pipe from ever going quiet, and ended
-        // where the caller gives up.
+        // something it left running still holds them, until a look finds the pipe holding nothing with no read waiting on
+        // it. What that process writes from then on is its own - a server its build started, kept for the next phase by
+        // design - and is said not read; the child's own output is never cut at a number of seconds, nor a run held for as
+        // long as such a process lives. Told every five minutes while a busy leftover keeps the pipe from ever going quiet,
+        // and ended where the caller gives up.
         // A stopped child's rest is read whatever the caller does: the stop has been made, and what it said as it went is the
-        // run's to keep.
-        var held = await DrainedAsync(resolved, standardOutput, standardError, stopped ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
+        // run's to keep. Whatever the stop, or a contained child's container, ended has gone by now, so what still holds a
+        // pipe is only ever what the child left running - or what the stop, or the container, could not reach or end, which
+        // the result says.
+        var held = await DrainedAsync(resolved, standardOutput, standardError, unreached: uncontained is not null, stopped ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
 
         var capturedOutput = standardOutput.Taken();
         var capturedError = standardError.Taken();
@@ -569,6 +605,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             BeatLost = beatLost,
             Uncontained = uncontained,
+            ProcessId = process.Id,
             OutputLog = request.OutputLog,
             ErrorLog = request.ErrorLog,
             OutputHeld = held,
@@ -576,111 +613,204 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>
-    /// Waits, once the child has ended, until every character it wrote has been read from both of its streams: to their
-    /// end, or - where something it left running holds one - until each pipe holds nothing more and its reading waits on it.
+    /// Waits, once the child has ended - and whatever its stop or its container's end ended has gone
+    /// (<see cref="EndedProcesses"/>) - until every character it wrote has been read from both of its streams: to their
+    /// end, or - where something it left running holds one - until a look at it finds its pipe holding nothing, no read
+    /// waiting on it (<see cref="StreamCapture.Look"/>), which ends its reading there. A look settles at once, so a
+    /// process still ending would be taken for one left running: nothing a stop ended is, by then.
     /// </summary>
+    /// <param name="resolved">The program the child runs.</param>
+    /// <param name="output">The child's output.</param>
+    /// <param name="error">The child's error output.</param>
+    /// <param name="unreached">
+    /// Whether the stop, or the child's container, could not reach or end a process it was to (<see cref="ProcessResult.Uncontained"/>):
+    /// what holds the output is then said to be that process or one the child left running - in the wait told every five
+    /// minutes and in what is said once it is over alike - never the child's leftover alone.
+    /// </param>
+    /// <param name="cancellationToken">Gives the wait up.</param>
     /// <returns>
-    /// What says a process the child left holds its output, where one does; <see langword="null"/> where both streams
-    /// ended, or the caller gave up first.
+    /// What says a process the child left - or one its end could not reach or end - holds its output, where one does;
+    /// <see langword="null"/> where both streams ended, or the caller gave up first.
     /// </returns>
-    private async Task<string?> DrainedAsync(string resolved, StreamCapture output, StreamCapture error, CancellationToken cancellationToken)
+    internal async Task<string?> DrainedAsync(string resolved, StreamCapture output, StreamCapture error, bool unreached, CancellationToken cancellationToken)
     {
         var ended = Task.WhenAll(output.Reading, error.Reading);
 
-        if (ended.IsCompleted)
+        // What holds the output, as the wait is told and as its end says it: never the child's leftover alone where its end
+        // could not reach or end a process.
+        var holding = unreached ? "a process its end could not reach or end, or one it left running" : "what it left running";
+
+        if (!ended.IsCompleted)
         {
-            await ended.ConfigureAwait(false);
+            var drained = await Waits.ForAsync(
+                async stop =>
+                {
+                    while (!ended.IsCompleted)
+                    {
+                        // Each look ends the read a stream waits on, which reads on where its pipe holds anything or every
+                        // writer has let it go, and ends where its pipe holds nothing while something the child left still
+                        // holds it - one that cannot be asked is read to its end.
+                        output.Look();
+                        error.Look();
+
+                        await Task.WhenAny(ended, Task.Delay(DrainLook, stop)).ConfigureAwait(false);
+                        stop.ThrowIfCancellationRequested();
+                    }
+
+                    return true;
+                },
+                new WaitWatch($"the output of '{resolved}' to end, held open by {holding}", Waits.Told, null, Clock),
+                cancellationToken).ConfigureAwait(false);
+
+            if (drained.Kind != WaitEndKind.Done)
+            {
+                return null;
+            }
+        }
+
+        await ended.ConfigureAwait(false);
+
+        if (!output.HeldOpen && !error.HeldOpen)
+        {
             return null;
         }
 
-        var drained = await Waits.ForAsync(
-            async stop =>
-            {
-                while (!ended.IsCompleted)
-                {
-                    // Each stream has ended, or holds nothing more and has been waited on across a look - one that cannot
-                    // be asked is read to its end, as every stream once was.
-                    var outputRead = output.ReadAll();
-                    var errorRead = error.ReadAll();
+        var holder = unreached
+            ? $"the output of '{resolved}' is held by {holding}"
+            : $"'{resolved}' left a process running that holds its output";
 
-                    if (outputRead && errorRead && !ended.IsCompleted)
-                    {
-                        return true;
-                    }
-
-                    await Task.WhenAny(ended, Task.Delay(DrainLook, stop)).ConfigureAwait(false);
-                    stop.ThrowIfCancellationRequested();
-                }
-
-                await ended.ConfigureAwait(false);
-                return false;
-            },
-            new WaitWatch($"the output of '{resolved}' to end, held open by what it left running", Waits.Told, null, Clock),
-            cancellationToken).ConfigureAwait(false);
-
-        return drained is { Kind: WaitEndKind.Done, Value: true }
-            ? $"'{resolved}' left a process running that holds its output: every character it wrote was read, and what that process writes from now on is its own, and is not read"
-            : null;
+        return $"{holder}: every character it wrote was read, and what that process writes from now on is its own, and is not read";
     }
 
     /// <summary>
     /// Stops a child as its request says: a contained one through its container - and any other,
     /// and a contained one whose container was asked for in the moment before it was joined, by its
     /// tree; a child that leads a group of its own, apart from the terminal on Linux and macOS, by its
-    /// group as well, at once, which reaches what its tree handed on.
+    /// group as well, at once, which reaches what its tree handed on - and waits until every process
+    /// the stop ended has gone, told every five minutes, so none of them is still holding the child's
+    /// output when its end is looked for, and none is taken for a process the child left running. What it could not reach
+    /// or end it says.
     /// </summary>
     /// <param name="request">The child's request, saying whether it was contained.</param>
+    /// <param name="resolved">The program the child runs.</param>
     /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
     /// <param name="job">The job holding a contained child on Windows, or <see langword="null"/>.</param>
     /// <param name="process">The child.</param>
-    /// <returns>What the container could not reach, or <see langword="null"/> where it reached all it holds.</returns>
     /// <param name="bound">What is left of the child's time limit, at which what it left asked to end is made to; none where it has none.</param>
-    private async Task<string?> StopAsync(ProcessRequest request, bool grouped, SafeWaitHandle? job, Process process, TimeSpan? bound)
+    /// <param name="program">
+    /// The program the tool's own step created for the child, on Windows, by a copy of the handle it was created with;
+    /// <see langword="null"/> where the child runs no such step, or the step had not said it yet.
+    /// </param>
+    /// <returns>
+    /// What the container could not reach, and what of the child's tree the stop could not end; <see langword="null"/>
+    /// where it reached and ended all it was to.
+    /// </returns>
+    private async Task<string?> StopAsync(ProcessRequest request, string resolved, bool grouped, SafeWaitHandle? job, Process process, TimeSpan? bound, SafeProcessHandle? program)
     {
+        using var ended = new EndedProcesses(Ends);
+        string? unreached = null;
+
         try
         {
-            return request.Contained ? await EndContainerAsync(job, process, bound).ConfigureAwait(false) : null;
+            unreached = request.Contained ? await EndContainerAsync(job, process, bound, resolved).ConfigureAwait(false) : null;
         }
         finally
         {
             // The tree as well, whatever ending the container met: a stop that lands in the moment
             // before the child joined its container reaches nothing through the container, and the
-            // child itself must still go, or the wait that follows would never end.
-            KillTree(process);
+            // child itself must still go, or the wait that follows would never end. Then the group,
+            // for what the tree handed on: walked first, while the child stands, the tree still
+            // reaches what moved to a group of its own - a test under timeout - which the child's end
+            // would have handed on, out of the tree's reach.
+            EndTree(process, grouped, ended, program);
 
-            // Then the group, for what the tree handed on: walked first, while the child stands, the
-            // tree still reaches what moved to a group of its own - a test under timeout - which the
-            // child's end would have handed on, out of the tree's reach. No later process takes the
-            // group's id while anything is left in it.
-            if (grouped)
-            {
-                Containment.KillGroup(process.Id);
-            }
+            await ended.GoneAsync($"what the stop of '{resolved}' ended to go", Waits.Told, Clock).ConfigureAwait(false);
+        }
+
+        // Read once the wait is over, which looked at the tree again: what a look again passed over is the stop's too.
+        var unended = Unended(process, ended);
+
+        return unreached is null ? unended : unended is null ? unreached : $"{unreached}, and {unended}";
+    }
+
+    /// <summary>
+    /// Ends <paramref name="process"/>'s tree, and the group it leads where <paramref name="grouped"/>, keeping what it
+    /// ends in <paramref name="ended"/> (<see cref="Containment.EndTree"/>) - the child by a copy of the handle the runtime
+    /// got as this process created it, and the program the tool's own step created for it by a copy of the handle the step
+    /// created it with, each ended so whatever its own security refuses another, so the wait for it ends. A process of the
+    /// tree running as another user, or one whose own security refuses another its end, is passed over, every other ended,
+    /// and said in what <paramref name="ended"/> could not end (<see cref="EndedProcesses.Refused"/>), as every look again
+    /// at the tree says what it passes over (<see cref="Unended"/>).
+    /// </summary>
+    /// <param name="process">The child.</param>
+    /// <param name="grouped">Whether the child leads a group of its own on Linux and macOS.</param>
+    /// <param name="ended">What keeps each process ended.</param>
+    /// <param name="program">The program the tool's own step created for the child, on Windows; <see langword="null"/> where there is none to hand on.</param>
+    private static void EndTree(Process process, bool grouped, EndedProcesses ended, SafeProcessHandle? program)
+    {
+        try
+        {
+            Containment.EndTree(process, grouped, ended, program is null ? [process.SafeHandle] : [process.SafeHandle, program]);
+        }
+        catch (AggregateException)
+        {
+            // Said in what the end could not end, with what every look again at the tree passes over.
         }
     }
 
     /// <summary>
-    /// Ends everything a contained child's container holds: on Windows the job, all at once; on
-    /// Linux and macOS the session the child leads, asked to end, waited for while any of it stands - told every five
-    /// minutes - and made to at <paramref name="bound"/>, what is left of the child's time limit.
+    /// What of <paramref name="process"/>'s tree could not be ended, and why, as a stop says it: every refusal the walk met
+    /// (<see cref="EndedProcesses.Refused"/>) - its first reading's and every look again's, read once the wait for what it
+    /// ended is over - each said once; <see langword="null"/> where every process of it was ended.
+    /// </summary>
+    /// <param name="process">The child.</param>
+    /// <param name="ended">What the stop ended, and could not.</param>
+    private static string? Unended(Process process, EndedProcesses ended)
+        => ended.Refused.Count == 0
+            ? null
+            : string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"not every process of the tree of pid {process.Id} could be ended: {string.Join("; ", ended.Refused.Select(failure => failure.Message.TrimEnd('.')))}");
+
+    /// <summary>
+    /// The program the tool's own step created for a child, on Windows: a copy of the handle the step created it with, held
+    /// for as long as the child's run, and let go of with it.
+    /// </summary>
+    private sealed class CreatedProgram : IDisposable
+    {
+        /// <summary>The handle, once it was copied out of the step; <see langword="null"/> before, or where it could not be.</summary>
+        public SafeProcessHandle? Handle { get; set; }
+
+        /// <inheritdoc/>
+        public void Dispose() => Handle?.Dispose();
+    }
+
+    /// <summary>
+    /// Ends everything a contained child's container holds, and waits until it has gone, told every five minutes: on
+    /// Windows the job, all at once, each member kept by a handle first; on Linux and macOS the session the child leads,
+    /// asked to end, waited for while any of it stands - a zombie standing for none - told every five minutes - and made to at <paramref name="bound"/>,
+    /// what is left of the child's time limit.
     /// </summary>
     /// <param name="job">The job holding the child on Windows, or <see langword="null"/> elsewhere.</param>
     /// <param name="process">The child, which leads its session on Linux and macOS under its own id.</param>
     /// <param name="bound">What is left of the child's time limit; none where it has none.</param>
+    /// <param name="resolved">The program the child runs.</param>
     /// <returns>What could not be reached, or <see langword="null"/> where all the container holds was.</returns>
-    private Task<string?> EndContainerAsync(SafeWaitHandle? job, Process process, TimeSpan? bound)
+    private async Task<string?> EndContainerAsync(SafeWaitHandle? job, Process process, TimeSpan? bound, string resolved)
     {
         if (job is not null)
         {
-            Containment.Terminate(job);
-            return Task.FromResult<string?>(null);
+            using var ended = new EndedProcesses(Ends);
+
+            Containment.EndJob(job, ended);
+            await ended.GoneAsync($"what the job of '{resolved}' held to go once ended", Waits.Told, Clock).ConfigureAwait(false);
+
+            return null;
         }
 
         _processTable ??= ProcessTableFactory.Create(_platform, this);
 
-        return UnreachedOf(Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, bound, Waits.Told, Clock));
-
-        static async Task<string?> UnreachedOf(Task<HeldEnding> ending) => (await ending.ConfigureAwait(false)).Unreached;
+        return (await Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, bound, Waits.Told, Clock, Ends).ConfigureAwait(false)).Unreached;
     }
 
     /// <summary>
@@ -698,7 +828,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <param name="job">The job holding the child, or <see langword="null"/>.</param>
     /// <param name="process">The child, which leads its session or its group under its own id.</param>
     /// <returns>The record written, to be taken back once the child has ended; <see langword="null"/> where none was.</returns>
-    /// <exception cref="ProgramStartException">The record could not be written: the child was ended, and never said to have started.</exception>
+    /// <exception cref="ProgramStartException">
+    /// The record could not be written: the child was ended, and never said to have started - what its stop could not end
+    /// said with it.
+    /// </exception>
     private async Task<IContainedSessionRecord?> RecordedAsync(
         ProcessRequest request,
         IContainedSessionRecord? record,
@@ -721,15 +854,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         catch (Exception ex)
         {
             // A child no record names is one a killed tool would leave running unseen: it is not run, stopped as a stop
-            // stops it, whatever kept the record from being written.
-            await StopAsync(request, grouped, job, process, request.Timeout).ConfigureAwait(false);
+            // stops it, whatever kept the record from being written, and what the stop could not end is said with it.
+            var unended = await StopAsync(request, resolved, grouped, job, process, request.Timeout, program: null).ConfigureAwait(false);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
 
             if (ex is IOException or UnauthorizedAccessException)
             {
                 throw new ProgramStartException(
                     request.FileName,
-                    $"'{resolved}' could not be started: its {LeftSessions.Noun(grouped)} could not be recorded: {ex.Message}",
+                    $"'{resolved}' could not be started: its {LeftSessions.Noun(grouped)} could not be recorded: {ex.Message}{(unended is null ? string.Empty : $"; {unended}")}",
                     ex);
             }
 
@@ -1322,70 +1455,94 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// string .NET makes (<see cref="LongestLine"/>), in pieces past it, the request told.
     /// </para>
     /// <para>
+    /// What one read returned is kept, written and handed on line by line under a gate the child's other stream shares:
+    /// the lines a child wrote to one stream at once - as much as a pipe hands back in one read - reach whoever takes both
+    /// streams' lines, a phase's log among them, together, never parted by a line of the other stream, which each stream's
+    /// own reading would put wherever its thread happened to run. Which stream's read is handed on first is whichever took
+    /// the gate first: two pipes say nothing of the order their writes were made in. A .NET program's error heading and its
+    /// first frame, written in one write, are read as a thrown error only where nothing comes between them.
+    /// </para>
+    /// <para>
     /// A handler that fails is handed no more lines, and the stream is still read to its end: a child writing more than a
     /// pipe holds would otherwise block on a pipe nobody reads, and one whose input is held open - a host's agent, reading a
     /// file back - would never end. What it raised is kept for the caller to raise once the child has gone.
     /// </para>
     /// <para>
     /// What was read is taken when the caller takes it - once the stream has ended, or once every character the child
-    /// wrote has been read and what a process it left running still holds is all that is left (<see cref="ReadAll"/>).
+    /// wrote has been read and what a process it left running still holds is all that is left (<see cref="Look"/>).
     /// From then on nothing more is kept or handed on: what that process writes is its own.
+    /// </para>
+    /// <para>
+    /// Every character the child wrote has been read, while something it left holds the pipe open, only where the pipe holds
+    /// nothing and no read waits on it to take what it holds: so a look, once the child has ended, ends the read that waits
+    /// and asks the pipe (<see cref="PipeBytes.HeldEmpty"/>). A read's task says nothing of it: on Windows a read of a
+    /// child's pipe waits for a pool thread to make it, its task unanswered while what the child wrote sits in the pipe, and
+    /// a busy machine holds that back for as long as it likes - a look that took a waiting task for a quiet pipe would read
+    /// it as a leftover's hold and give git's whole answer up with it, and a command asking git to name its repository
+    /// would fail.
     /// </para>
     /// </remarks>
     /// <summary>
     /// Reads a child's output from its first character: what the child wrote is kept, whole or as a tail, handed on
-    /// line by line, and written to a log; a read of it can be asked whether it has waited on a quiet pipe across two
-    /// looks, which is how a runner tells a child's own whole output from one a process it left running holds open.
+    /// line by line, and written to a log; a look at it, once the child has ended, ends its reading where a process the
+    /// child left running holds its pipe with nothing in it, which is how a runner tells a child's own whole output from
+    /// one such a process holds open.
     /// </summary>
     internal sealed class StreamCapture
     {
-        private readonly Lock _gate = new();
+        /// <summary>The gate a child's two streams share: what one read returned is kept and handed on whole under it.</summary>
+        private readonly Lock _gate;
         private readonly Action<string>? _onLine;
         private readonly StringBuilder? _whole;
         private readonly StreamTail? _end;
         private readonly LineSplitter? _lines;
 
-        /// <summary>The pipe the stream is read from, asked whether it holds anything once the child has ended.</summary>
-        private readonly System.Runtime.InteropServices.SafeHandle? _pipe;
+        /// <summary>The pipe the stream is read through, each read of it one a look can end.</summary>
+        private readonly LookedPipe _pipe;
 
         private ExceptionDispatchInfo? _failed;
         private StreamWriter? _log;
         private bool _taken;
         private bool _linesEnded;
 
-        /// <summary>Whether a read of the pipe is under way, waiting for what the child writes next.</summary>
-        private volatile bool _waiting;
-
-        /// <summary>
-        /// The read now waiting on the pipe, as the task it answers: completed, the read has returned - what it read is
-        /// the child's own, kept already, whatever delay a busy machine puts between the read's return and the loop that
-        /// keeps it - so a waiting read is one whose task is still to end.
-        /// </summary>
-        private volatile Task<int>? _pending;
-
-        /// <summary>How many reads have returned: a reading that waits across two looks has had nothing in between.</summary>
-        private long _reads;
-
-        /// <summary>How many reads had returned at the last look that found the pipe quiet; -1 where the last did not.</summary>
-        private long _lookedAt = -1;
-
-        /// <summary>Starts reading <paramref name="reader"/>.</summary>
-        /// <param name="reader">The stream.</param>
+        /// <summary>Starts reading <paramref name="stream"/>.</summary>
+        /// <param name="stream">The child's stream, as the process gives it.</param>
+        /// <param name="decoding">How its bytes are read as text.</param>
+        /// <param name="gate">The gate the child's other stream is read under too.</param>
         /// <param name="onLine">Handed each line as it arrives, or <see langword="null"/>.</param>
         /// <param name="kept">How much of the text is kept.</param>
         /// <param name="cut">Where a line past the longest string is cut, or <see langword="null"/>.</param>
         /// <param name="pieced">Told of each line handed on in pieces, or <see langword="null"/>.</param>
         /// <param name="log">Where every character is written as it arrives, or <see langword="null"/>.</param>
-        public StreamCapture(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
+        public StreamCapture(Stream stream, StreamDecoding decoding, Lock gate, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
+            : this(PipeBytes.Unbuffered(stream ?? throw new ArgumentNullException(nameof(stream))), PipeBytes.Handle(stream), decoding, gate, onLine, kept, cut, pieced, log)
         {
+        }
+
+        /// <summary>Starts reading <paramref name="read"/>, a look asking <paramref name="pipe"/>: a test's, where it stands in for the read.</summary>
+        /// <param name="read">What the stream's bytes are read through, holding none of its own between reads.</param>
+        /// <param name="pipe">The pipe under it, which a look asks; <see langword="null"/> where there is none, and the stream is read to its end.</param>
+        /// <param name="decoding">How its bytes are read as text.</param>
+        /// <param name="gate">The gate the child's other stream is read under too.</param>
+        /// <param name="onLine">Handed each line as it arrives, or <see langword="null"/>.</param>
+        /// <param name="kept">How much of the text is kept.</param>
+        /// <param name="cut">Where a line past the longest string is cut, or <see langword="null"/>.</param>
+        /// <param name="pieced">Told of each line handed on in pieces, or <see langword="null"/>.</param>
+        /// <param name="log">Where every character is written as it arrives, or <see langword="null"/>.</param>
+        internal StreamCapture(Stream read, System.Runtime.InteropServices.SafeHandle? pipe, StreamDecoding decoding, Lock gate, Action<string>? onLine, StreamKept kept, Func<string, int>? cut, Action? pieced, string? log)
+        {
+            ArgumentNullException.ThrowIfNull(read);
+            ArgumentNullException.ThrowIfNull(decoding);
+
             var tail = kept != StreamKept.Whole;
             var cutting = kept == StreamKept.Tail;
 
+            _gate = gate;
             _onLine = onLine;
             _whole = tail ? null : new StringBuilder();
             _end = tail ? new StreamTail(TailLength) : null;
             _lines = onLine is null ? null : new LineSplitter(Hand, cutting ? LongestLineHandedOn : null, cutting ? cut : null, pieced: cutting ? pieced : null);
-            _pipe = PipeBytes.Handle(reader.BaseStream);
+            _pipe = new LookedPipe(read, pipe);
 
             if (log is not null)
             {
@@ -1400,38 +1557,26 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 }
             }
 
-            Reading = ReadAsync(reader);
+            Reading = ReadAsync(new StreamReader(_pipe, decoding.Encoding, decoding.Marks, OutputBuffer, leaveOpen: true));
         }
 
         /// <summary>
-        /// Whether every character the child wrote to the stream has been read: the stream has ended; or a read of the
-        /// pipe has waited across two looks with none returning in between - the pipe holding nothing more, for
-        /// anything more would have ended the waiting read - what a process the child left running holds open, once
-        /// the child has ended. A read is waiting only where its own task has not completed: one whose task has
-        /// completed has returned, and what it returned is the child's own, kept, however long a busy machine holds
-        /// back the loop that keeps it. And where the pipe itself answers - Linux and macOS, where a read can wait
-        /// merely to be run, its task no answer while what the child wrote sits in the pipe - the pipe is asked, and
-        /// holds nothing only where it says so. The system is asked nothing on Windows, where the handle a synchronous
-        /// read pends on answers no other question - a peek on it waits for that read, which is what the child left
-        /// running holds - and a read there is submitted to the system as it is made, so its task alone tells whether
-        /// anything waits. A stream that is no pipe of a child's is read to its end.
+        /// Looks at the stream once the child has ended: ends the read that waits on its pipe, which reads on where the pipe
+        /// holds anything or every writer has let it go, and ends the reading where the pipe holds nothing while something
+        /// still holds it open - every character the child wrote read, what a process it left running holds all that is
+        /// left (<see cref="HeldOpen"/>). A read the look ends has taken nothing: the runtime ends a read that waits only
+        /// before it takes a byte, and one that took any returns them. Nothing where the stream is no pipe of a child's,
+        /// which is read to its end.
         /// </summary>
-        public bool ReadAll()
-        {
-            if (Reading.IsCompleted)
-            {
-                return true;
-            }
+        public void Look() => _pipe.Look();
 
-            var reads = Interlocked.Read(ref _reads);
-            var quiet = _waiting && _pipe is not null && _pending is { IsCompleted: false } && !PipeBytes.HoldsData(_pipe);
-            var settled = quiet && reads == _lookedAt;
+        /// <summary>
+        /// Whether the reading ended at a look that found the pipe holding nothing while something the child left running
+        /// still held it open: every character the child wrote was read, and what that process writes is not.
+        /// </summary>
+        public bool HeldOpen => _pipe.Settled;
 
-            _lookedAt = quiet ? reads : -1;
-            return settled;
-        }
-
-        /// <summary>Ends when the stream does.</summary>
+        /// <summary>Ends when the stream does, or when a look finds what a process the child left running holds all that is left.</summary>
         public Task Reading { get; }
 
         /// <summary>
@@ -1458,7 +1603,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             var buffer = new char[ReadBufferSize];
             int read;
 
-            while ((read = await Next(reader, buffer).ConfigureAwait(false)) > 0)
+            while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
             {
                 lock (_gate)
                 {
@@ -1484,30 +1629,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                     EndLines();
                     EndLog();
                 }
-            }
-        }
-
-        /// <summary>
-        /// The next read, marked as waiting while it is under way. The task the read answers is kept, so a look can
-        /// tell a read that still waits from one that has returned, its keeping not yet run: a busy machine can hold
-        /// that back long past the read's own return.
-        /// </summary>
-        private async Task<int> Next(StreamReader reader, char[] buffer)
-        {
-            _waiting = true;
-
-            try
-            {
-                var reading = reader.ReadAsync(buffer.AsMemory()).AsTask();
-                _pending = reading;
-
-                return await reading.ConfigureAwait(false);
-            }
-            finally
-            {
-                _pending = null;
-                _waiting = false;
-                Interlocked.Increment(ref _reads);
             }
         }
 
@@ -1588,16 +1709,115 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>
+    /// How a child's stream is read as text: under <paramref name="Encoding"/>, its byte order marks read where
+    /// <paramref name="Marks"/> says so - a stream that begins as a mark does is then decoded as the mark says, the mark
+    /// dropped - as .NET's own reader of a child's output reads it.
+    /// </summary>
+    /// <param name="Encoding">What its bytes are decoded as.</param>
+    /// <param name="Marks">Whether a byte order mark at its start is read as one.</param>
+    internal sealed record StreamDecoding(Encoding Encoding, bool Marks);
+
+    /// <summary>A child's stream read as .NET reads a child's output: as UTF-8, a byte order mark at its start read as one.</summary>
+    internal static readonly StreamDecoding AsDotNetReadsIt = new(Utf8NoBom, Marks: true);
+
+    /// <summary>
     /// How the child's standard output is read: under the encoding the caller named, exactly, from its first byte - a reader
     /// .NET makes for a child takes bytes that begin as a byte order mark does for the mark, drops them and decodes the rest
     /// as the mark says, which turns the output of a caller that reads bytes through Latin-1 into other bytes. The encoding
     /// named has no mark of its own, refused otherwise, so none is dropped. Text read as UTF-8, the caller naming none, is
-    /// read as .NET reads it.
+    /// read as .NET reads it (<see cref="AsDotNetReadsIt"/>).
     /// </summary>
-    private static StreamReader OutputOf(Process process, ProcessRequest request)
-        => request.StandardOutputEncoding is { } exact
-            ? new StreamReader(process.StandardOutput.BaseStream, exact, detectEncodingFromByteOrderMarks: false, OutputBuffer)
-            : process.StandardOutput;
+    private static StreamDecoding OutputDecoding(ProcessRequest request)
+        => request.StandardOutputEncoding is { } exact ? new(exact, Marks: false) : AsDotNetReadsIt;
+
+    /// <summary>
+    /// The pipe a <see cref="StreamCapture"/> reads, each read of it given a token a look ends: a read a look ended has taken
+    /// nothing - the runtime ends a read that waits only before it takes a byte, on Windows the system's read of a synchronous
+    /// pipe and on Linux and macOS its own - and the pipe is asked, no read waiting on it, what it holds
+    /// (<see cref="PipeBytes.HeldEmpty"/>). Holding nothing while something still holds it open, it is settled: every read
+    /// from then on answers the stream's end, so a reader drains what it already decoded and stops. Holding anything, or let
+    /// go of by every writer, it is read again.
+    /// </summary>
+    /// <param name="pipe">The child's stream, as the process gives it; never closed here, the process owns it.</param>
+    /// <param name="handle">The pipe under it, which a look asks; <see langword="null"/> where it is no pipe, and no look ends its reads.</param>
+    private sealed class LookedPipe(Stream pipe, System.Runtime.InteropServices.SafeHandle? handle) : Stream
+    {
+        /// <summary>
+        /// What the read that waits was given: ended by a look, and replaced once the pipe has been asked. Never disposed: it
+        /// holds no timer and no wait handle, and a look may still be ending one replaced - a look that ends a replaced one
+        /// is lost, and the next look ends the read it missed.
+        /// </summary>
+        private volatile CancellationTokenSource _look = new();
+
+        private volatile bool _settled;
+
+        /// <summary>Whether a look found the pipe holding nothing while something still held it open.</summary>
+        public bool Settled => _settled;
+
+        /// <summary>
+        /// Ends the read that waits, where the pipe can be asked; a look between two reads ends the next. Its reader is told
+        /// on a pool thread, never on the looker's: the read it ends goes on reading from there.
+        /// </summary>
+        public void Look()
+        {
+            if (handle is not null)
+            {
+                _ = _look.CancelAsync();
+            }
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            while (!_settled)
+            {
+                var looked = _look.Token;
+
+                try
+                {
+                    return await pipe.ReadAsync(buffer, looked).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (looked.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    // Ended by a look before it took a byte: no read waits on the pipe, so what it holds is asked.
+                    _settled = PipeBytes.HeldEmpty(handle!);
+                    _look = new();
+                }
+            }
+
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        /// <summary>Refused: a look ends only a read made through <see cref="ReadAsync(Memory{byte}, CancellationToken)"/>, the one a capture makes.</summary>
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException("a child's pipe is read only through a read a look can end");
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException("a pipe has no length");
+
+        public override long Position
+        {
+            get => throw new NotSupportedException("a pipe has no position");
+            set => throw new NotSupportedException("a pipe has no position");
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException("a pipe has no position");
+
+        public override void SetLength(long value) => throw new NotSupportedException("a pipe has no length");
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException("a child's output is only read");
+    }
 
     /// <summary>A stream as it was read: what is kept of it, and what its line handler raised, where it raised anything.</summary>
     internal sealed record Captured(string Text, ExceptionDispatchInfo? Failed);
@@ -1720,34 +1940,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         catch (IOException)
         {
             // Closing flushes, and the pipe can already be gone because the child exited.
-        }
-    }
-
-    private static void KillTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // The process exited between the check and the kill.
-        }
-        catch (Exception ex) when (ex is Win32Exception or AggregateException)
-        {
-            // A descendant could not be stopped: it was already exiting, or it runs as another user. The
-            // process itself must still go, or the wait for it that follows would never end.
-            try
-            {
-                process.Kill();
-            }
-            catch (Exception inner) when (inner is InvalidOperationException or Win32Exception)
-            {
-                // It exited meanwhile, or cannot be signalled either; waiting for it says which.
-            }
         }
     }
 }

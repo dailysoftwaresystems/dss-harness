@@ -9,4 +9,8 @@ namespace DssHarness.Core.Processes;
 /// end is one to say; false where it had already ended, and nothing was signalled.
 /// </param>
 /// <param name="Unreached">What of it could not be reached, and why; <see langword="null"/> where everything in it was.</param>
-public readonly record struct HeldEnding(bool Found, string? Unreached);
+/// <param name="HoldsThisProcess">
+/// Whether it holds the process ending it - that process runs in it, or descends from its leader - so nothing in it was
+/// signalled, as <paramref name="Unreached"/> says: it stands as it stood, for a process outside it to end.
+/// </param>
+public readonly record struct HeldEnding(bool Found, string? Unreached, bool HoldsThisProcess = false);

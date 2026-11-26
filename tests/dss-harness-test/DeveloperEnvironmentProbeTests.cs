@@ -17,6 +17,27 @@ namespace DssHarness.Tests;
 public sealed class DeveloperEnvironmentProbeTests
 {
     /// <summary>
+    /// What a stop of vswhere could not reach or end is said under the developer environments, naming vswhere, once
+    /// (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfVswhereCouldNotReachOrEnd_IsSaidNamingIt(bool stopped)
+    {
+        var harness = new HarnessFactory();
+        UnreachingRunner? runner = null;
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new DeveloperEnvironmentProbe(HostDoubles.Platform(PlatformId.Windows), runner = UnreachingRunner.For(stop, _ => HostResults.Ok("[]")), Substitute.For<IFileSystem>(), harness.Output)
+                .CheckAsync(new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio, RequiresComponent = "X" }, token));
+
+        Assert.Equal([UnreachedSaid.Warned(DeveloperEnvironmentProvider.CommandName, $"'{Assert.Single(runner!.Requests).FileName}'")], said);
+    }
+
+    /// <summary>
     /// A vswhere that takes four minutes to list the instances is waited for and told: held to a minute of the code's own,
     /// a machine whose disk was cold was said to have no Visual Studio it could read.
     /// </summary>

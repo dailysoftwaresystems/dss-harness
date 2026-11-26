@@ -818,6 +818,36 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// A test invocation's <c>results</c> names the files that hold the runner's structured results, under the directory
+    /// the harness makes empty for each run of it, as the keep's paths are under the build directory: a path anywhere else
+    /// - the build directory, which every earlier run wrote too - could be any run's, and is refused when the file is read,
+    /// as a path that could never name a file is. The run's results directory is neither evidence under the build directory
+    /// nor where a runner starts.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": [] } } } ] }""", "test.all.results is given empty")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["../out.trx"] } } } ] }""", "test.all.results entry '../out.trx' must be a relative path inside the run's results directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{resultsDir}"] } } } ] }""", "test.all.results names '{resultsDir}', which is the run's results directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{resultsDir}/."] } } } ] }""", "test.all.results names '{resultsDir}/.', which is the run's results directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{buildDir}/*.trx"] } } } ] }""", "test.all.results names '{buildDir}', which is not under the run's results directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "windows": { "results": ["{treeDir}/out.trx"] } } } ] }""", "test.windows.results names '{treeDir}', which is not under the run's results directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["out/**x"] } } } ] }""", "which holds '**' inside a segment")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{resultsDir}/junit.xml"] } } } ] }""", "test.all.keepOnFailure names '{resultsDir}', which is not under the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "workingDirectory": "{resultsDir}/run" } } } ] }""", "test.all.workingDirectory names '{resultsDir}', which is where the runner writes its results, never where it starts")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{resultsDir}/*.trx", "junit.xml"] } } } ] }""", null)]
+    public void Load_HoldsResultsToTheRunsResultsDirectory(string json, string? refused)
+    {
+        if (refused is null)
+        {
+            Assert.NotNull(LoadValid(json));
+
+            return;
+        }
+
+        Assert.Contains(refused, LoadInvalid(json).Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A test invocation may name a WSL item's distribution, <c>{distribution.&lt;item&gt;}</c>, for an item wslDistros
     /// declares, matched ignoring case as the item is; one it does not declare is refused when the file is read, naming
     /// the declared ones - never left to a leg's build to find nothing there.
@@ -2263,11 +2293,11 @@ public sealed class ConfigStoreTests
         var local = AdmissionSettings.RuleFor(config.Hosts.Local.Admission, config.Defaults.Admission);
         var vps = AdmissionSettings.RuleFor(config.Hosts.Ssh["vps"].Admission, config.Defaults.Admission);
 
-        Assert.Equal(new AdmissionRule(1, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), 0), local);
-        Assert.Equal(new AdmissionRule(3, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 9L << 29), vps);
+        Assert.Equal(new AdmissionRule(1, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), 0) { Processes = null, Agents = AdmissionSettings.DefaultAgents }, local);
+        Assert.Equal(new AdmissionRule(3, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 9L << 29) { Processes = null, Agents = AdmissionSettings.DefaultAgents }, vps);
         Assert.Null(AdmissionSettings.RuleFor(null, null));
         Assert.Equal(
-            new AdmissionRule(2, 76, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 2L << 30),
+            new AdmissionRule(2, 76, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 2L << 30) { Processes = null, Agents = AdmissionSettings.DefaultAgents },
             AdmissionSettings.RuleFor(new AdmissionSettings(), null));
     }
 
@@ -2290,6 +2320,8 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "defaults": { "admission": { "heavyLegs": -2 } } }""", "defaults.admission heavyLegs must be at least 1, found -2")]
     [InlineData("""{ "defaults": { "admission": { "minFreeGiB": -0.5 } } }""", "defaults.admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found -0.5")]
     [InlineData("""{ "hosts": { "local": { "admission": { "minFreeGiB": 1e10 } } } }""", "hosts.local admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found 10000000000")]
+    [InlineData("""{ "defaults": { "admission": { "processes": 0 } } }""", "defaults.admission processes must be at least 1, found 0")]
+    [InlineData("""{ "hosts": { "local": { "admission": { "agents": 0 } } } }""", "hosts.local admission agents must be at least 1, found 0")]
     public void Admission_ThatNoMachineCouldAdmitBy_IsRefused(string json, string expected)
         => Assert.Contains(expected, LoadInvalid(json).Message, StringComparison.Ordinal);
 
@@ -2301,11 +2333,35 @@ public sealed class ConfigStoreTests
         var least = LoadValid("""{ "defaults": { "admission": { "maxMemoryPercent": 0.5, "settleSeconds": [5, 5], "pollSeconds": 1, "maxWaitMinutes": 0.1, "minFreeGiB": 0 } } }""");
 
         Assert.Equal(
-            new AdmissionRule(1, 100, TimeSpan.Zero, TimeSpan.FromSeconds(3600), TimeSpan.FromSeconds(3600), TimeSpan.FromMinutes(10080), 1L << 40),
+            new AdmissionRule(1, 100, TimeSpan.Zero, TimeSpan.FromSeconds(3600), TimeSpan.FromSeconds(3600), TimeSpan.FromMinutes(10080), 1L << 40) { Processes = null, Agents = AdmissionSettings.DefaultAgents },
             AdmissionSettings.RuleFor(null, most.Defaults.Admission));
         Assert.Equal(
-            new AdmissionRule(2, 0.5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(0.1), 0),
+            new AdmissionRule(2, 0.5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(0.1), 0) { Processes = null, Agents = AdmissionSettings.DefaultAgents },
             AdmissionSettings.RuleFor(null, least.Defaults.Admission));
+    }
+
+    /// <summary>
+    /// The dispatch queue's aging bound is any number of minutes from none to all a span of time holds - one longer than
+    /// any wait asks that no share age, which a machine may ask - and only a number outside that is refused: the range is
+    /// the time the bound is kept as, never a choice of the tool's.
+    /// </summary>
+    [Fact]
+    public void AnAgingBound_IsAnyNumberOfMinutesASpanOfTimeHolds()
+    {
+        var month = LoadValid("""{ "defaults": { "admission": { "ageAfterMinutes": 43200 } } }""");
+
+        Assert.Equal(TimeSpan.FromDays(30), AdmissionSettings.RuleFor(null, month.Defaults.Admission)!.AgeAfter);
+        Assert.Equal(TimeSpan.Zero, AdmissionSettings.RuleFor(null, new AdmissionSettings { AgeAfterMinutes = 0 })!.AgeAfter);
+        Assert.Equal(TimeSpan.MaxValue, AdmissionSettings.RuleFor(null, new AdmissionSettings { AgeAfterMinutes = AdmissionSettings.MostAgeAfterMinutes })!.AgeAfter);
+
+        foreach (var (given, said) in new[] { ("-1", "-1"), ("1e300", "1E+300") })
+        {
+            Assert.Contains(
+                $"defaults.admission ageAfterMinutes must be from 0 and no more minutes than a span of time holds "
+                    + $"({AdmissionSettings.MostAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)}), found {said}",
+                LoadInvalid($$"""{ "defaults": { "admission": { "ageAfterMinutes": {{given}} } } }""").Message,
+                StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

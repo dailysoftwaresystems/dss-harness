@@ -20,6 +20,7 @@ var root = new RootCommand(
 
 root.Subcommands.Add(InitCommand.Create());
 root.Subcommands.Add(VerifyGitCommand.Create());
+root.Subcommands.Add(QueueCommand.Create());
 root.Subcommands.Add(CreateWorktreeCommand.Create());
 root.Subcommands.Add(DeleteWorktreeCommand.Create());
 root.Subcommands.Add(ListWorktreeCommand.Create());
@@ -35,6 +36,8 @@ root.Subcommands.Add(PauseOrchestratorCommand.Create());
 root.Subcommands.Add(StopOrchestratorCommand.Create());
 root.Subcommands.Add(AskOrchestratorStatusCommand.Create());
 root.Subcommands.Add(AskOrchestratorCommand.Create());
+root.Subcommands.Add(ReadOrchestratorReportCommand.Create());
+root.Subcommands.Add(AnalyzeOrchestratorReportCommand.Create());
 root.Subcommands.Add(RunSideTaskCommand.Create());
 root.Subcommands.Add(ListSideTasksCommand.Create());
 root.Subcommands.Add(CreateAgentCommand.Create());

@@ -62,6 +62,13 @@ public sealed record MutationRequest(
 
     /// <summary>What holds the work of each leg this machine sweeps inside the operating system's isolation (<see cref="LegRunRequest.Isolation"/>); <see langword="null"/> where none does.</summary>
     public ILegIsolation? Isolation { get; init; }
+
+    /// <summary>
+    /// The run's priority, as a workflow declared it: what multiplies its tenant's share of the dispatch queue's fair order
+    /// for every arm of the sweep it admits (<see cref="LegRunRequest.Priority"/>), the least
+    /// (<see cref="DispatchOrder.LeastPriority"/>) where nothing declared one.
+    /// </summary>
+    public int Priority { get; init; } = DispatchOrder.LeastPriority;
 }
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
@@ -216,7 +223,7 @@ public sealed class MutationService(
             request.SelfTest ? new FixtureMutationSource() : new TreeMutationSource(_syncService),
             new WorkerCopies(_syncService, _localTransport, _fileSystem, _output, _identity, CommandName),
             new WorkerSite(_fileSystem, _clock),
-            new ArmBuilder(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem),
+            Builder(),
             new ArmTestRunner(_phaseRunner, _fileSystem, _clock),
             new CtestDescription(_processRunner, _fileSystem, _platform, _output, _clock),
             _pathBudget,
@@ -289,6 +296,7 @@ public sealed class MutationService(
                     HostNotes = records ? NotesOf(context) : null,
                     Watch = request.Watch,
                     Isolation = request.Isolation,
+                    Priority = request.Priority,
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
@@ -375,6 +383,13 @@ public sealed class MutationService(
     /// <param name="sweeps">Whether the arms must be sweepable as a sweep needs them, which a listing does not.</param>
     internal Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken, bool sweeps = true)
         => _listings.ReadAsync(context, armNames, CommandName, cancellationToken, sweeps);
+
+    /// <summary>
+    /// The builder of a sweep's arms, as every sweep makes it: over this service's build, process runner, guard of a build
+    /// directory and file system, and the sweep's own output, which says what a stop of ninja listing a worker's records
+    /// could not reach or end on the worker's line (<see cref="UnreachedSaying"/>). The one place it is made.
+    /// </summary>
+    internal ArmBuilder Builder() => new(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem, _output);
 
     /// <summary>
     /// Lists, without sweeping, each selected arm's last verdict on each selected leg its S row names, and whether anything

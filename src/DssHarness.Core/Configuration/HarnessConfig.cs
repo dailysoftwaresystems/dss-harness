@@ -50,11 +50,14 @@ public sealed class HarnessConfig
     /// <summary>Units of work that each receive exactly one verdict, keyed by name.</summary>
     public Dictionary<string, LegConfig> Legs { get; init; } = Map<LegConfig>();
 
-    /// <summary>
-    /// Named groups of legs, selected with <c>--legs</c> alongside leg names, so a whole gate can be
-    /// invoked by one name.
-    /// </summary>
+    /// <summary>Named groups of legs, selected with <c>--legs</c> alongside leg names, so a whole gate can be invoked by one name.</summary>
     public Dictionary<string, List<string>> LegSets { get; init; } = Map<List<string>>();
+
+    /// <summary>
+    /// How a phase's or a job's output is digested: the problem matchers of <c>results.matchers</c>, each a regex
+    /// with named groups that reads another tool's diagnostics from its lines, so no tool is hardcoded.
+    /// </summary>
+    public ResultsConfig Results { get; init; } = new();
 
     /// <summary>External tools this repository needs, verified and installed by name.</summary>
     public List<ToolConfig> Tools { get; init; } = [];
@@ -347,6 +350,13 @@ public sealed class HarnessDefaults
     /// <see cref="AdmissionSettings"/>.
     /// </summary>
     public AdmissionSettings? Admission { get; init; }
+
+    /// <summary>
+    /// The thresholds a report's signals are computed by (<see cref="Orchestration.Flow.FlowReportThresholds"/>,
+    /// which also names the shipped values each field takes where the config says nothing); <see langword="null"/> for
+    /// every one of them.
+    /// </summary>
+    public Orchestration.Flow.FlowReportThresholds? Report { get; init; }
 
     /// <summary>
     /// Seconds without output after which a phase is treated as hung; zero disables

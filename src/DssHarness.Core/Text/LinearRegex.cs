@@ -35,6 +35,15 @@ namespace DssHarness.Core.Text;
 /// reads the pattern - a key of a file, a tool's input - can carry it; that caller, who knows where the pattern was
 /// written, adds the remedy.
 /// </para>
+/// <para>
+/// The end of the text, <c>\z</c>, is kept by the engine for the match but not for its groups: where a match that a
+/// <c>\z</c> of the pattern could end reaches the end of a text whose last character is a line feed, the engine reports
+/// every group of it unmatched. A pattern that has groups is therefore compiled with each <c>\z</c> it holds as an
+/// anchor written <c>(?:\Z\z)</c>: the same place - the text's end, which is an end <c>\Z</c> allows too - which the
+/// engine keeps the groups at. The pattern is read as .NET reads it to find them: a backslash another escapes, a class,
+/// a <c>(?#...)</c> comment and, where whitespace is ignored, a line's <c>#</c> comment hold none. A refusal is of the
+/// pattern as written, which is compiled first.
+/// </para>
 /// </remarks>
 public static class LinearRegex
 {
@@ -94,6 +103,12 @@ public static class LinearRegex
         try
         {
             regex = new Regex(pattern, options | Linear, Regex.InfiniteMatchTimeout);
+
+            if (regex.GetGroupNumbers().Length > 1 && EndsKept(pattern, options) is { } kept)
+            {
+                regex = new Regex(kept, options | Linear, Regex.InfiniteMatchTimeout);
+            }
+
             refusal = null;
             return true;
         }
@@ -109,6 +124,174 @@ public static class LinearRegex
                 : $"The pattern '{named}' is refused by .NET's linear-time matcher: {ex.Message}";
             return false;
         }
+    }
+
+    /// <summary>
+    /// The first match of <paramref name="regex"/> in <paramref name="input"/> read from <paramref name="at"/> to its end as
+    /// the whole of it: a <c>\A</c> of the pattern stands at <paramref name="at"/>, where .NET's <c>\G</c> stands for a match
+    /// sought from there - an anchor the linear engine lacks - so a pattern that begins with <c>\A</c> matches only where a
+    /// reader stands, and one that does not is sought from there, as from a text's start, nothing before it read.
+    /// </summary>
+    /// <param name="regex">A regular expression this made.</param>
+    /// <param name="input">The text.</param>
+    /// <param name="at">Where in <paramref name="input"/> the match is sought from.</param>
+    public static Match MatchFrom(Regex regex, string input, int at)
+    {
+        ArgumentNullException.ThrowIfNull(regex);
+        ArgumentNullException.ThrowIfNull(input);
+
+        return regex.Match(input, at, input.Length - at);
+    }
+
+    /// <summary>
+    /// <paramref name="pattern"/> with each <c>\z</c> it holds as an anchor written <c>(?:\Z\z)</c>, which matches where
+    /// <c>\z</c> does and keeps the groups the engine loses at a <c>\z</c> after a final line feed; <see langword="null"/>
+    /// where it holds none. Read in one pass as .NET reads a pattern that compiled: a backslash escapes the character after
+    /// it, a class runs to the bracket that closes it - a subtracted class's included - a <c>(?#</c> comment to its first
+    /// <c>)</c>, and where whitespace is ignored - asked of the options, or turned on or off by <c>(?x)</c>, <c>(?-x)</c>,
+    /// <c>(?x:</c> to the end of the group that holds it - a <c>#</c> comment to the line's end.
+    /// </summary>
+    private static string? EndsKept(string pattern, RegexOptions options)
+    {
+        System.Text.StringBuilder? kept = null;
+        var copied = 0;
+        var spaced = (options & RegexOptions.IgnorePatternWhitespace) != 0;
+        var outside = new Stack<bool>();
+        var at = 0;
+
+        while (at < pattern.Length)
+        {
+            switch (pattern[at])
+            {
+                case '\\':
+                    if (at + 1 < pattern.Length && pattern[at + 1] == 'z')
+                    {
+                        kept ??= new System.Text.StringBuilder(pattern.Length + 8);
+                        kept.Append(pattern, copied, at - copied).Append(@"(?:\Z\z)");
+                        copied = at + 2;
+                    }
+
+                    at += 2;
+                    break;
+
+                case '[':
+                    at = ClassEnd(pattern, at);
+                    break;
+
+                case '#' when spaced:
+                    at = pattern.IndexOf('\n', at) is var line and >= 0 ? line + 1 : pattern.Length;
+                    break;
+
+                case '(' when string.CompareOrdinal(pattern, at, "(?#", 0, 3) == 0:
+                    at = pattern.IndexOf(')', at) is var close and >= 0 ? close + 1 : pattern.Length;
+                    break;
+
+                case '(':
+                    if (InlineOptions(pattern, at, spaced) is (var set, var end, var scoped))
+                    {
+                        if (scoped)
+                        {
+                            outside.Push(spaced);
+                        }
+
+                        spaced = set;
+                        at = end;
+                    }
+                    else
+                    {
+                        outside.Push(spaced);
+                        at++;
+                    }
+
+                    break;
+
+                case ')':
+                    spaced = outside.Count > 0 ? outside.Pop() : spaced;
+                    at++;
+                    break;
+
+                default:
+                    at++;
+                    break;
+            }
+        }
+
+        return kept?.Append(pattern, copied, pattern.Length - copied).ToString();
+    }
+
+    /// <summary>
+    /// Where the class whose <c>[</c> stands at <paramref name="at"/> ends, past its <c>]</c>: a <c>]</c> right after the
+    /// <c>[</c> or a <c>[^</c> is a member, a backslash escapes the character after it, and a <c>-[</c> opens a class
+    /// subtracted inside it, closed by a <c>]</c> of its own.
+    /// </summary>
+    private static int ClassEnd(string pattern, int at)
+    {
+        var depth = 0;
+
+        while (at < pattern.Length)
+        {
+            // At a class's opening: its '[', a '^', and a first ']' that is a member.
+            at++;
+            depth++;
+            at += at < pattern.Length && pattern[at] == '^' ? 1 : 0;
+            at += at < pattern.Length && pattern[at] == ']' ? 1 : 0;
+
+            while (at < pattern.Length && pattern[at] != ']' && !(pattern[at] == '-' && at + 1 < pattern.Length && pattern[at + 1] == '['))
+            {
+                at += pattern[at] == '\\' ? 2 : 1;
+            }
+
+            if (at < pattern.Length && pattern[at] == '-')
+            {
+                // A subtracted class opens at its '['.
+                at++;
+                continue;
+            }
+
+            // Each ']' closes the innermost class still open.
+            while (at < pattern.Length && pattern[at] == ']' && depth > 0)
+            {
+                at++;
+                depth--;
+            }
+
+            if (depth == 0)
+            {
+                return at;
+            }
+        }
+
+        return pattern.Length;
+    }
+
+    /// <summary>
+    /// The inline options group at <paramref name="at"/> - <c>(?imnsx-imnsx)</c>, or <c>(?imnsx-imnsx:</c> that opens a
+    /// group - as whether whitespace is ignored after it, where the pattern goes on, and whether it opens a group the
+    /// setting holds to the end of; null where the group at <paramref name="at"/> is of another kind.
+    /// </summary>
+    private static (bool Spaced, int End, bool Scoped)? InlineOptions(string pattern, int at, bool spaced)
+    {
+        if (at + 1 >= pattern.Length || pattern[at + 1] != '?')
+        {
+            return null;
+        }
+
+        var on = true;
+        var end = at + 2;
+
+        for (; end < pattern.Length && pattern[end] is 'i' or 'm' or 'n' or 's' or 'x' or '-'; end++)
+        {
+            if (pattern[end] == '-')
+            {
+                on = false;
+            }
+            else if (pattern[end] == 'x')
+            {
+                spaced = on;
+            }
+        }
+
+        return end < pattern.Length && pattern[end] is ')' or ':' ? (spaced, end + 1, pattern[end] == ':') : null;
     }
 
     /// <summary>The options asked that the linear engine lacks, named and joined by "and"; <see langword="null"/> where none is.</summary>

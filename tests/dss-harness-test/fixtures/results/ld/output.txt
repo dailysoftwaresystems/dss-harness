@@ -1,0 +1,12 @@
+/usr/bin/ld: /tmp/ccYMg2Tv.o: in function `main':
+link.c:(.text+0x18): undefined reference to `parse_record'
+/usr/bin/ld: link.c:(.text+0x1f): undefined reference to `load_store'
+collect2: error: ld returned 1 exit status
+ld.lld: error: undefined symbol: parse_record
+>>> referenced by link.c
+>>>               /tmp/ccNZ1uYU.o:(main)
+
+ld.lld: error: undefined symbol: load_store
+>>> referenced by link.c
+>>>               /tmp/ccNZ1uYU.o:(main)
+collect2: error: ld returned 1 exit status

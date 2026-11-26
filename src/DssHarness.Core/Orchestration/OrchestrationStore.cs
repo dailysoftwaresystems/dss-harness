@@ -47,6 +47,12 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What a run's record of affected tests is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string AffectedTestsKind = "the run's record of affected tests";
 
+    /// <summary>What a run's issues owed its next round are, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string NextRoundKind = "the run's issues owed its next round";
+
+    /// <summary>What an agent's item's closure ledger is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string ClosureLedgerKind = "an item's closure ledger";
+
     /// <summary>What a step's own record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string StepRecordKind = "a step's own record";
 
@@ -390,6 +396,48 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         Write(orchestrator.AffectedTestsFile, AffectedTestsKind, affected, affected.Problem());
     }
 
+    /// <summary>The run's issues owed its next round, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowNextRoundFile? ReadNextRound(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<FlowNextRoundFile>(orchestrator.NextRoundFile, NextRoundKind, next => next.Problem());
+    }
+
+    /// <summary>Writes the run's issues owed its next round.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="next">The issues, which must be one.</param>
+    public void WriteNextRound(OrchestratorLayout orchestrator, FlowNextRoundFile next)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(next);
+        Write(orchestrator.NextRoundFile, NextRoundKind, next, next.Problem());
+    }
+
+    /// <summary>One agent's item's closure ledger, or null where its directory holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="agent">The agent whose item the ledger is of.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowClosureLedgerFile? ReadClosureLedger(OrchestratorLayout orchestrator, string agent)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+        return Read<FlowClosureLedgerFile>(orchestrator.ClosureLedgerFile(agent), ClosureLedgerKind, ledger => ledger.Problem());
+    }
+
+    /// <summary>Writes one agent's item's closure ledger.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="agent">The agent whose item the ledger is of.</param>
+    /// <param name="ledger">The ledger, which must be one.</param>
+    public void WriteClosureLedger(OrchestratorLayout orchestrator, string agent, FlowClosureLedgerFile ledger)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+        ArgumentNullException.ThrowIfNull(ledger);
+        Write(orchestrator.ClosureLedgerFile(agent), ClosureLedgerKind, ledger, ledger.Problem());
+    }
+
     /// <summary>One step's own record, wherever the run keeps it, or null where the step's directory holds none.</summary>
     /// <param name="recordFile">The record's path, as <see cref="OrchestratorLayout"/> spells it.</param>
     /// <exception cref="HarnessException">The record cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
@@ -480,6 +528,20 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         return Read<WorkflowDefinition>(orchestrator.DefinitionFile, DefinitionKind, _ => null);
+    }
+
+    /// <summary>
+    /// The orchestrator entry as it ran, frozen, or why it cannot be read: the entry null and the why set where the file
+    /// is there and does not read, both null where it is not there - for a reader that answers anyway and says so in its
+    /// own words, where <see cref="ReadDefinition"/> refuses the whole read.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    public (WorkflowDefinition? Definition, string? Why) ReadDefinitionOrWhy(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+
+        var (definition, why, _) = ReadOrWhy(orchestrator.DefinitionFile, DefinitionKind, _ => null, () => JsonStateFile.Read<WorkflowDefinition>(_fileSystem, orchestrator.DefinitionFile));
+        return (definition, why);
     }
 
     /// <summary>Writes the orchestrator entry as it ran, frozen.</summary>
@@ -948,41 +1010,78 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     }
 
     /// <summary>
-    /// The run's repository map of the steps whose read rules <paramref name="reads"/> names (<see cref="OrchestratorLayout.GraphMapFileOf"/>):
-    /// the one kept, read as it is, where it is there; else made by <paramref name="make"/> and kept - what it was made
-    /// from first and the map after, so a map is never kept without it - all under the map's own section across the
-    /// machine's processes, so steps that start together keep one map and every one of them is given the same bytes.
-    /// Null where none is kept and <paramref name="make"/> makes none.
+    /// The run's repository map's first page, of the steps whose read rules <paramref name="reads"/> names
+    /// (<see cref="OrchestratorLayout.GraphMapFileOf"/>), with how many pages the map holds: the one kept, read as it
+    /// is, where it is there, its count read from that first page's own last line (<see cref="Codebase.CodebaseRepositoryMap.PagesOf"/>)
+    /// - what every step of it is told - so a step is offered every page it is told there is, whatever became of the
+    /// map's other records; else made by <paramref name="make"/> and kept - what it was made from first, then the pages after
+    /// the first, then the first page itself last, so a map.md that is there says its pages are - all under the map's own
+    /// section across the machine's processes, so steps that start together keep one map and every one of them is given
+    /// the same bytes. Null where none is kept and <paramref name="make"/> makes none.
     /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
-    /// <param name="make">Makes the map and what it was made from; null where there is nothing to make it of.</param>
+    /// <param name="make">Makes the map's pages and what it was made from; null where there is nothing to make it of.</param>
     /// <param name="cancellationToken">Ends a wait for another process making the map, before anything is read or made.</param>
-    public string? MapOnce(OrchestratorLayout orchestrator, string? reads, Func<(string Text, System.Text.Json.Nodes.JsonNode Meta)?> make, CancellationToken cancellationToken = default)
+    public (string? Map, int Pages) MapOnce(OrchestratorLayout orchestrator, string? reads, Func<(IReadOnlyList<string> Pages, System.Text.Json.Nodes.JsonNode Meta)?> make, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(make);
 
         var map = orchestrator.GraphMapFileOf(reads);
 
-        return WhileHeld(map, () =>
+        return WhileHeld<(string? Map, int Pages)>(map, () =>
         {
             if (_fileSystem.FileExists(map))
             {
-                return _fileSystem.ReadAllText(map);
+                var kept = _fileSystem.ReadAllText(map);
+                return (kept, Codebase.CodebaseRepositoryMap.PagesOf(kept));
             }
 
             if (make() is not { } made)
             {
-                return null;
+                return (null, 0);
             }
 
             _fileSystem.CreateDirectory(orchestrator.GraphDirectory);
             _fileSystem.WriteAllTextAtomic(orchestrator.GraphMapMetaFileOf(reads), made.Meta.ToJsonString(JsonStateFile.Options));
-            _fileSystem.WriteAllTextAtomic(map, made.Text);
 
-            return made.Text;
+            // The pages after the first are kept before it, so a first page that is there says its pages are: no step
+            // reads a map whose rest is missing.
+            for (var page = 2; page <= made.Pages.Count; page++)
+            {
+                _fileSystem.WriteAllTextAtomic(orchestrator.GraphMapPageFileOf(reads, page), made.Pages[page - 1]);
+            }
+
+            var first = made.Pages is [var head, ..] ? head : string.Empty;
+            _fileSystem.WriteAllTextAtomic(map, first);
+
+            return (first, made.Pages.Count);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Page <paramref name="page"/> of the run's repository map of the steps whose read rules <paramref name="reads"/>
+    /// names, as the graph tool's <c>map</c> serves it: read whole from where <see cref="MapOnce"/> kept it, with how many
+    /// pages the map holds - which a page past the last is refused by - and a page the disk will not give back said with
+    /// why, never thrown, for the map is a cache and no read of it fails the call that asks.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator, or a side-task's as its graph is kept.</param>
+    /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
+    /// <param name="pages">How many pages the map holds, as <see cref="MapOnce"/> gave it.</param>
+    /// <param name="page">The page asked, from 1.</param>
+    public Agents.Runtime.GraphMapPage MapPage(OrchestratorLayout orchestrator, string? reads, int pages, int page)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+
+        try
+        {
+            return new(pages, page > pages ? null : _fileSystem.ReadAllText(orchestrator.GraphMapPageFileOf(reads, page)));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new(0, null, ex.Message.TrimEnd('.'));
+        }
     }
 
     /// <summary>Appends one sync's line to the graph's <c>sync.jsonl</c>, whole and on the disk before it returns.</summary>
@@ -1015,36 +1114,47 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     private T? Read<T>(string path, string what, Func<T, string?> problemOf, Func<T?> read)
         where T : class
     {
+        var (record, why, asOne) = ReadOrWhy(path, what, problemOf, read);
+
+        return why is null ? record
+            : asOne ? throw Unreadable(path, what, why)
+            : throw new HarnessException(HarnessExit.CommandFailed, $"'{path}', {what}, could not be read: {why}. Nothing was changed.");
+    }
+
+    /// <summary>
+    /// A record as <paramref name="read"/> reads it, with why it cannot be where it cannot: the record null where none
+    /// was read and the why null where one was or the file is not there, and the third saying which trouble the why
+    /// names - the record does not read as one, or this process could not read it at all. The one reading every record
+    /// of the store is read by, whether its caller refuses the read or answers anyway and says why.
+    /// </summary>
+    private (T? Record, string? Why, bool AsOne) ReadOrWhy<T>(string path, string what, Func<T, string?> problemOf, Func<T?> read)
+        where T : class
+    {
         // A record this process cannot look for is not a record that is not there.
         if (Kind(path, what) == PathKind.None)
         {
-            return null;
+            return (null, null, true);
         }
-
-        T? record;
 
         try
         {
-            record = read();
+            var record = read();
+            return record is null ? (null, "it holds null", true) : problemOf(record) is { } problem ? (null, problem, true) : (record, null, true);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
             // Removed between the look and the read - a run's owner released as a stop watches for it - the record is
             // not there, as one never written is not.
-            return null;
+            return (null, null, true);
         }
         catch (JsonException ex)
         {
-            throw Unreadable(path, what, ex.Message.TrimEnd('.'));
+            return (null, ex.Message.TrimEnd('.'), true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new HarnessException(HarnessExit.CommandFailed, $"'{path}', {what}, could not be read: {ex.Message.TrimEnd('.')}. Nothing was changed.");
+            return (null, ex.Message.TrimEnd('.'), false);
         }
-
-        return record is null ? throw Unreadable(path, what, "it holds null")
-            : problemOf(record) is { } problem ? throw Unreadable(path, what, problem)
-            : record;
     }
 
     /// <summary>

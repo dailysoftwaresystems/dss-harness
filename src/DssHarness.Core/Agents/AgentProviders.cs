@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Agents;
 
@@ -128,7 +129,7 @@ public static class AgentAuth
 /// the slot holds an appointed name is checked when a run needs the value, so a machine without a key still reads its
 /// config.
 /// </summary>
-public sealed partial class AgentProviders
+public sealed class AgentProviders
 {
     /// <summary>
     /// The levels of effort the tool says, lowest first: what each client says a step's effort in, and the ladder a level
@@ -361,7 +362,7 @@ public sealed partial class AgentProviders
                 problems.Add($"{where} readOn '{read}' is no date; the date its numbers were read is YYYY-MM-DD");
             }
 
-            if (provider.Currency is { Length: > 0 } currency && !CurrencyName().IsMatch(currency))
+            if (provider.Currency is { Length: > 0 } currency && !CurrencyName.IsMatch(currency))
             {
                 problems.Add($"{where} currency '{currency}' is not three capital letters");
             }
@@ -797,8 +798,8 @@ public sealed partial class AgentProviders
         return model.PriceInputMiss is not null || model.PriceOutput is not null;
     }
 
-    [System.Text.RegularExpressions.GeneratedRegex("^[A-Z]{3}$")]
-    private static partial System.Text.RegularExpressions.Regex CurrencyName();
+    /// <summary>A currency's name: three capital letters.</summary>
+    private static readonly System.Text.RegularExpressions.Regex CurrencyName = LinearRegex.Compile("^[A-Z]{3}$");
 
     /// <summary>
     /// Each name more than one provider lists - one provider listing it twice is that provider's own problem, said

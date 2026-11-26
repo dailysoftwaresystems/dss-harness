@@ -24,6 +24,31 @@ public sealed class HostProgramResolverTests
         KnownHostsFile = "/repo/known_hosts",
     };
 
+    /// <summary>
+    /// What the end of a lookup on a host could not reach or end is said under the tool, naming the program and the host,
+    /// once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatTheEndOfALookupCouldNotReachOrEnd_IsSaidNamingTheProgramAndTheHost(bool stopped)
+    {
+        var harness = new HarnessFactory();
+        var commands = new ScriptedHostCommands((_, command) => (command.Program, command.Arguments.FirstOrDefault()) switch
+        {
+            ("command", "-v") => HostResults.Ok("/usr/bin/dotnet\n"),
+            _ => throw HostResults.Unexpected(command),
+        });
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new HostProgramResolver(new LocalProgramResolver(HostDoubles.Platform(), Substitute.For<IFilePermissions>()), new UnreachingHostCommands(commands, stop), harness.Output)
+                .ResolveAsync(SshHost, ["dotnet"], ToolSearchDirectories.Posix, token));
+
+        Assert.Equal([UnreachedSaid.Warned(ToolPackage.Command, "'command' on ssh build-box")], said);
+    }
+
     [Fact]
     public async Task AProgramThePathNames_IsStartedByItsName()
     {

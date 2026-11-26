@@ -18,6 +18,14 @@ public sealed record LegPlace(string Leg, bool InACopy);
 public interface ILegRunWatch
 {
     /// <summary>
+    /// The run claimed its directory of records, before it placed any leg: where its records are kept as its legs work -
+    /// each phase's log as it is written - from here on.
+    /// </summary>
+    /// <param name="run">The run.</param>
+    /// <param name="runDirectory">Its directory of records.</param>
+    void Began(RunId run, string runDirectory);
+
+    /// <summary>
     /// The legs the run places, once, before any of them reads the tree: every one that will work, and where. A leg the
     /// run turns away before placing it - skipped, unavailable - is never placed, and is told of only as it ends.
     /// </summary>
@@ -31,7 +39,22 @@ public interface ILegRunWatch
     /// <param name="leg">The leg's name.</param>
     void CopyMade(string leg);
 
-    /// <summary><paramref name="leg"/> has ended, its line recorded: whatever of the tree it was to read, it has read.</summary>
+    /// <summary>
+    /// A leg has ended, its line recorded - <paramref name="line"/>, as the ledger keeps it: whatever of the tree it was to
+    /// read, it has read.
+    /// </summary>
+    /// <param name="line">The leg's line.</param>
+    void Ended(LegEntry line);
+
+    /// <summary>
+    /// <paramref name="asking"/> - <paramref name="leg"/>, or a unit of its work - reached a stage of its admission onto
+    /// the machine its work runs on (<see cref="AdmissionTold"/>): each wait on a cause as it begins - with who stands
+    /// ahead where the cause is the machine's queue (<see cref="QueueAhead"/>) - the start, and its admission's end. Said
+    /// of a leg or unit that asks for a heavy-leg slot, on this machine or - as the note its host writes says it - on an
+    /// ssh host; never of one that asks for none.
+    /// </summary>
     /// <param name="leg">The leg's name.</param>
-    void Ended(string leg);
+    /// <param name="asking">What asked: the leg's name, or <c>&lt;leg&gt;/&lt;unit&gt;</c> for a unit of its work.</param>
+    /// <param name="told">What it reached, and - for the machine's queue - who stands ahead there.</param>
+    void Admitting(string leg, string asking, AdmissionTold told);
 }

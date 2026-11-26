@@ -38,7 +38,7 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words("From all of them at once the walk goes best first over calls both ways, the type relations, tests and the types a node names, with no count of hops"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"({string.Join(", ", DssHarness.Core.Codebase.CodeConfidences.All.Select(confidence => $"{confidence} {DssHarness.Core.Codebase.CodebaseContextPack.Confidence(confidence).ToString(System.Globalization.CultureInfo.InvariantCulture)}"))})"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("so a hub is gone through and its many neighbours are ranked down by how many they are, never cut."), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"or how to ask for the next page - graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Pack)} with page - each later page laid by going on with the same walk"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"or which page of how many and how to ask for the next - graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Pack)} with page - the pack's pages laid once whole with it, so every page's last line names the total, and the last saying it is;"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("graphPromptTokens 0 gives no pack, and so does a size that cannot hold a page's first and last lines."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("A step that starts from its changes is packed first from the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("then their impact walked the same way from them - their tests, carried whole, first, then their callers, overrides, implementations and dispatches, and derived types, as far as it goes - then from the task; where nothing changed, its first line says so and the task's seeds stand in."), prose, StringComparison.Ordinal);
@@ -59,6 +59,27 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words($"the cards grouped by file kind - the language that read the file, else its extension or its name - and tier - the project nearest above the file, else its top directory - {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.RelatedLines} places a page; every place held to the step's reads, those they do not reach counted;"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("with the coverage lines that end every such answer - how many files of each kind of what the graph does not answer were searched once they were read, with their hits, the files it lists only and those it is unsure of said where none was, the forms a selector and a key path were searched in, and, where any file the graph lists only was searched, that nothing is assumed of a language with no extractor - and every limit of each language whose files the graph read - one some of those files show the sign of in full, with how many show it, and every other by its short name, on one line for the language that points to 'help codebase-graph-languages', which says each in full under its name;"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("--body <symbol>... or --sites <data>, any of them with --page <n>"), prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The topic says every spelling the keys' join names a key by - a literal of its last segment, of its whole path, of
+    /// its path in brackets in either quote mark, of the path as .NET's configuration spells it, and of a path through a
+    /// YAML alias or merge - each read from the code, so a later wording change to the spellings is held.
+    /// </summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysTheSpellingsTheKeysJoinNames_AsTheCodeHoldsThem()
+    {
+        var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
+
+        Assert.Contains(
+            Prose.Words(
+                $"The keys' join gives a configuration key a uses edge of {DssHarness.Core.Codebase.CodeConfidences.Candidates} from each declaration "
+                + "holding a string literal of its last segment, of its whole path, of its path in brackets in either quote mark "
+                + "(Logging.LogLevel['Microsoft.AspNetCore']), or of the path as .NET's configuration spells it "
+                + "(Payments:TimeoutSeconds, Payments__TimeoutSeconds, Limits:1:Value, Logging:LogLevel:Microsoft.AspNetCore, "
+                + "a name holding a dot one place), or of a path that runs through a YAML alias or merge to it"),
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

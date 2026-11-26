@@ -165,6 +165,44 @@ public static partial class HarnessConfigValidator
         }
 
         ValidateAdmission(defaults.Admission, "defaults.admission", problems);
+
+        if (defaults.Report is { } report && report.Problem() is { } wrong)
+        {
+            problems.Add($"defaults.report: {wrong}");
+        }
+
+        foreach (var matcher in config.Results.Matchers)
+        {
+            matcher.Compile();
+
+            if (matcher.Problem() is { } unreadable)
+            {
+                problems.Add($"results.matchers: {unreadable}");
+            }
+        }
+
+        if (config.Results.Matchers.GroupBy(matcher => matcher.Name, StringComparer.Ordinal).Any(twice => twice.Count() > 1))
+        {
+            problems.Add($"results.matchers: {string.Join(", ", config.Results.Matchers.GroupBy(matcher => matcher.Name, StringComparer.Ordinal).Where(twice => twice.Count() > 1).Select(twice => $"'{twice.Key}'"))} named twice");
+        }
+    }
+
+    /// <summary>
+    /// Checks a runner's or an invocation's <c>matchers</c>: never given empty, and every name one <c>results.matchers</c>
+    /// declares, for a name no matcher answers to would read nothing and say nothing of it.
+    /// </summary>
+    /// <param name="config">The configuration.</param>
+    /// <param name="names">The names it gives, or null where it gives none.</param>
+    /// <param name="setting">Where they are, as a problem names it.</param>
+    /// <param name="problems">Where problems are added.</param>
+    private static void ValidateMatcherNames(HarnessConfig config, List<string>? names, string setting, List<string> problems)
+    {
+        RefuseGivenEmpty(names, setting, "name the matchers that read its output", "the matchers no runner or invocation names", problems);
+
+        foreach (var name in (names ?? []).Where(name => !config.Results.Matchers.Any(matcher => string.Equals(matcher.Name, name, StringComparison.Ordinal))))
+        {
+            problems.Add($"{setting} names matcher '{name}', which results.matchers does not declare");
+        }
     }
 
     /// <summary>Checks one admission section: every field it declares is one a machine can admit legs by.</summary>
@@ -208,6 +246,16 @@ public static partial class HarnessConfigValidator
             problems.Add(
                 $"{owner} minFreeGiB must be from 0 and under {Number(AdmissionSettings.CountedGiB)}, the GiB a count of bytes holds, "
                 + $"found {Number(floor)}");
+        }
+
+        // The dispatch queue's own capacities and aging bound: at least one of anything, and an aging bound of any number of
+        // minutes a span of time holds - one longer than any wait is a machine's asking that no share age.
+        RequireAtLeastOne(admission.Processes, $"{owner} processes", problems);
+        RequireAtLeastOne(admission.Agents, $"{owner} agents", problems);
+
+        if (admission.AgeAfterMinutes is { } ageAfter && !(double.IsFinite(ageAfter) && ageAfter >= 0 && ageAfter <= AdmissionSettings.MostAgeAfterMinutes))
+        {
+            problems.Add($"{owner} ageAfterMinutes must be from 0 and no more minutes than a span of time holds ({Number(AdmissionSettings.MostAgeAfterMinutes)}), found {Number(ageAfter)}");
         }
     }
 
@@ -1618,6 +1666,7 @@ public static partial class HarnessConfigValidator
         {
             RefuseGivenEmpty(runner.Legs, $"predefined runner '{name}' legs", "name the legs it runs", "every declared leg", problems);
             ValidateSetUpUses(config, runner.SetUp, $"predefined runner '{name}' setUp", problems);
+            ValidateMatcherNames(config, runner.Matchers, $"predefined runner '{name}' matchers", problems);
 
             foreach (var leg in (runner.Legs ?? []).Where(leg => !config.Legs.ContainsKey(leg)))
             {
@@ -2023,13 +2072,18 @@ public static partial class HarnessConfigValidator
             return true;
         }
 
-        problems.Add(Refused(setting, refusal));
+        problems.Add(PatternRefused(setting, refusal));
         regex = null!;
         return false;
     }
 
-    /// <summary>A pattern refused, said of <paramref name="setting"/> in the linear engine's words (<see cref="LinearRegex"/>).</summary>
-    private static string Refused(string setting, string refusal) => $"{setting} is not a valid regular expression: {refusal}";
+    /// <summary>
+    /// A pattern refused, said of <paramref name="setting"/> in the linear engine's words (<see cref="LinearRegex"/>): the one
+    /// wording of every refused pattern a file declares, a problem matcher's among them.
+    /// </summary>
+    /// <param name="setting">What the problem calls the setting that declares the pattern.</param>
+    /// <param name="refusal">The linear engine's refusal of it.</param>
+    internal static string PatternRefused(string setting, string refusal) => $"{setting} is not a valid regular expression: {refusal}";
 
     /// <summary>Checks the parts of a test section that can be wrong without being malformed.</summary>
     private static void ValidateTest(HarnessConfig config, TestConfig? test, string owner, List<string> problems)
@@ -2112,42 +2166,33 @@ public static partial class HarnessConfigValidator
                 [CoreCounts.PlaceholderName],
                 config.WslDistros);
 
-            // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict.
-            // Given empty it is refused as every such list is; an entry that is not a path inside the build directory,
-            // or names a directory besides it, could never name evidence, and saying so here names the line to fix
-            // before a run has spent its build on it.
+            // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict,
+            // and where it reads the structured results its runner wrote: each a list of paths under one directory, held
+            // to one rule. Given empty it is refused as every such list is; an entry that is not a path inside its
+            // directory, or names a directory besides it, could never name what it is for, and saying so here names the
+            // line to fix before a run has spent its build on it.
             RefuseGivenEmpty(invocation.KeepOnFailure, $"{setting}.keepOnFailure", "name the files a failed run keeps as evidence", "no evidence kept", problems);
-            RequireRelativePaths(invocation.KeepOnFailure ?? [], $"{setting}.keepOnFailure", problems, inside: "the build directory");
-
-            foreach (var kept in invocation.KeepOnFailure ?? [])
-            {
-                if (Escapes(kept))
-                {
-                    continue;
-                }
-
-                if (NamesTheBuildDirectory(kept))
-                {
-                    problems.Add($"{setting}.keepOnFailure names '{kept}', which is the build directory itself; name a path inside it");
-                }
-                else if (BeyondTheBuildDirectory(kept) is { } beyond)
-                {
-                    problems.Add($"{setting}.keepOnFailure names '{{{beyond}}}', which is not under the build directory; name a path inside it");
-                }
-                else if (GlobPattern.Problem(kept) is { } problem)
-                {
-                    // Asked of the entry whether it holds a wildcard or not: the misspelling rule is one the whole
-                    // file's path lists are held to, and the name the keep reports is the entry as written.
-                    problems.Add($"{setting}.keepOnFailure names '{kept}', which {problem}");
-                }
-            }
-
-            CheckPlaceholders(invocation.KeepOnFailure, $"{setting}.keepOnFailure", problems);
+            DeclaredPathsUnder(invocation.KeepOnFailure, $"{setting}.keepOnFailure", LegPathNames.BuildDirectory, "the build directory", problems);
 
             if (invocation.KeepOnFailureCapBytes is < 1)
             {
                 problems.Add($"{setting}.keepOnFailureCapBytes must be at least 1 byte, found {invocation.KeepOnFailureCapBytes}");
             }
+
+            // A results file is read only from the directory the harness makes empty for each run of the invocation, so
+            // what is read is that run's: a path anywhere else - the build directory a runner's earlier runs wrote too -
+            // could be any run's.
+            RefuseGivenEmpty(invocation.Results, $"{setting}.results", "name the files that hold the runner's structured results", "no results read", problems);
+            DeclaredPathsUnder(invocation.Results, $"{setting}.results", LegPathNames.ResultsDirectory, "the run's results directory", problems);
+
+            // The directory a runner starts in is never where its results go: the results directory is made for what the
+            // runner writes, and refused where nothing makes one.
+            if (invocation.WorkingDirectory is { } start && LegPathNames.NamesIn(start).Contains(LegPathNames.ResultsDirectory, StringComparer.Ordinal))
+            {
+                problems.Add($"{setting}.workingDirectory names '{{{LegPathNames.ResultsDirectory}}}', which is where the runner writes its results, never where it starts; name another directory");
+            }
+
+            ValidateMatcherNames(config, invocation.Matchers, $"{setting}.matchers", problems);
         }
 
         // What runs on a platform is its own section merged over 'all', field by field. Every
@@ -2367,19 +2412,53 @@ public static partial class HarnessConfigValidator
         => string.IsNullOrWhiteSpace(path) || PlatformPaths.IsRootedOnAnyPlatform(path) || PlatformPaths.ClimbsOut(path);
 
     /// <summary>
-    /// The first directory name <paramref name="entry"/> names that is never under a leg's build directory, or
-    /// <see langword="null"/>: the keep copies only what the build directory holds, so a directory besides it names
-    /// evidence no run could ever keep.
+    /// Records a problem for every entry of <paramref name="entries"/> that names no path inside the directory
+    /// <paramref name="directory"/> names - blank, absolute, climbing out, the directory itself, another of the leg's
+    /// directories, or a pattern that matches nothing it looks like it matches - and for every name in braces nothing
+    /// fills in: the one rule of a test invocation's lists of paths under one directory, <c>keepOnFailure</c>'s under the
+    /// build directory and <c>results</c>' under the run's results directory.
     /// </summary>
-    private static string? BeyondTheBuildDirectory(string entry)
-        => LegPathNames.NamesIn(entry).FirstOrDefault(name => LegPathNames.Directories.Contains(name, StringComparer.Ordinal));
+    /// <param name="entries">The entries, as written.</param>
+    /// <param name="setting">What to call the setting in a problem.</param>
+    /// <param name="directory">The name of the directory the entries are relative to, without its braces.</param>
+    /// <param name="said">The directory as a problem says it.</param>
+    /// <param name="problems">Where problems are collected.</param>
+    private static void DeclaredPathsUnder(IReadOnlyList<string>? entries, string setting, string directory, string said, List<string> problems)
+    {
+        RequireRelativePaths(entries ?? [], setting, problems, inside: said);
+
+        foreach (var entry in entries ?? [])
+        {
+            if (Escapes(entry))
+            {
+                continue;
+            }
+
+            if (NamesTheDirectory(entry, directory))
+            {
+                problems.Add($"{setting} names '{entry}', which is {said} itself; name a path inside it");
+            }
+            else if (LegPathNames.NamesIn(entry).FirstOrDefault(name => name != directory && LegPathNames.Directories.Append(LegPathNames.BuildDirectory).Contains(name, StringComparer.Ordinal)) is { } beyond)
+            {
+                problems.Add($"{setting} names '{{{beyond}}}', which is not under {said}; name a path inside it");
+            }
+            else if (GlobPattern.Problem(entry) is { } problem)
+            {
+                // Asked of the entry whether it holds a wildcard or not: the misspelling rule is one the whole file's path
+                // lists are held to, and the name a reader reports is the entry as written.
+                problems.Add($"{setting} names '{entry}', which {problem}");
+            }
+        }
+
+        CheckPlaceholders(entries, setting, problems);
+    }
 
     /// <summary>
-    /// Whether <paramref name="entry"/> names the build directory itself - spelled plainly, as <c>.</c>, or as
-    /// <c>{buildDir}</c> with nothing after it - which no path inside it is: an entry read as evidence that names only
-    /// where evidence lives keeps nothing on every failure.
+    /// Whether <paramref name="entry"/> names the directory <paramref name="directory"/> names itself - spelled plainly, as
+    /// <c>.</c>, or as that name in braces with nothing after it - which no path inside it is: an entry that names only where
+    /// the files live names no file on every run.
     /// </summary>
-    private static bool NamesTheBuildDirectory(string entry)
+    private static bool NamesTheDirectory(string entry, string directory)
     {
         var normalized = PathPatterns.Normalize(entry);
 
@@ -2388,8 +2467,8 @@ public static partial class HarnessConfigValidator
             return true;
         }
 
-        return normalized.StartsWith($"{{{LegPathNames.BuildDirectory}}}", StringComparison.Ordinal)
-            && PathPatterns.Normalize(normalized[(LegPathNames.BuildDirectory.Length + 2) ..]) is "" or ".";
+        return normalized.StartsWith($"{{{directory}}}", StringComparison.Ordinal)
+            && PathPatterns.Normalize(normalized[(directory.Length + 2) ..]) is "" or ".";
     }
 
     /// <summary>Refuses each name in one of a tool's scopes that names nothing declared.</summary>
@@ -2569,6 +2648,6 @@ public static partial class HarnessConfigValidator
     {
         ArgumentNullException.ThrowIfNull(pattern);
 
-        return LinearRegex.TryCompile(pattern, RegexOptions.None, out _, out var refusal) ? null : Refused(setting, refusal);
+        return LinearRegex.TryCompile(pattern, RegexOptions.None, out _, out var refusal) ? null : PatternRefused(setting, refusal);
     }
 }

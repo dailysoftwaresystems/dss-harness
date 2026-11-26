@@ -135,6 +135,14 @@ public sealed record BuildResult(
     public FailedUnits? FailedUnits { get; init; }
 
     /// <summary>
+    /// The failing phase's log digested by the parsers its toolchain chose, where the build's failure is its verdict:
+    /// the typed diagnostics with the first error in the order the tool met it. <see langword="null"/> where it passed,
+    /// where something else decided its verdict - a moving tree, a shared directory - and where nothing the parsers chose
+    /// read anything in what the phase printed.
+    /// </summary>
+    public ResultDigest? Digest { get; init; }
+
+    /// <summary>
     /// The line of the leg <paramref name="leg"/> whose build this is, where the build is what its line says: its verdict and
     /// why, the notes and compilers it names, the last lines of the phase it stopped at, and the units it failed to build.
     /// Made here, once, for every command that builds a leg, so none of them leaves out what another says.
@@ -155,6 +163,7 @@ public sealed record BuildResult(
         LogTail = Tail,
         TailPhase = TailPhase,
         FailedUnits = FailedUnits,
+        Digest = Digest,
     };
 }
 
@@ -641,12 +650,23 @@ public sealed class BuildService(
                 }
             }
 
-            // The units only where the build's failure is the verdict: one a moving tree or a shared directory outranked was
-            // a build of a tree that never existed, and what it failed says nothing of the code.
+            // The units and the digest only where the build's failure is the verdict: one a moving tree or a shared
+            // directory outranked was a build of a tree that never existed, and what it failed says nothing of the code.
+            // The digest is the failing phase's log read by the parsers its toolchain chose, so a red build's line starts
+            // from what the compiler already said instead of a tail searched for it.
+            var failing = verdict.Verdict == LegVerdict.Failed ? PhaseResult.LastFailing(phases) : null;
+
             return new BuildResult(verdict, buildDirectory, phases, rebuilt, dependencies)
             {
                 Compilers = compilers,
-                FailedUnits = verdict.Verdict == LegVerdict.Failed ? failedUnits : null,
+                FailedUnits = failing is null ? null : failedUnits,
+                Digest = failing is null
+                    ? null
+                    : PhaseDigest.Of(
+                        failing.Output,
+                        failing.ProgramExit,
+                        PhaseParsers.ForBuild(config, request.Project.Type, request.Variant.Toolchain),
+                        new DigestTree(request.TreeRoot, failing.WorkingDirectory, _fileSystem, config.Worktrees.Root)),
             };
         }
     }
@@ -911,7 +931,7 @@ public sealed class BuildService(
         foreach (var compiler in identified)
         {
             var answer = await _compilerVersions
-                .AskAsync(compiler, new LegRecords(request.RunDirectory, request.Leg).Directory, environment, request.ProgramDirectories, Told(request), cancellationToken)
+                .AskAsync(compiler, new LegRecords(request.RunDirectory, request.Leg).Directory, environment, request.ProgramDirectories, Said(request), Told(request), cancellationToken)
                 .ConfigureAwait(false);
 
             // An id whose version this build does not know how to put together, as CMake's own formula does,
@@ -1430,6 +1450,9 @@ public sealed class BuildService(
     /// </summary>
     private Action<Waiting.WaitTold> Told(BuildRequest request) => told => _output.Info(CommandName, $"{request.Leg}: {told.Line()}");
 
+    /// <summary>How what a stop of a probe of the build could not reach or end is said: on the leg's own line, as a warning (<see cref="Processes.UnreachedSaying"/>).</summary>
+    private Action<string> Said(BuildRequest request) => line => _output.Warn(CommandName, $"{request.Leg}: {line}");
+
     /// <summary>What ninja says of the outputs no target of this build produces any more; never a failure of the build.</summary>
     private async Task<NinjaDeadOutputs> ReadDeadOutputsAsync(
         BuildRequest request,
@@ -1437,7 +1460,7 @@ public sealed class BuildService(
         IReadOnlyDictionary<string, string?> environment,
         CancellationToken cancellationToken)
         => await _deadOutputCheck
-            .CheckAsync(buildDirectory, request.ProgramDirectories, _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram, environment, Told(request), cancellationToken)
+            .CheckAsync(buildDirectory, request.ProgramDirectories, Said(request), _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram, environment, Told(request), cancellationToken)
             .ConfigureAwait(false);
 
     /// <summary>
@@ -1471,7 +1494,7 @@ public sealed class BuildService(
             // phases had, a host's own among them.
             var recorded = _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram;
 
-            return (await _dependencyCheck.CheckAsync(buildDirectory, request.ProgramDirectories, recorded, environment, Told(request), cancellationToken).ConfigureAwait(false), null);
+            return (await _dependencyCheck.CheckAsync(buildDirectory, request.ProgramDirectories, Said(request), recorded, environment, Told(request), cancellationToken).ConfigureAwait(false), null);
         }
         catch (HarnessException ex)
         {

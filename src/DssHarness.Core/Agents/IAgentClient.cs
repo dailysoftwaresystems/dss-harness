@@ -193,6 +193,14 @@ public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2,
     public int? AskRounds { get; init => field = value is { } rounds ? Counted(rounds, nameof(AskRounds)) : null; } = AskRounds is { } rounds ? Counted(rounds, nameof(AskRounds)) : null;
 
     /// <summary>
+    /// What the step's own rules refuse of an output that reads against its schema - the rules no schema can say, such as
+    /// which classes a reviewer's reopened finding may name - each problem a path in the output and what is wrong there;
+    /// null where the step has none. The gate asks the agent again for each, in the same conversation and under the same
+    /// count of repairs as a schema's problem (<see cref="StructuredOutputGate"/>).
+    /// </summary>
+    public Func<System.Text.Json.Nodes.JsonNode, IReadOnlyList<string>>? Holds { get; init; }
+
+    /// <summary>
     /// Why <see cref="Schema"/> is no schema an answer can be held to, as <see cref="Schemas.JsonSchemaSubset.TextProblems"/>
     /// says it, or nothing where it is one: checked before any client is taken, so no model is paid for an answer
     /// nothing could read.
@@ -279,8 +287,9 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
 
     /// <summary>
     /// The handoff an answer gives: its notes where it answered with an envelope that holds them
-    /// (<see cref="AgentEnvelope.Notes"/>), else the whole answer held to the schema, else its text; null where that says
-    /// nothing, and the agent gave no handoff.
+    /// (<see cref="AgentEnvelope.Notes"/>), else the whole answer held to the schema - written as every JSON an agent reads
+    /// is (<see cref="AgentEnvelope.Written"/>), so the next to read it reads what was written - else its text; null where
+    /// that says nothing, and the agent gave no handoff.
     /// </summary>
     /// <param name="structured">The answer held to the run's schema, where it carries one.</param>
     /// <param name="text">The answer's text.</param>
@@ -288,7 +297,7 @@ public sealed class AgentHandoffSignal(TimeSpan Bound, int MaxAnswers = 3)
     {
         var answer = structured is System.Text.Json.Nodes.JsonObject held && held[AgentEnvelope.Notes] is System.Text.Json.Nodes.JsonValue notes && notes.TryGetValue<string>(out var said)
             ? said
-            : structured?.ToJsonString() ?? text;
+            : structured?.ToJsonString(AgentEnvelope.Written) ?? text;
 
         return string.IsNullOrWhiteSpace(answer) ? null : answer;
     }

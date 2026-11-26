@@ -86,7 +86,13 @@ public static partial class HelpTopics
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/",
-            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included"),
+            "ignored; one step of a run that no agent owns, the create-agent that makes an agent included; every "
+            + "step's own record holds what its work measured (`measure` in `step.json` and `flow.json`: when it was "
+            + "ready, its waits by cause whole across sessions, its run time, its pause, and one entry per attempt - "
+            + "what served it, the price copied as its cost was counted, the tokens by kind, the dollars, the turns, "
+            + "the tools, the compactions, the pages past the first its graph calls asked for - with the advisor's spend beside them; the run's `spent` is the sum of its "
+            + "steps'), and an attempt a crash cut off has its measure completed at the resume from the step's stored "
+            + "stream"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorTempDirectoryName}/<launch>/",
             "ignored; every temporary directory a run's launch and its children keep, one directory a launch (its "
             + "children's and Claude Code's own process's beside it), made with the launch, held for the run's life "
@@ -98,11 +104,16 @@ public static partial class HelpTopics
             "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "
             + "carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and "
-            + "by stop-orchestrator --now - once its starter has gone"),
+            + "by stop-orchestrator --now - once its starter has gone, by one that runs outside it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AsksDirectoryName}/",
             "ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, "
             + $"the files of its reporter's attempt, the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/) and ask.json; "
             + "the engine never reads it"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AnalysisDirectoryName}/",
+            "ignored; one directory for each call of analyze-orchestrator-report whose analyst ran: the report it read "
+            + $"({OrchestratorLayout.AnalysisReportFileName}, the bytes its hash names), the files of its analyst's attempt (its stream), "
+            + $"the conversations its client stores ({OrchestratorLayout.SessionsDirectoryName}/), {OrchestratorLayout.AnalysisFileName} - the analysis, each impact as the tool "
+            + $"wrote it with its template beside it, or why it was refused, with the report's hash and what it cost - and {OrchestratorLayout.AnalysisMarkdownFileName} where an analysis was given; the engine never reads it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}",
             "ignored; a run's web search: what each source found once for the run, and each query it answered, which the "
             + "same query again is answered from; written by every client whose step searches"),
@@ -237,7 +248,10 @@ public static partial class HelpTopics
         builder.AppendLine("check-mutations --list begins no run, and names neither.");
         builder.AppendLine("A host runs a leg under a run of its own: the dispatcher names it once, '<leg>: run");
         builder.AppendLine("<id> on <host>', never relaying the host's own line, and the leg's --json holds it as");
-        builder.AppendLine("hostRunId.");
+        builder.AppendLine("hostRunId. The log of the phase such a leg did not pass is brought back as it ends,");
+        builder.AppendLine("into this run's records beside a local leg's ('<leg>/<phase>.log'), and the leg's --json");
+        builder.AppendLine("names it as logBroughtBack; one that cannot be brought back is said on the leg's");
+        builder.AppendLine("progress, and named on no line.");
         builder.AppendLine("Action files are tracked, so a worktree has its own and a runner acts on the tree it");
         builder.AppendLine("was asked about.");
 

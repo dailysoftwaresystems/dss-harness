@@ -1,0 +1,25 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["py_chain.py", "py_cause.py", "py_assert.py", "py_module.py"],
+  "crashed": 4,
+  "first": null,
+  "failures": [
+    "crashed FileNotFoundError: [Errno 2] No such file or directory: '/no/such/dir/state.json'",
+    "crashed ConfigError: the configuration names no port",
+    "crashed AssertionError",
+    "crashed IndexError: list index out of range"
+  ],
+  "stack": {
+    "frames": 2,
+    "inTree": [
+      "/home/runner/work/app/app/py_chain.py:12",
+      "/home/runner/work/app/app/py_chain.py:15"
+    ]
+  },
+  "causes": [
+    "json.decoder.JSONDecodeError"
+  ]
+}

@@ -420,11 +420,14 @@ public sealed class ToolUpdateService(
     /// <summary>Lists what is installed, waited for to its end and told while it lasts.</summary>
     private Task<ProcessResult> ListAsync(ToolUpdateRequest request, CancellationToken cancellationToken)
         => ProgramWait.ToItsEndAsync(
-            token => _processRunner.RunAsync(ListRequest(request.ToolPath), token),
+            token => _processRunner.RunAsync(ListRequest(request.ToolPath), token).SayingUnreached(Listing(request.ToolPath), line => _output.Warn(CommandName, line)),
             "dotnet to list the installed tools",
             ProgramWait.Told(_output, CommandName),
             clock: null,
             cancellationToken);
+
+    /// <summary>The listing, by its command line, as what its stop could not reach or end is said of it.</summary>
+    private static string Listing(string? toolPath) => $"'{HostInspector.DotnetProgram} {string.Join(' ', ToolPackage.ListArguments(toolPath))}'";
 
     /// <summary>The one request that lists what is installed, wherever the update reads it: before it begins, and since it changed.</summary>
     private static ProcessRequest ListRequest(string? toolPath) => new()

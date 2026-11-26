@@ -2218,6 +2218,48 @@ public sealed class FlowUseTests
         Assert.Equal(1, FlowUse.RetriesOf(definition, "recover.heal.implement", implement));
     }
 
+    /// <summary>
+    /// A run's priority is one of its limits: a use that governs itself gives its steps' legs the priority its workflow
+    /// declares, a use that does not says it as not applied and its steps ask at the run's, and a run whose workflow
+    /// declares none asks at the least. What a governing use declares is held to the run's own bound.
+    /// </summary>
+    [Fact]
+    public void ALegStepsPriority_IsTheGoverningUsesElseTheRunsElseTheLeast()
+    {
+        var pipeline = Swap(Pipeline, "name: pipeline\n", "name: pipeline\npriority: 5\n");
+        const string Caller = """
+            name: flow
+            priority: 3
+            steps:
+              - name: governed
+                use: ./pipeline/pipeline.yml
+                useParentLimits: false
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+              - name: plain
+                use: ./pipeline/pipeline.yml
+                with:
+                  title: t
+                  prompt: prompts/implement.md
+            """;
+        var definition = Resolved(Caller, pipeline);
+        var governed = definition.Steps.Single(step => step.Name == "governed").Use!;
+
+        Assert.Equal(
+            [("governed.implement", 5), ("governed.recover.diagnose", 5), ("plain.implement", 3), ("governed", 3)],
+            new[] { "governed.implement", "governed.recover.diagnose", "plain.implement", "governed" }.Select(path => (path, FlowUse.PriorityOf(definition, path))));
+        Assert.Equal(1, FlowUse.PriorityOf(definition with { Priority = null }, "plain.implement"));
+        Assert.Equal(["limits"], governed.Own!.Declared);
+        Assert.Equal(5, governed.Own.Priority);
+        Assert.Empty(governed.NotApplied);
+        Assert.Equal(["limits"], definition.Steps.Single(step => step.Name == "plain").Use!.NotApplied);
+
+        Assert.Equal(
+            ["the workflow 'flow/pipeline' governing step 'governed' (useParentLimits: false): priority must be from 1 to 2,147,483,647, found 0"],
+            WorkflowValidator.Validate(Resolved(Caller, Swap(Pipeline, "name: pipeline\n", "name: pipeline\npriority: 0\n")), hasCommitTemplate: false));
+    }
+
     /// <summary>The facts a run of these definitions needs, with nothing configured.</summary>
     private static ConfiguredRunnerFacts Facts()
         => new(new HarnessConfig());

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
@@ -384,25 +385,118 @@ public sealed class OrchestrationStoreTests
             var other = new Thread(() => whileMaking = Record.Exception(() => MachineWideFile.Update(layout.GraphMapFile, TimeSpan.Zero, () => 0)));
             other.Start();
             other.Join();
-            return ("the first map", new System.Text.Json.Nodes.JsonObject { ["by"] = "first" });
+            return (["the first map"], new System.Text.Json.Nodes.JsonObject { ["by"] = "first" });
         }, Token);
 
         // The second, under the section after it, reads the map the first kept and makes none.
         var second = harness.OrchestrationStore.MapOnce(layout, reads: null, () =>
         {
             secondMade++;
-            return ("the second map", new System.Text.Json.Nodes.JsonObject { ["by"] = "second" });
+            return (["the second map"], new System.Text.Json.Nodes.JsonObject { ["by"] = "second" });
         }, Token);
 
         Assert.Equal(HarnessExit.Refused, Assert.IsType<HarnessException>(whileMaking).ExitCode);
-        Assert.Equal(("the first map", "the first map", 0), (first, second, secondMade));
+        Assert.Equal(("the first map", "the first map", 1, 0), (first.Map, second.Map, first.Pages, secondMade));
         Assert.Equal("the first map", File.ReadAllText(layout.GraphMapFile));
-        Assert.Equal("""{"by":"first"}""", System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(layout.GraphMapMetaFile))!.ToJsonString());
+        Assert.Equal("""{"by":"first"}""", System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(layout.GraphMapMetaFileOf(reads: null)))!.ToJsonString());
 
         // Steps whose read rules differ keep a map each, beside the run's.
-        Assert.Equal("a narrowed map", harness.OrchestrationStore.MapOnce(layout, "0123456789abcdef", () => ("a narrowed map", new System.Text.Json.Nodes.JsonObject()), Token));
+        Assert.Equal("a narrowed map", harness.OrchestrationStore.MapOnce(layout, "0123456789abcdef", () => (["a narrowed map"], new System.Text.Json.Nodes.JsonObject()), Token).Map);
         Assert.Equal("a narrowed map", File.ReadAllText(Path.Combine(layout.GraphDirectory, "map-0123456789abcdef.md")));
-        Assert.Null(harness.OrchestrationStore.MapOnce(layout, "fedcba9876543210", () => null, Token));
+        Assert.Null(harness.OrchestrationStore.MapOnce(layout, "fedcba9876543210", () => null, Token).Map);
+    }
+
+    /// <summary>
+    /// A map of several pages is kept with every one of them, its first page last: what it was made from first, as the
+    /// maker made it, then the pages after the first, then the first - so a map.md that is there says its pages are, and
+    /// no step reads a map whose rest is missing. The count comes back with it, read from the first page's own last line
+    /// where the map was kept.
+    /// </summary>
+    [Fact]
+    public void AMapOfSeveralPages_IsKeptWithItsPages_TheFirstPageLast()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "run");
+        var written = new List<string>();
+        var store = new OrchestrationStore(new WritingFileSystem(harness.FileSystem, written), harness.Output);
+
+        var made = store.MapOnce(layout, reads: null, () => ([FirstMapPage, "the second page", "the third page"], new System.Text.Json.Nodes.JsonObject { ["by"] = "one" }), Token);
+
+        Assert.Equal((FirstMapPage, 3), (made.Map, made.Pages));
+        Assert.Equal(
+            [layout.GraphMapMetaFileOf(reads: null), layout.GraphMapPageFileOf(reads: null, 2), layout.GraphMapPageFileOf(reads: null, 3), layout.GraphMapFileOf(reads: null)],
+            written);
+        Assert.Equal("the second page", File.ReadAllText(layout.GraphMapPageFileOf(reads: null, 2)));
+        Assert.Equal("the third page", File.ReadAllText(layout.GraphMapPageFileOf(reads: null, 3)));
+        Assert.Equal("""{"by":"one"}""", System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(layout.GraphMapMetaFileOf(reads: null)))!.ToJsonString());
+
+        // A step after reads the first page as it is, and its count from that page.
+        var again = store.MapOnce(layout, reads: null, () => throw new InvalidOperationException("the map was made again"), Token);
+
+        Assert.Equal((FirstMapPage, 3), (again.Map, again.Pages));
+    }
+
+    /// <summary>
+    /// A kept map's count is the one its first page tells every step, never another record's: what the map was made
+    /// from, damaged or gone, leaves a step offered every page it is told there is - where a count read from that record
+    /// would offer one page to a step told of three, which then asks for the rest and is refused.
+    /// </summary>
+    [Fact]
+    public void AKeptMapsCount_IsTheOneItsFirstPageTells_WhateverBecameOfWhatItWasMadeFrom()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "run");
+
+        _ = harness.OrchestrationStore.MapOnce(layout, reads: null, () => ([FirstMapPage, "the second page", "the third page"], new System.Text.Json.Nodes.JsonObject()), Token);
+        File.WriteAllText(layout.GraphMapMetaFileOf(reads: null), "{ not a record");
+
+        var damaged = harness.OrchestrationStore.MapOnce(layout, reads: null, () => throw new InvalidOperationException("the map was made again"), Token);
+        File.Delete(layout.GraphMapMetaFileOf(reads: null));
+        var gone = harness.OrchestrationStore.MapOnce(layout, reads: null, () => throw new InvalidOperationException("the map was made again"), Token);
+
+        Assert.Equal((FirstMapPage, 3), (damaged.Map, damaged.Pages));
+        Assert.Equal((FirstMapPage, 3), (gone.Map, gone.Pages));
+    }
+
+    /// <summary>
+    /// A page of a kept map is read by the one reader beside its writer, for the run's steps and a side-task's alike: a
+    /// page from where it is kept, with the map's count; one past the last with no text, which the tool refuses with the
+    /// range; and one the disk will not give back said with why, never thrown, for the map is a cache.
+    /// </summary>
+    [Fact]
+    public void AKeptMapsPage_IsReadWhereItIsKept_APagePastTheLastHasNone_AndOneTheDiskWillNotGiveIsSaid()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "run");
+        var store = harness.OrchestrationStore;
+        var (_, pages) = store.MapOnce(layout, "0123456789abcdef", () => ([FirstMapPage, "the second page", "the third page"], new System.Text.Json.Nodes.JsonObject()), Token);
+
+        File.Delete(layout.GraphMapPageFileOf("0123456789abcdef", 3));
+        var lost = store.MapPage(layout, "0123456789abcdef", pages, 3);
+
+        Assert.Equal(new GraphMapPage(3, FirstMapPage), store.MapPage(layout, "0123456789abcdef", pages, 1));
+        Assert.Equal(new GraphMapPage(3, "the second page"), store.MapPage(layout, "0123456789abcdef", pages, 2));
+        Assert.Equal(new GraphMapPage(3, null), store.MapPage(layout, "0123456789abcdef", pages, 4));
+        Assert.Equal((0, (string?)null), (lost.Pages, lost.Text));
+        Assert.False(string.IsNullOrWhiteSpace(lost.Why), "a page the disk would not give back was not said");
+        Assert.False(lost.Why!.EndsWith('.'), lost.Why);
+    }
+
+    /// <summary>A map's first page of three, as the map writes it: its lines, then its last line naming the pages.</summary>
+    private const string FirstMapPage = "at commit abc, 3 files and 9 declarations: the graph tool answers for the tree as it is now\n"
+        + "map page 1 of 3 · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
+
+    /// <summary>A file system that notes each atomic write's path as it lands, around the real one.</summary>
+    private sealed class WritingFileSystem(DssHarness.Core.FileSystem.IFileSystem inner, List<string> written) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            written.Add(path);
+            base.WriteAtomic(path, write);
+        }
     }
 
     /// <summary>A front end's sink of events, keeping each as it is given.</summary>

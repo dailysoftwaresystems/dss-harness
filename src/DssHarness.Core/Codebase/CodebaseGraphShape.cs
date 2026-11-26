@@ -11,7 +11,7 @@ namespace DssHarness.Core.Codebase;
 /// <param name="Exclude">Paths one of these matches are not graphed.</param>
 /// <param name="Languages">The implementations used, by name, in ordinal order; every one the registry holds where <see langword="null"/>. A file whose claimant is left out is read by the fallback.</param>
 /// <param name="ExcludeGenerated">Whether a generated file's declarations are left out (<c>exclude</c>) rather than kept, its file's entry naming why it is generated (<c>low</c>).</param>
-/// <param name="MapTokens">The cap, in tokens, of the run's repository map; 0 asks for none.</param>
+/// <param name="MapTokens">The size, in estimated tokens, of a page of the run's repository map; 0 asks for none.</param>
 /// <param name="KeyNaming">
 /// The naming policies a configuration key's last segment is joined to a member's name by - <c>camelCase</c>,
 /// <c>snake_case</c>, <c>kebab-case</c> and <c>exact</c> - each once, in that order (<see cref="NamingValues"/>):
@@ -33,7 +33,7 @@ public sealed record CodebaseGraphShape(
     IReadOnlyList<string>? KeyNaming = null,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? Claims = null)
 {
-    /// <summary>The cap of the run's repository map where the workflow says nothing.</summary>
+    /// <summary>The size of a page of the run's repository map where the workflow says nothing.</summary>
     public const int DefaultMapTokens = 1_500;
 
     /// <summary>The most <c>mapTokens</c> may say.</summary>

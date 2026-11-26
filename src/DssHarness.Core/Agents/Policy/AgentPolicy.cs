@@ -259,6 +259,7 @@ public sealed partial class AgentPolicy
         OrchestratorService.CreateCommand, OrchestratorService.DeleteCommand, Agents.AgentProvidersService.ListCommand,
         FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand, FlowService.AmendCommand,
         FlowService.PauseCommand, FlowService.StopCommand, FlowService.AskStatusCommand, FlowService.AskCommand,
+        FlowService.AnalyzeReportCommand,
         AgentService.CreateCommand, AgentService.SeedCommand, AgentService.RefreshCommand, AgentService.RebaseCommand,
         AgentService.FoldCommand, AgentService.DeleteCommand, Legs.LegsService.CommandName, Tools.ToolProvisionService.CommandName,
         Hosts.ToolUpdateService.CommandName, Sync.SyncService.CommandName, Build.BuildService.CommandName, Testing.TestService.CommandName,
@@ -281,7 +282,8 @@ public sealed partial class AgentPolicy
         "help", "verify-git", Worktrees.WorktreeService.ListCommand, OrchestratorService.ListCommand, SideTasks.SideTaskService.ListCommand,
         WorkflowValidationService.CommandName, WorkflowExportService.CommandName, "write-anchor", "set-anchor",
         "read-anchor", "read-anchors", "check-anchor-balance", "check-anchor-arms", "check-anchor-citations", Worktrees.RootLitterService.CommandName,
-        "fix-line-endings", "check-ci-legs", Codebase.CodebaseGraphQueryService.CommandName,
+        "fix-line-endings", "check-ci-legs", Codebase.CodebaseGraphQueryService.CommandName, Orchestration.Flow.FlowService.ReadReportCommand,
+        Execution.QueueReports.CommandName,
     ];
 
     /// <summary>
@@ -5168,9 +5170,12 @@ public sealed partial class AgentPolicy
     /// <summary>Whether <paramref name="character"/> separates a path on Windows, either way it is written.</summary>
     private static bool IsSeparator(char character) => character is '\\' or '/';
 
-    /// <summary>A tilde's prefix the shell expands, before a separator or the path's end: <c>~+</c>, <c>~-</c>, the directory stack's <c>~N</c>, <c>~+N</c> and <c>~-N</c>, or <c>~name</c>.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^~(?<name>[+-]?[0-9]+|[+-]|[A-Za-z0-9._][A-Za-z0-9._-]*)(?=$|[/\\])")]
-    private static partial System.Text.RegularExpressions.Regex TildeName();
+    /// <summary>
+    /// A tilde's prefix the shell expands, before a separator or the path's end: <c>~+</c>, <c>~-</c>, the directory
+    /// stack's <c>~N</c>, <c>~+N</c> and <c>~-N</c>, or <c>~name</c> - the separator after the name, where one stands,
+    /// matched too, so what follows the prefix is read from the name's end.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex TildeName = LinearRegex.Compile(@"^~(?<name>[+-]?[0-9]+|[+-]|[A-Za-z0-9._][A-Za-z0-9._-]*)(?:$|[/\\])");
 
     /// <summary>
     /// The path with a home at its start expanded to the user's own: <c>~</c>, <c>$HOME</c>, <c>${HOME}</c>,
@@ -5221,10 +5226,11 @@ public sealed partial class AgentPolicy
         // beside it (CommandAnalysis.Substituted); its ~- is where the shell stood before, and ~N, ~+N and ~-N a directory of
         // the stack pushd keeps, which this does not know; and ~name is that user's home, read beside the user's own, where
         // homes stand together.
-        if (TildeName().Match(path) is { Success: true } tilde)
+        if (TildeName.Match(path) is { Success: true } tilde)
         {
-            var name = tilde.Groups["name"].Value;
-            var rest = path[tilde.Length..];
+            var named = tilde.Groups["name"];
+            var name = named.Value;
+            var rest = path[(named.Index + named.Length)..];
 
             return name switch
             {

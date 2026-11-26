@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -46,6 +47,12 @@ public sealed record LegRunRequest(
     HostId? Here = null,
     IReadOnlyList<string>? RemoteArguments = null)
 {
+    /// <summary>
+    /// The run's priority, as a workflow declared it: what multiplies its tenant's share of the dispatch queue's fair
+    /// order, the least (<see cref="DispatchOrder.LeastPriority"/>) where nothing declared one.
+    /// </summary>
+    public int Priority { get; init; } = DispatchOrder.LeastPriority;
+
     /// <summary>
     /// What the command has each leg do, which decides the programs a host must have to be given
     /// one. Said by every command, because what one needs is not what another does.
@@ -250,7 +257,8 @@ public sealed class LegRunService(
     RunStops stops,
     MachineSettingsFile machineSettings,
     CommandOrigin? origin = null,
-    LegSetUps? setUps = null)
+    LegSetUps? setUps = null,
+    HostNotes? notes = null)
 {
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LegsService _legsService = legsService;
@@ -286,6 +294,9 @@ public sealed class LegRunService(
 
     /// <summary>What brings a leg's set-ups up and down, where its run is asked to set up.</summary>
     private readonly LegSetUps? _setUps = setUps;
+
+    /// <summary>What tells the machine that dispatched this run to this host how its legs' admission here goes, as notes.</summary>
+    private readonly HostNotes? _notes = notes;
 
     /// <summary>The stop another process asks of a run (<c>stop-run</c>), which the run looks for while it owns its directory.</summary>
     private readonly RunStops _stops = stops;
@@ -456,7 +467,8 @@ public sealed class LegRunService(
         }
 
         // Every refusal of the whole run is asked above: once taken, the claim is followed at once by the try below that
-        // gives it up, so no run that ended here leaves it held for the next run to call abandoned.
+        // gives it up, so no run that ended here - whatever ended it, what the caller's watch was told among it - leaves it
+        // held for the next run to call abandoned.
         var claim = await _logOwnership.ClaimAsync(runDirectory, runId, request.ForceLock, cancellationToken).ConfigureAwait(false);
 
         if (!claim.Taken)
@@ -478,30 +490,36 @@ public sealed class LegRunService(
                 runDirectory);
         }
 
-        // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends.
-        _output.Publish(new RecordWritten("run directory", runDirectory));
-
-        // Before any leg reads its tree - the reading for the copies below among it: a leg in a copy reads the tree only
-        // until its copy is made, and one in the tree itself until it ends.
-        request.Watch?.Placed([.. placed.Select(leg => new LegPlace(leg.Name, leg.Synced))]);
-
-        // A stop another process asks of the run (stop-run) is looked for from here, where the run owns its directory, to
-        // where its legs end, and stops the run as an interrupt does: the run's own token is the one both cancel.
-        var stop = _stops.Watch(runDirectory, commandName, cancellationToken);
-        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Stopping);
-
-        // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
-        // another run holds is, and no end to the legs that do not.
-        var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
-
-        // The hosts' copies of the tree the legs' own copies are kept in, each synced once a run where it is not there yet.
-        var holders = new ConcurrentDictionary<string, Lazy<Task<string?>>>(LegPlan.TreeKeyComparer);
-
-        // Each tree as it was read for its copies, where any leg works in one.
+        // The watch for a stop asked of the run, and the run's own token that both it and an interrupt cancel, once the
+        // watch has begun; and each tree as it was read for its copies, where any leg works in one.
+        RunStopWatch? stop = null;
+        CancellationTokenSource? stopping = null;
         IReadOnlyDictionary<string, Task<SyncSource>>? sources = null;
 
         try
         {
+            // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends,
+            // and so is the caller's watch - a step of an orchestrator run keeps it, so a crash while the legs work is closed
+            // where their records last moved.
+            _output.Publish(new RecordWritten("run directory", runDirectory));
+            request.Watch?.Began(runId, runDirectory);
+
+            // Before any leg reads its tree - the reading for the copies below among it: a leg in a copy reads the tree only
+            // until its copy is made, and one in the tree itself until it ends.
+            request.Watch?.Placed([.. placed.Select(leg => new LegPlace(leg.Name, leg.Synced))]);
+
+            // A stop another process asks of the run (stop-run) is looked for from here, where the run owns its directory, to
+            // where its legs end, and stops the run as an interrupt does: the run's own token is the one both cancel.
+            stop = _stops.Watch(runDirectory, commandName, cancellationToken);
+            stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Stopping);
+
+            // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
+            // another run holds is, and no end to the legs that do not.
+            var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
+
+            // The hosts' copies of the tree the legs' own copies are kept in, each synced once a run where it is not there yet.
+            var holders = new ConcurrentDictionary<string, Lazy<Task<string?>>>(LegPlan.TreeKeyComparer);
+
             // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
             // machine - may have written no verdict, and nothing would ever claim that directory again: said here, once,
             // and let go. Inside this try, so that whatever happens in it, this run's own directory is still given up. A
@@ -534,7 +552,7 @@ public sealed class LegRunService(
                             MaxParallelLegsTotal = context.Config.Defaults.MaxParallelLegsTotal,
                             SyncTree = syncTree,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, sources, token),
                         },
                         ledger,
                         stopping.Token)
@@ -583,10 +601,18 @@ public sealed class LegRunService(
             }
 
             // The watch ends, taking back a request it never took, before the directory is given up: a stop asked too late
-            // is never taken by a run that has ended, nor recorded taken among its records.
+            // is never taken by a run that has ended, nor recorded taken among its records. A run that ended before its
+            // watch began gives its directory up all the same.
             Task GiveUp() => _logOwnership.ReleaseAsync(runDirectory, runId, CancellationToken.None);
 
-            await stop.EndThenAsync(GiveUp).ConfigureAwait(false);
+            try
+            {
+                await (stop is null ? GiveUp() : stop.EndThenAsync(GiveUp)).ConfigureAwait(false);
+            }
+            finally
+            {
+                stopping?.Dispose();
+            }
         }
     }
 
@@ -901,6 +927,7 @@ public sealed class LegRunService(
         string commandName,
         LegLedger ledger,
         ConcurrentDictionary<string, string> lockedTrees,
+        IReadOnlyDictionary<string, Task<SyncSource>>? sources,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
@@ -1011,9 +1038,63 @@ public sealed class LegRunService(
 
                 var entry = await RunTakenLegAsync(context, start, runId, runDirectory, request, work, commandName, ledger, started, check.Restarts, cancellationToken).ConfigureAwait(false);
 
+                // What it built of each file its digest names, taken before its line is kept: as the leg's line is made, it
+                // still holds the tree it worked in.
+                tree = request.Here is null ? await BuiltAsync(tree, entry.Digest, sources, cancellationToken).ConfigureAwait(false) : tree;
+
                 return (admitted is null ? entry : entry with { Admission = admitted.Fact }) with { Tree = tree };
             }
         }
+    }
+
+    /// <summary>
+    /// <paramref name="tree"/> with what the leg built of each file of it <paramref name="digest"/>'s places name
+    /// (<see cref="WorkedTree.Built"/>): for a copy, each file as the run's reading of the tree it was made of read it - the
+    /// copy holds that reading, checked file by file as it was made, so the content is proven whatever the tree holds now -
+    /// and for the tree itself, each file as it holds it now, the leg's work ended and its line not yet kept. A file the
+    /// reading did not carry, or the tree no longer holds or cannot be read, holds nothing proven. As it was where the digest
+    /// names no file of the tree, or the copy holds no reading of this run's - a run on what is staged.
+    /// </summary>
+    private async Task<WorkedTree> BuiltAsync(WorkedTree tree, ResultDigest? digest, IReadOnlyDictionary<string, Task<SyncSource>>? sources, CancellationToken cancellationToken)
+    {
+        if (digest?.FilesInTree() is not { Count: > 0 } files)
+        {
+            return tree;
+        }
+
+        var built = new Dictionary<string, FileContent>(StringComparer.Ordinal);
+
+        if (tree.CopyOf is { } copyOf)
+        {
+            if (tree.Staged || sources?.GetValueOrDefault(copyOf) is not { IsCompletedSuccessfully: true } read)
+            {
+                return tree;
+            }
+
+            foreach (var file in files)
+            {
+                if (read.Result.Files.Entries.TryGetValue(file, out var entry))
+                {
+                    built[file] = entry.Identity;
+                }
+            }
+
+            return tree with { Built = built };
+        }
+
+        foreach (var file in files)
+        {
+            try
+            {
+                built[file] = await FileContentHash.OfAsync(_fileSystem, Path.Combine(tree.Path, file), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception unread) when (unread is IOException or UnauthorizedAccessException)
+            {
+                // Gone or unreadable: nothing proves what the leg built of it.
+            }
+        }
+
+        return tree with { Built = built };
     }
 
     /// <summary>
@@ -1177,8 +1258,12 @@ public sealed class LegRunService(
             return null;
         }
 
-        // On an ssh host, under the run of the machine that dispatched the leg: its command's other legs there ask under
-        // it too, and a wait for slots only they hold does not count.
+        // Charged to its repository whichever tree it works in - a worktree, a leg's copy, a host's copy of either - as the
+        // one owner of that question spells it on this machine.
+        var repository = await _contextLoader.RepositoryOfAsync(context, cancellationToken).ConfigureAwait(false);
+
+        // On an ssh host, under the run of the machine that dispatched the leg, and at that run's priority: its command's
+        // other legs there ask under it too, and a wait for slots only they hold does not count.
         return await _admission
             .AdmitAsync(
                 new AdmissionRequest(
@@ -1190,10 +1275,13 @@ public sealed class LegRunService(
                     leg.HostTreeRoot,
                     leg.Variant.DirectoryName,
                     message => ledger.Transition(leg.Name, message),
-                    room)
+                    room,
+                    _origin.Dispatched?.Priority ?? request.Priority,
+                    repository)
                 {
                     Settle = settle,
                     WorkBegunBy = workBegunBy,
+                    Told = Told(leg.Name, asking, request.Watch, _notes, _origin),
 
                     // What this machine counts as in use and could have back: the page cache of WSL's virtual machine, which
                     // holds what every distribution's builds read and wrote until it idles for minutes.
@@ -1211,6 +1299,58 @@ public sealed class LegRunService(
                 },
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Who is told each stage of <paramref name="asking"/>'s admission here: the run's watch, where it has one; the machine
+    /// that dispatched this run to this host, by a note (<see cref="AdmissionNote"/>) - one line of JSON
+    /// (<see cref="NotedAdmission"/>) - which its own watch is told; <see langword="null"/> where neither asks.
+    /// </summary>
+    internal static Action<AdmissionTold>? Told(string leg, string asking, ILegRunWatch? watch, HostNotes? notes, CommandOrigin origin)
+        => watch is not null ? told => watch.Admitting(leg, asking, told)
+            : notes is not null && origin.Dispatched is not null
+                ? told => notes.Write(AdmissionNote, JsonSerializer.Serialize(new NotedAdmission(leg, asking, told), JsonStateFile.LineOptions))
+                : null;
+
+    /// <summary>
+    /// What reads the notes the host of a dispatched leg writes as it runs: a stage of a leg's admission
+    /// there, which <paramref name="watch"/> is told, and every other note the command's own reader takes
+    /// (<paramref name="command"/>); <see langword="null"/> where neither reads any.
+    /// </summary>
+    internal static Action<string, string>? NotesOf(Action<string, string>? command, ILegRunWatch? watch)
+        => watch is null ? command
+            : (kind, text) =>
+            {
+                if (kind != AdmissionNote)
+                {
+                    command?.Invoke(kind, text);
+                }
+
+                // Dropped where it does not read as one this build writes, as a damaged note is: the step then counts that
+                // wait as its run, never a wrong cause.
+                else if (Read(text) is { } noted)
+                {
+                    watch.Admitting(noted.Leg, noted.Asking, noted.Told);
+                }
+            };
+
+    /// <summary>A note a host writes as a leg's admission there reaches a stage: the leg, what asked, and what it reached, as one line of JSON.</summary>
+    internal sealed record NotedAdmission(string Leg, string Asking, AdmissionTold Told);
+
+    /// <summary>The kind of note a host writes as a leg's admission there reaches a stage.</summary>
+    internal const string AdmissionNote = "admission";
+
+    /// <summary>Reads one note of a leg's admission, as this build writes it; null where the note does not read.</summary>
+    private static NotedAdmission? Read(string text)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<NotedAdmission>(text, JsonStateFile.LineOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -1517,18 +1657,23 @@ public sealed class LegRunService(
             // What one dispatched leg is given of its own, after the command's own options, and what reads the notes its
             // host writes while it runs: asked of it alone, here, once - no other leg is asked for.
             var own = request.RemoteArgumentsOf?.Invoke(leg) ?? [];
-            var onNote = request.HostNotes?.Invoke(leg);
+            var onNote = NotesOf(request.HostNotes?.Invoke(leg), request.Watch);
             var ended = await _remoteLegs
                 .RunAsync(
                     commandName,
                     leg,
                     [.. request.RemoteArguments ?? [], .. SetUpOption(context, leg, request), .. KeepGoingOption(leg, request), .. own],
                     runId,
+                    request.Priority,
                     onNote,
                     facts => ledger.SetUpsEnded(leg.Name, facts),
                     checkRestarts,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            // The log of the phase it did not pass, brought back into this run's records, so the whole of what that phase
+            // printed is one read away here as a leg of this machine's is.
+            ended = await BroughtBackAsync(leg, ended, runDirectory, ledger, cancellationToken).ConfigureAwait(false);
 
             // What a WSL leg read and wrote stays in its virtual machine's page cache, which this machine counts as in use
             // until the virtual machine idles for minutes: dropped as the leg ends - before its slot is given back - where
@@ -1669,6 +1814,47 @@ public sealed class LegRunService(
         }
 
         return entry;
+    }
+
+    /// <summary>
+    /// <paramref name="line"/>, the line of a leg another machine ran, with the log of the phase it did not pass brought
+    /// back to this machine (<see cref="LegEntry.LogBroughtBack"/>): read through the host's copy of the leg's tree, where
+    /// the host's run keeps its records, a piece at a time (<see cref="ISyncService.BringBackAsync"/>), and kept in this
+    /// run's records as a local leg keeps its own - so the whole of what that phase printed, which the line's digest and
+    /// last lines stand for, is one read away here. The line as it was where it holds no such phase, or its host listed no
+    /// log of it; and where the log could not be brought back - the host stopped answering, the run was stopped - the
+    /// leg's progress says why, and its line keeps its last lines for a reader to start from.
+    /// </summary>
+    private async Task<LegEntry> BroughtBackAsync(PlacedLeg leg, LegEntry line, string runDirectory, LegLedger ledger, CancellationToken cancellationToken)
+    {
+        if (line.TailPhase is not { } phase
+            || line.HostRunId is not { } hostRun
+            || !(line.Logs ?? []).Any(log => log.Phase == PhaseLogs.NameFor(phase)))
+        {
+            return line;
+        }
+
+        var here = new LegRecords(runDirectory, leg.Name).PhaseLog(PhaseLogs.NameFor(phase));
+
+        try
+        {
+            await _syncService
+                .BringBackAsync(_transportFactory.For(leg.Host), leg.HostTreeRoot, LegRecords.PhaseLogInTree(hostRun, leg.Name, PhaseLogs.NameFor(phase)), here, cancellationToken)
+                .ConfigureAwait(false);
+
+            return line with { LogBroughtBack = here };
+        }
+        catch (HarnessException ex)
+        {
+            ledger.Transition(leg.Name, $"its log of {phase} could not be brought back from {leg.Host.Host}: {ex.Message.TrimEnd('.')}; its last lines stay on its line");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The leg's verdict is in hand, and a stop asked for while its log crosses takes nothing of it.
+            ledger.Transition(leg.Name, $"its log of {phase} was not brought back from {leg.Host.Host}: the run was stopped first; its last lines stay on its line");
+        }
+
+        return line;
     }
 
     /// <summary>

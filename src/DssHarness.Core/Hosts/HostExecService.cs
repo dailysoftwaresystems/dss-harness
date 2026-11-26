@@ -178,7 +178,7 @@ public sealed class HostExecService(
                     _output.RawError(HostProbes.AsConfigured(line, session.Connection));
                 },
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken).SayingUnreached($"{host}", line => _output.Warn(CommandName, line)).ConfigureAwait(false);
 
         if (HostProbes.BeatLost(result) is { } unheard)
         {
@@ -234,7 +234,9 @@ public sealed class HostExecService(
         // distribution starting cold - is waited for, and told while it lasts.
         var result = await ProgramWait
             .ToItsEndAsync(
-                _hostCommands.ProbeDefaultWslDistributionAsync,
+                token => _hostCommands
+                    .ProbeDefaultWslDistributionAsync(token)
+                    .SayingUnreached("WSL naming its default distribution", line => _output.Warn(CommandName, line)),
                 "WSL to name its default distribution",
                 ProgramWait.Told(_output, CommandName),
                 clock: null,

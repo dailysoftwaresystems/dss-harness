@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Execution;
 
@@ -118,6 +119,13 @@ public sealed record LegPaths
     /// build: a name of one is then refused, saying so, never passed through.
     /// </summary>
     public LegCompilers? Compilers { get; init; }
+
+    /// <summary>
+    /// The directory this run of a test invocation has its runner write its structured results into, or
+    /// <see langword="null"/> outside one: made empty by the harness before the runner starts, inside the leg's own
+    /// records of the run, so a results file read there is this run's and no earlier one's.
+    /// </summary>
+    public string? ResultsDirectory { get; init; }
 
     /// <summary>
     /// Where this run of the action writes while it runs, or <see langword="null"/> outside an
@@ -296,7 +304,7 @@ public enum PlaceholderPolicy
 /// nothing.
 /// </para>
 /// </remarks>
-public static partial class LegPathNames
+public static class LegPathNames
 {
     /// <summary>Names the leg's variant-keyed build directory.</summary>
     public const string BuildDirectory = "buildDir";
@@ -306,6 +314,12 @@ public static partial class LegPathNames
 
     /// <summary>Names the tree's <c>.harness-config</c> directory.</summary>
     public const string HarnessDirectory = "harnessDir";
+
+    /// <summary>
+    /// Names the directory a test invocation's run has its runner write its structured results into - made empty for
+    /// each run, so what is read there is that run's - in the invocation's <c>args</c> and <c>results</c> alone.
+    /// </summary>
+    public const string ResultsDirectory = "resultsDir";
 
     /// <summary>Names the leg, as <c>legs</c> declares it.</summary>
     public const string Leg = "leg";
@@ -389,7 +403,7 @@ public static partial class LegPathNames
     /// <remarks>A WSL item's distribution, <c>{distribution.&lt;item&gt;}</c>, is one of a family, by the item's name: see <see cref="IsOwned"/>.</remarks>
     public static IReadOnlyList<string> All { get; } =
     [
-        BuildDirectory, TreeRoot, HarnessDirectory,
+        BuildDirectory, TreeRoot, HarnessDirectory, ResultsDirectory,
         Leg, Os, Processor, Toolchain, Config, Variant, Host, RunId, Distribution,
         Product, CompilerC, CompilerCxx, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
     ];
@@ -411,13 +425,13 @@ public static partial class LegPathNames
 
     /// <summary>
     /// The names whose value is a directory that is never under a leg's build directory: the tree, the harness's own
-    /// directory, and the run-of-an-action ones. A setting whose paths are relative to the build directory - a test
-    /// invocation's <c>keepOnFailure</c> - refuses an entry naming any of them, naming the key, when the configuration
-    /// is read.
+    /// directory, a test run's results directory, and the run-of-an-action ones. A setting whose paths are relative to the
+    /// build directory - a test invocation's <c>keepOnFailure</c> - refuses an entry naming any of them, naming the key,
+    /// when the configuration is read.
     /// </summary>
     public static IReadOnlyList<string> Directories { get; } =
     [
-        TreeRoot, HarnessDirectory, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
+        TreeRoot, HarnessDirectory, ResultsDirectory, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
     ];
 
     /// <summary>
@@ -463,10 +477,7 @@ public static partial class LegPathNames
     /// The name is <see cref="NamePattern"/>; the first two shapes are <see cref="LiteralPattern"/>.
     /// </para>
     /// </remarks>
-    [GeneratedRegex(
-        LiteralPattern + @"|\{(?<name>" + NamePattern + @")\}",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex Placeholder { get; }
+    private static readonly Regex Placeholder = LinearRegex.Compile(LiteralPattern + @"|\{(?<name>" + NamePattern + @")\}");
 
     /// <summary>
     /// The brace groups every template the tool fills writes as text: a doubled brace, <c>{{</c> or
@@ -476,23 +487,52 @@ public static partial class LegPathNames
     /// </summary>
     private const string LiteralPattern = @"(?<doubled>\{\{|\}\})|(?<other>\$\{[^}]*\})";
 
-    [GeneratedRegex(@"\G(?:" + LiteralPattern + ")", RegexOptions.CultureInvariant)]
-    private static partial Regex LiteralHere { get; }
+    /// <summary>A brace group <see cref="LiteralPattern"/> names, wherever it starts.</summary>
+    private static readonly Regex Literal = LinearRegex.Compile(LiteralPattern);
 
     /// <summary>
-    /// The brace group <see cref="LiteralPattern"/> names that starts at <paramref name="at"/> of
-    /// <paramref name="template"/> - the text it writes and how much of the template it takes - or
-    /// null where none starts there.
+    /// The brace groups <see cref="LiteralPattern"/> names in one template, told place by place to a reader walking it:
+    /// the leftmost group at or past where the reader asks is sought (<see cref="LinearRegex.MatchFrom"/>) and kept while
+    /// it lies ahead - a group starts at a place exactly when the leftmost one sought from that place starts at it - so a
+    /// reader whose places never go back has the template searched in time linear in its length, however many of
+    /// another expander's groups it leaves unclosed.
     /// </summary>
     /// <param name="template">The template, as it is written.</param>
-    /// <param name="at">Where to look.</param>
-    public static (string Text, int Length)? LiteralAt(string template, int at)
+    public sealed class Literals(string template)
     {
-        ArgumentNullException.ThrowIfNull(template);
+        /// <summary>The leftmost group found at or past <see cref="_from"/>; null before the first is sought.</summary>
+        private Match? _ahead;
 
-        var match = LiteralHere.Match(template, at);
+        /// <summary>Where <see cref="_ahead"/> was sought from.</summary>
+        private int _from;
 
-        return !match.Success ? null : (match.Groups["doubled"].Success ? match.Value[..1] : match.Value, match.Length);
+        /// <summary>The template, as it is written.</summary>
+        public string Template { get; } = template ?? throw new ArgumentNullException(nameof(template));
+
+        /// <summary>
+        /// How much of the template the searches spanned: each from where it was sought to the end of the group it found,
+        /// or to the template's end where it found none - what a search reads to answer.
+        /// </summary>
+        public long Spanned { get; private set; }
+
+        /// <summary>
+        /// The brace group that starts at <paramref name="at"/> - the text it writes and how much of the template it takes -
+        /// or null where none starts there.
+        /// </summary>
+        /// <param name="at">Where to look.</param>
+        public (string Text, int Length)? At(int at)
+        {
+            if (_ahead is null || _from > at || (_ahead.Success && _ahead.Index < at))
+            {
+                _ahead = LinearRegex.MatchFrom(Literal, Template, at);
+                _from = at;
+                Spanned += (_ahead.Success ? _ahead.Index + _ahead.Length : Template.Length) - at;
+            }
+
+            return _ahead.Success && _ahead.Index == at
+                ? (_ahead.Groups["doubled"].Success ? _ahead.Value[..1] : _ahead.Value, _ahead.Length)
+                : null;
+        }
     }
 
     /// <summary>
@@ -513,8 +553,8 @@ public static partial class LegPathNames
     /// </summary>
     public const string NameRule = "starts with a letter or '_' and holds only letters, digits, '_', '-' and '.'";
 
-    [GeneratedRegex(@"\A" + NamePattern + @"\z", RegexOptions.CultureInvariant)]
-    private static partial Regex WholeName { get; }
+    /// <summary>A name in braces, whole (<see cref="NamePattern"/>).</summary>
+    private static readonly Regex WholeName = LinearRegex.Compile(@"\A" + NamePattern + @"\z");
 
     /// <summary>Whether a configured string can name <paramref name="name"/> in braces, as <c>{name}</c>.</summary>
     /// <param name="name">The name something declares.</param>
@@ -806,6 +846,14 @@ public static partial class LegPathNames
                     HarnessExit.ConfigInvalid,
                     $"{setting} names '{{{Product}}}', and {paths.ProductProblem ?? "this leg has no build product"}.");
 
+            case ResultsDirectory when paths.ResultsDirectory is null:
+                // Never another directory in its place: a results file read anywhere but the one emptied for this run
+                // may be any earlier run's.
+                throw new HarnessException(
+                    HarnessExit.ConfigInvalid,
+                    $"{setting} names '{{{ResultsDirectory}}}', and only a run of a test invocation has a results directory, "
+                    + "made empty for it: name it in a test invocation's args or results.");
+
             case ActionBuild or ActionArtifacts or StepBuild or RunArtifacts
                 when paths.ActionBuild is null:
                 throw new HarnessException(
@@ -915,6 +963,7 @@ public static partial class LegPathNames
         BuildDirectory => paths.BuildDirectory,
         TreeRoot => paths.TreeRoot,
         HarnessDirectory => paths.HarnessDirectory,
+        ResultsDirectory => paths.ResultsDirectory,
         Product => paths.Product,
         ActionBuild => paths.ActionBuild,
         ActionArtifacts => paths.ActionArtifacts,

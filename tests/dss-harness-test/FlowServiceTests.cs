@@ -757,6 +757,42 @@ public sealed class FlowServiceTests
         Assert.Single(steps, step => step.Step == "planning.planupdate" && step.RaisedByUpdate == "u1");
         Assert.Equal(2, steps.Count(step => step.Step == "planning.check"));
     }
+    /// <summary>
+    /// The report a session's end writes is the report <c>read-orchestrator-report</c> answers, computed by the same
+    /// thresholds - the configuration's <c>defaults.report</c> - so both name the same signals, bounded alike.
+    /// </summary>
+    [Fact]
+    public async Task TheSessionsReport_IsTheReadVerbsReport_ByTheConfiguredThresholds()
+    {
+        var (repository, runner) = await RepositoryAsync(
+            """
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: orient
+                dependsOn: [one]
+            """,
+            new HarnessConfig { Workflows = [Workflow], Defaults = new HarnessDefaults { Report = new FlowReportThresholds(Top: 1) } });
+        using var disposed = repository;
+
+        // Each step takes time the clock can tell, so each is among the slowest the signals could name.
+        var clock = new JumpingClock();
+        runner.OnStart("one", () => clock.Advance(TimeSpan.FromSeconds(10)));
+        runner.OnStart("two", () => clock.Advance(TimeSpan.FromSeconds(5)));
+        var service = Service(repository.Harness, runner, clock: clock);
+
+        Assert.Equal(HarnessExit.Success, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        var written = JsonNode.Parse(File.ReadAllText(RunOf(repository).ReportJsonFile))!["signals"]!;
+        var read = await service.ReadReportAsync(repository.Path, "r1", json: true, cancellationToken: Token);
+        var answered = JsonNode.Parse(read.Data[0])!["report"]!["signals"]!;
+
+        Assert.Equal(["slowestStep#1"], written.AsArray().Select(signal => signal!["id"]!.GetValue<string>()).Where(id => id.StartsWith("slowestStep", StringComparison.Ordinal)));
+        Assert.True(JsonNode.DeepEquals(written, answered), $"{written.ToJsonString()}\n{answered.ToJsonString()}");
+    }
+
     /// <summary>A run starts the next r-N, writes every record of the run, drives the session to its end, releases the owner, and names every record it wrote.</summary>
     [Fact]
     public async Task ARunStarts_RecordsAndDrivesTheSessionToItsEnd_NamingEveryRecord()
@@ -1124,7 +1160,8 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// Every verb over a run made sweeps what a killed engine's steps left running before it reads anything else of the
-    /// run, its own name on what the sweep says: here a record that does not read as one, said and left as it is.
+    /// run, its own name on what the sweep says: here a record that does not read as one, said and left as it is - and said
+    /// once, however many times the verb sweeps: a resume and an answer sweep again at their claim of the run.
     /// </summary>
     [Theory]
     [InlineData(FlowService.ResumeCommand)]
@@ -1158,7 +1195,9 @@ public sealed class FlowServiceTests
         var warning = $"{command}: WARN - '{record}' is the record of a step's child's session or process group, and does not read as one: "
             + "its session is 0, and a session is a process's id. It was left as it is, and nothing it names was ended.";
 
-        Assert.Equal(warning, repository.Harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).FirstOrDefault(line => line.StartsWith($"{command}: ", StringComparison.Ordinal)));
+        Assert.Equal(
+            [warning],
+            repository.Harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Contains($"'{record}'", StringComparison.Ordinal)));
         Assert.True(File.Exists(record));
     }
 
@@ -2337,6 +2376,286 @@ public sealed class FlowServiceTests
         Assert.Equal([StaysHandedOverLine(run), $"inbox: {run.InboxFile}", $"log {run.LogFile("r1")}"], outcome.Details);
         Assert.Null(store.ReadOwner(run));
         Assert.Equal(("q1", "go"), (Assert.Single(store.ReadInbox(run)!.Answers).Question, Assert.Single(store.ReadInbox(run)!.Answers).Answer));
+    }
+
+    /// <summary>
+    /// A session of a run already made begun from inside a session a sweep keeps - a step's own script in the session a
+    /// contained child of a killed engine leads - is refused (13) at its claim of the run, naming the record and saying to
+    /// run the command from outside: the owner that killed engine left is left as it was, the claim refused before it took
+    /// it, nothing of the run is answered, and this process never becomes the run's engine inside what the next command
+    /// from outside ends - whether the record is the run's own or another orchestrator's of the repository, which the claim
+    /// sweeps as list-orchestrator does: a resume, a new answer to the run's open question, and a changed answer
+    /// (<c>--again</c>) alike - the record warned of once, though the command sweeps the run's own records as it begins and
+    /// every run's again at its claim. Run where it would act on itself: the command runs in a child the session's leader
+    /// starts (<see cref="EngineFromInside"/>), every process the test's own, bounded, and ended on every path.
+    /// </summary>
+    [Theory]
+    [InlineData("resume", "r1")]
+    [InlineData("resume", "o0")]
+    [InlineData("answer", "r1")]
+    [InlineData("answer", "o0")]
+    [InlineData("again", "r1")]
+    [InlineData("again", "o0")]
+    public async Task ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_ItsDeadOwnerLeftAsItWas_NothingAnswered(string command, string recordedIn)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
+
+        var (repository, service, runner) = command == "again" ? await AmendedAsync() : await ServiceAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: command == "again" ? ["request=build the thing"] : null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        // A changed answer is asked of the set a person answered last: the intake's, answered here before.
+        if (command == "again")
+        {
+            _ = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        }
+
+        var run = RunOf(repository);
+        var (gone, written) = await GoneOwnerAsync(repository, run);
+        var questions = File.ReadAllText(run.QuestionsFile);
+        var holding = AnotherOrchestrator(repository, recordedIn);
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, recordedIn, command));
+        var record = OrchestratorLayout.ChildFile(holding.StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"detail=log {run.LogFile("r1")}",
+                $"exit={HarnessExit.Refused}",
+                $"holder={caller}",
+                "kept=True",
+                $"owner={gone}",
+                $"runs={string.Join(",", new[] { "o0", "r1" }.Where(name => name == "r1" || recordedIn == "o0"))}",
+                $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
+                    + $"inside it would be ended with it by the next command run from outside. Run {(command == "resume" ? FlowService.ResumeCommand : FlowService.AnswerCommand)} "
+                    + "from outside it. Nothing was changed.",
+                $"warned={ChildSessionsTests.HeldHereWarning(command == "resume" ? FlowService.ResumeCommand : FlowService.AnswerCommand, record, leader, caller.Id)}",
+            ],
+            lines);
+        Assert.Equal(written, File.ReadAllText(run.OwnerFile));
+        Assert.Equal(questions, File.ReadAllText(run.QuestionsFile));
+    }
+
+    /// <summary>
+    /// Writes as <paramref name="run"/>'s owner an engine that has gone - a process of the test's own, ended once its start
+    /// was read - the owner a killed engine leaves; answers its id and the owner file as it was written.
+    /// </summary>
+    private static async Task<(int Id, string Written)> GoneOwnerAsync(Repository repository, OrchestratorLayout run)
+    {
+        var identity = repository.Harness.Identity;
+        using var engine = Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
+        string stamp;
+
+        try
+        {
+            stamp = identity.StampOf(engine.Id) ?? throw new InvalidOperationException($"the start of the engine {engine.Id} could not be read");
+        }
+        finally
+        {
+            engine.Kill();
+            await engine.WaitForExitAsync(Token);
+        }
+
+        repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(identity.CurrentMachine, engine.Id, DateTimeOffset.UtcNow, stamp));
+        return (engine.Id, File.ReadAllText(run.OwnerFile));
+    }
+
+    /// <summary>
+    /// An answer handed to the engine running the run, from inside a session a step of that engine's leads - the step's own
+    /// script answering the run's question - whose engine dies while the answer waits on it, is refused (13) at the claim
+    /// the answer then makes as the run's next session: the claim sweeps every run there, once its own look has found the
+    /// owner gone and before it takes it, so the record the dead engine left of that session - kept, for it holds this very
+    /// process - refuses it, though the command's first sweep, made while the engine stood, left that record as its live
+    /// owner's. The dead engine's owner is left as it was, the record is kept, and the answer is said to stay in the inbox
+    /// for the next session of the run. Run where it would
+    /// act on itself: the answer runs in a child the session's leader starts (<see cref="EngineFromInside"/>), the engine
+    /// is a process of the test's own, ended once the answer is in the inbox, and every process is ended on every path.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWaitingOnAnEngineThatDies_IsRefusedAtItsClaim_FromInsideASessionThatEnginesRecordKeeps()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
+
+        var (repository, service, runner) = await ServiceAsync(HoldingFlow);
+        using var disposed = repository;
+
+        Script(runner);
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+        var identity = repository.Harness.Identity;
+        using var engine = Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
+
+        try
+        {
+            var stamp = identity.StampOf(engine.Id) ?? throw new InvalidOperationException($"the start of the engine {engine.Id} could not be read");
+
+            store.WriteOwner(run, new RunOwner(identity.CurrentMachine, engine.Id, DateTimeOffset.UtcNow, stamp));
+            var written = File.ReadAllText(run.OwnerFile);
+
+            // The engine dies once the answer is handed to it, while the answer waits on it.
+            var dying = Task.Run(async () =>
+            {
+                while (store.ReadInbox(run) is not { Answers.Count: > 0 })
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), Token);
+                }
+
+                engine.Kill();
+                await engine.WaitForExitAsync(Token);
+            }, Token).WaitAsync(Bound, Token);
+
+            var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(
+                TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, "r1", "answer", engine.Id.ToString(CultureInfo.InvariantCulture), stamp));
+
+            await dying;
+
+            var record = OrchestratorLayout.ChildFile(run.StepDirectory("s1"), leader);
+
+            Assert.Equal(
+                [
+                    "after=0",
+                    $"caller={caller}",
+                    $"detail=inbox: {run.InboxFile}",
+                    $"detail=log {run.LogFile("r1")}",
+                    $"detail={StaysHandedOverLine(run)}",
+                    $"exit={HarnessExit.Refused}",
+                    $"holder={caller}",
+                    "kept=True",
+                    $"owner={engine.Id}",
+                    "runs=r1",
+                    $"said=run 'r1' was not taken: '{record}' records session {leader}, which holds this very process (pid {caller}), and a session of the run "
+                        + $"inside it would be ended with it by the next command run from outside. Run {FlowService.AnswerCommand} from outside it. Nothing was changed.",
+                    $"warned={ChildSessionsTests.HeldHereWarning(FlowService.AnswerCommand, record, leader, caller.Id)}",
+                ],
+                lines);
+            Assert.Equal(written, File.ReadAllText(run.OwnerFile));
+            Assert.Equal(("q1", "go"), (Assert.Single(store.ReadInbox(run)!.Answers).Question, Assert.Single(store.ReadInbox(run)!.Answers).Answer));
+        }
+        finally
+        {
+            if (!engine.HasExited)
+            {
+                engine.Kill();
+                engine.WaitForExit();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A new run started from inside a session a sweep kept - a step's own script in the session a contained child of a
+    /// killed engine of another run leads - is refused (13) before anything of it is made, naming the record and saying to
+    /// run it from outside: the start sweeps every run of the repository first, as list-orchestrator does, so this process
+    /// never becomes a new run's engine inside what the next command from outside ends. Run where it would act on itself:
+    /// the start runs in a child the session's leader starts (<see cref="EngineFromInside"/>), every process the test's
+    /// own, bounded, and ended on every path.
+    /// </summary>
+    [Fact]
+    public async Task ARunStartedFromInsideASessionASweepKept_IsRefused_NothingOfItMade()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left.");
+
+        var (repository, _) = await RepositoryAsync(HoldingFlow);
+        using var disposed = repository;
+
+        var holding = AnotherOrchestrator(repository, "o0");
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "engine-from-inside", repository.Path, "o0", "run"));
+        var record = OrchestratorLayout.ChildFile(holding.StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"exit={HarnessExit.Refused}",
+                $"holder={caller}",
+                "kept=True",
+                "owner=none",
+                "runs=o0",
+                $"said=no run of workflow '{Workflow}' was started: '{record}' records session {leader}, which holds this very process (pid {caller}), and a run "
+                    + $"started inside it would be ended with it by the next command run from outside. Run {FlowService.RunCommand} from outside it. Nothing was changed.",
+                $"warned={ChildSessionsTests.HeldHereWarning(FlowService.RunCommand, record, leader, caller.Id)}",
+            ],
+            lines);
+        Assert.False(Directory.Exists(RunOf(repository).Directory), $"a run was made at '{RunOf(repository).Directory}' from inside the session the sweep kept");
+    }
+
+    /// <summary>
+    /// The orchestrator a test's record is kept in: run <c>r1</c>, already made, where <paramref name="name"/> names it;
+    /// else an orchestrator of that name made here beside the run, holding no run of its own - another of the repository's.
+    /// </summary>
+    private static OrchestratorLayout AnotherOrchestrator(Repository repository, string name)
+    {
+        var layout = OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), name);
+
+        if (name != "r1")
+        {
+            repository.Harness.OrchestrationStore.WriteOrchestrator(
+                layout,
+                new OrchestratorRecord { Kind = OrchestratorRecord.KindName, Name = name, Model = "model-a", Parallel = 1, CreatedAt = DateTimeOffset.UtcNow });
+        }
+
+        return layout;
+    }
+
+    /// <summary>
+    /// The child's side of <see cref="ASessionOfARunBegunFromInsideASessionASweepKeeps_IsRefusedAtItsClaim_ItsDeadOwnerLeftAsItWas_NothingAnswered"/>,
+    /// <see cref="AnAnswerWaitingOnAnEngineThatDies_IsRefusedAtItsClaim_FromInsideASessionThatEnginesRecordKeeps"/> and
+    /// <see cref="ARunStartedFromInsideASessionASweepKept_IsRefused_NothingOfItMade"/>: records the session the process that
+    /// started it leads in step <c>s1</c> of the orchestrator <c>arguments[1]</c> of the repository at <c>arguments[0]</c> -
+    /// as a process that has gone since left it, or, where <c>arguments[3]</c> and <c>arguments[4]</c> name one by its id and
+    /// start, as that process placed it - then, as <c>arguments[2]</c> says, resumes run <c>r1</c>, answers its open
+    /// question <c>go</c>, changes its last answer to <c>stay</c> (<c>again</c>), or starts a new run, from inside the
+    /// session, and writes its own id as <c>caller</c>, how the command ended as <c>exit</c>, <c>said</c> and each
+    /// <c>detail</c>, whether the record is still there as <c>kept</c>, run <c>r1</c>'s owner once it ended as
+    /// <c>owner</c>, the repository's orchestrators then as <c>runs</c>, and each line the command said of the record as
+    /// <c>warned</c>.
+    /// </summary>
+    internal static int EngineFromInside(TextWriter output, string[] arguments)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        var harness = new HarnessFactory();
+        var layout = new DssHarness.Core.Repository.HarnessLayout(arguments[0], arguments[0]);
+        var placed = arguments.Length > 4 ? (int.Parse(arguments[3], CultureInfo.InvariantCulture), arguments[4]) : ((int, string)?)null;
+        var record = ChildSessionsTests.RecordParentsSession(OrchestratorLayout.Of(layout, arguments[1]), placed);
+        var runner = new SteppedRunner();
+
+        Script(runner);
+
+        var service = Service(harness, runner);
+        var ended = (arguments[2] switch
+            {
+                "run" => service.RunAsync(arguments[0], Workflow, run: null, inputs: null, json: false, cancellationToken: CancellationToken.None),
+                "answer" => service.AnswerAsync(arguments[0], "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: CancellationToken.None),
+                "again" => service.AnswerAsync(arguments[0], "r1", "stay", question: null, text: null, textFile: null, again: true, json: false, cancellationToken: CancellationToken.None),
+                _ => service.ResumeAsync(arguments[0], "r1", json: false, cancellationToken: CancellationToken.None),
+            })
+            .GetAwaiter()
+            .GetResult();
+        var owner = harness.OrchestrationStore.ReadOwner(OrchestratorLayout.Of(layout, "r1"));
+
+        output.Write($"exit={ended.ExitCode}\n");
+        output.Write($"said={ended.Message}\n");
+
+        foreach (var detail in ended.Details ?? [])
+        {
+            output.Write($"detail={detail}\n");
+        }
+
+        output.Write($"kept={File.Exists(record)}\n");
+        output.Write($"owner={(owner is null ? "none" : owner.ProcessId.ToString(CultureInfo.InvariantCulture))}\n");
+        output.Write($"runs={string.Join(",", harness.OrchestrationStore.Orchestrators(layout).Select(orchestrator => orchestrator.Name))}\n");
+        ChildSessionsTests.WriteWarned(output, harness.StandardError, record);
+        return 0;
     }
 
     /// <summary>A resume whose claim of the run meets a stop file the store refuses is refused with its problem (13), and leaves no owner on the run.</summary>
@@ -4243,7 +4562,7 @@ public sealed class FlowServiceTests
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
-        var (run, context) = await sessions.CreateAsync(layout, definition, cancellationToken: Token);
+        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {
@@ -4368,7 +4687,7 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Success, deleted.ExitCode);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => sessions.ClaimAsync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, () => ChildSweep.None, FlowService.ResumeCommand, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(OrchestrationReports.NoOrchestrator("r1"), refused.Message);

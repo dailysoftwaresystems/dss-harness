@@ -108,6 +108,14 @@ internal sealed class CtestDescription(IProcessRunner processes, IFileSystem fil
                 labels: null,
                 _fileSystem);
             var start = TestInvocationResolver.StartDirectory(command.WorkingDirectory, question.Worker);
+
+            // Asked as the leg's tests start, its results directory among what they are given - made empty, as every
+            // run of the invocation's is, for what ctest writes there belongs to this asking alone.
+            if (question.Paths?.ResultsDirectory is { } results)
+            {
+                TestResults.MakeEmpty(_fileSystem, results);
+            }
+
             var answer = await ProgramWait
                 .ToItsEndAsync(
                     token => _processes.RunAsync(
@@ -120,7 +128,7 @@ internal sealed class CtestDescription(IProcessRunner processes, IFileSystem fil
                             ProgramDirectories = question.ProgramDirectories,
                             OutputKept = StreamKept.Whole,
                         },
-                        token),
+                        token).SayingUnreached($"ctest describing the tests of '{question.Program}'", line => _output?.Warn(Mutations.MutationService.CommandName, line)),
                     $"ctest to describe the tests of '{question.Program}'",
                     ProgramWait.Told(_output, Mutations.MutationService.CommandName),
                     _clock,

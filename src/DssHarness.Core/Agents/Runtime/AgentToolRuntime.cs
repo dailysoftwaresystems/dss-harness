@@ -93,7 +93,7 @@ public sealed class AgentToolTally
     /// <summary>The files read and written, each once, in ordinal order.</summary>
     public IReadOnlyList<string> Files => [.. _files.Keys.Order(StringComparer.Ordinal)];
 
-    /// <summary>What a command's container could not reach when it ended, one entry each.</summary>
+    /// <summary>What a command's end could not reach or end - its container, a process of its tree a stop could not end - one entry each.</summary>
     public IReadOnlyList<string> Uncontained => [.. _uncontained];
 
     /// <summary>Counts a call.</summary>
@@ -118,7 +118,7 @@ public sealed class AgentToolTally
     /// <summary>Counts a request of the web asked, allowed or refused.</summary>
     internal void Asked() => Interlocked.Increment(ref _webRequests);
 
-    /// <summary>Keeps what a command's container could not reach when it ended.</summary>
+    /// <summary>Keeps what a command's end could not reach or end.</summary>
     /// <param name="what">The command, and what was left.</param>
     internal void LeftRunning(string what) => _uncontained.Enqueue(what);
 }
@@ -643,7 +643,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         var records = AgentMeasureSupport.RecordsOf(_run.StepDirectory, callId);
         var asked = new AgentMeasureCall(callId, Text(input["leg"]), Text(input["variant"]), Text(input["filter"]), Text(input["cell"]), records);
         var answer = await _run.Measure!.Measure(asked, cancellationToken).ConfigureAwait(false);
-        var said = AgentMeasureSupport.Said(asked, answer).ToJsonString();
+        var said = AgentMeasureSupport.Said(asked, answer).ToJsonString(AgentEnvelope.Written);
 
         _host.FileSystem.CreateDirectory(records);
         _host.FileSystem.WriteAllTextAtomic(AgentMeasureSupport.RecordFileOf(_run.StepDirectory, callId), _run.Mask.Redact(said) + "\n");

@@ -1,0 +1,9 @@
+[1/3] Building CXX object CMakeFiles\app.dir\src\store.cpp.obj
+FAILED: CMakeFiles/app.dir/src/store.cpp.obj 
+C:\PROGRA~1\MICROS~1\18\ENTERP~1\VC\Tools\MSVC\1452~1.370\bin\Hostx64\x64\cl.exe  /nologo /TP   /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -MDd /W4 /showIncludes /FoCMakeFiles\app.dir\src\store.cpp.obj /FdCMakeFiles\app.dir\ /FS -c D:\a\app\app\msvc\compile\src\store.cpp
+D:\a\app\app\msvc\compile\src\store.cpp(1): fatal error C1083: Cannot open include file: 'store/config.h': No such file or directory
+[2/3] Building CXX object CMakeFiles\app.dir\src\main.cpp.obj
+FAILED: CMakeFiles/app.dir/src/main.cpp.obj 
+C:\PROGRA~1\MICROS~1\18\ENTERP~1\VC\Tools\MSVC\1452~1.370\bin\Hostx64\x64\cl.exe  /nologo /TP   /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -MDd /W4 /showIncludes /FoCMakeFiles\app.dir\src\main.cpp.obj /FdCMakeFiles\app.dir\ /FS -c D:\a\app\app\msvc\compile\src\main.cpp
+D:\a\app\app\msvc\compile\src\main.cpp(7): error C2065: 'response': undeclared identifier
+ninja: build stopped: cannot make progress due to previous errors.

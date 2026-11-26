@@ -79,6 +79,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
                 Watch = request.Watch,
                 Isolation = request.Isolation,
+                Priority = request.Priority,
                 KeepGoing = request.KeepGoing,
             },
             (work, token) => RunLegAsync(_builds, _tests, _toolchains, work, filters, request.Excludes, request.Labels, request.SkipBuild, token),

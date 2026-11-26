@@ -604,7 +604,7 @@ public interface IAgentIsolation
 /// <param name="git">Asks git where each tree keeps its own files, its worktrees and its replacements.</param>
 /// <param name="fileSystem">Finds what each place is and where it leads, and makes one that is not there.</param>
 /// <param name="host">This machine: its home, and how it compares paths.</param>
-/// <param name="environment">Reads this process's environment, for where the user's cache directory, the places the user keeps credentials in and the user's SSH agent are; this process's own where left out.</param>
+/// <param name="environment">Reads this process's environment, for where the isolation's own directory (<see cref="UserState.IsolationDirectory"/>), the places the user keeps credentials in and the user's SSH agent are; this process's own where left out.</param>
 /// <param name="pins">Keeps each tree's git directories, as git named them, for every later git of this tool's in it; none where left out.</param>
 /// <param name="claudeCode">Every Claude Code directory on this machine, which an execution hides as a launch does; this machine's own alone, the slot unread, where left out.</param>
 /// <param name="clock">What a wait of the look once the work has run is measured and told on; the system's where left out.</param>
@@ -718,7 +718,7 @@ public sealed class AgentIsolation(
         // A leg's set-ups start outside the isolation, in a directory of the execution's own beside its caches and temporary
         // directories, which no child writes.
         var outside = ground.Kind == IsolatedExecution.Legs && held.Mechanism is not null
-            ? Path.Combine(IsolationCaches.Root(host.HomeDirectory, host.Current, _environment), IsolationCaches.OutsideDirectory, Guid.NewGuid().ToString("N")[..12])
+            ? Path.Combine(UserState.IsolationDirectory(host.HomeDirectory, host.Current, _environment), IsolationCaches.OutsideDirectory, Guid.NewGuid().ToString("N")[..12])
             : null;
 
         if (outside is not null)
@@ -757,6 +757,17 @@ public sealed class AgentIsolation(
             return Held.None(mode, availability.Unavailable, availability.Remedy);
         }
 
+        string root;
+
+        try
+        {
+            root = UserState.IsolationDirectory(host.HomeDirectory, host.Current, _environment);
+        }
+        catch (VariableNamesNoDirectoryException ex)
+        {
+            return Held.None(mode, $"the isolation's caches have nowhere to be kept: {ex.Message.TrimEnd('.')}", VariableNamesNoDirectoryException.Remedy);
+        }
+
         var gitPlaces = await GitPlacesAsync(ground.Trees, cancellationToken).ConfigureAwait(false);
 
         if (gitPlaces.Unread is { } unread)
@@ -774,7 +785,6 @@ public sealed class AgentIsolation(
             return Held.None(mode, unreadBefore, "look at what keeps git from listing the repository's refs, and remove it");
         }
 
-        var root = IsolationCaches.Root(host.HomeDirectory, host.Current, _environment);
         var cachesRoot = Path.Combine(root, IsolationCaches.Directory);
         var comparer = StringComparer.FromComparison(host.PathComparison);
 

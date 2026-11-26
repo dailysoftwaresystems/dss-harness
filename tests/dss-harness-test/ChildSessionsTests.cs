@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
-using DssHarness.Core.Composition;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
@@ -491,6 +490,42 @@ public sealed class ChildSessionsTests
     }
 
     /// <summary>
+    /// A bound child whose group cannot be recorded, whose stop cannot hold it still - the system refusing it, as it does
+    /// a process of another user's - is still ended with its group, and its start fails saying what its stop could not
+    /// end beside why it was not recorded: what a stop could not end is never dropped.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildWhoseGroupCannotBeRecorded_SaysWhatItsStopCouldNotEnd()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing is recorded there, which AContainedChild_IsRecordedOnlyWhereItsSessionWouldOutliveItsStarter holds.");
+
+        var refusing = new Refusing();
+        Task<ProcessResult> run;
+
+        using (ProcessScope.Enter(new ProcessScope(() => refusing)))
+        {
+            run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Ends = new RefusedHold(refusing) }.RunAsync(
+                Sleeper("300000") with { Bound = true },
+                Token);
+        }
+
+        var raised = await Assert.ThrowsAsync<ProgramStartException>(() => run.WaitAsync(LongBound, Token));
+
+        try
+        {
+            Assert.Equal(
+                $"'{TestHost.AssemblyProgram}' could not be started: its process group could not be recorded: the disk is full; "
+                    + $"not every process of the tree of pid {refusing.Leader} could be ended: pid {refusing.Leader} could not be ended: {new Win32Exception(RefusedHold.NotPermitted).Message.TrimEnd('.')}",
+                raised.Message);
+            Assert.True(refusing.Leader.AwaitGone(), $"the child {refusing.Leader}, whose group was never recorded, was left running");
+        }
+        finally
+        {
+            refusing.Leader.TryEnding();
+        }
+    }
+
+    /// <summary>
     /// A contained child whose session cannot be recorded is not run - nor a bound one under a process scope whose group
     /// cannot be: it is ended, never said to have started, and its start fails saying why - a child no record names is one
     /// a killed tool would leave running unseen.
@@ -884,6 +919,215 @@ public sealed class ChildSessionsTests
         Assert.DoesNotContain("left process group", listed.Error, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A command over an orchestrator run from inside a session its sweep would end - a step's own script in the session
+    /// a contained child of a killed engine leads - never ends it: nothing in it is signalled, the refusal is said, and the
+    /// record is kept for a command run from outside it to end. Run where it would act on itself: the sweep runs in a
+    /// child the session's leader starts (<see cref="SweepFromInside"/>), every process the test's own, bounded, and ended
+    /// on every path.
+    /// </summary>
+    [Fact]
+    public async Task ASessionHoldingTheSweepingCommand_IsSaidAndLeft_WithItsRecord()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left, which ARecordFoundOnWindows_IsSaidAndLeft holds.");
+
+        using var temp = new TempDirectory();
+        var directory = temp.Combine("o1");
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "sweep-own-leader", directory));
+        var record = OrchestratorLayout.ChildFile(new OrchestratorLayout("o1", directory).StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                "ended=0",
+                $"held={record}:{leader}:{caller}",
+                $"holder={caller}",
+                "kept=True",
+                $"said={HeldHereWarning(SweepCommand, record, leader, caller.Id)}",
+            ],
+            lines);
+    }
+
+    /// <summary>The command a sweep from inside a session names.</summary>
+    private const string SweepCommand = "list-orchestrator";
+
+    /// <summary>
+    /// What <paramref name="command"/> warns of the record at <paramref name="record"/> of the session <paramref name="leader"/>
+    /// leads, swept from inside it by <paramref name="caller"/>: kept, nothing in it signalled, for a command run from
+    /// outside it to end.
+    /// </summary>
+    internal static string HeldHereWarning(string command, string record, int leader, int caller)
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{command}: WARN - '{record}' is {ChildSessions.RecordKind}, and the contained child's session ({leader}) holds this very process (pid {caller}), in it or in its leader's tree, and no process ends what it runs in: nothing in it was signalled. It was left as it is, for a command run from outside it to end.");
+
+    /// <summary>
+    /// The child's side of <see cref="ASessionHoldingTheSweepingCommand_IsSaidAndLeft_WithItsRecord"/>: records the session
+    /// the process that started it leads in step <c>s1</c> of the orchestrator <c>o1</c> at <c>arguments[0]</c>, as a
+    /// process that has gone since left it, sweeps that orchestrator from inside the session, and writes its own id as
+    /// <c>caller</c>, each line the sweep said as <c>said</c>, whether the record is still there as <c>kept</c>, how many
+    /// sessions the sweep ended as <c>ended</c>, and what it answered it kept because it holds this process as <c>held</c>.
+    /// </summary>
+    internal static int SweepFromInside(TextWriter output, string[] arguments)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        var said = new StringWriter();
+        var orchestrator = new OrchestratorLayout("o1", arguments[0]);
+        var record = RecordParentsSession(orchestrator);
+        var swept = LeftBehind(said).SweepAsync(orchestrator, SweepCommand).GetAwaiter().GetResult();
+
+        foreach (var line in Lines(said).Where(line => line.Length > 0))
+        {
+            output.Write($"said={line}\n");
+        }
+
+        output.Write($"kept={File.Exists(record)}\n");
+        output.Write($"ended={swept.Ended.Count.ToString(CultureInfo.InvariantCulture)}\n");
+        output.Write($"held={string.Join(",", swept.HeldHere.Select(held => $"{held.Record}:{held.Session.ToString(CultureInfo.InvariantCulture)}:{held.Process.ToString(CultureInfo.InvariantCulture)}"))}\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// A deletion of the orchestrator run from inside a session its sweep kept - a step's own script in the session a
+    /// contained child of a killed engine leads - is refused (13), naming the record and saying to run it from outside:
+    /// nothing is deleted, so the record is there for a command run from outside the session to end what it names - and its
+    /// two sweeps, as it begins and right before the removal, warn of the record once. Run where it would act on itself: the
+    /// deletion runs in a child the session's leader starts (<see cref="DeleteFromInside"/>), every process the test's own,
+    /// bounded, and ended on every path.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionFromInsideASessionItsSweepKept_IsRefused_TheRecordAndTheOrchestratorKept()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "nothing there ends a recorded session: a record found is said and left, which ARecordFoundOnWindows_IsSaidAndLeft holds.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var (lines, leader, caller) = await ContainExecTests.FromInsideAsync(TestHost.ChildRequest("lead-then", "session", "spawn-holder", "outlive", "300000", "delete-own-orchestrator", kit.Main));
+        var record = OrchestratorLayout.ChildFile(kit.Layout.StepDirectory("s1"), leader);
+
+        Assert.Equal(
+            [
+                "after=0",
+                $"caller={caller}",
+                $"exit={HarnessExit.Refused}",
+                $"holder={caller}",
+                "kept=True",
+                "orchestrator=True",
+                $"said=Orchestrator '{OrchestrationKit.Orchestrator}' was not deleted: '{record}' records session {leader}, which holds this very process (pid {caller}), "
+                    + $"and its record would go with the orchestrator, leaving what it holds running with nothing left to end it. Run {OrchestratorService.DeleteCommand} "
+                    + "from outside it. Nothing was changed.",
+                $"warned={HeldHereWarning(OrchestratorService.DeleteCommand, record, leader, caller.Id)}",
+            ],
+            lines);
+        Assert.True(File.Exists(record), $"the record the deletion was refused over went: '{record}'");
+    }
+
+    /// <summary>
+    /// The child's side of <see cref="ADeletionFromInsideASessionItsSweepKept_IsRefused_TheRecordAndTheOrchestratorKept"/>:
+    /// records the session the process that started it leads in step <c>s1</c> of the orchestrator of the main tree at
+    /// <c>arguments[0]</c>, as a process that has gone since left it, deletes that orchestrator with its evidence from
+    /// inside the session as the command line would, and writes its own id as <c>caller</c>, how the deletion ended as
+    /// <c>exit</c> and <c>said</c>, whether the record and the orchestrator are still there as <c>kept</c> and
+    /// <c>orchestrator</c>, and each line the command said of the record as <c>warned</c>.
+    /// </summary>
+    internal static int DeleteFromInside(TextWriter output, string[] arguments)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        output.Write($"caller={Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}\n");
+
+        var main = arguments[0];
+        var orchestrator = OrchestratorLayout.Of(new Core.Repository.HarnessLayout(main, main), OrchestrationKit.Orchestrator);
+        var record = RecordParentsSession(orchestrator);
+        var harness = new HarnessFactory();
+        var deleted = harness.OrchestratorService.DeleteAsync(main, OrchestrationKit.Orchestrator, deleteEvidence: true).GetAwaiter().GetResult();
+
+        output.Write($"exit={deleted.ExitCode}\n");
+        output.Write($"said={deleted.Message}\n");
+        output.Write($"kept={File.Exists(record)}\n");
+        output.Write($"orchestrator={Directory.Exists(orchestrator.Directory)}\n");
+        WriteWarned(output, harness.StandardError, record);
+        return 0;
+    }
+
+    /// <summary>Writes each line <paramref name="said"/> holds that names the record at <paramref name="record"/>, as <c>warned</c>: what a child's command said of it.</summary>
+    internal static void WriteWarned(TextWriter output, StringWriter said, string record)
+    {
+        foreach (var line in Lines(said).Where(line => line.Contains($"'{record}'", StringComparison.Ordinal)))
+        {
+            output.Write($"warned={line}\n");
+        }
+    }
+
+    /// <summary>
+    /// Records the session the process that started this one leads in step <c>s1</c> of <paramref name="orchestrator"/>: as
+    /// a process that has gone since left it - its owner this process under a start it does not have - the record a killed
+    /// engine leaves of a step's contained child; or, where <paramref name="owner"/> names one, as that process placed it,
+    /// the record a live engine keeps. For a test run inside that child's session; Linux's and macOS's.
+    /// </summary>
+    /// <param name="orchestrator">The orchestrator whose step records it.</param>
+    /// <param name="owner">The process that placed it, by its id and its start; <see langword="null"/> for one that has gone.</param>
+    /// <returns>The record's path.</returns>
+    internal static string RecordParentsSession(OrchestratorLayout orchestrator, (int Id, string Stamp)? owner = null)
+    {
+        var leader = TestChild.ParentId() ?? throw new InvalidOperationException("this process's parent could not be read");
+        var step = orchestrator.StepDirectory("s1");
+        var identity = new ProcessIdentity(new HostPlatform());
+        IProcessIdentity placer = owner is { } placed ? new PlacedBy(identity, placed.Id, placed.Stamp) : new Gone(identity, laterStart: false);
+
+        Records(placer, TextWriter.Null).For(step).Placed(leader, started: null, TestHost.AssemblyProgram, group: false);
+        return OrchestratorLayout.ChildFile(step, leader);
+    }
+
+    /// <summary>
+    /// The machine's records of a step's children, as a process that has gone wrote them (<see cref="Gone"/>), its lines
+    /// written to <paramref name="said"/>: what a child of a test reads and writes them by.
+    /// </summary>
+    private static ChildSessions LeftBehind(TextWriter said) => Records(new Gone(new ProcessIdentity(new HostPlatform()), laterStart: false), said);
+
+    /// <summary>The machine's records of a step's children, as <paramref name="identity"/> writes and reads them, its lines written to <paramref name="said"/>.</summary>
+    private static ChildSessions Records(IProcessIdentity identity, TextWriter said)
+    {
+        var platform = new HostPlatform();
+        var permissions = FilePermissionsFactory.Create();
+
+        return new ChildSessions(
+            new Core.FileSystem.PhysicalFileSystem(permissions),
+            identity,
+            new LeftSessions(platform, ProcessTableFactory.Create(platform, new ProcessRunner(platform, permissions))),
+            new ConsoleHarnessOutput(TextWriter.Null, said, verbose: false),
+            new EndedChildSessions());
+    }
+
+    /// <summary>
+    /// This process's identity, but for the process it says it is: <paramref name="id"/> under <paramref name="stamp"/> -
+    /// the owner a record that process placed names.
+    /// </summary>
+    private sealed class PlacedBy(IProcessIdentity real, int id, string stamp) : IProcessIdentity
+    {
+        public int CurrentId => id;
+
+        public string CurrentMachine => real.CurrentMachine;
+
+        public string? Current => stamp;
+
+        public bool IsAlive(int processId, string? stamp) => real.IsAlive(processId, stamp);
+
+        public string? StampOf(int processId) => real.StampOf(processId);
+
+        public bool IsSame(int processId, string stamp) => real.IsSame(processId, stamp);
+    }
+
     /// <summary>What a sweep ended is counted by kind in one line - the sessions, then the process groups - naming only the kinds it ended.</summary>
     [Fact]
     public void WhatASweepEnded_IsCountedByKind()
@@ -897,12 +1141,15 @@ public sealed class ChildSessionsTests
 
     /// <summary>
     /// Every command that works an orchestrator sweeps its records first, its own name on what the sweep says: here a record
-    /// that does not read as one, which is said and left as it is, since no process is ended on a record not understood.
+    /// that does not read as one, which is said and left as it is, since no process is ended on a record not understood -
+    /// and said once, however many times the command sweeps: a deletion with its evidence sweeps again right before the
+    /// removal.
     /// </summary>
     [Theory]
     [InlineData(OrchestratorService.CreateCommand)]
     [InlineData(OrchestratorService.ListCommand)]
     [InlineData(OrchestratorService.DeleteCommand)]
+    [InlineData(DeleteWithEvidence)]
     [InlineData(AgentService.CreateCommand)]
     [InlineData(AgentService.SeedCommand)]
     [InlineData(AgentService.RefreshCommand)]
@@ -924,6 +1171,7 @@ public sealed class ChildSessionsTests
             OrchestratorService.CreateCommand => await kit.Harness.OrchestratorService.CreateAsync(kit.Main, OrchestrationKit.Orchestrator, "model-a", null, null, Token),
             OrchestratorService.ListCommand => await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, false, false, json: false, Token),
             OrchestratorService.DeleteCommand => await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, OrchestrationKit.Orchestrator, deleteEvidence: false, Token),
+            DeleteWithEvidence => await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, OrchestrationKit.Orchestrator, deleteEvidence: true, Token),
             AgentService.CreateCommand => await kit.Harness.AgentService.CreateAsync(kit.Main, OrchestrationKit.Orchestrator, "a1", "model-b", empty: false, session: null, Token),
             AgentService.SeedCommand => await kit.Harness.AgentService.SeedAsync(kit.Main, OrchestrationKit.Orchestrator, "nobody", empty: false, force: false, Token),
             AgentService.RefreshCommand => await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, "nobody", new RefreshRequest(), apply: false, Token),
@@ -933,11 +1181,119 @@ public sealed class ChildSessionsTests
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Not a command over an orchestrator."),
         };
 
-        var warning = $"{command}: WARN - '{record}' is the record of a step's child's session or process group, and does not read as one: "
+        var named = command == DeleteWithEvidence ? OrchestratorService.DeleteCommand : command;
+        var warning = $"{named}: WARN - '{record}' is the record of a step's child's session or process group, and does not read as one: "
             + "its session is 0, and a session is a process's id. It was left as it is, and nothing it names was ended.";
 
-        Assert.Equal(warning, Lines(kit.Harness.StandardError).FirstOrDefault(line => line.StartsWith($"{command}: ", StringComparison.Ordinal)));
-        Assert.True(command == OrchestratorService.DeleteCommand ? !outcome.Succeeded || !File.Exists(record) : File.Exists(record), OrchestrationKit.Describe(outcome));
+        Assert.Equal([warning], Lines(kit.Harness.StandardError).Where(line => line.Contains($"'{record}'", StringComparison.Ordinal)));
+        Assert.True(named == OrchestratorService.DeleteCommand ? !outcome.Succeeded || !File.Exists(record) : File.Exists(record), OrchestrationKit.Describe(outcome));
+    }
+
+    /// <summary>A deletion of an orchestrator with its evidence, as a theory names it beside the other commands.</summary>
+    private const string DeleteWithEvidence = OrchestratorService.DeleteCommand + " --delete-evidence";
+
+    /// <summary>
+    /// A command sweeps more than once - as it begins, and again at the act that decides on what a sweep keeps - and says
+    /// each thing its sweeps say of a record once: two sweeps of one operation over records each finds as before - one whose
+    /// session's end could not read the process table, so its group was taken as ended and what it started outside the
+    /// group was not reached, and whose record could not be removed; and one that does not read as one - say each line once
+    /// and keep the end once for the documents, while each sweep answers what it ended itself. Windows ends nothing a record
+    /// names: there the first is said once, as a record that system never writes. Nothing is signalled anywhere: the session
+    /// the record names is no process's, and the table that would name its members is never read.
+    /// </summary>
+    [Fact]
+    public async Task TwoSweepsOfOneOperation_SayEachLineOfARecordOnce_AndKeepItsEndOnce()
+    {
+        using var temp = new TempDirectory();
+        var orchestrator = new OrchestratorLayout("o1", temp.Combine("o1"));
+        var step = orchestrator.StepDirectory("s1");
+        var platform = new HostPlatform();
+        var identity = new ProcessIdentity(platform);
+
+        Records(new Gone(identity, laterStart: false), TextWriter.Null).For(step).Placed(NoProcess, started: "a start", TestHost.AssemblyProgram, group: false);
+
+        var left = OrchestratorLayout.ChildFile(step, NoProcess);
+        var unread = OrchestratorLayout.ChildFile(step, 7);
+
+        File.WriteAllText(unread, """{ "session": 0, "started": "1", "program": "p", "owner": { "machine": "m", "processId": 1 } }""");
+
+        var said = new StringWriter();
+        var ended = new EndedChildSessions();
+        var sessions = new ChildSessions(
+            new Unremovable(new Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create())),
+            identity,
+            new LeftSessions(platform, new WithheldTable()),
+            new ConsoleHarnessOutput(said, said, verbose: false),
+            ended);
+
+        var first = await sessions.SweepAsync(orchestrator, SweepCommand).WaitAsync(LongBound, Token);
+        var second = await sessions.SweepAsync(orchestrator, SweepCommand).WaitAsync(LongBound, Token);
+        var unreadLine = $"{SweepCommand}: WARN - '{unread}' is {ChildSessions.RecordKind}, and does not read as one: its session is 0, and a session is a process's id. "
+            + "It was left as it is, and nothing it names was ended.";
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal(
+                [
+                    $"{SweepCommand}: WARN - '{left}' is {ChildSessions.RecordKind}, which this system never writes: session {NoProcess} cannot be ended on Windows, "
+                        + "whose bound and contained children are held in a job that ends them with the process that held it, so none is ever left running for a sweep to end. It was left as it is.",
+                    unreadLine,
+                ],
+                Lines(said).Where(line => line.Length > 0));
+            Assert.Empty(ended.All);
+            Assert.Empty(first.Ended);
+            Assert.Empty(second.Ended);
+        }
+        else
+        {
+            var session = new EndedChildSession(
+                "o1",
+                null,
+                "s1",
+                NoProcess,
+                TestHost.AssemblyProgram,
+                Environment.ProcessId,
+                "the process table could not be read to end the contained child's session (the table is withheld): its group had already ended, and what it started outside the group was not reached",
+                Group: false);
+
+            Assert.Equal(
+                [
+                    $"{SweepCommand}: WARN - '{left}', {ChildSessions.RecordKind}, could not be removed: {Unremovable.Why}. The next command over 'o1' removes it.",
+                    $"{SweepCommand}: {ChildSessions.Line(session)}",
+                    unreadLine,
+                ],
+                Lines(said).Where(line => line.Length > 0));
+            Assert.Equal([session], ended.All);
+            Assert.Equal([session], first.Ended);
+            Assert.Equal([session], second.Ended);
+        }
+
+        Assert.True(File.Exists(left), $"the record that could not be removed went: '{left}'");
+        Assert.True(File.Exists(unread), $"the record that does not read went: '{unread}'");
+    }
+
+    /// <summary>The disk, but for a step's child's record, which it refuses to remove - as one held open, or under a directory this user may not write, is.</summary>
+    private sealed class Unremovable(Core.FileSystem.IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        /// <summary>Why a record is not removed.</summary>
+        public const string Why = "the record is held open";
+
+        public override void DeleteFile(string path)
+        {
+            if (path.EndsWith(OrchestratorLayout.ChildExtension, StringComparison.Ordinal))
+            {
+                throw new IOException(Why);
+            }
+
+            base.DeleteFile(path);
+        }
+    }
+
+    /// <summary>A process table that cannot be read - as one whose reader could not be started - so a session's end reads no member of it, and signals none.</summary>
+    private sealed class WithheldTable : IProcessTable
+    {
+        public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<ProcessTableReading>(new IOException("the table is withheld"));
     }
 
     /// <summary>
@@ -1069,7 +1425,7 @@ public sealed class ChildSessionsTests
         var error = new StringWriter();
         var host = new DssHarnessHost((options, operation) =>
         {
-            var services = new ServiceCollection().AddDssHarness(options, operation, output: _ => new ConsoleHarnessOutput(output, error, verbose: false, home: null));
+            var services = TestRegistrations.Of(options, operation, output: _ => new ConsoleHarnessOutput(output, error, verbose: false, home: null));
             replace?.Invoke(services);
             return services.BuildServiceProvider();
         });
@@ -1140,6 +1496,19 @@ public sealed class ChildSessionsTests
     }
 
     /// <summary>A record that cannot be written - as a full disk refuses it, unless told otherwise - keeping the leader it was asked to name.</summary>
+    /// <summary>
+    /// How a stop ends what it ends, as the machine does - but for the leader a refusing record learned, whose hold the
+    /// system refuses as it does a process of another user's: what a stop cannot end, which no process of the test's own
+    /// user can be made to be.
+    /// </summary>
+    private sealed class RefusedHold(Refusing record) : ProcessEnds
+    {
+        /// <summary>EPERM: what the system answers a signal to a process of another user's.</summary>
+        public const int NotPermitted = 1;
+
+        public override int Hold(int id) => id == record.Leader.Id ? NotPermitted : base.Hold(id);
+    }
+
     private sealed class Refusing(Func<Exception>? fault = null) : IContainedSessionRecord
     {
         public LearnedProcess Leader { get; private set; }

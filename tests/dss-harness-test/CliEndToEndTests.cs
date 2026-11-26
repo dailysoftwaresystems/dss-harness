@@ -1270,7 +1270,7 @@ public sealed partial class CliEndToEndTests
     {
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
-        var (environment, holds) = OwnUserData(temp);
+        var (environment, holds) = OwnUserState(temp);
         await PrepareRunnerAsync(temp, heavy: true);
 
         var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "--json", "-C", temp.Path], token, environment: environment);
@@ -1279,7 +1279,7 @@ public sealed partial class CliEndToEndTests
 
         using var document = JsonDocument.Parse(result.StandardOutput);
         var admission = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("admission");
-        var record = Path.Combine(Path.GetDirectoryName(holds)!, HeavyLegSlots.FileNameFor(new HostPlatform().MachineId.Id));
+        var record = Path.Combine(Path.GetDirectoryName(holds)!, MachineDispatchQueue.FileNameFor(new HostPlatform().MachineId.Id));
 
         Assert.True(admission.GetProperty("admitted").GetBoolean());
         Assert.Equal(record, admission.GetProperty("record").GetString());
@@ -1452,7 +1452,7 @@ public sealed partial class CliEndToEndTests
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
         var watched = temp.Combine("watched.txt");
-        var (environment, holds) = OwnUserData(temp);
+        var (environment, holds) = OwnUserState(temp);
 
         var request = JsonSerializer.Serialize(
             new HostAgentRequest
@@ -1483,7 +1483,7 @@ public sealed partial class CliEndToEndTests
         await Task.Delay(TimeSpan.FromSeconds(1), token);
         Assert.True(Running(holder), "the hold ended before anything ended it");
 
-        Assert.True(File.Exists(holds), "the hold was not kept in the user's data the CLI was given");
+        Assert.True(File.Exists(holds), "the hold was not kept in the state directory the CLI was given");
         new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), holds).End();
 
         await EventuallyAsync(() => !Running(holder), token);
@@ -1528,11 +1528,9 @@ public sealed partial class CliEndToEndTests
     {
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
-        var (environment, _) = OwnUserData(temp);
+        var (environment, home) = OwnHome(temp);
 
-        // The home the CLI reads: its HOME, and on Windows the account's own folder, which no environment moves -
-        // there the test's directories are under it only where the system keeps temporary files there.
-        var home = OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : environment["HOME"]!;
+        // On Windows the test's directories are under the home only where the system keeps temporary files there.
         var work = OperatingSystem.IsWindows() ? temp.Combine("work") : Path.Combine(home, "work");
         Directory.CreateDirectory(work);
 
@@ -1572,11 +1570,10 @@ public sealed partial class CliEndToEndTests
     {
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
-        var (environment, _) = OwnUserData(temp);
+        var (environment, home) = OwnHome(temp);
         var harness = new HarnessFactory();
         var platform = harness.Platform;
 
-        var home = OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : environment["HOME"]!;
         var work = OperatingSystem.IsWindows() ? temp.Combine("work") : Path.Combine(home, "work");
         Directory.CreateDirectory(work);
 
@@ -1622,10 +1619,9 @@ public sealed partial class CliEndToEndTests
     {
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
-        var (environment, _) = OwnUserData(temp);
+        var (environment, home) = OwnHome(temp);
         var platform = new HostPlatform();
 
-        var home = OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : environment["HOME"]!;
         var named = OperatingSystem.IsWindows() ? temp.Combine("named") : Path.Combine(home, "named");
 
         Assert.SkipUnless(
@@ -1679,7 +1675,7 @@ public sealed partial class CliEndToEndTests
         var harness = new HarnessFactory();
         var platform = harness.Platform;
         var token = TestContext.Current.CancellationToken;
-        var (environment, holds) = OwnUserData(temp);
+        var (environment, holds) = OwnUserState(temp);
 
         await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
         {
@@ -1720,9 +1716,9 @@ public sealed partial class CliEndToEndTests
             },
         });
 
-        // The slot held by another leg of the run that sends this one, in the record the CLI keeps in the user's data it
+        // The slot held by another leg of the run that sends this one, in the record the CLI keeps in the state directory it
         // was given: this process's, which lives while the leg waits.
-        var record = Path.Combine(Path.GetDirectoryName(holds)!, HeavyLegSlots.FileNameFor(platform.MachineId.Id));
+        var record = Path.Combine(Path.GetDirectoryName(holds)!, MachineDispatchQueue.FileNameFor(platform.MachineId.Id));
         var run = RunId.New();
         using var held = AdmissionKit.Slots(harness, record).Ask(run.Value, "test", "another", "ssh pi", "~/repo", "debug", 1);
 
@@ -1748,10 +1744,13 @@ public sealed partial class CliEndToEndTests
 
         var served = await serving;
 
+        // Its tenant is the repository its tree is of, as the machine spells it.
+        var repository = await harness.ContextLoader.RepositoryOfAsync(await harness.ContextLoader.LoadAsync(temp.Path, token), token);
+
         Assert.Equal(HarnessExit.Success, served.ExitCode);
         Assert.Contains(
-            "sent-here: waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead, each its own command's, which does not "
-            + "count against the",
+            $"sent-here: waits for one of this machine's 1 heavy-leg slot(s) as tenant '{MachineDispatchQueue.TenantOf(repository)}', "
+                + $"1 leg(s) ahead, each its own command's, which does not count against the ",
             served.StandardError,
             StringComparison.Ordinal);
 
@@ -1869,28 +1868,108 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
-    /// An environment giving the CLI a user's data of its own, below <paramref name="temp"/>, and the file it then
-    /// keeps the hold between commands in: a test reaching a hold never reaches the one the machine's user holds.
+    /// The queue command, through the real binary, reads this machine's dispatch queue as it stands and changes nothing:
+    /// as text, a block a class and a line a unit, the waiting ones numbered in the order served with what that order rests
+    /// on; with --json, its one document whole - each class's capacity from the rule the tree is admitted by.
     /// </summary>
-    private static (Dictionary<string, string?> Environment, string Holds) OwnUserData(TempDirectory temp)
+    [Fact]
+    public async Task TheQueueCommand_SaysTheMachinesQueue_AsTextAndAsItsDocument()
     {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var (environment, holds) = OwnUserState(temp);
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Defaults = new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1, Processes = 6, Agents = 2 } },
+        });
+
+        // One unit of one tenant holding the one slot, and one of another waiting at twice the priority, as two commands of
+        // this process would have left them.
+        var record = Path.Combine(Path.GetDirectoryName(holds)!, MachineDispatchQueue.FileNameFor(harness.Platform.MachineId.Id));
+        var slots = AdmissionKit.Slots(harness, record);
+        using var holding = slots.Ask("run-a", "build", "linux", "local", "/src/a", "debug", 1, repository: "/src/a");
+
+        Assert.True(slots.Look(holding).Holding);
+
+        using var waiting = slots.Ask("run-b", "test", "mac", "local", "/src/b", null, 1, repository: "/src/b", priority: 2);
+
+        Assert.False(slots.Look(waiting).Holding);
+
+        var before = (File.ReadAllText(record), File.ReadAllText(MachineDispatchQueue.QueuePathFor(record)));
+        var text = await CliRunner.RunAsync(["queue", "-C", temp.Path], token, environment: environment);
+        var json = await CliRunner.RunAsync(["queue", "--json", "-C", temp.Path], token, environment: environment);
+
+        Assert.Equal((HarnessExit.Success, HarnessExit.Success), (text.ExitCode, json.ExitCode));
+        Assert.Equal(before, (File.ReadAllText(record), File.ReadAllText(MachineDispatchQueue.QueuePathFor(record))));
+
+        var lines = text.StandardOutput.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var waitingLine = Assert.Single(lines, line => line.StartsWith("  waiting 1 ", StringComparison.Ordinal));
+
+        Assert.Equal(
+            [
+                "heavy: 1 unit(s) at once",
+                $"  holding (tenant 'local/src/a', cost 1, weight 1, priority 1): {holding.Entry.Describe()}",
+                waitingLine,
+                "process: 6 unit(s) at once, asked by no unit yet",
+                "agent: 2 unit(s) at once, asked by no unit yet",
+            ],
+            lines.Where(line => !line.Contains("unit(s) holding and", StringComparison.Ordinal)));
+        Assert.StartsWith("  waiting 1 (tenant 'local/src/b', cost 1, share 2, deficit 0, weight 1, priority 2, waited ", waitingLine, StringComparison.Ordinal);
+        Assert.EndsWith($"): {waiting.Entry.Describe()}", waitingLine, StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(json.StandardOutput);
+        var root = document.RootElement;
+
+        Assert.Equal((0, "1 unit(s) holding and 1 unit(s) waiting, in 3 class(es)"), (root.GetProperty("exitCode").GetInt32(), root.GetProperty("summary").GetString()));
+        Assert.Equal(
+            [("heavy", 1, true, 1, 1), ("process", 6, false, 0, 0), ("agent", 2, false, 0, 0)],
+            root.GetProperty("queue").EnumerateArray().Select(@class => (
+                @class.GetProperty("class").GetString(),
+                @class.GetProperty("capacity").GetInt32(),
+                @class.GetProperty("asked").GetBoolean(),
+                @class.GetProperty("holding").GetArrayLength(),
+                @class.GetProperty("waiting").GetArrayLength())));
+
+        var unit = root.GetProperty("queue")[0].GetProperty("waiting")[0];
+
+        Assert.Equal(
+            ("local/src/b", 2, 1d, 2d, 0d, "mac", "/src/b", "run-b", waiting.Entry.Describe()),
+            (unit.GetProperty("tenant").GetString(), unit.GetProperty("priority").GetInt32(), unit.GetProperty("cost").GetDouble(),
+                unit.GetProperty("share").GetDouble(), unit.GetProperty("deficit").GetDouble(), unit.GetProperty("leg").GetString(),
+                unit.GetProperty("tree").GetString(), unit.GetProperty("runId").GetString(), unit.GetProperty("unit").GetString()));
+    }
+
+    /// <summary>
+    /// An environment giving the CLI a directory of its own for this tool's state, below <paramref name="temp"/>, and the
+    /// file it then keeps the hold between commands in: a test reaching a hold or a record never reaches the machine
+    /// user's, nor another test's.
+    /// </summary>
+    private static (Dictionary<string, string?> Environment, string Holds) OwnUserState(TempDirectory temp)
+    {
+        var state = temp.Combine("state");
+
+        return (CliRunner.OwnUserState(state), Path.Combine(state, "hold-awake.json"));
+    }
+
+    /// <summary>
+    /// An environment giving the CLI a home of its own below <paramref name="temp"/> where the home it reads is the HOME it
+    /// is given - every system but Windows, whose home is the account's own folder, which no environment moves - and the
+    /// home the CLI then reads: for a test of the <c>~</c> a host writes its home as, whose directories are made under it.
+    /// </summary>
+    private static (Dictionary<string, string?> Environment, string Home) OwnHome(TempDirectory temp)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return (new(StringComparer.Ordinal), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        }
+
         var home = temp.Combine("home");
-        var local = Path.Combine(home, "AppData", "Local");
-        var share = Path.Combine(home, ".local", "share");
         Directory.CreateDirectory(home);
 
-        var data = OperatingSystem.IsMacOS() ? Path.Combine(home, "Library", "Application Support")
-            : OperatingSystem.IsWindows() ? local
-            : share;
-
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
-        {
-            ["HOME"] = home,
-            ["XDG_DATA_HOME"] = share,
-            ["LOCALAPPDATA"] = local,
-        };
-
-        return (environment, Path.Combine(data, "dssharness", "hold-awake.json"));
+        return (new(StringComparer.Ordinal) { ["HOME"] = home }, home);
     }
 
     /// <summary>
@@ -3698,7 +3777,7 @@ public sealed partial class CliEndToEndTests
     /// process running it. Here the command writes what it was given, and the leg's test waits for
     /// that file before it can pass: the command ran during the work, and was given a process - the
     /// CLI's own, which runs apart from this test and whose id only it knows. Starting, it ends the
-    /// hold standing between commands: here one kept in the user's data the CLI was given, so the
+    /// hold standing between commands: here one kept in the state directory the CLI was given, so the
     /// hold the machine's own user may have standing is never the one it ends.
     /// </summary>
     [Fact]
@@ -3709,7 +3788,7 @@ public sealed partial class CliEndToEndTests
         var platform = harness.Platform;
         var token = TestContext.Current.CancellationToken;
         var awake = temp.Combine("awake.txt");
-        var (environment, holds) = OwnUserData(temp);
+        var (environment, holds) = OwnUserState(temp);
 
         new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), holds)
             .Write(new HoldAwakeState("0123456789abcdef", DateTimeOffset.UtcNow.AddHours(1), [], [], []));
@@ -3752,7 +3831,7 @@ public sealed partial class CliEndToEndTests
         Assert.True(
             int.TryParse(await File.ReadAllTextAsync(awake, token), NumberStyles.None, CultureInfo.InvariantCulture, out var pid) && pid > 0,
             "keepAwake was not given the process running the leg");
-        Assert.False(File.Exists(holds), "the hold standing in the user's data the CLI was given was not ended");
+        Assert.False(File.Exists(holds), "the hold standing in the state directory the CLI was given was not ended");
     }
 
     /// <summary>The operating system of the leg <see cref="PrepareRunnerAsync"/> declares that no host provides.</summary>

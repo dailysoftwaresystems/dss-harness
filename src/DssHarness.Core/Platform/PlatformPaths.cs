@@ -125,4 +125,226 @@ public static class PlatformPaths
 
         return path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':';
     }
+
+    /// <summary>
+    /// Where <paramref name="path"/>, read in the form its own text is written in, is strictly inside
+    /// <paramref name="root"/>, read the same way: its parts below the root's, <c>.</c> and <c>..</c> resolved, joined by
+    /// <c>/</c> - the one spelling of a place in the tree on every machine - or <see langword="null"/> where it is not
+    /// strictly inside. The answer every machine gives for the same texts, whichever form each is written in and whichever
+    /// machine reads them, so a path a tool wrote on one system and read on another is never placed by the reader's own
+    /// rules. A relative path is read against <paramref name="from"/>, the directory the tool that wrote it ran in, where
+    /// one is given - so <c>../../src/a.c</c> a compiler wrote in the build directory is the tree's <c>src/a.c</c> - and
+    /// against the root where none is.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A relative path read against the root is inside it unless its parts climb out. A rooted one is inside only where it
+    /// is of the root's own form - Windows' (a drive and a separator, or a share; either slash separates, and names are
+    /// compared ignoring case, as Windows compares them) or the POSIX form (a leading <c>/</c>; <c>/</c> alone separates,
+    /// and names are compared exactly) - and its parts, once <c>.</c> and <c>..</c> are resolved, begin with every part of
+    /// the root's and go on. Two forms name no place in common: a Windows path is never inside a POSIX root, nor the other
+    /// way.
+    /// </para>
+    /// <para>
+    /// A <c>file:</c> URI is read as the path it names, its escapes decoded; a URI of any other scheme - <c>dart:core</c>,
+    /// <c>node:internal/...</c>, <c>package:</c> - names no place on a disk, and is inside nothing. Where the place cannot
+    /// be told from the text - a drive-relative <c>C:tools</c>, a root-relative <c>\src</c> with no drive - it is not
+    /// inside: what cannot be told is never said to be.
+    /// </para>
+    /// </remarks>
+    /// <param name="root">The directory, as the machine that holds it writes it; null where no rooted place is known to be the tree's, so only a relative path read against the root is inside it.</param>
+    /// <param name="path">The path, as whatever wrote it wrote it.</param>
+    /// <param name="from">The directory a relative path is read from, as the machine that holds it writes it; <see langword="null"/> for the root.</param>
+    public static string? RelativeAsWritten(string? root, string path, string? from = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        if (AsAPath(path) is not { } named || named.Length == 0)
+        {
+            return null;
+        }
+
+        if (!IsRootedOnAnyPlatform(named))
+        {
+            if (from is null)
+            {
+                return Resolved(named, windows: true, relative: true) is { Count: > 0 } parts ? string.Join('/', parts) : null;
+            }
+
+            // Joined by its text, the directory's own form deciding how the whole is parted: a drive or a share parts at
+            // either slash, a leading '/' at '/' alone.
+            named = $"{from.TrimEnd('/', '\\')}/{named}";
+
+            if (!IsRootedOnAnyPlatform(named))
+            {
+                return null;
+            }
+        }
+
+        var form = FormOf(named);
+
+        if (root is null || form is null || form != FormOf(root))
+        {
+            return null;
+        }
+
+        var windows = form == PathForm.Windows;
+
+        if (Resolved(root, windows, relative: false) is not { } rootParts || Resolved(named, windows, relative: false) is not { } below || below.Count <= rootParts.Count)
+        {
+            return null;
+        }
+
+        var comparison = windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        return rootParts.Select((part, at) => string.Equals(part, below[at], comparison)).All(same => same)
+            ? string.Join('/', below.Skip(rootParts.Count))
+            : null;
+    }
+
+    /// <summary>
+    /// The directory a rooted <paramref name="path"/> lies under whose last parts are <paramref name="tail"/>, read in the
+    /// form the path's own text is written in and its names compared as that form compares them - the first such along the
+    /// path, written as the path writes it; null where the path is relative, is of no form its text tells, or holds no such
+    /// directory with anything below it. How a place a machine names by a convention of its own - a CI runner's workspace,
+    /// <c>&lt;work&gt;/&lt;repository&gt;/&lt;repository&gt;</c> - is found in a path it wrote.
+    /// </summary>
+    /// <param name="path">The path, as whatever wrote it wrote it.</param>
+    /// <param name="tail">The names the directory's path ends with, in order.</param>
+    public static string? DirectoryEndingAsWritten(string path, IReadOnlyList<string> tail)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(tail);
+
+        if (tail.Count == 0 || AsAPath(path) is not { } named || !IsRootedOnAnyPlatform(named) || FormOf(named) is not { } form)
+        {
+            return null;
+        }
+
+        var windows = form == PathForm.Windows;
+        var comparison = windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        // Each part with where it ends in the text, so the directory is given back as the path spells it.
+        var parts = new List<(string Name, int End)>();
+        var begins = 0;
+
+        for (var at = 0; at <= named.Length; at++)
+        {
+            if (at == named.Length || named[at] == '/' || windows && named[at] == '\\')
+            {
+                if (at > begins)
+                {
+                    parts.Add((named[begins..at], at));
+                }
+
+                begins = at + 1;
+            }
+        }
+
+        for (var first = 0; first + tail.Count < parts.Count; first++)
+        {
+            if (tail.Select((name, at) => string.Equals(name, parts[first + at].Name, comparison)).All(same => same))
+            {
+                return named[..parts[first + tail.Count - 1].End];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The two forms a rooted path is written in.</summary>
+    private enum PathForm
+    {
+        /// <summary>A drive and a separator, or a share.</summary>
+        Windows,
+
+        /// <summary>A leading <c>/</c>.</summary>
+        Posix,
+    }
+
+    /// <summary>
+    /// The form a rooted path is written in, or <see langword="null"/> where its place cannot be told from its text: a
+    /// drive with no separator after it, or a single backslash with no drive before it.
+    /// </summary>
+    private static PathForm? FormOf(string path)
+        => IsWindowsAbsolute(path) ? PathForm.Windows
+            : path.StartsWith('/') ? PathForm.Posix
+            : null;
+
+    /// <summary>
+    /// The path <paramref name="text"/> names: itself where it is no URI, the path a <c>file:</c> URI names, its escapes
+    /// decoded and a drive's form the same read on every machine, or <see langword="null"/> for a URI of another scheme -
+    /// a scheme being two or more of a URI scheme's characters before a colon that begins the text, so a drive's letter is
+    /// never read as one. The one reading of a file URI: a results file's, a stack frame's.
+    /// </summary>
+    /// <param name="text">The path or URI, as whatever wrote it wrote it.</param>
+    public static string? AsAPath(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var colon = text.IndexOf(':', StringComparison.Ordinal);
+
+        if (colon < 2 || !char.IsAsciiLetter(text[0]) || text.AsSpan(0, colon).ContainsAnyExcept(SchemeCharacters))
+        {
+            return text;
+        }
+
+        if (!text.AsSpan(0, colon).Equals("file", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        // file:///C:/x and file:/C:/x name C:/x; file:///home/x and file:/home/x name /home/x; file://server/share/x names
+        // the share.
+        var named = Uri.UnescapeDataString(text[(colon + 1)..]);
+
+        if (named.StartsWith("///", StringComparison.Ordinal))
+        {
+            named = named[2..];
+        }
+
+        return named.Length >= 3 && named[0] == '/' && NamesADrive(named[1..]) ? named[1..] : named;
+    }
+
+    /// <summary>The characters a URI's scheme is written in, past its first letter.</summary>
+    private static readonly System.Buffers.SearchValues<char> SchemeCharacters =
+        System.Buffers.SearchValues.Create("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-.");
+
+    /// <summary>
+    /// The parts of <paramref name="path"/>, <c>.</c> and empty ones dropped and each <c>..</c> taking the part before it
+    /// away - at a rooted path's root, its drive or its share's server and share, as every form reads it, taking nothing -
+    /// or <see langword="null"/> where a relative path's parts climb out of where it starts. Windows' form, and a relative
+    /// path whose form its text cannot tell, are parted at either slash; the POSIX form at <c>/</c> alone.
+    /// </summary>
+    /// <param name="path">The path.</param>
+    /// <param name="windows">Whether it is parted as Windows parts it.</param>
+    /// <param name="relative">Whether it is relative to where it starts, which no <c>..</c> may climb out of.</param>
+    private static List<string>? Resolved(string path, bool windows, bool relative)
+    {
+        var parts = new List<string>();
+        var kept = !windows || relative ? 0 : NamesADrive(path) ? 1 : 2;
+
+        foreach (var part in windows ? path.Split('/', '\\') : path.Split('/'))
+        {
+            if (part.Length == 0 || part == ".")
+            {
+                continue;
+            }
+
+            if (part != "..")
+            {
+                parts.Add(part);
+            }
+            else if (parts.Count > kept)
+            {
+                parts.RemoveAt(parts.Count - 1);
+            }
+            else if (relative)
+            {
+                return null;
+            }
+        }
+
+        return parts;
+    }
 }

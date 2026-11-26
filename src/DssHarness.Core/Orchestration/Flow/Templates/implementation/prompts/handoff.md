@@ -35,7 +35,7 @@ work now, not a log.
 - The gate of the last round. Passed: {rounds.gate.passed}
 - The mutation sweep of the last round. Passed: {rounds.mutations.passed}
 - What was put off, where the repository keeps a registry: {deferrals.summary}
-- The issues found that were there before the run, each proven, with its id and whether it was fixed or listed: {run.preExisting}
+- The issues found that were there before the run, each proven, with whether it was fixed, owed the next round, fixed in a later round or listed: {run.preExisting}
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 

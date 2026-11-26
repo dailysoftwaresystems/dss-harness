@@ -21,6 +21,29 @@ public sealed class ToolUpdateServiceTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// What a stop of dotnet listing the installed tools could not reach or end is said under the update, by the command
+    /// line, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheListingCouldNotReachOrEnd_IsSaidUnderTheUpdate(bool stopped)
+    {
+        var kit = new Kit(installed: "0.6.13", newest: "0.6.13");
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            () => string.Join('\n', kit.Said()),
+            stopped,
+            (stop, token) =>
+            {
+                kit.Runs = dotnet => UnreachingRunner.For(stop, request => dotnet.RunAsync(request, token).GetAwaiter().GetResult());
+                return kit.Service().RunAsync(new ToolUpdateRequest(), token);
+            });
+
+        Assert.Equal([UnreachedSaid.Warned(ToolUpdateService.CommandName, "'dotnet tool list --global --format json'")], said);
+    }
+
+    /// <summary>
     /// A tool behind the newest release, on a machine running no DssHarness, is updated to exactly that release from
     /// nuget.org alone, and said updated only once it is listed as that release - the one reading that is not the
     /// installer's word.
@@ -702,10 +725,13 @@ public sealed class ToolUpdateServiceTests
         /// <summary>How long the service has waited, by its own count.</summary>
         public TimeSpan Waited { get; private set; }
 
+        /// <summary>What runs the service's programs, given the scripted dotnet: that dotnet where nothing else is given.</summary>
+        public Func<IProcessRunner, IProcessRunner> Runs { get; set; } = dotnet => dotnet;
+
         public ToolUpdateService Service()
             => new(
                 Table,
-                Dotnet,
+                Runs(Dotnet),
                 Feed,
                 new RunningToolDouble(running),
                 _harness.Identity,

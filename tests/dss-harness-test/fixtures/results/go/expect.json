@@ -1,0 +1,29 @@
+{
+  "read": {
+    "tests": "go"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": [
+    { "path": "go.mod", "text": "module example.com/app\n\ngo 1.22\n" },
+    "sum/sum.go",
+    "sum/sum_test.go",
+    "store/store_test.go",
+    "store/parser_test.go"
+  ],
+  "failed": 2,
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "failed TestStoreLoads",
+    "failed TestParser/empty",
+    "crashed TestSum"
+  ],
+  "stack": {
+    "of": "TestSum",
+    "frames": 7,
+    "inTree": [
+      "/home/runner/work/app/app/sum/sum.go:12",
+      "/home/runner/work/app/app/sum/sum_test.go:9"
+    ]
+  }
+}

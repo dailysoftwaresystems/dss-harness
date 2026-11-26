@@ -21,6 +21,88 @@ public sealed class ExpectedExceptionMatcherTests
                 new RunFailure("IOException", "device or resource busy (16)")));
     }
 
+    /// <summary>
+    /// What was expected is often the cause under what was thrown: an entry's type matches the record's causes too,
+    /// each one however deep it sits, and its messages still match the texts - so an excusal declared against a cause
+    /// is not lost the day the same failure arrives wrapped.
+    /// </summary>
+    [Fact]
+    public void Find_MatchesATypeTheRecordCausessAsToo_HoweverDeepItSits()
+    {
+        var entry = Entry(exceptionType: "ArgumentException", messages: ["the argument was wrong"]);
+
+        var wrapped = new DssHarness.Core.Results.ExceptionRecord(
+            "System.InvalidOperationException",
+            "The operation is invalid.",
+            [],
+            [new DssHarness.Core.Results.ExceptionRecord(
+                "System.ArgumentException",
+                "the argument was wrong",
+                [],
+                [new DssHarness.Core.Results.ExceptionRecord("System.Exception", "deepest", [], [])])]);
+
+        Assert.Same(
+            entry,
+            Matcher().Find(
+                Scope("corpus", ["linux-arm64-qemu"], entry),
+                "linux-arm64-qemu",
+                new RunFailure("InvalidOperationException", "The operation is invalid.", Exception: wrapped)));
+
+        Assert.Null(
+            Matcher().Find(
+                Scope("corpus", ["linux-arm64-qemu"], entry),
+                "linux-arm64-qemu",
+                new RunFailure("IOException", "device busy", Exception: new DssHarness.Core.Results.ExceptionRecord("IOException", "device busy", [], []))));
+    }
+
+    /// <summary>
+    /// Both halves of a match are of one exception: a cause's type is never matched with a message the outer exception
+    /// says, another cause's, or a line the unit printed - an entry declared against one cause would excuse a failure
+    /// whose message no cause of that type ever said. The cause's type with its own message still matches.
+    /// </summary>
+    [Fact]
+    public void ACausesType_IsNeverMatchedWithAnotherExceptionsMessage()
+    {
+        var entry = Entry(exceptionType: "ArgumentException", messages: ["the device was busy"]);
+        var scope = Scope("corpus", ["linux-arm64-qemu"], entry);
+
+        static DssHarness.Core.Results.ExceptionRecord Wrapped(string outer, string argument, string deepest)
+            => new(
+                "System.InvalidOperationException",
+                outer,
+                [],
+                [new DssHarness.Core.Results.ExceptionRecord("System.ArgumentException", argument, [], [new DssHarness.Core.Results.ExceptionRecord("System.IO.IOException", deepest, [], [])])]);
+
+        // The message is the outer exception's, the run's, a deeper cause's or a printed line: no match.
+        Assert.Null(Matcher().Find(scope, "linux-arm64-qemu", new RunFailure("InvalidOperationException", "the device was busy", Exception: Wrapped("the device was busy", "bad argument", "io"))));
+        Assert.Null(Matcher().Find(scope, "linux-arm64-qemu", new RunFailure("InvalidOperationException", "it failed", Exception: Wrapped("it failed", "bad argument", "the device was busy"))));
+        Assert.Null(Matcher().Find(scope, "linux-arm64-qemu", new RunFailure("InvalidOperationException", "it failed", PhaseOutput.Of("ArgumentException: the device was busy\n"), Exception: Wrapped("it failed", "bad argument", "io"))));
+
+        // The cause's own message: a match.
+        Assert.Same(entry, Matcher().Find(scope, "linux-arm64-qemu", new RunFailure("InvalidOperationException", "it failed", Exception: Wrapped("it failed", "the device was busy", "io"))));
+    }
+
+    /// <summary>
+    /// A line the unit printed is matched as the message of the exception that reached the log only where no stack was
+    /// read: under a stack, a line may be a cause's message - the outer type with a cause's printed message is no match -
+    /// and with no stack read, the lines are all there is to read it by.
+    /// </summary>
+    [Fact]
+    public void ALinePrinted_IsTheThrownMessage_OnlyWhereNoStackWasRead()
+    {
+        var entry = Entry(exceptionType: "InvalidOperationException", messages: ["Permission denied"]);
+        var scope = Scope("corpus", ["linux-arm64-qemu"], entry);
+        var printed = PhaseOutput.Of("System.InvalidOperationException: flush failed\n ---> System.IO.IOException: Permission denied\n");
+        var thrown = new DssHarness.Core.Results.ExceptionRecord(
+            "System.InvalidOperationException",
+            "flush failed",
+            [],
+            [new DssHarness.Core.Results.ExceptionRecord("System.IO.IOException", "Permission denied", [], [])]);
+
+        Assert.Null(Matcher().Find(scope, "linux-arm64-qemu", new RunFailure("InvalidOperationException", "step failed", printed, thrown)));
+        Assert.Same(entry, Matcher().Find(scope, "linux-arm64-qemu", new RunFailure("InvalidOperationException", "step failed", printed)));
+    }
+
     [Fact]
     public void Find_MatchesAMessageAsPlainText_WhenItIsNotARegularExpression()
     {

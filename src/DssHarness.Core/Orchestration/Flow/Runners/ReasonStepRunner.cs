@@ -36,7 +36,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">The file system the step's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="gh">Runs <c>gh</c>, for a web-search source the machine's login reads.</param>
-/// <param name="harnessOutput">Writes output the copies of a continuation record name.</param>
+/// <param name="harnessOutput">Writes output the copies of a continuation record name, and says a write of a measure call's ledger the file system refused as its legs' run went.</param>
 /// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
@@ -384,9 +384,12 @@ public sealed class ReasonStepRunner(
 
         try
         {
-            // What the attempt spends is charged to the run's budget turn by turn, as its agent works, at the prices of
-            // the model serving it then: the run's reserve is reached while a long attempt runs, not only once it ends.
-            var result = await runner.RunAsync(request, new AgentRunSpend(providers, resolution.Serving.Model, run.Events), cancellationToken).ConfigureAwait(false);
+            // What the attempt spends is charged into its measure and the run's budget turn by turn, as its agent works,
+            // at the prices of the model serving it then: the run's reserve is reached while a long attempt runs, not only
+            // once it ends. The count also keeps the run's own account - what served it, the turns, the tools, the
+            // compactions - which the engine adds to the attempt's entry when this run of it ends.
+            var counter = new AgentRunSpend(providers, resolution.Serving.Model, run.Events, resolution.Serving.Effort);
+            var result = await runner.RunAsync(request, counter, cancellationToken).ConfigureAwait(false);
 
             // A limit's question says whether a stored conversation of the attempt can be handed, which is where the
             // answer `more` is offered; no other ending reads it.
@@ -416,7 +419,7 @@ public sealed class ReasonStepRunner(
                 FlowStepGraph.PutAwayPages(fileSystem, harnessOutput, StepDirectoryOf(layout, run.Instance, agent), run.Instance);
             }
 
-            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse };
+            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse, Attempt = counter.Account() };
         }
         catch (HarnessException refused)
         {
@@ -483,15 +486,17 @@ public sealed class ReasonStepRunner(
 
         try
         {
-            ran = await new FlowStepLegs(fileSystem, children, isolation).RunAsync(
-                new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, stepDirectory, call.Records, RedLogs: workspace.Worktree is not null, $"the measure call '{call.Id}' of '{instance}'"),
-                legIsolation => tests.RunAsync(
+            ran = await new FlowStepLegs(fileSystem, harnessOutput, children, isolation).RunAsync(
+                new FlowStepLegsRequest(context.Config, context.Layout.MainCheckoutRoot, tree, stepDirectory, call.Records, RedLogs: workspace.Worktree is not null, $"the measure call '{call.Id}' of '{instance}'", Type),
+                watch: null,
+                (legIsolation, kept) => tests.RunAsync(
                     new TestLegsRequest
                     {
                         Directory = tree,
                         LegNames = [call.Leg],
                         Filters = call.Filter.Length > 0 ? [call.Filter] : [],
                         LocalCopy = workspace.Worktree is null,
+                        Watch = kept,
                         Isolation = legIsolation,
                     },
                     RunId.New(),
@@ -611,6 +616,64 @@ public sealed class ReasonStepRunner(
         // Its last messages word for word, as many as the compaction keeps of its last iterations: every message is in
         // the continuation record whole, which the account is a part of.
         return AgentStreamAccount.Of(stream, before, AgentCompactionBounds.LastIterations);
+    }
+
+    /// <summary>
+    /// The account of the attempt the step's record says it was on (<see cref="FlowStepRun.Attempt"/>), where a crash cut
+    /// it off before the engine read its answer: that attempt's events - every run of it the stream holds, to the end the
+    /// crash left (<see cref="AgentAttempt.Of"/>) - replayed through the engine's own count of what a run spends
+    /// (<see cref="AgentRunSpend"/>), which prices each turn as it is reported, copies the price and tracks what served
+    /// it. Every turn is handed back with its spend: the engine charges only those past what its record holds charged.
+    /// Null where the step made no agent, or its stream holds no run of that attempt - a crash before the attempt's first
+    /// event, with nothing more spent than its record holds; the account says why where the stream cannot be read whole,
+    /// or priced, for then what it spent past its record is not known.
+    /// </summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the reading of the repository.</param>
+    async Task<FlowCutAttempt?> IFlowHandoffRunner.AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        var agent = run.WorksIn ?? run.Made?.Name;
+
+        if (agent is null)
+        {
+            return null;
+        }
+
+        var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(place.Repository, place.Repository), place.Run);
+        IReadOnlyList<AgentEvent> stream;
+
+        try
+        {
+            stream = StreamOf(layout, agent, run.Instance);
+        }
+        catch (HarnessException unread)
+        {
+            return FlowCutAttempt.NotRead($"its stream does not read whole, so what it spent past its record is not known: {unread.Message.TrimEnd('.')}");
+        }
+
+        var window = AgentAttempt.Of(stream, run.Attempt);
+
+        if (window is not [RunStarted { Attempt: var attempt }, ..] || attempt != run.Attempt)
+        {
+            return null;
+        }
+
+        if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
+        {
+            return FlowCutAttempt.NotRead("the configuration's agent providers do not resolve, so what it spent past its record cannot be priced");
+        }
+
+        var spend = new AgentRunSpend(providers, serving: null);
+
+        foreach (var happened in window)
+        {
+            _ = spend.EmitAsync(happened);
+        }
+
+        return new FlowCutAttempt(spend.Account(), spend.Turns, window[^1].At);
     }
 
     /// <summary>
@@ -780,7 +843,8 @@ public sealed class ReasonStepRunner(
     /// references share with the schema files beside it taken in (<see cref="Schemas.JsonSchemaSubset.Shared"/>), so
     /// the schema the client is sent and the schema the answer is held to are one and hold - the step's own name the
     /// name its output is read by, and - where the step may ask - the rounds it may ask in one attempt, less what its
-    /// answers already spent: after the last the agent is offered no questions and told so. A schema no answer could
+    /// answers already spent: after the last the agent is offered no questions and told so; and what a step of the flow
+    /// that reads its answer holds it to beyond the schema (<see cref="FlowStepRun.AnswerHolds"/>). A schema no answer could
     /// be held to is refused (13) naming why: the definition's check said its problems when the run began, and this
     /// says where they are again.
     /// </summary>
@@ -796,6 +860,9 @@ public sealed class ReasonStepRunner(
                 SchemaWholeOf(files, layout, workflow, step, named),
                 MaxRepairs: 2,
                 AskRounds: step.Ask == true ? Math.Max(0, (step.AskRounds ?? 2) - run.Answers.Count(given => given.Kind == "ask" && given.Attempt == run.Attempt)) : null)
+            {
+                Holds = run.AnswerHolds,
+            }
             : null;
 
     /// <summary>
@@ -826,7 +893,7 @@ public sealed class ReasonStepRunner(
 
         return read.Schema is not { } whole || read.Problems.Count > 0
             ? throw new HarnessException(HarnessExit.ConfigInvalid, $"'{named}', the output schema of step '{step.Name}', is not a schema the engine reads: {string.Join("; ", read.Problems)}")
-            : whole.ToJsonString();
+            : whole.ToJsonString(AgentEnvelope.Written);
     }
 
     /// <summary>
@@ -1029,8 +1096,10 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The red legs of the agent's newest build or test that was red, as the record says them: each red leg, its phase
-    /// and the ledger's line for it, and where the copied ledger and its logs are. Empty where none was red.
+    /// The red legs of the agent's newest build or test that was red, as the record says them: each red leg, its phase,
+    /// the ledger's line for it, what the phase printed digested - so the step that goes on starts from the first error -
+    /// the raw lines the entry carries beside it, and the log the phase wrote as the entry names it, which the record
+    /// copies. Empty where none was red.
     /// </summary>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as, whose steps ran them.</param>
@@ -1041,13 +1110,15 @@ public sealed class ReasonStepRunner(
             return [];
         }
 
+        // A step whose output the engine wrote of the legs it ran, never one a model answered: the log a red entry names is
+        // copied for the record, and a path a model wrote there would hand the agent a file its policy never let it read.
         foreach (var step in steps
             .Where(step => string.Equals(step.Agent, agent, StringComparison.Ordinal)
                 && step.FinishedAt is not null
+                && step.Type is { } type && WorkflowStepTypes.Find(type) is { AnswersLegs: true }
                 && step.Output?["red"] is JsonArray { Count: > 0 })
             .OrderByDescending(step => step.FinishedAt))
         {
-            var directory = layout.InstanceDirectory(step.Instance, step.Agent);
             var legs = new List<AgentRedLeg>();
 
             foreach (var red in step.Output!["red"]!.AsArray().OfType<JsonObject>())
@@ -1056,7 +1127,21 @@ public sealed class ReasonStepRunner(
                     && red["detail"] is JsonValue detail && detail.GetValueKind() == JsonValueKind.String)
                 {
                     var phase = red["phase"] is JsonValue named && named.GetValueKind() == JsonValueKind.String ? named.GetValue<string>() : null;
-                    legs.Add(new AgentRedLeg(leg.GetValue<string>(), phase ?? string.Empty, detail.GetValue<string>(), directory));
+
+                    // What a red result printed, typed and said for a model, so the step that goes on starts from the
+                    // first error - written as every JSON an agent reads is (AgentEnvelope.Written), so what the tool
+                    // printed reads as it printed it; the raw lines beside it, so a leg no parser read is never said by
+                    // its line alone.
+                    var digest = red["digest"] is { } typed && typed.GetValueKind() == JsonValueKind.Object ? typed.ToJsonString(AgentEnvelope.Written) : null;
+                    IReadOnlyList<string> tail = red["tail"] is JsonArray lines
+                        ? [.. lines.OfType<JsonValue>().Where(line => line.GetValueKind() == JsonValueKind.String).Select(line => line.GetValue<string>())]
+                        : [];
+
+                    // Its log, whose lines the digest's ranges number, as the entry names it - the copy the step kept beside
+                    // its ledger in an agent's worktree; the record copies it, so it points into no run's records.
+                    var log = red["log"] is JsonValue file && file.GetValueKind() == JsonValueKind.String ? file.GetValue<string>() : null;
+
+                    legs.Add(new AgentRedLeg(leg.GetValue<string>(), phase ?? string.Empty, detail.GetValue<string>(), digest, tail, log));
                 }
             }
 
@@ -1270,6 +1355,16 @@ public interface IFlowHandoffRunner
     /// </summary>
     /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
     string? Account(FlowStepRun run);
+
+    /// <summary>
+    /// The account of the attempt the step's record says it was on, where a crash cut it off before the engine read its
+    /// answer: what served it and what it called, and every turn of its stored stream with its spend, counted at the
+    /// configuration's prices as they stand now, and when its last event was written (<see cref="FlowCutAttempt"/>).
+    /// Null where its stream holds no run of that attempt; why, where the stream cannot be read whole or priced.
+    /// </summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the reading of the repository.</param>
+    Task<FlowCutAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -1286,4 +1381,12 @@ public interface IFlowStreamAccount
     /// </summary>
     /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
     string? Account(FlowStepRun run);
+
+    /// <summary>
+    /// The account of the attempt the step's record says it was on, where a crash cut it off before the engine read its
+    /// answer (<see cref="IFlowHandoffRunner.AttemptOf"/>); null where the runner's type keeps no stream.
+    /// </summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the reading of the repository.</param>
+    Task<FlowCutAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken);
 }

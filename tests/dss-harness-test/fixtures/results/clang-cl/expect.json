@@ -1,0 +1,29 @@
+{
+  "read": {
+    "build": "cmake",
+    "compiler": "Clang"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["store.cpp", "undeclared.cpp", "warn.cpp"],
+  "errors": 2,
+  "warnings": 1,
+  "first": {
+    "tool": "clang",
+    "code": null,
+    "file": "/home/runner/work/app/app/store.cpp",
+    "line": 8,
+    "column": 18
+  },
+  "diagnostics": [
+    "error - /home/runner/work/app/app/store.cpp:8",
+    "error - /home/runner/work/app/app/undeclared.cpp:3",
+    "warning -Wunused-variable /home/runner/work/app/app/warn.cpp:3"
+  ],
+  "stack": {
+    "frames": 2,
+    "inTree": [
+      "/home/runner/work/app/app/store.cpp:14",
+      "/home/runner/work/app/app/store.cpp:19"
+    ]
+  }
+}

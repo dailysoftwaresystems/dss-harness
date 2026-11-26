@@ -25,6 +25,42 @@ public sealed class ArmBuilderTests
     private static readonly VariantKey Variant = new("x86_64", "gcc", "debug", null);
 
     /// <summary>
+    /// What a stop of ninja listing a worker's dependency records could not reach or end is said under the sweep, on the
+    /// worker's own line, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfTheRecordsListingCouldNotReachOrEnd_IsSaidOnTheWorkersLine(bool stopped)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var worker = MutationWorkers.PathOf(temp.Combine("tree"), Variant, 1);
+        var build = MutationWorkers.BuildDirectoryOf(worker);
+
+        WriteBuild(temp, build);
+
+        var request = new BuildRequest("native/workers/1", worker, new ProjectConfig { Name = "app", Type = "cmake" }, Variant, harness.Platform.PlatformKey, 2, temp.Combine("runs"))
+        {
+            BuildDirectory = build,
+        };
+        var records = $"{FixtureObject}: #deps 1, deps mtime 1 (VALID)\n    {temp.Combine("src", "fixture.cpp").Replace('\\', '/')}\n";
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new ArmBuilder(
+                    NSubstitute.Substitute.For<IBuildService>(),
+                    UnreachingRunner.For(stop, _ => HostResults.Ok(records)),
+                    new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
+                    harness.FileSystem,
+                    harness.Output)
+                .ReadGraphAsync(new HarnessConfig(), request, token));
+
+        Assert.Equal([UnreachedSaid.Warned(MutationService.CommandName, "native/workers/1: 'ninja -t deps'")], said);
+    }
+
+    /// <summary>
     /// A target builds the file it names, through however many phony names stand for it; a target standing for several
     /// builds each that is built, and one standing for a source, or that nothing builds, builds none.
     /// </summary>

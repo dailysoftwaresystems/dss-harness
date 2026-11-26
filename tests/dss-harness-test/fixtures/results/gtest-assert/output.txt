@@ -1,0 +1,20 @@
+Test project /home/runner/work/app/app/build
+    Start 1: store_tests
+1/1 Test #1: store_tests ......................Subprocess aborted***Exception:   0.01 sec
+Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc
+[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 2 tests from StoreTest
+[ RUN      ] StoreTest.KeepsItsBounds
+[       OK ] StoreTest.KeepsItsBounds (0 ms)
+[ RUN      ] StoreTest.Loads
+store_tests: /home/runner/work/app/app/tests/store_test.cc:18: virtual void StoreTest_Loads_Test::TestBody(): Assertion `count == 2' failed.
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.01 sec
+
+The following tests FAILED:
+	  1 - store_tests (Subprocess aborted)
+Errors while running CTest

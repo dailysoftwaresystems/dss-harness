@@ -1,0 +1,2865 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
+using DssHarness.Core.Text;
+
+namespace DssHarness.Tests;
+
+/// <summary>
+/// The parsers a log is read by and the one pass that reads it: each line offered once to each reading and claimed by
+/// one, a line given back offered to the others, the findings merged in the order of their lines, numbered as the log's
+/// file numbers them, and a line no parser took said unparsed only where it holds an error's marker; the parsers chosen
+/// by what a phase runs - the compiler a toolchain declares, a test's runner, a runner's steps, a CI job - with the
+/// configured matchers where they are named; a matcher's severity, its record, its stack and its refusals at load; and the
+/// forms the fixtures do not hold.
+/// </summary>
+public sealed class ResultParsersTests
+{
+    /// <summary>
+    /// One pass: each line is offered to the reading with a record open first, and a reading that leaves what it held gives
+    /// it back, every held line offered to the others in the order printed, never to it again - while the line that ended
+    /// its hold, which says only that the held lines were not its, is offered again as a line of its own, to it as well; a
+    /// line a reading left with nothing held goes to the others alone; a given-back line no reading takes is said unparsed
+    /// where it looks like an error; and each reading ends once.
+    /// </summary>
+    [Fact]
+    public void AHeldLine_GoesToTheOthers_AndTheLineThatEndedItsHoldIsOfferedAgainOnItsOwn()
+    {
+        var offered = new List<string>();
+
+        var digest = Digested(
+            ["a1", "a2 error: lost", "x", "b1", "a3"],
+            [new Holding(offered), new Taking(offered)]);
+
+        Assert.Equal(
+            ["A a1", "A a2 error: lost", "A x", "B a1", "B a2 error: lost", "A x", "B x", "B b1", "B a3", "A a3", "A end", "B end"],
+            offered);
+        Assert.Equal([("taking", "x", (3, 3))], digest!.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Message, diagnostic.Log!.Value)));
+        Assert.Equal(["a2 error: lost"], digest.Unparsed);
+    }
+
+    public static TheoryData<string[], string> HeadsInARow() => new()
+    {
+        {
+            [
+                "System.Net.Http.HttpRequestException: Connection refused (localhost:5432)",
+                "System.InvalidOperationException: The store could not be loaded.",
+                @"   at Crash.Store.Load(String name) in D:\a\app\app\net\Crash\Program.cs:line 13",
+                @"   at Crash.Program.Main() in D:\a\app\app\net\Crash\Program.cs:line 38",
+            ],
+            "dotnet errored 'System.InvalidOperationException: The store could not be loaded.' 2 frames (2, 4); unparsed: System.Net.Http.HttpRequestException: Connection refused (localhost:5432)"
+        },
+        {
+            [
+                "Error: retry 1",
+                "TypeError: x is not a function",
+                "    at load (/home/runner/work/app/app/store.js:4:10)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/store.js:7:1)",
+            ],
+            "node errored 'TypeError: x is not a function' 2 frames (2, 4); unparsed: Error: retry 1"
+        },
+        {
+            [
+                "java.lang.IllegalStateException: retry 1",
+                "java.io.UncheckedIOException: the store could not be read",
+                "\tat com.example.Store.load(Store.java:13)",
+                "\tat com.example.Main.main(Main.java:38)",
+            ],
+            "jvm errored 'java.io.UncheckedIOException: the store could not be read' 2 frames (2, 4); unparsed: java.lang.IllegalStateException: retry 1"
+        },
+        {
+            [
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/store.py\", line 9, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+            ],
+            "python errored 'KeyError: 'port'' 1 frames (3, 6); unparsed: Traceback (most recent call last):"
+        },
+    };
+
+    /// <summary>
+    /// A thrown error's head that ends what a stack reader held undecided - a logged error's line no frame followed, a
+    /// traceback cut short - is read as the head it is, of the error whose frames follow it: never lost with the held line,
+    /// nor its frames dropped for want of a record, on any runtime; the held line no frame followed is said unparsed.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(HeadsInARow))]
+    public void AHeadThatEndsAHold_IsReadAsTheHeadOfTheErrorItBegins(string[] lines, string read)
+    {
+        var digest = Digested(lines, PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        Assert.Equal(
+            read,
+            $"{string.Join(" | ", digest.Failures.Select(failure => $"{failure.Framework} {failure.Outcome} '{failure.Id}' {failure.Frames.Count} frames {failure.Log}"))}; unparsed: {string.Join(" | ", digest.Unparsed ?? [])}");
+    }
+
+    /// <summary>
+    /// A logged thrown error's head - a <c>Type: message</c> line a program printed - is decided by the line after it
+    /// alone: a frame makes it a stack trace's, any other line gives it back, so a reader holds that one line and never the
+    /// log below it. The process's own crash under it is read as that crash, never as the logged line's message, and a test
+    /// console's block under it is read by its console.
+    /// </summary>
+    [Fact]
+    public void ALoggedHead_IsDecidedByTheLineAfterIt_SoNoReaderHoldsTheLogBelowIt()
+    {
+        var dotnet = new List<string>();
+        var crash = Digested(
+            [
+                "MyApp.Config.SettingException: 'x' missing, using default",
+                "loading the store",
+                "still loading",
+                "Unhandled exception. System.InvalidOperationException: The store could not be loaded.",
+                @"   at Crash.Store.Load(String name) in D:\a\app\app\net\Crash\Program.cs:line 13",
+                @"   at Crash.Program.Main() in D:\a\app\app\net\Crash\Program.cs:line 38",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "dotnet-stack" ? new Recording(parser, dotnet) : parser)])!;
+
+        // The logged line is held for the one line after it, which gives it back and is read again on its own.
+        Assert.Equal(["1 Held", "2 Left", "2 Left", "3 Left", "4 Took", "5 Took", "6 Took"], dotnet);
+        Assert.Equal(
+            [("dotnet", "crashed", "System.InvalidOperationException: The store could not be loaded.", 2)],
+            crash.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count)));
+        Assert.Equal(["MyApp.Config.SettingException: 'x' missing, using default"], crash.Unparsed);
+
+        var v8 = new List<string>();
+        var jest = Digested(
+            [
+                "Error: connect ECONNREFUSED 127.0.0.1:5432",
+                " FAIL  src/store.test.js",
+                "  ● Store › loads its record",
+                string.Empty,
+                "    expect(received).toBe(expected) // Object.is equality",
+                string.Empty,
+                "    Expected: 4",
+                "    Received: 3",
+                string.Empty,
+                "      at Object.toBe (src/store.test.js:7:27)",
+                string.Empty,
+                "Tests:       1 failed, 1 total",
+            ],
+            [.. PhaseParsers.ForTests(new HarnessConfig(), "npx", null).Select(parser => parser.Name == "v8-stack" ? new Recording(parser, v8) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Left"], v8);
+        Assert.Equal(
+            [("jest", "failed", "Store › loads its record", 1)],
+            jest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count)));
+        Assert.Equal(["Error: connect ECONNREFUSED 127.0.0.1:5432"], jest.Unparsed);
+    }
+
+    /// <summary>
+    /// An error that ended its program has crashed it, on every runtime: Node's, printed under the header of where it was
+    /// thrown, and Python's, whose traceback runs through a module's top level - as a script's or <c>-m</c>'s does - where
+    /// it is not known that its program ended 0, while one a program caught and printed has errored, the program going on:
+    /// Node's logged with no header, Python's printed by a handler inside a function. The lines are each tool's own
+    /// output, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void AnErrorThatEndedItsProgram_HasCrashedIt_AndOneItCaughtAndPrintedHasErrored()
+    {
+        var digest = Digested(
+            [
+                "TypeError: a store needs a path",
+                "    at load (/home/runner/work/app/app/logged.js:1:25)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/logged.js:2:7)",
+                "    at Module._compile (node:internal/modules/cjs/loader:1356:14)",
+                "    at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)",
+                "    at Module.load (node:internal/modules/cjs/loader:1197:32)",
+                "    at Module._load (node:internal/modules/cjs/loader:1013:12)",
+                "    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)",
+                "    at node:internal/main/run_main_module:28:49",
+                "went on",
+                "/home/runner/work/app/app/cause.js:2",
+                "  try { JSON.parse('{'); } catch (err) { throw new Error('the store could not be read', { cause: err }); }",
+                "                                         ^",
+                string.Empty,
+                "Error: the store could not be read",
+                "    at load (/home/runner/work/app/app/cause.js:2:48)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/cause.js:4:1)",
+                "    ... 5 lines matching cause stack trace ...",
+                "    at node:internal/main/run_main_module:28:49 {",
+                "  [cause]: SyntaxError: Unexpected end of JSON input",
+                "      at JSON.parse (<anonymous>)",
+                "      at load (/home/runner/work/app/app/cause.js:2:14)",
+                "      at Object.<anonymous> (/home/runner/work/app/app/cause.js:4:1)",
+                "      at Module._compile (node:internal/modules/cjs/loader:1356:14)",
+                "      at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)",
+                "      at Module.load (node:internal/modules/cjs/loader:1197:32)",
+                "      at Module._load (node:internal/modules/cjs/loader:1013:12)",
+                "      at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)",
+                "      at node:internal/main/run_main_module:28:49",
+                "}",
+                string.Empty,
+                "Node.js v18.19.1",
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/handled.py\", line 8, in main",
+                "    load()",
+                "  File \"/home/runner/work/app/app/handled.py\", line 4, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+                "went on",
+                "Traceback (most recent call last):",
+                "  File \"<frozen runpy>\", line 198, in _run_module_as_main",
+                "  File \"<frozen runpy>\", line 88, in _run_code",
+                "  File \"/home/runner/work/app/app/pkg/run.py\", line 3, in <module>",
+                "    main()",
+                "  File \"/home/runner/work/app/app/pkg/run.py\", line 2, in main",
+                "    raise RuntimeError(\"run failed\")",
+                "RuntimeError: run failed",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        Assert.Equal(
+            [
+                ("node", "errored", "TypeError: a store needs a path", 8, (1, 9)),
+                ("node", "crashed", "Error: the store could not be read", 3, (15, 30)),
+                ("python", "errored", "KeyError: 'port'", 2, (33, 38)),
+                ("python", "crashed", "RuntimeError: run failed", 4, (40, 47)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Frames.Count, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+
+        var cause = Assert.Single(digest.Failures[1].Exception!.CausedBy);
+
+        Assert.Equal(
+            ("SyntaxError", "Unexpected end of JSON input", 9, "/home/runner/work/app/app/cause.js", 2, 0),
+            (cause.Type, cause.Message, cause.Stack.Count, cause.Stack[1].File!, cause.Stack[1].Line!.Value, cause.CausedBy.Count));
+    }
+
+    /// <summary>
+    /// Whether a Python error through its program's top level crashed the program is how the program ended, never a line
+    /// printed after its traceback, which may as well be another program's - a shell's, make's: the error that ends a module
+    /// run with <c>-m</c> has crashed it where it ended with a code not 0, followed by the capture's own line of its exit or
+    /// by make's <c>Error 1</c>, and where how it ended is not known; one a handler at the top level logged
+    /// (<c>logging.exception</c>) has errored where the program ended 0, and crashed where it did not or that is not known,
+    /// for its traceback alone is the same. The lines are Python 3.12's and GNU Make 4.3's own output, each with the line the
+    /// capture printed of the exit after it where it printed one, the run's directory written as a runner's; the logger's
+    /// own line ahead of its traceback is no form a parser reads.
+    /// </summary>
+    [Fact]
+    public void WhetherAPythonErrorCrashedItsProgram_IsHowTheProgramEnded_NeverALineAfterIt()
+    {
+        string[] module =
+        [
+            "Traceback (most recent call last):",
+            "  File \"<frozen runpy>\", line 198, in _run_module_as_main",
+            "  File \"<frozen runpy>\", line 88, in _run_code",
+            "  File \"/home/runner/work/app/app/pkg/run.py\", line 3, in <module>",
+            "    main()",
+            "  File \"/home/runner/work/app/app/pkg/run.py\", line 2, in main",
+            "    raise RuntimeError(\"run failed\")",
+            "RuntimeError: run failed",
+        ];
+        string[] logged =
+        [
+            "ERROR:root:the store could not be loaded",
+            "Traceback (most recent call last):",
+            "  File \"/home/runner/work/app/app/logged.py\", line 7, in <module>",
+            "    load()",
+            "  File \"/home/runner/work/app/app/logged.py\", line 4, in load",
+            "    raise KeyError(\"port\")",
+            "KeyError: 'port'",
+        ];
+        (string Name, string[] Lines, int? Exit)[] runs =
+        [
+            ("module", [.. module, "exit 1"], 1),
+            ("module under make", ["python3 -m pkg.run", .. module, "make: *** [Makefile:2: test] Error 1"], 2),
+            ("module", module, null),
+            ("logged", [.. logged, "exit 0"], 0),
+            ("logged", logged, 1),
+            ("logged", logged, null),
+        ];
+
+        var read = runs.Select(run =>
+        {
+            var digest = Digested(run.Lines, PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()), run.Exit)!;
+            var failure = Assert.Single(digest.Failures);
+
+            return (run.Name, run.Exit, failure.Outcome, failure.Id, failure.Frames.Count, failure.Log!.Value, string.Join(" | ", digest.Unparsed ?? []));
+        });
+
+        Assert.Equal(
+            [
+                ("module", (int?)1, "crashed", "RuntimeError: run failed", 4, (1, 8), string.Empty),
+                ("module under make", 2, "crashed", "RuntimeError: run failed", 4, (2, 9), string.Empty),
+                ("module", null, "crashed", "RuntimeError: run failed", 4, (1, 8), string.Empty),
+                ("logged", 0, "errored", "KeyError: 'port'", 2, (2, 7), "ERROR:root:the store could not be loaded"),
+                ("logged", 1, "crashed", "KeyError: 'port'", 2, (2, 7), "ERROR:root:the store could not be loaded"),
+                ("logged", null, "crashed", "KeyError: 'port'", 2, (2, 7), "ERROR:root:the store could not be loaded"),
+            ],
+            read);
+    }
+
+    /// <summary>
+    /// A Node error's cause, which Node prints among its properties in braces - <c>[cause]: Type: message</c> and its frames,
+    /// a cause of its own inside its braces, indented further - is the record's cause, each nested one the cause of the
+    /// one it is printed inside, so a matcher reading the cause chain meets each. The lines are Node 18's own output for an
+    /// error thrown with a cause that has one, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void ANodeErrorsCauses_AreItsRecordsCauses_EachNestedOneUnderTheOneItIsPrintedIn()
+    {
+        var digest = Digested(
+            [
+                "/home/runner/work/app/app/nested.js:2",
+                "function load() { try { parse(); } catch (err) { throw new Error('the store could not be read', { cause: err }); } }",
+                "                                                 ^",
+                string.Empty,
+                "Error: the store could not be read",
+                "    at load (/home/runner/work/app/app/nested.js:2:56)",
+                "    at Object.<anonymous> (/home/runner/work/app/app/nested.js:3:1)",
+                "    ... 5 lines matching cause stack trace ...",
+                "    at node:internal/main/run_main_module:28:49 {",
+                "  [cause]: Error: the record could not be parsed",
+                "      at parse (/home/runner/work/app/app/nested.js:1:65)",
+                "      at load (/home/runner/work/app/app/nested.js:2:25)",
+                "      ... 6 lines matching cause stack trace ...",
+                "      at node:internal/main/run_main_module:28:49 {",
+                "    [cause]: SyntaxError: Unexpected end of JSON input",
+                "        at JSON.parse (<anonymous>)",
+                "        at parse (/home/runner/work/app/app/nested.js:1:31)",
+                "        at load (/home/runner/work/app/app/nested.js:2:25)",
+                "        at Object.<anonymous> (/home/runner/work/app/app/nested.js:3:1)",
+                "        at Module._compile (node:internal/modules/cjs/loader:1356:14)",
+                "        at Module._extensions..js (node:internal/modules/cjs/loader:1414:10)",
+                "        at Module.load (node:internal/modules/cjs/loader:1197:32)",
+                "        at Module._load (node:internal/modules/cjs/loader:1013:12)",
+                "        at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:128:12)",
+                "        at node:internal/main/run_main_module:28:49",
+                "  }",
+                "}",
+                string.Empty,
+                "Node.js v18.19.1",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        var failure = Assert.Single(digest.Failures);
+        var chain = new List<(string, string, int, string?)>();
+
+        for (var thrown = failure.Exception; thrown is not null; thrown = thrown.CausedBy.SingleOrDefault())
+        {
+            chain.Add((thrown.Type, thrown.Message, thrown.Stack.Count, thrown.Stack[0].Symbol));
+        }
+
+        Assert.Equal(("crashed", (5, 27)), (failure.Outcome, failure.Log!.Value));
+        Assert.Equal(
+            [
+                ("Error", "the store could not be read", 3, "load"),
+                ("Error", "the record could not be parsed", 3, "parse"),
+                ("SyntaxError", "Unexpected end of JSON input", 10, "JSON.parse"),
+            ],
+            chain);
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A phase's log is digested as it streams, through to the digest: each line is offered to the readings before the
+    /// next is read from the log - never the whole log read first and parsed after - and every line no reading took that
+    /// looks like an error is counted as the pass meets it, the last fifty held - the nearest the failure - and the rest
+    /// said as left out, for the one bound of those lines is the digest's own.
+    /// </summary>
+    [Fact]
+    public void APhasesLog_IsDigestedAsItStreams_EveryLineNoReadingTookCounted()
+    {
+        using var temp = new TempDirectory();
+        var trace = new List<string>();
+        string[] lines = [.. Enumerable.Range(1, ResultDigest.Bound + 3).Select(at => $"c{at.ToString(CultureInfo.InvariantCulture)} error: lost")];
+
+        var digest = PhaseDigest.Of(
+            new Streaming(trace, lines),
+            null,
+            [new Holding(trace), new Taking(trace)],
+            new DigestTree(temp.Path, null, new PhysicalFileSystem(FilePermissionsFactory.Create())))!;
+
+        Assert.Equal(
+            ["read c1 error: lost", "A c1 error: lost", "B c1 error: lost", "read c2 error: lost", "A c2 error: lost", "B c2 error: lost"],
+            trace.Take(6));
+        Assert.Equal((ResultDigest.Bound + 3, 3), (digest.UnparsedCount, digest.UnparsedLeftOut));
+        Assert.Equal(lines.TakeLast(ResultDigest.Bound), digest.Unparsed);
+    }
+
+    /// <summary>
+    /// The findings of every reading are merged in the order of the lines they begin at, never parser by parser: a C
+    /// compiler's error, MSBuild's and the compiler's again come out as printed, the first error the first printed.
+    /// </summary>
+    [Fact]
+    public void TheFindings_AreMergedInTheOrderOfTheirLines()
+    {
+        var digest = Digested(
+            [
+                "src/store.c:3:5: error: 'count' undeclared (first use in this function)",
+                @"D:\a\app\app\src\Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [D:\a\app\app\src\App.csproj]",
+                "src/queue.c:8:1: error: expected ';' before '}' token",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [("cc", "src/store.c", 3), ("msbuild", @"D:\a\app\app\src\Program.cs", 12), ("cc", "src/queue.c", 8)],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.File!, diagnostic.Line!.Value)));
+        Assert.Equal((3, "src/store.c"), (digest.Errors, digest.First!.File));
+    }
+
+    /// <summary>
+    /// A CI job's log is read once: each compiler's line is one form's, so a gcc error and an MSVC error are two
+    /// diagnostics, never four, whatever forms are chosen beside them.
+    /// </summary>
+    [Fact]
+    public void ACiJobsLog_IsReadOnce_EachLineByOneForm()
+    {
+        var digest = DssHarness.Core.Ci.CiDigest.Of(
+            string.Join(
+                "\n",
+                "2026-11-23T00:40:01.0000000Z src/store.c:3:5: error: 'count' undeclared (first use in this function)",
+                @"2026-11-23T00:40:02.0000000Z D:\a\app\app\native\store.cpp(7): error C2065: 'y': undeclared identifier"),
+            [],
+            null,
+            said => said,
+            [])!;
+
+        Assert.Equal(
+            [("cc", "error", (string?)null, "src/store.c", 3, (1, 1)), ("msvc", "error", "C2065", @"D:\a\app\app\native\store.cpp", 7, (2, 2))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Severity, diagnostic.Code, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Log!.Value)));
+        Assert.Equal(2, digest.Errors);
+    }
+
+    /// <summary>
+    /// A finding's log range runs from the number its first line has in the log's file to the last number of its last
+    /// line - where a line the parsers read as one holds a carriage return printed alone, the file counts it as more.
+    /// </summary>
+    [Fact]
+    public void AFindingsLogRange_RunsFromItsFirstLinesNumber_ToItsLastLinesLast()
+    {
+        var unparsed = new List<NumberedLine>();
+        var found = PhaseParsers.FindingsOf(
+            [new NumberedLine(4, 4, "src/a.c:3:5: error: 'x' undeclared"), new NumberedLine(5, 5, "    3 |   x++;"), new NumberedLine(6, 8, "      |   ^")],
+            [ResultParsers.Of("gcc")!],
+            unparsed.Add,
+            () => null)!;
+
+        Assert.Equal((4, 8), Assert.Single(found.Diagnostics).Log);
+        Assert.Empty(unparsed);
+    }
+
+    /// <summary>
+    /// A line looks like an error by an error's marker as a word - <c>error:</c>, <c>error CODE:</c>, <c>FAILED</c>,
+    /// <c>fatal:</c>, a line's own <c>panic:</c>, a thrown error's <c>Type: </c>, Python's traceback head - never by a name
+    /// that holds the word, nor by a count or a test's name.
+    /// </summary>
+    [Theory]
+    [InlineData("src/a.c:3:5: error: x", true)]
+    [InlineData("error: linker command failed with exit code 1", true)]
+    [InlineData("Error: Cannot find module 'left-pad'", true)]
+    [InlineData("src/app.ts: error TS2304: Cannot find name 'x'.", true)]
+    [InlineData("FAILED: obj/store.o", true)]
+    [InlineData("fatal: not a git repository", true)]
+    [InlineData("a.c:1:10: fatal error: b.h: No such file or directory", true)]
+    [InlineData("panic: runtime error: index out of range [3] with length 3", true)]
+    [InlineData("TypeError: x is not a function", true)]
+    [InlineData("java.lang.IllegalStateException: no runner", true)]
+    [InlineData("TypeError [ERR_INVALID_ARG_VALUE]: bad", true)]
+    [InlineData("Traceback (most recent call last):", true)]
+    [InlineData("  Passed Demo.Tests.WarningTests.SaysItsWarnings [6 ms]", false)]
+    [InlineData("    0 Warning(s)", false)]
+    [InlineData("    1 Error(s)", false)]
+    [InlineData("terror: no", false)]
+    [InlineData("no_error: 1", false)]
+    [InlineData("errors: 0", false)]
+    [InlineData("the ErrorHandler: set", false)]
+    [InlineData("it did not panic: fine", false)]
+    [InlineData("FAILEDX", false)]
+    public void ALine_LooksLikeAnError_ByAnErrorsMarkerAsAWord(string line, bool looks)
+        => Assert.Equal(looks, PhaseParsers.LooksLikeError(line));
+
+    /// <summary>A build's parsers are chosen by the compiler its toolchain declares, whatever the toolchain is named, and by the project's type as its adapter reads it, ignoring case.</summary>
+    [Theory]
+    [InlineData("dotnet", null, "msbuild")]
+    [InlineData("DOTNET", null, "msbuild")]
+    [InlineData("dart", null, "dart")]
+    [InlineData("Dart", null, "dart")]
+    [InlineData("cmake", "MSVC", "msbuild cmake ninja")]
+    [InlineData("cmake", "GNU", "gcc ld cmake ninja")]
+    [InlineData("cmake", "Clang", "clang msbuild ld cmake ninja")]
+    [InlineData("cmake", "AppleClang", "clang msbuild ld cmake ninja")]
+    [InlineData("cmake", "GNU Clang", "cc msbuild ld cmake ninja")]
+    [InlineData("cmake", "", "cc msbuild ld cmake ninja")]
+    public void ABuildsParsers_AreChosenByTheCompilerItsToolchainDeclares(string type, string? compilers, string chosen)
+    {
+        var config = new HarnessConfig();
+        var ids = (compilers ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        config.Toolchains["gcc13-or-anything"] = new ToolchainConfig();
+
+        for (var at = 0; at < ids.Length; at++)
+        {
+            config.Toolchains["gcc13-or-anything"].CompilerId[at == 0 ? "C" : "CXX"] = ids[at];
+        }
+
+        Assert.Equal(chosen, string.Join(' ', PhaseParsers.ForBuild(config, type, compilers is null ? null : "gcc13-or-anything").Select(parser => parser.Name)));
+    }
+
+    /// <summary>
+    /// A test phase's parsers are chosen by the runner it starts, as its program's name - the last part of its path, a
+    /// launcher's extension and a Python's version off - and a runner none names is read by GoogleTest's console and every
+    /// runtime's stack form.
+    /// </summary>
+    [Theory]
+    [InlineData("ctest", "ctest gtest sanitizer backtrace cmake")]
+    [InlineData(@"C:\Program Files\dotnet\dotnet.exe", "dotnet-test dotnet-stack msbuild")]
+    [InlineData("flutter", "dart-test dart-stack dart")]
+    [InlineData("/usr/bin/python3.12", "python-stack")]
+    [InlineData("npx", "jest vitest v8-stack tsc eslint")]
+    [InlineData("go", "go-panic")]
+    [InlineData("cargo", "rust-panic")]
+    [InlineData("./gradlew", "jvm-stack")]
+    [InlineData("build/store_tests", "gtest dotnet-stack jvm-stack python-stack v8-stack dart-stack go-panic rust-panic sanitizer backtrace")]
+    public void ATestsParsers_AreChosenByItsRunner(string runner, string chosen)
+        => Assert.Equal(chosen, string.Join(' ', PhaseParsers.ForTests(new HarnessConfig(), runner, null).Select(parser => parser.Name)));
+
+    /// <summary>
+    /// A matcher a runner or a test invocation names reads only their output; one no runner or invocation names reads every
+    /// build, test and runner phase; a CI job's log is read by every matcher; and a name no matcher answers to is refused at
+    /// load, as is a list given empty.
+    /// </summary>
+    [Fact]
+    public void AMatcher_ReadsThePhasesThatNameIt_AndOneNamedNowhereReadsEvery()
+    {
+        ProblemMatcher Matcher(string name)
+        {
+            var matcher = new ProblemMatcher(name, "^E (?<message>.+)$", Message: "message");
+            matcher.Compile();
+            return matcher;
+        }
+
+        var config = new HarnessConfig
+        {
+            Results = new ResultsConfig { Matchers = [Matcher("runner-named"), Matcher("invocation-named"), Matcher("named-nowhere")] },
+            PredefinedRunners = { ["lint"] = new RunnerConfig { Matchers = ["runner-named"] } },
+            Legs = { ["linux"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "Debug", Test = new TestConfig { All = new TestInvocation { Runner = "ctest", Matchers = ["invocation-named"] } } } },
+        };
+
+        static string Matchers(IEnumerable<IResultParser> parsers) => string.Join(' ', parsers.OfType<MatcherParser>().Select(parser => parser.Name));
+
+        Assert.Equal("named-nowhere", Matchers(PhaseParsers.ForBuild(config, "cmake", null)));
+        Assert.Equal("invocation-named named-nowhere", Matchers(PhaseParsers.ForTests(config, "ctest", ["invocation-named"])));
+        Assert.Equal("named-nowhere", Matchers(PhaseParsers.ForTests(config, "ctest", null)));
+        Assert.Equal("runner-named named-nowhere", Matchers(PhaseParsers.ForRun(config, config.PredefinedRunners["lint"])));
+        Assert.Equal("runner-named invocation-named named-nowhere", Matchers(PhaseParsers.ForCi(config.Results.Matchers)));
+
+        var refused = new HarnessConfig
+        {
+            Results = config.Results,
+            PredefinedRunners = { ["lint"] = new RunnerConfig { Matchers = ["nope"], Phases = [new RunnerPhase { Name = "lint", Command = ["lint"] }] }, ["fmt"] = new RunnerConfig { Matchers = [], Phases = [new RunnerPhase { Name = "fmt", Command = ["fmt"] }] } },
+        };
+        var problems = HarnessConfigValidator.Validate(refused);
+
+        Assert.Contains("predefined runner 'lint' matchers names matcher 'nope', which results.matchers does not declare", problems);
+        Assert.Contains("predefined runner 'fmt' matchers is given empty, which is never read as the matchers no runner or invocation names: name the matchers that read its output, or leave the key out for the matchers no runner or invocation names", problems);
+    }
+
+    /// <summary>
+    /// A matcher's severity group is read as editors read it, case ignored: a warning's words a warning, a note's a note,
+    /// anything else an error - so a matcher's errors are the digest's errors, its first error among them.
+    /// </summary>
+    [Theory]
+    [InlineData("ERROR", "error")]
+    [InlineData("Error", "error")]
+    [InlineData("fatal", "error")]
+    [InlineData("whatever", "error")]
+    [InlineData("WARN", "warning")]
+    [InlineData("Warning", "warning")]
+    [InlineData("info", "note")]
+    [InlineData("Information", "note")]
+    [InlineData("HINT", "note")]
+    [InlineData("notice", "note")]
+    [InlineData("note", "note")]
+    public void AMatchersSeverityGroup_IsReadAsEditorsReadIt(string said, string severity)
+    {
+        var matcher = new ProblemMatcher("mytool", @"^(?<sev>\w+) (?<file>[^:]+):(?<line>\d+): (?<message>.+)$", Severity: "sev", File: "file", Line: "line", Message: "message");
+        matcher.Compile();
+
+        var digest = Digested([$"{said} src/a.c:3: it jammed"], [new MatcherParser(matcher)])!;
+
+        Assert.Equal(severity, Assert.Single(digest.Diagnostics).Severity);
+        Assert.Equal(severity == "error" ? 1 : 0, digest.Errors);
+    }
+
+    /// <summary>
+    /// A matcher's record runs from its match to the last line it read: a stack's frames to the line <c>until</c> matches,
+    /// or to the last frame where a line matches no frame - the line after it read by the others - and an <c>end</c>'s
+    /// lines to the one it matches; its frames read, and none of its lines repeated among the unparsed.
+    /// </summary>
+    [Fact]
+    public void AMatchersRecord_RunsFromItsMatch_ToTheLastLineItRead()
+    {
+        var stacked = new ProblemMatcher("mytool", @"^ERROR (?<message>.+)$", Message: "message", Stack: new MatcherStack(@"^  at (?<symbol>\S+) \((?<file>[^:]+):(?<line>\d+)\)$", "^  end of stack$"));
+        var ended = new ProblemMatcher("other", @"^BEGIN (?<message>.+)$", Message: "message", End: "^END$");
+        stacked.Compile();
+        ended.Compile();
+
+        var digest = Digested(
+            [
+                "ERROR it jammed: error: the queue",
+                "  at Queue.take (src/queue.c:12)",
+                "  at main (src/main.c:4)",
+                "  end of stack",
+                "ERROR again",
+                "  at Store.load (src/store.c:7)",
+                "FAILED: obj/store.o",
+                "BEGIN a block",
+                "error: inside it",
+                "END",
+            ],
+            [new MatcherParser(stacked), new MatcherParser(ended)])!;
+
+        Assert.Equal(
+            [("mytool", "it jammed: error: the queue", (1, 4), "Queue.take src/queue.c:12|main src/main.c:4"), ("mytool", "again", (5, 6), "Store.load src/store.c:7"), ("other", "a block", (8, 10), "")],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Message, diagnostic.Log!.Value, string.Join('|', (diagnostic.Stack ?? []).Select(frame => $"{frame.Symbol} {frame.File}:{frame.Line}")))));
+        Assert.Equal(["FAILED: obj/store.o"], digest.Unparsed);
+    }
+
+    /// <summary>
+    /// A matcher that does not read - a pattern that does not compile, a group it does not name, a severity that is
+    /// neither, a stack whose frame pattern names none of a frame's groups - is refused at load.
+    /// </summary>
+    [Fact]
+    public void AMatcherThatDoesNotRead_IsRefusedAtLoad()
+    {
+        static string? Problem(ProblemMatcher matcher)
+        {
+            matcher.Compile();
+            return matcher.Problem();
+        }
+
+        Assert.Equal(
+            "matcher 'mytool': its pattern names no group 'line'",
+            Problem(new ProblemMatcher("mytool", "^(?<file>.+)$", File: "file", Line: "line")));
+        Assert.Equal(
+            "matcher 'mytool': its severity 'sev' is neither a severity nor a group its pattern names",
+            Problem(new ProblemMatcher("mytool", "^(?<file>.+)$", Severity: "sev", File: "file")));
+        Assert.Equal(
+            "matcher 'mytool': its stack's frame pattern names none of the groups a frame reads (file, line, column, symbol, module)",
+            Problem(new ProblemMatcher("mytool", "^(?<file>.+)$", File: "file", Stack: new MatcherStack(@"^  at (?<where>.+)$"))));
+        Assert.Null(Problem(new ProblemMatcher("mytool", @"^(?<file>.+):(?<line>\d+): (?<message>.*)$", Severity: "warning", File: "file", Line: "line", Message: "message", Stack: new MatcherStack(@"^  at (?<file>.+)$"))));
+    }
+
+    /// <summary>
+    /// A matcher's patterns are compiled as every pattern the tool runs is, linear in what they read with no timeout: one
+    /// that holds what that matcher lacks - its pattern, its end's, its stack's frame's or until's - refuses the
+    /// configuration at load, naming the matcher, which pattern and the construct in the compiler's own words; and a matcher
+    /// that reads compiles all four, so its lines are read with no engine of their own.
+    /// </summary>
+    [Fact]
+    public void AMatchersPatternTheLinearMatcherLacks_RefusesTheConfigurationAtLoad_NamingIt()
+    {
+        static IReadOnlyList<string> Problems(ProblemMatcher matcher)
+            => [.. HarnessConfigValidator.Validate(new HarnessConfig { Results = new ResultsConfig { Matchers = [matcher] } })
+                .Where(problem => problem.StartsWith("results.", StringComparison.Ordinal))];
+
+        Assert.Equal(
+            ["results.matchers: matcher 'mytool': its pattern is not a valid regular expression: The pattern '^(?<file>.+)(?=:)' holds a lookahead or lookbehind, which .NET's linear-time matcher lacks."],
+            Problems(new ProblemMatcher("mytool", "^(?<file>.+)(?=:)", File: "file")));
+        Assert.Equal(
+            ["results.matchers: matcher 'mytool': its pattern is not a valid regular expression: Invalid pattern '(?<file>[' at offset 9. Unterminated [] set."],
+            Problems(new ProblemMatcher("mytool", "(?<file>[", File: "file")));
+        Assert.Equal(
+            ["results.matchers: matcher 'mytool': its end pattern is not a valid regular expression: The pattern '(?>end)' holds an atomic group, which .NET's linear-time matcher lacks."],
+            Problems(new ProblemMatcher("mytool", "^(?<file>.+)$", File: "file", End: "(?>end)")));
+        Assert.Equal(
+            [@"results.matchers: matcher 'mytool': its stack's frame pattern is not a valid regular expression: The pattern '(?<file>\w+)\1' holds a backreference, which .NET's linear-time matcher lacks."],
+            Problems(new ProblemMatcher("mytool", "^(?<file>.+)$", File: "file", Stack: new MatcherStack(@"(?<file>\w+)\1"))));
+        Assert.Equal(
+            ["results.matchers: matcher 'mytool': its stack's until pattern is not a valid regular expression: The pattern '(?>end)' holds an atomic group, which .NET's linear-time matcher lacks."],
+            Problems(new ProblemMatcher("mytool", "^(?<file>.+)$", File: "file", Stack: new MatcherStack("(?<file>.+)", "(?>end)"))));
+
+        var reading = new ProblemMatcher("mytool", "^(?<file>.+)$", File: "file", End: "^done$", Stack: new MatcherStack("^  at (?<file>.+)$", "^end$"));
+
+        Assert.Empty(Problems(reading));
+        Assert.Equal(
+            [RegexOptions.NonBacktracking, RegexOptions.NonBacktracking, RegexOptions.NonBacktracking, RegexOptions.NonBacktracking],
+            new[] { reading.Compiled!, reading.EndCompiled!, reading.FrameCompiled!, reading.UntilCompiled! }.Select(regex => regex.Options & RegexOptions.NonBacktracking));
+    }
+
+    /// <summary>
+    /// A frame a matcher reads names its line and column only where its own pattern captured a whole number there: one
+    /// that captured anything else names no place, as a diagnostic's line does, and the digest is read on, never stopped.
+    /// </summary>
+    [Fact]
+    public void AMatchersFrameWhoseLineIsNoNumber_NamesNoLine_AndTheDigestIsReadOn()
+    {
+        var matcher = new ProblemMatcher("mytool", @"^ERROR (?<message>.+)$", Message: "message", Stack: new MatcherStack(@"^  at (?<file>\S+):(?<line>\w+)$"));
+        matcher.Compile();
+
+        var digest = Digested(["ERROR it broke", "  at src/a.c:twelve", "  at src/b.c:7", "  at src/c.c:99999999999"], PhaseParsers.ForCi([matcher]))!;
+
+        Assert.Equal(
+            [("src/a.c", (int?)null), ("src/b.c", 7), ("src/c.c", null)],
+            digest.First!.Stack!.Select(frame => (frame.File, frame.Line)));
+    }
+
+    /// <summary>
+    /// A line or a column printed past what a number holds names no place, and the log is read on: never an overflow that
+    /// stops the digest.
+    /// </summary>
+    [Fact]
+    public void ALineNumberPastWhatANumberHolds_NamesNoLine_AndTheLogIsReadOn()
+    {
+        var digest = Digested(
+            ["src/a.c:99999999999:5: error: far", @"D:\a\src\b.cpp(99999999999,3): error C2065: 'y': undeclared identifier", "src/c.c:3:5: error: near"],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [("src/a.c", (int?)null), (@"D:\a\src\b.cpp", null), ("src/c.c", 3)],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.File, diagnostic.Line)));
+    }
+
+    /// <summary>
+    /// MSBuild's canonical form is read wherever its tools print it: a Windows drive's path, a path holding parentheses,
+    /// and cl's <c>fatal error</c>, each diagnostic named for the tool its code belongs to - its project the project's
+    /// file, an inner build's properties MSBuild writes after it left with the build.
+    /// </summary>
+    [Fact]
+    public void TheCanonicalForm_ReadsADrivesPath_AParenthesisedOne_AndAFatalError()
+    {
+        var digest = Digested(
+            [
+                @"D:\a\app\app\src\Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [D:\a\app\app\src\App.csproj]",
+                @"C:\Program Files (x86)\Windows Kits\10\Include\um\winbase.h(4,1): fatal error C1083: Cannot open include file: 'b.h': No such file or directory",
+                @"src\app.ts(3,7): error TS2304: Cannot find name 'y'.",
+                @"D:\a\app\app\src\Lib.cs(3,1): warning CS0168: The variable 'e' is declared but never used [D:\a\app\app\src\Lib.csproj::TargetFramework=net10.0]",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [
+                ("msbuild", "CS0103", @"D:\a\app\app\src\Program.cs", 12, (int?)35, @"D:\a\app\app\src\App.csproj"),
+                ("msvc", "C1083", @"C:\Program Files (x86)\Windows Kits\10\Include\um\winbase.h", 4, 1, null),
+                ("tsc", "TS2304", @"src\app.ts", 3, 7, null),
+                ("msbuild", "CS0168", @"D:\a\app\app\src\Lib.cs", 3, 1, @"D:\a\app\app\src\Lib.csproj"),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Code!, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Column, diagnostic.Project)));
+    }
+
+    /// <summary>
+    /// clang-cl - CMake's <c>Clang</c> where it is the compiler on Windows - writes its place as MSVC does and no code, and
+    /// is read as clang, its flag its code and its notes its chain, while link's lines beside it are read in the canonical
+    /// form; where the toolchain declares no compiler, the same lines are the C compiler's, never MSBuild's with a flag for
+    /// a project.
+    /// </summary>
+    [Fact]
+    public void ClangCl_IsReadAsClang_InMsvcsPlaceForm_AndLinkBesideIt()
+    {
+        string[] lines =
+        [
+            @"D:\a\app\src\main.cpp(7,5): error: use of undeclared identifier 'x'",
+            "    7 |     x = count;",
+            "      |     ^",
+            @"D:\a\app\src\store.cpp(8,18): error: invalid operands to binary expression ('const Text' and 'int')",
+            @"D:\a\app\src\store.cpp(14,12): note: in instantiation of function template specialization 'twice<Text>' requested here",
+            @"D:\a\app\src\warn.cpp(3,9): warning: unused variable 'unused' [-Wunused-variable]",
+            "2 errors generated.",
+            @"main.cpp.obj : error LNK2019: unresolved external symbol ""int __cdecl store::load_records(char const *)"" (?load_records@store@@YAHPEBD@Z) referenced in function main",
+        ];
+
+        var config = new HarnessConfig();
+        config.Toolchains["clang-cl"] = new ToolchainConfig { CompilerId = { ["C"] = "Clang", ["CXX"] = "Clang" } };
+
+        static IEnumerable<string> Said(ResultDigest digest)
+            => digest.Diagnostics.Select(diagnostic => $"{diagnostic.Tool} {diagnostic.Severity} {diagnostic.Code ?? "-"} {diagnostic.File ?? "-"}:{diagnostic.Line}:{diagnostic.Column} {diagnostic.Project ?? "-"} {diagnostic.Stack.Count}");
+
+        Assert.Equal(
+            [
+                @"clang error - D:\a\app\src\main.cpp:7:5 - 0",
+                @"clang error - D:\a\app\src\store.cpp:8:18 - 1",
+                @"clang warning -Wunused-variable D:\a\app\src\warn.cpp:3:9 - 0",
+                "link error LNK2019 -:: main.cpp.obj 0",
+            ],
+            Said(Digested(lines, PhaseParsers.ForBuild(config, "cmake", "clang-cl"))!));
+        Assert.Equal(
+            [
+                @"cc error - D:\a\app\src\main.cpp:7:5 - 0",
+                @"cc error - D:\a\app\src\store.cpp:8:18 - 1",
+                @"cc warning -Wunused-variable D:\a\app\src\warn.cpp:3:9 - 0",
+                "link error LNK2019 -:: main.cpp.obj 0",
+            ],
+            Said(Digested(lines, PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!));
+    }
+
+    /// <summary>
+    /// GNU ld's reference is read wherever it is placed: by its line where the object holds line information - with its
+    /// section after it, or with none as older binutils printed it - behind the object where ld names it first, and behind
+    /// a linker named by a drive's path; every reference is said, the first under its function's line included, and the
+    /// line that only says the link failed is taken with them.
+    /// </summary>
+    [Fact]
+    public void ALinkersReference_IsReadByItsLine_BehindItsObject_AndBehindADrivesLinker()
+    {
+        var digest = Digested(
+            [
+                "/usr/bin/ld: /tmp/cc.o: in function `main':",
+                "/home/u/app/link.c:4: undefined reference to `parse_record'",
+                "/usr/bin/ld: /home/u/app/link.c:5: undefined reference to `load_store'",
+                "collect2: error: ld returned 1 exit status",
+                "C:/msys64/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: CMakeFiles/app.dir/main.c.obj:main.c:(.text+0x15): undefined reference to `parse_record'",
+                "C:/msys64/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w64-mingw32/bin/ld.exe: C:/a/app/main.c:9:(.text+0x20): undefined reference to `load_store'",
+                "collect2.exe: error: ld returned 1 exit status",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig { Toolchains = { ["gcc"] = new ToolchainConfig { CompilerId = { ["C"] = "GNU" } } } }, "cmake", "gcc"))!;
+
+        Assert.Equal(
+            [
+                ("undefined reference to `parse_record'", "/home/u/app/link.c", (int?)4, (1, 2)),
+                ("undefined reference to `load_store'", "/home/u/app/link.c", 5, (3, 3)),
+                ("undefined reference to `parse_record'", "main.c", null, (5, 5)),
+                ("undefined reference to `load_store'", "C:/a/app/main.c", 9, (6, 6)),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Message, diagnostic.File!, diagnostic.Line, diagnostic.Log!.Value)));
+        Assert.Equal(4, digest.Errors);
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A CMake error says the command that raised it ahead of the message CMake printed under it - never as its project,
+    /// which is the project or target a build names - while a head with no message under it is its own message, the
+    /// command in it already, and one CMake names no command for says its message alone.
+    /// </summary>
+    [Fact]
+    public void ACMakeError_SaysItsCommandAheadOfItsMessage_AndNamesNoProject()
+    {
+        var digest = Digested(
+            [
+                "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
+                "  add_subdirectory given source \"lib/missing\" which is not an existing",
+                "  directory.",
+                string.Empty,
+                string.Empty,
+                "CMake Error in src/CMakeLists.txt:",
+                "  No SOURCES given to target: store",
+                string.Empty,
+                string.Empty,
+                "CMake Error at CMakeLists.txt:9 (find_package):",
+                "-- Configuring incomplete, errors occurred!",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [
+                ("CMakeLists.txt", (int?)3, (string?)null, "add_subdirectory: add_subdirectory given source \"lib/missing\" which is not an existing directory."),
+                ("src/CMakeLists.txt", null, null, "No SOURCES given to target: store"),
+                ("CMakeLists.txt", 9, null, "CMake Error at CMakeLists.txt:9 (find_package):"),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.File!, diagnostic.Line, diagnostic.Project, diagnostic.Message)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A compiler's chain is handed whole, however deep: the digest is the one owner of a stack's bound, so a parser
+    /// never cuts one of its own.
+    /// </summary>
+    [Fact]
+    public void ACompilersChain_IsHandedWhole_HoweverDeep()
+    {
+        var lines = Enumerable.Range(1, 70).Select(at => at == 1 ? $"In file included from include/h{at}.h:1," : $"                 from include/h{at}.h:1,")
+            .Append("src/main.c:3:5: error: 'x' undeclared");
+
+        var unparsed = new List<NumberedLine>();
+        var found = PhaseParsers.FindingsOf(lines.Select((line, at) => new NumberedLine(at + 1, at + 1, line)), [ResultParsers.Of("gcc")!], unparsed.Add, () => null)!;
+        var stack = Assert.Single(found.Diagnostics).Stack!;
+
+        Assert.Empty(unparsed);
+
+        Assert.Equal((70, "include/h1.h", "include/h70.h"), (stack.Count, stack[0].File, stack[^1].File));
+    }
+
+    /// <summary>
+    /// GoogleTest's failure is read wherever its place is printed in the form the compiler it was built with uses - MSVC's
+    /// <c>file(line): error:</c> among them - its message the lines under it, and its summary's list said once.
+    /// </summary>
+    [Fact]
+    public void AGoogleTestFailure_IsReadInMsvcsForm_AndItsSummarySaysItOnce()
+    {
+        var digest = Digested(
+            [
+                "[ RUN      ] StoreTest.LoadsItsRecords",
+                @"D:\a\app\app\tests\store_test.cpp(42): error: Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: 2",
+                "  3",
+                "[  FAILED  ] StoreTest.LoadsItsRecords (0 ms)",
+                "[==========] 1 test from 1 test suite ran. (0 ms total)",
+                "[  PASSED  ] 0 tests.",
+                "[  FAILED  ] 1 test, listed below:",
+                "[  FAILED  ] StoreTest.LoadsItsRecords",
+                string.Empty,
+                " 1 FAILED TEST",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests.exe", null))!;
+
+        var failure = Assert.Single(digest.Failures);
+
+        Assert.Equal(
+            ("gtest", "StoreTest.LoadsItsRecords", "failed", @"D:\a\app\app\tests\store_test.cpp", 42, "Expected equality of these values:\n  store.Count()\n    Which is: 2\n  3"),
+            (failure.Framework, failure.Id, failure.Outcome, failure.File!, failure.Line!.Value, failure.Message));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// CTest says a failed test only where nothing printed under its status line said why: a test whose GoogleTest output
+    /// names its failure is said by that, and one that printed nothing by CTest's own line.
+    /// </summary>
+    [Fact]
+    public void CTestSaysAFailedTest_OnlyWhereItsOwnOutputSaidNothing()
+    {
+        var digest = Digested(
+            [
+                "    Start 1: store_tests",
+                "1/2 Test #1: store_tests ......................***Failed    0.01 sec",
+                "[==========] Running 1 test from 1 test suite.",
+                "[ RUN      ] StoreTest.LoadsItsRecords",
+                "/home/runner/work/app/app/tests/store_test.cpp:42: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: 2",
+                "  3",
+                "[  FAILED  ] StoreTest.LoadsItsRecords (0 ms)",
+                "    Start 2: parse_tests",
+                "2/2 Test #2: parse_tests ......................***Failed    0.00 sec",
+                string.Empty,
+                "0% tests passed, 2 tests failed out of 2",
+                string.Empty,
+                "Total Test time (real) =   0.02 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - store_tests (Failed)",
+                "\t  2 - parse_tests (Failed)",
+                "Errors while running CTest",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "ctest", null))!;
+
+        Assert.Equal(
+            [("gtest", "StoreTest.LoadsItsRecords", (4, 10)), ("ctest", "parse_tests", (12, 13))],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Log!.Value)));
+        Assert.Empty(digest.Diagnostics);
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A test binary that crashed under CTest after GoogleTest placed a failure is said once, as GoogleTest's test that
+    /// crashed - its message the lines under its place, ended by CTest's next line, never CTest's lines after it.
+    /// </summary>
+    [Fact]
+    public void ATestBinaryThatCrashedUnderCTest_IsSaidOnce_ByTheTestThatCrashed()
+    {
+        var digest = Digested(
+            [
+                "    Start 1: store_tests",
+                "1/2 Test #1: store_tests ......................***Exception: SegFault  0.01 sec",
+                "[==========] Running 1 test from 1 test suite.",
+                "[ RUN      ] StoreTest.LoadsItsRecords",
+                "/home/runner/work/app/app/tests/store_test.cpp:42: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: 2",
+                "  3",
+                "    Start 2: parse_tests",
+                "2/2 Test #2: parse_tests ......................   Passed    0.00 sec",
+                string.Empty,
+                "50% tests passed, 1 tests failed out of 2",
+                string.Empty,
+                "Total Test time (real) =   0.02 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - store_tests (SEGFAULT)",
+                "Errors while running CTest",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "ctest", null))!;
+
+        var failure = Assert.Single(digest.Failures);
+
+        Assert.Equal(
+            ("gtest", "StoreTest.LoadsItsRecords", "crashed", (4, 9), "Expected equality of these values:\n  store.Count()\n    Which is: 2\n  3"),
+            (failure.Framework, failure.Id, failure.Outcome, failure.Log!.Value, failure.Message));
+        Assert.Empty(digest.Diagnostics);
+    }
+
+    /// <summary>
+    /// A test binary that crashed under CTest before GoogleTest placed anything is said once, as GoogleTest's test that
+    /// crashed, whichever reading read the log's last line: every reading ends after the ones chosen after it, so CTest
+    /// ends knowing what GoogleTest said at the end.
+    /// </summary>
+    [Fact]
+    public void ATestBinaryThatCrashedUnplaced_IsSaidOnce_WhicheverReadingReadTheLastLine()
+    {
+        var digest = Digested(
+            [
+                "    Start 1: store_tests",
+                "1/1 Test #1: store_tests ......................***Exception: SegFault  0.01 sec",
+                "[==========] Running 1 test from 1 test suite.",
+                "[ RUN      ] StoreTest.LoadsItsRecords",
+                "loading the store",
+                string.Empty,
+                "0% tests passed, 1 tests failed out of 1",
+                string.Empty,
+                "Total Test time (real) =   0.01 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - store_tests (SEGFAULT)",
+                "Errors while running CTest",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "ctest", null))!;
+
+        Assert.Equal(
+            [("gtest", "StoreTest.LoadsItsRecords", "crashed", (4, 4))],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Log!.Value)));
+        Assert.Empty(digest.Diagnostics);
+    }
+
+    /// <summary>
+    /// A JVM frame names only its source file's base name, which names no path - a library's frame names one as well - so
+    /// it names no file: its line and its symbol are what it says, and no frame of it is ever read as the tree's.
+    /// </summary>
+    [Fact]
+    public void AJvmFrame_NamesNoFile_ItsLineAndSymbolKept()
+    {
+        var digest = Digested(
+            [
+                "Exception in thread \"main\" java.lang.IllegalStateException: no runner",
+                "\tat com.example.Runner.start(Runner.java:42)",
+                "\tat java.base/java.lang.Thread.run(Thread.java:1583)",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        Assert.Equal(
+            [((string?)null, (int?)42, "com.example.Runner.start"), (null, 1583, "java.lang.Thread.run")],
+            Assert.Single(digest.Failures).Exception!.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
+    }
+
+    /// <summary>
+    /// <c>go test</c> names a package by its import path only after its output, on its result line, and a test's place it
+    /// logged is relative to that package's directory: each failure read before the line is said with it, naming the
+    /// package as its class, its place as Go printed it - and one no result line followed is said with no class.
+    /// </summary>
+    [Fact]
+    public void AGoTestsFailure_NamesThePackageItsResultLineNames_AsItsClass()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "--- FAIL: TestParse (0.01s)",
+                "    parse_test.go:9: Parse(\"\") returned no error",
+                "FAIL",
+                "FAIL\texample.com/app/parse\t0.002s",
+                "--- FAIL: TestCut (0.00s)",
+                "    cut_test.go:3: cut short",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "store_test.go", 14, (1, 2)),
+                ("TestParse", "example.com/app/parse", "parse_test.go", 9, (5, 6)),
+                ("TestCut", null, "cut_test.go", 3, (9, 10)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.File!, failure.Line!.Value, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A crash a report says ended the program inside a test a runner said began is that test's failure, said once: a GoogleTest test that
+    /// crashed under AddressSanitizer is the test's own crash - the report's words its message, its first stack the
+    /// failure's - and one the C runtime's failed assertion killed is the test's own too, the assertion's words its
+    /// message and its place the failure's, never a second failure the runner says beside them. The lines are each
+    /// tool's own output, a test binary run directly as a leg runs it.
+    /// </summary>
+    [Fact]
+    public void ACrashAReportSaysInsideATestABegan_IsThatTestsFailure_SaidOnce()
+    {
+        var asan = Digested(AsanDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+
+        var crashed = Assert.Single(asan.Failures);
+
+        Assert.Equal(("gtest", "StoreTest.Loads", "crashed"), (crashed.Framework, crashed.Id, crashed.Outcome));
+        Assert.Equal("AddressSanitizer: heap-buffer-overflow on address 0x502000000258 at pc 0x58ddc2a1101e bp 0x7fff5a29c580 sp 0x7fff5a29c570", crashed.Message);
+        Assert.Equal(("AddressSanitizer", 12), (crashed.Exception!.Type, crashed.Exception.Stack.Count));
+        Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 7), (crashed.Exception.Stack[0].File, crashed.Exception.Stack[0].Line));
+        Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 22), (crashed.Exception.Stack[1].File, crashed.Exception.Stack[1].Line));
+        Assert.Empty(asan.Unparsed ?? []);
+
+        var assertion = Digested(AssertDirectRun, PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+
+        var killed = Assert.Single(assertion.Failures);
+
+        Assert.Equal(("gtest", "StoreTest.Loads", "crashed"), (killed.Framework, killed.Id, killed.Outcome));
+        Assert.Equal("virtual void StoreTest_Loads_Test::TestBody(): Assertion `count == 2' failed.", killed.Message);
+        Assert.Equal(("/home/runner/work/app/app/tests/store_test.cc", 18), (killed.File, killed.Line));
+        Assert.Empty(assertion.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A sanitizer's report a test's program recovered from and ran on is the report's own, its message naming the test it
+    /// ran in, and the test is said by its runner as it ended: one GoogleTest says failed is said once, as that failure,
+    /// and one it says passed is in no failure. The lines are each tool's own form - GoogleTest's console as a test binary
+    /// run directly prints it, UndefinedBehaviorSanitizer's runtime error as g++ 13's recovering UBSan prints it.
+    /// </summary>
+    [Fact]
+    public void ASanitizersReportATestRanOn_IsTheReportsOwn_AndTheTestIsSaidByItsRunner()
+    {
+        const string Overflow = "signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'";
+
+        var digest = Digested(
+            [
+                "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+                "[==========] Running 2 tests from 1 test suite.",
+                "[----------] Global test environment set-up.",
+                "[----------] 2 tests from StoreTest",
+                "[ RUN      ] StoreTest.Loads",
+                $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}",
+                "/home/runner/work/app/app/tests/store_test.cc:14: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: -2147483648",
+                "  2",
+                "[  FAILED  ] StoreTest.Loads (0 ms)",
+                "[ RUN      ] StoreTest.Counts",
+                $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}",
+                "[       OK ] StoreTest.Counts (0 ms)",
+                "[----------] 2 tests from StoreTest (0 ms total)",
+                string.Empty,
+                "[----------] Global test environment tear-down",
+                "[==========] 2 tests from 1 test suite ran. (0 ms total)",
+                "[  PASSED  ] 1 test.",
+                "[  FAILED  ] 1 test, listed below:",
+                "[  FAILED  ] StoreTest.Loads",
+                string.Empty,
+                " 1 FAILED TEST",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null))!;
+
+        Assert.Equal(
+            [
+                ("gtest", "StoreTest.Loads", "failed", "Expected equality of these values:\n  store.Count()\n    Which is: -2147483648\n  2", (5, 12)),
+                ("sanitizer", $"UndefinedBehaviorSanitizer: {Overflow}", "errored", $"{Overflow} (while the test StoreTest.Loads ran)", (6, 6)),
+                ("sanitizer", $"UndefinedBehaviorSanitizer: {Overflow}", "errored", $"{Overflow} (while the test StoreTest.Counts ran)", (14, 14)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message!, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A test its program died in is one failure: a sanitizer that halts the program printing no line to halt with -
+    /// UBSan built not to recover, ThreadSanitizer told to halt on its first report - reads its report <c>errored</c>, and
+    /// where GoogleTest never says the test it ran in ended, run directly or under CTest, whose next test's line follows
+    /// it, that report becomes the test's crash: named for the test, the report's words its message, its place and log
+    /// range the report's - never the report's own record beside a bare crash of the test. The reports are g++ 13's UBSan
+    /// and clang 19's ThreadSanitizer, the run's directory written as a runner's; GoogleTest's and CTest's lines are their
+    /// consoles', as each prints them.
+    /// </summary>
+    [Fact]
+    public void ATestItsProgramDiedIn_IsOneFailure_TheReportSaidWhileItRanItsCrash()
+    {
+        const string Overflow = "signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'";
+        string[] gtest =
+        [
+            "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+            "[==========] Running 2 tests from 1 test suite.",
+            "[----------] Global test environment set-up.",
+            "[----------] 2 tests from StoreTest",
+            "[ RUN      ] StoreTest.KeepsItsBounds",
+            "[       OK ] StoreTest.KeepsItsBounds (0 ms)",
+            "[ RUN      ] StoreTest.Loads",
+        ];
+
+        var direct = Digested(
+            [.. gtest, $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}"],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null),
+            1)!;
+
+        var underCTest = Digested(
+            [
+                "Test project /home/runner/work/app/app/build",
+                "    Start 1: store_tests",
+                "1/2 Test #1: store_tests ......................***Failed    0.01 sec",
+                .. gtest,
+                $"/home/runner/work/app/app/src/store.cc:5:18: runtime error: {Overflow}",
+                "    Start 2: parse_tests",
+                "2/2 Test #2: parse_tests ......................   Passed    0.00 sec",
+                string.Empty,
+                "50% tests passed, 1 tests failed out of 2",
+                string.Empty,
+                "Total Test time (real) =   0.03 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - store_tests (Failed)",
+                "Errors while running CTest",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "ctest", null),
+            8)!;
+
+        var threads = Digested(
+            [
+                .. gtest[..6],
+                "[ RUN      ] StoreTest.Shares",
+                "==================",
+                "WARNING: ThreadSanitizer: data race (pid=406)",
+                "  Write of size 4 at 0x5555569e6698 by main thread:",
+                "    #0 main /home/runner/work/app/app/race.c:8:9 (race+0xe64f6) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Previous write of size 4 at 0x5555569e6698 by thread T1:",
+                "    #0 work /home/runner/work/app/app/race.c:4:31 (race+0xe6484) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Location is global 'shared' of size 4 at 0x5555569e6698 (race+0x1492698)",
+                string.Empty,
+                "  Thread T1 (tid=408, finished) created by main thread at:",
+                "    #0 pthread_create <null> (race+0x62c75) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                "    #1 main /home/runner/work/app/app/race.c:7:3 (race+0xe64de) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "SUMMARY: ThreadSanitizer: data race /home/runner/work/app/app/race.c:8:9 in main",
+                "==================",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null),
+            66)!;
+
+        Assert.Equal(
+            [
+                [("gtest", "StoreTest.Loads", "crashed", (string?)$"UndefinedBehaviorSanitizer: {Overflow}", (8, 8))],
+                [("gtest", "StoreTest.Loads", "crashed", $"UndefinedBehaviorSanitizer: {Overflow}", (11, 11))],
+                [("gtest", "StoreTest.Shares", "crashed", "ThreadSanitizer: data race (pid=406)", (9, 22))],
+            ],
+            new[] { direct, underCTest, threads }.Select(digest => digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message, failure.Log!.Value)).ToList()));
+        Assert.Equal(("/home/runner/work/app/app/src/store.cc", 5), (direct.Failures[0].File!, direct.Failures[0].Line!.Value));
+        Assert.Equal((0, 0, 1), (direct.Failed, direct.Errored, direct.Crashed));
+    }
+
+    /// <summary>
+    /// A GoogleTest binary's own output, run directly under AddressSanitizer (g++ 13, GoogleTest by CMake's
+    /// FetchContent): its two stacks, its <c>SUMMARY:</c> and its <c>ABORTING</c>. The gtest-asan fixture holds the whole
+    /// report, shadow bytes and legend included.
+    /// </summary>
+    private static readonly string[] AsanDirectRun =
+    [
+        "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+        "[==========] Running 2 tests from 1 test suite.",
+        "[----------] Global test environment set-up.",
+        "[----------] 2 tests from StoreTest",
+        "[ RUN      ] StoreTest.KeepsItsBounds",
+        "[       OK ] StoreTest.KeepsItsBounds (0 ms)",
+        "[ RUN      ] StoreTest.Loads",
+        "=================================================================",
+        "==473==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x502000000258 at pc 0x58ddc2a1101e bp 0x7fff5a29c580 sp 0x7fff5a29c570",
+        "READ of size 4 at 0x502000000258 thread T0",
+        "    #0 0x58ddc2a1101d in store::read(std::vector<int, std::allocator<int> > const&, int) /home/runner/work/app/app/tests/store_test.cc:7",
+        "    #1 0x58ddc2a11897 in StoreTest_Loads_Test::TestBody() /home/runner/work/app/app/tests/store_test.cc:22",
+        "    #2 0x58ddc2a52740 in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/runner/work/app/app/build/store_tests+0x51740) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #3 0x58ddc2a407d9 in testing::Test::Run() [clone .part.0] (/home/runner/work/app/app/build/store_tests+0x3f7d9) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #4 0x58ddc2a40ba9 in testing::TestInfo::Run() (/home/runner/work/app/app/build/store_tests+0x3fba9) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #5 0x58ddc2a410e8 in testing::TestSuite::Run() [clone .part.0] (/home/runner/work/app/app/build/store_tests+0x400e8) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #6 0x58ddc2a48c1e in testing::internal::UnitTestImpl::RunAllTests() (/home/runner/work/app/app/build/store_tests+0x47c1e) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #7 0x58ddc2a4127b in testing::UnitTest::Run() (/home/runner/work/app/app/build/store_tests+0x4027b) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #8 0x58ddc2a10b63 in main (/home/runner/work/app/app/build/store_tests+0xfb63) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        "    #9 0x75b886e2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58",
+        "    #10 0x75b886e2a28a in __libc_start_main_impl ../csu/libc-start.c:360",
+        "    #11 0x58ddc2a10ef4 in _start (/home/runner/work/app/app/build/store_tests+0xfef4) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        string.Empty,
+        "0x502000000258 is located 0 bytes after 8-byte region [0x502000000250,0x502000000258)",
+        "allocated by thread T0 here:",
+        "    #0 0x75b8876fe548 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:95",
+        "    #1 0x58ddc2a14c93 in std::__new_allocator<int>::allocate(unsigned long, void const*) /usr/include/c++/13/bits/new_allocator.h:151",
+        "    #2 0x58ddc2a143a0 in std::allocator_traits<std::allocator<int> >::allocate(std::allocator<int>&, unsigned long) /usr/include/c++/13/bits/alloc_traits.h:482",
+        "    #3 0x58ddc2a143a0 in std::_Vector_base<int, std::allocator<int> >::_M_allocate(unsigned long) /usr/include/c++/13/bits/stl_vector.h:381",
+        "    #4 0x58ddc2a13d7d in void std::vector<int, std::allocator<int> >::_M_range_initialize<int const*>(int const*, int const*, std::forward_iterator_tag) /usr/include/c++/13/bits/stl_vector.h:1692",
+        "    #5 0x58ddc2a132f2 in std::vector<int, std::allocator<int> >::vector(std::initializer_list<int>, std::allocator<int> const&) /usr/include/c++/13/bits/stl_vector.h:682",
+        "    #6 0x58ddc2a117ca in StoreTest_Loads_Test::TestBody() /home/runner/work/app/app/tests/store_test.cc:20",
+        "    #7 0x58ddc2a52740 in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/runner/work/app/app/build/store_tests+0x51740) (BuildId: eea6837c3cec38f7a4b00e06ddc4e6244ad60bae)",
+        string.Empty,
+        "SUMMARY: AddressSanitizer: heap-buffer-overflow /home/runner/work/app/app/tests/store_test.cc:7 in store::read(std::vector<int, std::allocator<int> > const&, int)",
+        "==473==ABORTING",
+    ];
+
+    /// <summary>A GoogleTest binary's own output, run directly, its test killed by the C runtime's failed assertion (glibc, g++ 13).</summary>
+    private static readonly string[] AssertDirectRun =
+    [
+        "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+        "[==========] Running 2 tests from 1 test suite.",
+        "[----------] Global test environment set-up.",
+        "[----------] 2 tests from StoreTest",
+        "[ RUN      ] StoreTest.KeepsItsBounds",
+        "[       OK ] StoreTest.KeepsItsBounds (0 ms)",
+        "[ RUN      ] StoreTest.Loads",
+        "store_tests: /home/runner/work/app/app/tests/store_test.cc:18: virtual void StoreTest_Loads_Test::TestBody(): Assertion `count == 2' failed.",
+    ];
+
+    /// <summary>
+    /// <c>go test -v</c> streams each test's logged lines as it runs, under the <c>===</c> line that named it, and says none
+    /// of them again under its result line: the failure's message is what the test logged, read from the stream, its
+    /// place the first line that names one. In the form the test binary prints for <c>test2json</c>, a subtest's result
+    /// comes first, unindented, and its parent's after it, the parent's <c>=== NAME</c> line back: the subtest's failure is
+    /// its own, and the parent that logged nothing of its own is said by it; a passing test's streamed lines are no
+    /// failure's.
+    /// </summary>
+    [Fact]
+    public void AVerboseGoRun_SaysEachFailingTestByWhatItsStreamLogged()
+    {
+        var digest = Digested(
+            [
+                "=== RUN   TestStoreLoads",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "=== RUN   TestGroup",
+                "=== RUN   TestGroup/sub",
+                "=== PAUSE TestGroup/sub",
+                "=== CONT  TestGroup/sub",
+                "=== NAME  TestGroup/sub",
+                "    sub_test.go:10: inner failure",
+                "--- FAIL: TestGroup/sub (0.00s)",
+                "=== NAME  TestGroup",
+                "--- FAIL: TestGroup (0.00s)",
+                "=== RUN   TestPasses",
+                "=== NAME  TestPasses",
+                "    pass_test.go:4: a line the stream logged of a passing test",
+                "--- PASS: TestPasses (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.008s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "store_test.go", (int?)14, "store_test.go:14: Load(\"first\") = 3, want 4"),
+                ("TestGroup/sub", "example.com/app/store", "sub_test.go", 10, "sub_test.go:10: inner failure"),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.File, failure.Line, failure.Message)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// Plain <c>go test -v</c> prints a parent's result first and its subtests' nested under it, indented: a nested
+    /// <c>--- PASS</c> or <c>--- SKIP</c> ends that subtest and is no line its parent logged, and a nested
+    /// <c>--- FAIL</c> is the subtest's failure, its message what its stream logged - the parent said by it where the
+    /// parent logged nothing of its own, whatever passed before it, and said as well, with its own lines, where it did.
+    /// </summary>
+    [Fact]
+    public void PlainVerboseGo_NestsSubtestsResultsUnderTheirParents_NoneALoggedLine()
+    {
+        var digest = Digested(
+            [
+                "=== RUN   TestAdd",
+                "=== RUN   TestAdd/one",
+                "=== RUN   TestAdd/two",
+                "    add_test.go:12: got 3, want 4",
+                "--- FAIL: TestAdd (0.00s)",
+                "    --- PASS: TestAdd/one (0.00s)",
+                "    --- FAIL: TestAdd/two (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/add\t0.002s",
+                "=== RUN   TestSave",
+                "    save_test.go:5: the store is read only",
+                "=== RUN   TestSave/skipped",
+                "    save_test.go:9: not on this system",
+                "=== RUN   TestSave/first",
+                "    save_test.go:14: Save(\"first\") failed",
+                "--- FAIL: TestSave (0.00s)",
+                "    --- SKIP: TestSave/skipped (0.00s)",
+                "    --- FAIL: TestSave/first (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/save\t0.003s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestAdd/two", (string?)"example.com/add", "add_test.go:12: got 3, want 4", (4, 7)),
+                ("TestSave", "example.com/save", "save_test.go:5: the store is read only", (11, 17)),
+                ("TestSave/first", "example.com/save", "save_test.go:14: Save(\"first\") failed", (15, 18)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.Message, failure.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// Run without <c>-v</c>, <c>go test</c> prints a failed subtest's block under its parent's result line and a line the
+    /// parent logged after the subtest ran under that block, at the parent's own indent - its testing package writes a
+    /// parent's lines and its subtests' reports into one buffer as each comes. The failed tests open at once are held by
+    /// their indent, so that line is the parent's own: the parent, decided at its own end, is said with it beside its
+    /// subtest, and a parent that logged nothing of its own by its end is said by its subtest.
+    /// </summary>
+    [Fact]
+    public void AGoParentsOwnLineAfterItsSubtestsBlock_IsItsOwn_EachTestDecidedAtItsEnd()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestStore (0.00s)",
+                "    --- FAIL: TestStore/load (0.00s)",
+                "        store_test.go:2: load failed",
+                "    store_test.go:3: count = 1, want 2",
+                "--- FAIL: TestQuiet (0.00s)",
+                "    --- FAIL: TestQuiet/one (0.00s)",
+                "        quiet_test.go:7: one failed",
+                "FAIL",
+                "FAIL\texample.com/app\t0.002s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStore", (string?)"store_test.go:3: count = 1, want 2", (string?)"store_test.go", (int?)3, (1, 4)),
+                ("TestStore/load", "store_test.go:2: load failed", "store_test.go", 2, (2, 3)),
+                ("TestQuiet/one", "quiet_test.go:7: one failed", "quiet_test.go", 7, (6, 7)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
+        Assert.All(digest.Failures, failure => Assert.Equal("example.com/app", failure.Class));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A line of whitespace alone inside a test's block is the open test's line: run without <c>-v</c>, Go prints every line
+    /// of a test's message after its first indented, a message's empty line as that indent alone - testify's empty line
+    /// before its diff as the indent, a tab, its label's width in spaces and a tab - and a subtest's block four spaces
+    /// further in, so the test reads on through its diff and its second assertion, and a parent's own line after its
+    /// subtest's message held an empty line is still the parent's. The lines are written as Go's testing package prints
+    /// them (its <c>decorate</c> and the indent it gives a subtest's block) and testify's <c>labeledOutput</c> with them;
+    /// no Go toolchain ran here.
+    /// </summary>
+    [Fact]
+    public void AWhitespaceLineInsideAGoTestsBlock_IsTheOpenTestsLine()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestStore (0.00s)",
+                "    store_test.go:12: ",
+                "        \tError Trace:\t/home/runner/work/app/app/store_test.go:12",
+                "        \tError:      \tNot equal: ",
+                "        \t            \texpected: []int{1, 2}",
+                "        \t            \tactual  : []int{1, 3}",
+                "        \t            \t",
+                "        \t            \tDiff:",
+                "        \t            \t--- Expected",
+                "        \t            \t+++ Actual",
+                "        \t            \t@@ -1,4 +1,4 @@",
+                "        \t            \t ([]int) (len=2) {",
+                "        \t            \t  (int) 1,",
+                "        \t            \t- (int) 2",
+                "        \t            \t+ (int) 3",
+                "        \t            \t }",
+                "        \tTest:       \tTestStore",
+                "    store_test.go:20: count = 1, want 2",
+                "        ",
+                "        the store held: [1]",
+                "--- FAIL: TestLoad (0.00s)",
+                "    --- FAIL: TestLoad/first (0.00s)",
+                "        load_test.go:7: first record",
+                "            ",
+                "            not found",
+                "    load_test.go:9: the parent's own line",
+                "FAIL",
+                "FAIL\texample.com/app\t0.003s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStore", (string?)"store_test.go:12:", (string?)"store_test.go", (int?)12, (1, 20)),
+                ("TestLoad", "load_test.go:9: the parent's own line", "load_test.go", 9, (21, 26)),
+                ("TestLoad/first", "load_test.go:7: first record", "load_test.go", 7, (22, 25)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
+        Assert.All(digest.Failures, failure => Assert.Equal("example.com/app", failure.Class));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// What a test streamed is held only while it runs, never past its end: a subtest's lines are dropped at its nested
+    /// result line - so a run of each test twice (<c>-count=2</c>) says the failing second run by its own lines alone, not
+    /// the first run's - and every test's at its package's result line, so a package whose binary was killed before its
+    /// test said its result leaves nothing to a test of the same name in the next package.
+    /// </summary>
+    [Fact]
+    public void AGoTestsStreamedLines_AreHeldOnlyWhileItRuns()
+    {
+        var counted = Digested(
+            [
+                "=== RUN   TestShared",
+                "=== RUN   TestShared/a",
+                "    shared_test.go:3: first run, attempt passed",
+                "--- PASS: TestShared (0.00s)",
+                "    --- PASS: TestShared/a (0.00s)",
+                "=== RUN   TestShared",
+                "=== RUN   TestShared/a",
+                "    shared_test.go:5: second run, attempt failed",
+                "--- FAIL: TestShared (0.00s)",
+                "    --- FAIL: TestShared/a (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/app/shared\t0.004s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [("TestShared/a", (string?)"shared_test.go:5: second run, attempt failed")],
+            counted.Failures.Select(failure => (failure.Id, failure.Message)));
+
+        var killed = Digested(
+            [
+                "=== RUN   TestLoad",
+                "    load_test.go:5: loading the first record",
+                "signal: killed",
+                "FAIL\texample.com/app/load\t0.512s",
+                "=== RUN   TestLoad",
+                "    save_test.go:9: the store was not saved",
+                "--- FAIL: TestLoad (0.00s)",
+                "FAIL",
+                "FAIL\texample.com/app/save\t0.003s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [("TestLoad", (string?)"example.com/app/save", (string?)"save_test.go:9: the store was not saved")],
+            killed.Failures.Select(failure => (failure.Id, failure.Class, failure.Message)));
+    }
+
+    /// <summary>
+    /// A Go test's failure is the first line it logged that names its place - its message and its place - and its log
+    /// range runs over every line it logged, so each is one read away and none is held as text: a test run without
+    /// <c>-v</c> that logged a line more than once - a retry's same <c>t.Errorf</c> twice, two lines in turn twice over -
+    /// has every one of them in its range, none taken for a copy of another, for Go says a test's lines once.
+    /// </summary>
+    [Fact]
+    public void AGoTestsFailure_IsItsFirstLineThatNamesItsPlace_EveryLineItLoggedInItsRange()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestRetries (0.02s)",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "--- FAIL: TestAlternates (0.00s)",
+                "    alt_test.go:4: A",
+                "    alt_test.go:5: B",
+                "    alt_test.go:4: A",
+                "    alt_test.go:5: B",
+                "FAIL",
+                "FAIL\texample.com/app/retry\t0.021s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestRetries", (string?)"retry_test.go:9: attempt failed: connection refused", "retry_test.go", (int?)9, (1, 3)),
+                ("TestAlternates", "alt_test.go:4: A", "alt_test.go", 4, (4, 8)),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
+
+        // Run with -v, the same lines are streamed under the test's === line before its result line.
+        var streamed = Digested(
+            [
+                "=== RUN   TestRetries",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "    retry_test.go:9: attempt failed: connection refused",
+                "--- FAIL: TestRetries (0.02s)",
+                "FAIL",
+                "FAIL\texample.com/app/retry\t0.021s",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [("TestRetries", (string?)"retry_test.go:9: attempt failed: connection refused", "retry_test.go", (int?)9, (2, 4))],
+            streamed.Failures.Select(failure => (failure.Id, failure.Message, failure.File, failure.Line, failure.Log!.Value)));
+    }
+
+    /// <summary>
+    /// Every package that did not build is said by its own block, wherever Go prints it: <c>go test ./...</c> prints each
+    /// block as its compile fails, out of the packages' order, and their <c>FAIL pkg [build failed]</c> lines later, in it
+    /// - another package's results among them - so each head is read whenever it comes, each compiler's line is a
+    /// diagnostic of the package whose head was the last, and a package's <c>[build failed]</c> is said only where its own
+    /// block said nothing, never where its block said why however much was printed between.
+    /// </summary>
+    [Fact]
+    public void GoPackagesThatDidNotBuild_AreEachSaidByTheirOwnBlock_WhereverGoPrintsIt()
+    {
+        var digest = Digested(
+            [
+                "# example.com/app/sum",
+                "sum/sum.go:3:9: undefined: x",
+                "# example.com/app/tools",
+                "tools/tools.go:4:2: undefined: y",
+                "# example.com/app/vendored",
+                "no required module provides package example.com/other; to add it:",
+                "\tgo get example.com/other",
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "FAIL\texample.com/app/sum [build failed]",
+                "FAIL\texample.com/app/tools [build failed]",
+                "FAIL\texample.com/app/vendored [build failed]",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("undefined: x", "sum/sum.go", "example.com/app/sum", (1, 2)),
+                ("undefined: y", "tools/tools.go", "example.com/app/tools", (3, 4)),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Message, diagnostic.File!, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "failed"),
+                ("example.com/app/vendored", null, "errored"),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.Outcome)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A Go package that did not build is said by its own block, never silenced by another package's failing test: the
+    /// <c># pkg</c> line Go prints ahead of its compiler's words holds for the line under it, and a compiler's line
+    /// under it is a diagnostic of that package, its project the package's import path, so the digest says the failing
+    /// test and the package's compiler error both; where the block said nothing - a missing dependency's words, which
+    /// name no file - the <c>FAIL pkg [build failed]</c> line is the failure that says it.
+    /// </summary>
+    [Fact]
+    public void AGoPackageThatDidNotBuild_IsSaidByItsOwnBlock_NeverSilencedByAnotherPackagesTest()
+    {
+        var digest = Digested(
+            [
+                "--- FAIL: TestStoreLoads (0.00s)",
+                "    store_test.go:14: Load(\"first\") = 3, want 4",
+                "FAIL",
+                "FAIL\texample.com/app/store\t0.004s",
+                "# example.com/app/sum [example.com/app/sum.test]",
+                "sum/sum.go:12:9: undefined: total",
+                "FAIL\texample.com/app/sum [build failed]",
+                "# example.com/app/tools [example.com/app/tools.test]",
+                "no required module provides package example.com/other; to add it:",
+                "\tgo get example.com/other",
+                "FAIL\texample.com/app/tools [build failed]",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "go", null))!;
+
+        Assert.Equal(
+            [
+                ("TestStoreLoads", (string?)"example.com/app/store", "failed"),
+                ("example.com/app/tools", null, "errored"),
+            ],
+            digest.Failures.Select(failure => (failure.Id, failure.Class, failure.Outcome)));
+        Assert.Equal("build failed", digest.Failures[1].Message);
+        Assert.Equal(
+            [("go", "error", "undefined: total", "sum/sum.go", 12, 9, "example.com/app/sum", (5, 6))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Severity, diagnostic.Message, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Column!.Value, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A sanitizer's report has crashed the program only where the sanitizer ended it - the line it halts with closed the
+    /// report, AddressSanitizer's <c>==pid==ABORTING</c>, MemorySanitizer's <c>Exiting</c>, the last line of its report
+    /// whether or not it was told to print its summary (the msan fixture holds its summary, from a program it halted and
+    /// one it let run on) - and errored it where the program ran on, as one recovers from UndefinedBehaviorSanitizer's
+    /// runtime error by default: the report still said, its place the line it named, never a crash the program did not
+    /// make. The lines are the tools' own output: g++ 13's UBSan recovering, and clang 19's MemorySanitizer halting a
+    /// program run with <c>print_summary=0</c>.
+    /// </summary>
+    [Fact]
+    public void ASanitizersReport_HasCrashedTheProgramOnlyWhereItAbortedIt()
+    {
+        var digest = Digested(
+            [
+                "ubsan.c:5:18: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'",
+                "next is -2147483648",
+                "==392==WARNING: MemorySanitizer: use-of-uninitialized-value",
+                "    #0 0x55555561ffe6 in pick /home/runner/work/app/app/umr.c:5:3",
+                "    #1 0x55555561fde9 in main /home/runner/work/app/app/umr.c:11:7",
+                "    #2 0x7ffff7c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7ffff7c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5555555862f4 in _start (/home/runner/work/app/app/umr+0x322f4) (BuildId: 8b79297ecb13ba3876f8c5850e6a6b9dfee7c518)",
+                string.Empty,
+                "Exiting",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()))!;
+
+        Assert.Equal(
+            [
+                ("sanitizer", "errored", "UndefinedBehaviorSanitizer: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'", (1, 1)),
+                ("sanitizer", "crashed", "MemorySanitizer: use-of-uninitialized-value", (3, 10)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Outcome, failure.Id, failure.Log!.Value)));
+        Assert.Equal(("ubsan.c", 5), (digest.Failures[0].File!, digest.Failures[0].Line!.Value));
+        Assert.Equal(5, digest.Failures[1].Exception!.Stack.Count);
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A sanitizer's report ends at the first line that is none of its own - its frames, its blank and indented lines, its
+    /// sentences between stacks, its shadow bytes - and that line is offered again to every other reading, so a report the
+    /// program ran on from, printed with no summary and no halt line, holds no line the program printed after it but a blank
+    /// or indented one: inside a
+    /// GoogleTest test, MemorySanitizer's report is its own and both failing tests are said by GoogleTest; AddressSanitizer's
+    /// and ThreadSanitizer's end at their last line, before the program's next. The reports are clang 19's own, its
+    /// runtimes told to recover and print no summary (<c>halt_on_error=0:print_summary=0</c>), the run's directory written as
+    /// a runner's; GoogleTest's lines are its console's, as a test binary run directly prints them.
+    /// </summary>
+    [Fact]
+    public void ASanitizersReport_EndsAtTheFirstLineNotItsOwn_HoldingNothingTheProgramPrintedAfterIt()
+    {
+        var memory = Digested(
+            [
+                "Running main() from /home/runner/work/app/app/build/_deps/googletest-src/googletest/src/gtest_main.cc",
+                "[==========] Running 2 tests from 1 test suite.",
+                "[----------] Global test environment set-up.",
+                "[----------] 2 tests from StoreTest",
+                "[ RUN      ] StoreTest.Loads",
+                "==397==WARNING: MemorySanitizer: use-of-uninitialized-value",
+                "    #0 0x555555620026 in pick /home/runner/work/app/app/umr.c:5:3",
+                "    #1 0x55555561fde9 in main /home/runner/work/app/app/umr.c:11:7",
+                "    #2 0x7ffff7c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7ffff7c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5555555862f4 in _start (/home/runner/work/app/app/umr-recover+0x322f4) (BuildId: ad434bb27eafd0dda709cef4d8f303935e6d388a)",
+                string.Empty,
+                "/home/runner/work/app/app/tests/store_test.cc:14: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: 3",
+                "  2",
+                "[  FAILED  ] StoreTest.Loads (0 ms)",
+                "[ RUN      ] StoreTest.Counts",
+                "/home/runner/work/app/app/tests/store_test.cc:22: Failure",
+                "Expected equality of these values:",
+                "  store.Count()",
+                "    Which is: 3",
+                "  2",
+                "[  FAILED  ] StoreTest.Counts (0 ms)",
+                "[----------] 2 tests from StoreTest (0 ms total)",
+                string.Empty,
+                "[----------] Global test environment tear-down",
+                "[==========] 2 tests from 1 test suite ran. (0 ms total)",
+                "[  PASSED  ] 0 tests.",
+                "[  FAILED  ] 2 tests, listed below:",
+                "[  FAILED  ] StoreTest.Loads",
+                "[  FAILED  ] StoreTest.Counts",
+                string.Empty,
+                " 2 FAILED TESTS",
+                "MemorySanitizer: 1 warnings reported.",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "store_tests", null),
+            1)!;
+
+        Assert.Equal(
+            [
+                ("gtest", "StoreTest.Loads", "failed", "Expected equality of these values:\n  store.Count()\n    Which is: 3\n  2", (5, 18)),
+                ("sanitizer", "MemorySanitizer: use-of-uninitialized-value", "errored", "use-of-uninitialized-value (while the test StoreTest.Loads ran)", (6, 12)),
+                ("gtest", "StoreTest.Counts", "failed", "Expected equality of these values:\n  store.Count()\n    Which is: 3\n  2", (19, 25)),
+            ],
+            memory.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Message!, failure.Log!.Value)));
+        Assert.Equal((2, 1, 0), (memory.Failed, memory.Errored, memory.Crashed));
+
+        var address = Digested(
+            [
+                "=================================================================",
+                "==400==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x502000000018 at pc 0x635ab0dc184c bp 0x7fff0b93d620 sp 0x7fff0b93d618",
+                "READ of size 4 at 0x502000000018 thread T0",
+                "    #0 0x635ab0dc184b in main /home/runner/work/app/app/oob.c:8:14",
+                "    #1 0x7db731e2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x7db731e2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x635ab0ce0344 in _start (/home/runner/work/app/app/oob-recover+0x2c344) (BuildId: d322ae48ef6432f596dad7560833cc9ab3db253a)",
+                string.Empty,
+                "0x502000000018 is located 0 bytes after 8-byte region [0x502000000010,0x502000000018)",
+                "allocated by thread T0 here:",
+                "    #0 0x635ab0d80173 in malloc (/home/runner/work/app/app/oob-recover+0xcc173) (BuildId: d322ae48ef6432f596dad7560833cc9ab3db253a)",
+                "    #1 0x635ab0dc1788 in main /home/runner/work/app/app/oob.c:5:17",
+                "    #2 0x7db731e2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7db731e2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x635ab0ce0344 in _start (/home/runner/work/app/app/oob-recover+0x2c344) (BuildId: d322ae48ef6432f596dad7560833cc9ab3db253a)",
+                string.Empty,
+                "Shadow bytes around the buggy address:",
+                "  0x501ffffffd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501ffffffe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501ffffffe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501fffffff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x501fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x502000000000: fa fa 00[fa]fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000080: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x502000000280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "Shadow byte legend (one shadow byte represents 8 application bytes):",
+                "  Addressable:           00",
+                "  Partially addressable: 01 02 03 04 05 06 07 ",
+                "  Heap left redzone:       fa",
+                "  Freed heap region:       fd",
+                "  Stack left redzone:      f1",
+                "  Stack mid redzone:       f2",
+                "  Stack right redzone:     f3",
+                "  Stack after return:      f5",
+                "  Stack use after scope:   f8",
+                "  Global redzone:          f9",
+                "  Global init order:       f6",
+                "  Poisoned by user:        f7",
+                "  Container overflow:      fc",
+                "  Array cookie:            ac",
+                "  Intra object redzone:    bb",
+                "  ASan internal:           fe",
+                "  Left alloca redzone:     ca",
+                "  Right alloca redzone:    cb",
+                "went on with 0",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            0)!;
+
+        var thread = Digested(
+            [
+                "==================",
+                "WARNING: ThreadSanitizer: data race (pid=413)",
+                "  Write of size 4 at 0x5555569e6698 by main thread:",
+                "    #0 main /home/runner/work/app/app/race.c:8:9 (race+0xe64f6) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Previous write of size 4 at 0x5555569e6698 by thread T1:",
+                "    #0 work /home/runner/work/app/app/race.c:4:31 (race+0xe6484) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "  Location is global 'shared' of size 4 at 0x5555569e6698 (race+0x1492698)",
+                string.Empty,
+                "  Thread T1 (tid=415, finished) created by main thread at:",
+                "    #0 pthread_create <null> (race+0x62c75) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                "    #1 main /home/runner/work/app/app/race.c:7:3 (race+0xe64de) (BuildId: fa7bcc695fc02990642821fa1b917c8be9083bdf)",
+                string.Empty,
+                "==================",
+                "ThreadSanitizer: reported 1 warnings",
+                "went on",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            66)!;
+
+        Assert.Equal(
+            [
+                ("AddressSanitizer: heap-buffer-overflow on address 0x502000000018 at pc 0x635ab0dc184c bp 0x7fff0b93d620 sp 0x7fff0b93d618", "errored", (2, 47)),
+                ("ThreadSanitizer: data race (pid=413)", "errored", (2, 14)),
+            ],
+            address.Failures.Concat(thread.Failures).Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)));
+        Assert.Empty(address.Unparsed ?? []);
+        Assert.Empty(thread.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// An AddressSanitizer's report runs over every line its runtime prints as its own to the line it halts with, and reads
+    /// <c>crashed</c> there: a heap report whose threads its program named (<c>freed by thread T2 (io-worker) here:</c>,
+    /// <c>previously allocated by thread T1 (io-reader) here:</c>, <c>Thread T2 (io-worker) created by T0 here:</c>),
+    /// container-overflow's hint and the line under it, an ODR violation's globals and where each was registered, never a
+    /// line of them ending the report as <c>errored</c> with its summary, shadow bytes and halt line left to no reading.
+    /// The reports are clang 19's own - the vector's annotations libstdc++'s, built with <c>_GLIBCXX_SANITIZE_VECTOR</c> -
+    /// each from a program a runner step ran, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void AnAddressSanitizersReport_RunsOverEveryLineItsRuntimePrints_ToTheLineItHaltsWith()
+    {
+        var named = Digested(
+            [
+                "=================================================================",
+                "==454==ERROR: AddressSanitizer: heap-use-after-free on address 0x503000001870 at pc 0x64c18f1a98c7 bp 0x7ffdf2005570 sp 0x7ffdf2005568",
+                "READ of size 4 at 0x503000001870 thread T0",
+                "    #0 0x64c18f1a98c6 in main /home/runner/work/app/app/named.c:28:23",
+                "    #1 0x719cdc02a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x719cdc02a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x64c18f0c8344 in _start (/home/runner/work/app/app/named+0x2c344) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                string.Empty,
+                "0x503000001870 is located 0 bytes inside of 32-byte region [0x503000001870,0x503000001890)",
+                "freed by thread T2 (io-worker) here:",
+                "    #0 0x64c18f167eda in free (/home/runner/work/app/app/named+0xcbeda) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a99ea in worker /home/runner/work/app/app/named.c:18:3",
+                "    #2 0x64c18f165aca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                string.Empty,
+                "previously allocated by thread T1 (io-reader) here:",
+                "    #0 0x64c18f168173 in malloc (/home/runner/work/app/app/named+0xcc173) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a9968 in reader /home/runner/work/app/app/named.c:11:12",
+                "    #2 0x64c18f165aca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                string.Empty,
+                "Thread T2 (io-worker) created by T0 here:",
+                "    #0 0x64c18f14d685 in pthread_create (/home/runner/work/app/app/named+0xb1685) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a987d in main /home/runner/work/app/app/named.c:26:3",
+                "    #2 0x719cdc02a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x719cdc02a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x64c18f0c8344 in _start (/home/runner/work/app/app/named+0x2c344) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                string.Empty,
+                "Thread T1 (io-reader) created by T0 here:",
+                "    #0 0x64c18f14d685 in pthread_create (/home/runner/work/app/app/named+0xb1685) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                "    #1 0x64c18f1a9855 in main /home/runner/work/app/app/named.c:24:3",
+                "    #2 0x719cdc02a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x719cdc02a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x64c18f0c8344 in _start (/home/runner/work/app/app/named+0x2c344) (BuildId: 21dafcd9255d987f6350f604a73bc977785adb7a)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: heap-use-after-free /home/runner/work/app/app/named.c:28:23 in main",
+                "Shadow bytes around the buggy address:",
+                "  0x503000001580: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001600: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001680: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001700: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001780: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "=>0x503000001800: fa fa fd fd fd fd fa fa fd fd fd fd fa fa[fd]fd",
+                "  0x503000001880: fd fd fa fa fd fd fd fd fa fa fd fd fd fd fa fa",
+                "  0x503000001900: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001980: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001a00: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000001a80: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                .. AddressSanitizersLegend,
+                "==454==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var container = Digested(
+            [
+                "=================================================================",
+                "==496==ERROR: AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x5c5b33c61e70 bp 0x7ffee97e55f0 sp 0x7ffee97e55e8",
+                "READ of size 4 at 0x503000000054 thread T0",
+                "    #0 0x5c5b33c61e6f in main /home/runner/work/app/app/container.cc:10:23",
+                "    #1 0x753e6da2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x753e6da2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x5c5b33b7e3a4 in _start (/home/runner/work/app/app/container+0x2c3a4) (BuildId: f4f81d7db1a043e560471efcefb31aefef8a89c6)",
+                string.Empty,
+                "0x503000000054 is located 20 bytes inside of 32-byte region [0x503000000040,0x503000000060)",
+                "allocated by thread T0 here:",
+                "    #0 0x5c5b33c5f851 in operator new(unsigned long) (/home/runner/work/app/app/container+0x10d851) (BuildId: f4f81d7db1a043e560471efcefb31aefef8a89c6)",
+                "    #1 0x5c5b33c62fcf in std::__new_allocator<int>::allocate(unsigned long, void const*) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/new_allocator.h:151:27",
+                "    #2 0x5c5b33c62b1f in std::allocator_traits<std::allocator<int>>::allocate(std::allocator<int>&, unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/alloc_traits.h:482:20",
+                "    #3 0x5c5b33c62b1f in std::_Vector_base<int, std::allocator<int>>::_M_allocate(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/stl_vector.h:381:20",
+                "    #4 0x5c5b33c6216c in std::vector<int, std::allocator<int>>::reserve(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/vector.tcc:79:22",
+                "    #5 0x5c5b33c61ddb in main /home/runner/work/app/app/container.cc:6:10",
+                "    #6 0x753e6da2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #7 0x753e6da2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #8 0x5c5b33b7e3a4 in _start (/home/runner/work/app/app/container+0x2c3a4) (BuildId: f4f81d7db1a043e560471efcefb31aefef8a89c6)",
+                string.Empty,
+                "HINT: if you don't care about these errors you may set ASAN_OPTIONS=detect_container_overflow=0.",
+                "If you suspect a false positive see also: https://github.com/google/sanitizers/wiki/AddressSanitizerContainerOverflow.",
+                "SUMMARY: AddressSanitizer: container-overflow /home/runner/work/app/app/container.cc:10:23 in main",
+                "Shadow bytes around the buggy address:",
+                "  0x502ffffffd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x503000000000: fa fa 00 00 00 fa fa fa 00 fc[fc]fc fa fa fa fa",
+                "  0x503000000080: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                .. AddressSanitizersLegend,
+                "==496==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var odr = Digested(
+            [
+                "=================================================================",
+                "==509==ERROR: AddressSanitizer: odr-violation (0x70748a6c00a0):",
+                "  [1] size=40 'table' /home/runner/work/app/app/odr_a.c:1 in /home/runner/work/app/app/libodr_a.so",
+                "  [2] size=80 'table' /home/runner/work/app/app/odr_b.c:1 in /home/runner/work/app/app/libodr_b.so",
+                "These globals were registered at these points:",
+                "  [1]:",
+                "    #0 0x5c1286c05a38 in __asan_register_globals (/home/runner/work/app/app/odr+0x41a38) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #1 0x5c1286c06b1d in __asan_register_elf_globals (/home/runner/work/app/app/odr+0x42b1d) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #2 0x70748a6d071e in call_init elf/dl-init.c:74:3",
+                "    #3 0x70748a6d0823 in call_init elf/dl-init.c:120:14",
+                "    #4 0x70748a6d0823 in _dl_init elf/dl-init.c:121:5",
+                "    #5 0x70748a6ea58f  (/lib64/ld-linux-x86-64.so.2+0x1f58f) (BuildId: 231ab65dd867a89dce29cb958fd5ca50abb1aa34)",
+                string.Empty,
+                "  [2]:",
+                "    #0 0x5c1286c05a38 in __asan_register_globals (/home/runner/work/app/app/odr+0x41a38) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #1 0x5c1286c06b1d in __asan_register_elf_globals (/home/runner/work/app/app/odr+0x42b1d) (BuildId: d3dfd1f4f41be8914b7d9e112312cd1303c4af99)",
+                "    #2 0x70748a6d071e in call_init elf/dl-init.c:74:3",
+                "    #3 0x70748a6d0823 in call_init elf/dl-init.c:120:14",
+                "    #4 0x70748a6d0823 in _dl_init elf/dl-init.c:121:5",
+                "    #5 0x70748a6ea58f  (/lib64/ld-linux-x86-64.so.2+0x1f58f) (BuildId: 231ab65dd867a89dce29cb958fd5ca50abb1aa34)",
+                string.Empty,
+                "==509==HINT: if you don't care about these errors you may set ASAN_OPTIONS=detect_odr_violation=0",
+                "SUMMARY: AddressSanitizer: odr-violation: global 'table' at /home/runner/work/app/app/odr_a.c:1 in /home/runner/work/app/app/libodr_a.so",
+                "==509==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                [("AddressSanitizer: heap-use-after-free on address 0x503000001870 at pc 0x64c18f1a98c7 bp 0x7ffdf2005570 sp 0x7ffdf2005568", "crashed", (2, 66))],
+                [("AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x5c5b33c61e70 bp 0x7ffee97e55f0 sp 0x7ffee97e55e8", "crashed", (2, 55))],
+                [("AddressSanitizer: odr-violation (0x70748a6c00a0):", "crashed", (2, 24))],
+            ],
+            new[] { named, container, odr }.Select(digest => digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)).ToList()));
+        Assert.Equal([4, 4, 6], new[] { named, container, odr }.Select(digest => digest.Failures[0].Exception!.Stack.Count));
+        Assert.All(new[] { named, container, odr }, digest => Assert.Empty(digest.Unparsed ?? []));
+    }
+
+    /// <summary>
+    /// A LeakSanitizer's report runs over every line it prints as its own to its summary: its suppressions' block between
+    /// its dashed rules, the top leaks it kept, the objects it leaked and the leaks it left out - its program ended by the
+    /// report's exit code, printing no line to halt with, so the report has <c>errored</c> it - never ending at a line of
+    /// them with its summary left to no reading. The reports are clang 19's own (a suppressions file naming one of two
+    /// leaks; <c>report_objects=1:max_leaks=1</c>), each from a program a runner step ran, the run's directory written as a
+    /// runner's.
+    /// </summary>
+    [Fact]
+    public void ALeakSanitizersReport_RunsOverItsSuppressionsAndTheLeaksItLeftOut_ToItsSummary()
+    {
+        var suppressed = Digested(
+            [
+                string.Empty,
+                "=================================================================",
+                "==538==ERROR: LeakSanitizer: detected memory leaks",
+                string.Empty,
+                "Direct leak of 24 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5e3508ea4173 in malloc (/home/runner/work/app/app/leak+0xcc173) (BuildId: f4ac781b263709277ef6fd826e34b2a6f3c7d630)",
+                "    #1 0x5e3508ee57ad in leak_reported /home/runner/work/app/app/leak.c:6:61",
+                "    #2 0x5e3508ee57e8 in main /home/runner/work/app/app/leak.c:10:3",
+                "    #3 0x777839c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x777839c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5e3508e04344 in _start (/home/runner/work/app/app/leak+0x2c344) (BuildId: f4ac781b263709277ef6fd826e34b2a6f3c7d630)",
+                string.Empty,
+                "-----------------------------------------------------",
+                "Suppressions used:",
+                "  count      bytes template",
+                "      1         16 leak_suppressed",
+                "-----------------------------------------------------",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: 24 byte(s) leaked in 1 allocation(s).",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var counted = Digested(
+            [
+                string.Empty,
+                "=================================================================",
+                "==471==ERROR: LeakSanitizer: detected memory leaks",
+                string.Empty,
+                "The 1 top leak(s):",
+                "Direct leak of 24 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5b2ccc1f4173 in malloc (/home/runner/work/app/app/leaks+0xcc173) (BuildId: 2b1cbe715b9d821ecafd7c619f7cce4bbacf94c8)",
+                "    #1 0x5b2ccc2357ad in leak_two /home/runner/work/app/app/leaks.c:6:56",
+                "    #2 0x5b2ccc2357e8 in main /home/runner/work/app/app/leaks.c:10:3",
+                "    #3 0x7933b082a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x7933b082a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5b2ccc154344 in _start (/home/runner/work/app/app/leaks+0x2c344) (BuildId: 2b1cbe715b9d821ecafd7c619f7cce4bbacf94c8)",
+                string.Empty,
+                "Objects leaked above:",
+                "0x503000000040 (24 bytes)",
+                string.Empty,
+                "Omitting 1 more leak(s).",
+                "SUMMARY: AddressSanitizer: 40 byte(s) leaked in 2 allocation(s).",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                [("LeakSanitizer: detected memory leaks", "errored", (3, 19))],
+                [("LeakSanitizer: detected memory leaks", "errored", (3, 18))],
+            ],
+            new[] { suppressed, counted }.Select(digest => digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)).ToList()));
+        Assert.All(new[] { suppressed, counted }, digest => Assert.Empty(digest.Unparsed ?? []));
+    }
+
+    /// <summary>
+    /// An UndefinedBehaviorSanitizer's runtime error runs over the notes it prints under it - at an address or at a source
+    /// place - with the memory a note shows: its bytes, the marks under them and the line naming the range they mark; then
+    /// its stack, which is the report's, and its summary. A runtime error a note ended would hold no stack and leave its
+    /// summary to no reading. The reports are clang 19's own - a downcast its program was built not to recover from, with
+    /// its stack asked for (<c>print_stacktrace=1</c>), and a null passed where a nonnull attribute forbids it, recovered
+    /// from, with the errors and the SEGV that followed - each from a program a runner step ran, the run's directory
+    /// written as a runner's.
+    /// </summary>
+    [Fact]
+    public void AnUndefinedBehaviorSanitizersRuntimeError_RunsOverItsNotesAndTheMemoryEachShows_ToItsSummary()
+    {
+        var downcast = Digested(
+            [
+                "ub.cc:19:12: runtime error: downcast of address 0x5e6179b1d2e0 which does not point to an object of type 'B'",
+                "0x5e6179b1d2e0: note: object is of type 'A'",
+                " 00 00 00 00  e8 1c aa 5f 61 5e 00 00  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  11 20 01 00",
+                "              ^~~~~~~~~~~~~~~~~~~~~~~",
+                "              vptr for 'A'",
+                "    #0 0x5e615fa8bdb8 in main /home/runner/work/app/app/ub.cc:19:12",
+                "    #1 0x71fbdc42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x71fbdc42a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x5e615fa5e434 in _start (/home/runner/work/app/app/ub-halt+0x5434) (BuildId: 1e78447ea2372fce1746998d97d4e8fd63f5dd36)",
+                string.Empty,
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior ub.cc:19:12 ",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var nonnull = Digested(
+            [
+                "more.c:39:26: runtime error: null pointer passed as argument 1, which is declared to never be null",
+                "more.c:20:16: note: nonnull attribute specified here",
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior more.c:39:26 ",
+                "more.c:20:58: runtime error: applying zero offset to null pointer",
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior more.c:20:58 ",
+                "more.c:20:58: runtime error: load of null pointer of type 'int'",
+                "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior more.c:20:58 ",
+                "UndefinedBehaviorSanitizer:DEADLYSIGNAL",
+                "==437==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x000000000000 (pc 0x5fde9137eb1f bp 0x7ffe91f71e60 sp 0x7ffe91f71e40 T437)",
+                "==437==The signal is caused by a READ memory access.",
+                "==437==Hint: address points to the zero page.",
+                "    #0 0x5fde9137eb1f in first /home/runner/work/app/app/more.c:20:58",
+                "    #1 0x5fde9137ed49 in main /home/runner/work/app/app/more.c:39:20",
+                "    #2 0x7366b842a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7366b842a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5fde91352454 in _start (/home/runner/work/app/app/more-ubsan+0x5454) (BuildId: 4f7f0d37d4aab56e423e10dcb7b45ebb0009de0a)",
+                string.Empty,
+                "==437==Register values:",
+                "rax = 0x0000000000000000  rbx = 0x00007ffe91f72048  rcx = 0x0000000000000000  rdx = 0x0000000000000000  ",
+                "rdi = 0x00007ffe91f71198  rsi = 0x0000000000000000  rbp = 0x00007ffe91f71e60  rsp = 0x00007ffe91f71e40  ",
+                " r8 = 0x000000000000007c   r9 = 0x0000000000000000  r10 = 0x00000000ffffff00  r11 = 0x0000000000000246  ",
+                "r12 = 0x0000000000000002  r13 = 0x0000000000000000  r14 = 0x00005fde91393678  r15 = 0x00007366b8849000  ",
+                "UndefinedBehaviorSanitizer can not provide additional info.",
+                "SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/runner/work/app/app/more.c:20:58 in first",
+                "==437==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                ("UndefinedBehaviorSanitizer: downcast of address 0x5e6179b1d2e0 which does not point to an object of type 'B'", "errored", (1, 11)),
+                ("UndefinedBehaviorSanitizer: null pointer passed as argument 1, which is declared to never be null", "errored", (1, 3)),
+                ("UndefinedBehaviorSanitizer: applying zero offset to null pointer", "errored", (4, 5)),
+                ("UndefinedBehaviorSanitizer: load of null pointer of type 'int'", "errored", (6, 7)),
+                ("UndefinedBehaviorSanitizer: SEGV on unknown address 0x000000000000 (pc 0x5fde9137eb1f bp 0x7ffe91f71e60 sp 0x7ffe91f71e40 T437)", "crashed", (9, 25)),
+            ],
+            downcast.Failures.Concat(nonnull.Failures).Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)));
+
+        var stack = downcast.Failures[0].Exception!.Stack;
+
+        Assert.Equal((4, "/home/runner/work/app/app/ub.cc", 19), (stack.Count, stack[0].File, stack[0].Line));
+        Assert.Equal(("ub.cc", 19), (downcast.Failures[0].File!, downcast.Failures[0].Line!.Value));
+        Assert.Empty(downcast.Unparsed ?? []);
+        Assert.Empty(nonnull.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// A sanitizer's report runs on after its summary over the lines its runtime prints there as its own, to the line it
+    /// halts with: the creation stack of the thread the error was in, which AddressSanitizer announces after the summary
+    /// where the report has not - a SEGV in a worker its program named, a global-buffer-overflow in a worker - the hint an
+    /// alloc-dealloc or new-delete type mismatch prints under its summary, and the allocator's stats and the command line
+    /// where they were asked for (<c>print_stats=1:print_cmdline=1</c>); each reads <c>crashed</c> at
+    /// <c>==pid==ABORTING</c>, and the frames after the summary are never the report's stack. The reports are clang 19's own
+    /// and g++ 13's (the type mismatch), each from a program a runner step ran, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void ASanitizersReport_RunsOnAfterItsSummary_OverTheLinesItsRuntimePrintsThere_ToItsHaltLine()
+    {
+        var segv = Digested(
+            [
+                "AddressSanitizer:DEADLYSIGNAL",
+                "=================================================================",
+                "==463==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000 (pc 0x564ddde939ee bp 0x78601b9fedd0 sp 0x78601b9fed80 T1)",
+                "==463==The signal is caused by a WRITE memory access.",
+                "==463==Hint: address points to the zero page.",
+                "    #0 0x564ddde939ee in worker /home/runner/work/app/app/segv.c:18:12",
+                "    #1 0x564ddde4faca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                "    #2 0x78601e89cb63 in start_thread nptl/pthread_create.c:447:8",
+                "    #3 0x78601e929e8b in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78",
+                string.Empty,
+                "==463==Register values:",
+                "rax = 0x0000000000000000  rbx = 0x000078601b9ff6c0  rcx = 0x000010007df809f6  rdx = 0x000010007df809f6  ",
+                "rdi = 0x00007fffefc44fb5  rsi = 0x00000ffffdf889f6  rbp = 0x000078601b9fedd0  rsp = 0x000078601b9fed80  ",
+                " r8 = 0x00000ffffdf889f6   r9 = 0x000010007df809f0  r10 = 0x0000000000000000  r11 = 0x00000aca3bbccda8  ",
+                "r12 = 0x00007fffefc44fb0  r13 = 0x000078601b9fede0  r14 = 0x000078601ea73000  r15 = 0x0000564ddde938f0  ",
+                "AddressSanitizer can not provide additional info.",
+                "SUMMARY: AddressSanitizer: SEGV /home/runner/work/app/app/segv.c:18:12 in worker",
+                "Thread T1 (io-worker) created by T0 here:",
+                "    #0 0x564ddde37685 in pthread_create (/home/runner/work/app/app/segv+0xb1685) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                "    #1 0x564ddde93889 in main /home/runner/work/app/app/segv.c:24:3",
+                "    #2 0x78601e82a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x78601e82a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x564ddddb2344 in _start (/home/runner/work/app/app/segv+0x2c344) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                string.Empty,
+                "==463==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var global = Digested(
+            [
+                "=================================================================",
+                "==479==ERROR: AddressSanitizer: global-buffer-overflow on address 0x5af2fc35db70 at pc 0x5af2fb9ce990 bp 0x7c39bbdfed70 sp 0x7c39bbdfed68",
+                "READ of size 4 at 0x5af2fc35db70 thread T1",
+                "    #0 0x5af2fb9ce98f in worker /home/runner/work/app/app/segv.c:15:26",
+                "    #1 0x5af2fb98aaca in asan_thread_start(void*) asan_interceptors.cpp.o",
+                "    #2 0x7c39bec9cb63 in start_thread nptl/pthread_create.c:447:8",
+                "    #3 0x7c39bed29e8b in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78",
+                string.Empty,
+                "0x5af2fc35db70 is located 0 bytes after global variable 'table' defined in '/home/runner/work/app/app/segv.c:7' (0x5af2fc35db60) of size 16",
+                "SUMMARY: AddressSanitizer: global-buffer-overflow /home/runner/work/app/app/segv.c:15:26 in worker",
+                "Shadow bytes around the buggy address:",
+                "  0x5af2fc35d880: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35d900: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35d980: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35da00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35da80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x5af2fc35db00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00[f9]f9",
+                "  0x5af2fc35db80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dc00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dc80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dd00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x5af2fc35dd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                .. AddressSanitizersLegend,
+                "Thread T1 created by T0 here:",
+                "    #0 0x5af2fb972685 in pthread_create (/home/runner/work/app/app/segv+0xb1685) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                "    #1 0x5af2fb9ce889 in main /home/runner/work/app/app/segv.c:24:3",
+                "    #2 0x7c39bec2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x7c39bec2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5af2fb8ed344 in _start (/home/runner/work/app/app/segv+0x2c344) (BuildId: 0a27cf1be3b0bfeb0f1ef0ad94ce151303895d30)",
+                string.Empty,
+                "Stats: 0M malloced (0M for red zones) by 6 calls",
+                "Stats: 0M realloced by 0 calls",
+                "Stats: 0M freed by 3 calls",
+                "Stats: 0M really freed by 0 calls",
+                "Stats: 2M (2M-0M) mmaped; 11 maps, 0 unmaps",
+                "  mallocs by size class: 3:3; 4:1; 14:1; 18:1; ",
+                "Stats: malloc large: 0",
+                "Stats: StackDepot: 8 ids; 9M allocated",
+                "Stats: SizeClassAllocator64: 1M mapped (0M rss) in 648 allocations; remains 648",
+                "  03 (    48): mapped:    256K allocs:     256 frees:       0 inuse:    256 num_freed_chunks    5205 avail:   5461 rss:      8K releases:      0 last released:      0K region: 0x503000000000",
+                "  04 (    64): mapped:    256K allocs:     128 frees:       0 inuse:    128 num_freed_chunks    3968 avail:   4096 rss:      4K releases:      0 last released:      0K region: 0x504000000000",
+                "  14 (   224): mapped:    256K allocs:     128 frees:       0 inuse:    128 num_freed_chunks    1042 avail:   1170 rss:      4K releases:      0 last released:      0K region: 0x50e000000000",
+                "  18 (   384): mapped:    256K allocs:     128 frees:       0 inuse:    128 num_freed_chunks     554 avail:    682 rss:      4K releases:      0 last released:      0K region: 0x512000000000",
+                "  36 (  8192): mapped:    256K allocs:       8 frees:       0 inuse:      8 num_freed_chunks      24 avail:     32 rss:      4K releases:      0 last released:      0K region: 0x524000000000",
+                "Stats: LargeMmapAllocator: allocated 0 times, remains 0 (0 K) max 0 M; by size logs: ",
+                "Quarantine limits: global: 256Mb; thread local: 1024Kb",
+                "Global quarantine stats: batches: 0; bytes: 0 (user: 0); chunks: 0 (capacity: 0); 0% chunks used; 0% memory overhead",
+                string.Empty,
+                "Command: ./segv global ",
+                string.Empty,
+                "==479==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var allocation = Digested(
+            [
+                "=================================================================",
+                "==469==ERROR: AddressSanitizer: alloc-dealloc-mismatch (malloc vs operator delete) on 0x502000000010",
+                "    #0 0x5fc71e23c476 in operator delete(void*, unsigned long) (/home/runner/work/app/app/mismatch+0x10e476) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                "    #1 0x5fc71e23dd0e in main /home/runner/work/app/app/mismatch.cc:11:5",
+                "    #2 0x76b87082a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x76b87082a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5fc71e15a344 in _start (/home/runner/work/app/app/mismatch+0x2c344) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                string.Empty,
+                "0x502000000010 is located 0 bytes inside of 16-byte region [0x502000000010,0x502000000020)",
+                "allocated by thread T0 here:",
+                "    #0 0x5fc71e1fa173 in malloc (/home/runner/work/app/app/mismatch+0xcc173) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                "    #1 0x5fc71e23dcee in main /home/runner/work/app/app/mismatch.cc:10:38",
+                "    #2 0x76b87082a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #3 0x76b87082a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #4 0x5fc71e15a344 in _start (/home/runner/work/app/app/mismatch+0x2c344) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: alloc-dealloc-mismatch (/home/runner/work/app/app/mismatch+0x10e476) (BuildId: a74c5bc09ebe3ce7823b1d3be8dd30d240962563) in operator delete(void*, unsigned long)",
+                "==469==HINT: if you don't care about these errors you may set ASAN_OPTIONS=alloc_dealloc_mismatch=0",
+                "==469==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        var type = Digested(
+            [
+                "=================================================================",
+                "==484==ERROR: AddressSanitizer: new-delete-type-mismatch on 0x504000000010 in thread T0:",
+                "  object passed to delete has wrong type:",
+                "  size of the allocated type:   44 bytes;",
+                "  size of the deallocated type: 4 bytes.",
+                "    #0 0x7205d8eff5e8 in operator delete(void*, unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:164",
+                "    #1 0x5c30861b6375 in main /home/runner/work/app/app/mismatch.cc:19",
+                "    #2 0x7205d862a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58",
+                "    #3 0x7205d862a28a in __libc_start_main_impl ../csu/libc-start.c:360",
+                "    #4 0x5c30861b61a4 in _start (/home/runner/work/app/app/mismatch-gcc+0x11a4) (BuildId: 2b8d2d424af852dc902e0acaf16a9d849206fdf4)",
+                string.Empty,
+                "0x504000000010 is located 0 bytes inside of 44-byte region [0x504000000010,0x50400000003c)",
+                "allocated by thread T0 here:",
+                "    #0 0x7205d8efe548 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:95",
+                "    #1 0x5c30861b635b in main /home/runner/work/app/app/mismatch.cc:18",
+                "    #2 0x7205d862a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58",
+                "    #3 0x7205d862a28a in __libc_start_main_impl ../csu/libc-start.c:360",
+                "    #4 0x5c30861b61a4 in _start (/home/runner/work/app/app/mismatch-gcc+0x11a4) (BuildId: 2b8d2d424af852dc902e0acaf16a9d849206fdf4)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: new-delete-type-mismatch ../../../../src/libsanitizer/asan/asan_new_delete.cpp:164 in operator delete(void*, unsigned long)",
+                "==484==HINT: if you don't care about these errors you may set ASAN_OPTIONS=new_delete_type_mismatch=0",
+                "==484==ABORTING",
+            ],
+            PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()),
+            1)!;
+
+        Assert.Equal(
+            [
+                [("AddressSanitizer: SEGV on unknown address 0x000000000000 (pc 0x564ddde939ee bp 0x78601b9fedd0 sp 0x78601b9fed80 T1)", "crashed", (3, 25))],
+                [("AddressSanitizer: global-buffer-overflow on address 0x5af2fc35db70 at pc 0x5af2fb9ce990 bp 0x7c39bbdfed70 sp 0x7c39bbdfed68", "crashed", (2, 69))],
+                [("AddressSanitizer: alloc-dealloc-mismatch (malloc vs operator delete) on 0x502000000010", "crashed", (2, 19))],
+                [("AddressSanitizer: new-delete-type-mismatch on 0x504000000010 in thread T0:", "crashed", (2, 22))],
+            ],
+            new[] { segv, global, allocation, type }.Select(digest => digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Log!.Value)).ToList()));
+
+        var stack = segv.Failures[0].Exception!.Stack;
+
+        Assert.Equal((4, "/home/runner/work/app/app/segv.c", 18), (stack.Count, stack[0].File, stack[0].Line));
+        Assert.Equal([4, 4, 5, 5], new[] { segv, global, allocation, type }.Select(digest => digest.Failures[0].Exception!.Stack.Count));
+        Assert.All(new[] { segv, global, allocation, type }, digest => Assert.Empty(digest.Unparsed ?? []));
+    }
+
+    /// <summary>
+    /// Under CTest, a sanitizer's report ends at the next line CTest itself prints, never holding it - a LeakSanitizer's
+    /// report, printing no halt line, runs over its blank line to CTest's indented <c>Start 2:</c> and no further - and a
+    /// test AddressSanitizer aborted reads <c>crashed</c>: its container-overflow report runs over its hint and the line
+    /// under it to <c>==pid==ABORTING</c>, so CTest says neither failed test again. The console is CTest 4.3's
+    /// <c>--output-on-failure</c> over three plain test programs clang 19 built under AddressSanitizer, the vector's
+    /// annotations libstdc++'s, the run's directory written as a runner's.
+    /// </summary>
+    [Fact]
+    public void UnderCTest_AReportEndsAtTheLineCTestPrints_AndATestAddressSanitizerAbortedHasCrashed()
+    {
+        var digest = Digested(
+            [
+                "Test project /home/runner/work/app/app/build",
+                "    Start 1: leak_test",
+                "1/3 Test #1: leak_test ........................***Failed    0.85 sec",
+                string.Empty,
+                "=================================================================",
+                "==549==ERROR: LeakSanitizer: detected memory leaks",
+                string.Empty,
+                "Direct leak of 24 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5e535e44f173 in malloc (/home/runner/work/app/app/build/leak_test+0xcc173) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                "    #1 0x5e535e4907ad in leak_reported /home/runner/work/app/app/leak.c:6:61",
+                "    #2 0x5e535e4907e8 in main /home/runner/work/app/app/leak.c:10:3",
+                "    #3 0x7b0837a2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x7b0837a2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5e535e3af344 in _start (/home/runner/work/app/app/build/leak_test+0x2c344) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                string.Empty,
+                "Direct leak of 16 byte(s) in 1 object(s) allocated from:",
+                "    #0 0x5e535e44f173 in malloc (/home/runner/work/app/app/build/leak_test+0xcc173) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                "    #1 0x5e535e49077d in leak_suppressed /home/runner/work/app/app/leak.c:5:63",
+                "    #2 0x5e535e4907e3 in main /home/runner/work/app/app/leak.c:9:3",
+                "    #3 0x7b0837a2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #4 0x7b0837a2a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #5 0x5e535e3af344 in _start (/home/runner/work/app/app/build/leak_test+0x2c344) (BuildId: a2432f2bc5c9bbcb1b36f606260fc28cdee0b026)",
+                string.Empty,
+                "SUMMARY: AddressSanitizer: 40 byte(s) leaked in 2 allocation(s).",
+                string.Empty,
+                "    Start 2: vec_test",
+                "2/3 Test #2: vec_test .........................***Failed    0.83 sec",
+                "=================================================================",
+                "==553==ERROR: AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x55e3a760be70 bp 0x7ffc2560f590 sp 0x7ffc2560f588",
+                "READ of size 4 at 0x503000000054 thread T0",
+                "    #0 0x55e3a760be6f in main /home/runner/work/app/app/container.cc:10:23",
+                "    #1 0x78861f22a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #2 0x78861f22a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #3 0x55e3a75283a4 in _start (/home/runner/work/app/app/build/vec_test+0x2c3a4) (BuildId: 4d172923b75e905e0837b37fcf73a7bba3987b2b)",
+                string.Empty,
+                "0x503000000054 is located 20 bytes inside of 32-byte region [0x503000000040,0x503000000060)",
+                "allocated by thread T0 here:",
+                "    #0 0x55e3a7609851 in operator new(unsigned long) (/home/runner/work/app/app/build/vec_test+0x10d851) (BuildId: 4d172923b75e905e0837b37fcf73a7bba3987b2b)",
+                "    #1 0x55e3a760cfcf in std::__new_allocator<int>::allocate(unsigned long, void const*) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/new_allocator.h:151:27",
+                "    #2 0x55e3a760cb1f in std::allocator_traits<std::allocator<int>>::allocate(std::allocator<int>&, unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/alloc_traits.h:482:20",
+                "    #3 0x55e3a760cb1f in std::_Vector_base<int, std::allocator<int>>::_M_allocate(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/stl_vector.h:381:20",
+                "    #4 0x55e3a760c16c in std::vector<int, std::allocator<int>>::reserve(unsigned long) /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/vector.tcc:79:22",
+                "    #5 0x55e3a760bddb in main /home/runner/work/app/app/container.cc:6:10",
+                "    #6 0x78861f22a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16",
+                "    #7 0x78861f22a28a in __libc_start_main csu/../csu/libc-start.c:360:3",
+                "    #8 0x55e3a75283a4 in _start (/home/runner/work/app/app/build/vec_test+0x2c3a4) (BuildId: 4d172923b75e905e0837b37fcf73a7bba3987b2b)",
+                string.Empty,
+                "HINT: if you don't care about these errors you may set ASAN_OPTIONS=detect_container_overflow=0.",
+                "If you suspect a false positive see also: https://github.com/google/sanitizers/wiki/AddressSanitizerContainerOverflow.",
+                "SUMMARY: AddressSanitizer: container-overflow /home/runner/work/app/app/container.cc:10:23 in main",
+                "Shadow bytes around the buggy address:",
+                "  0x502ffffffd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502ffffffe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "  0x502fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+                "=>0x503000000000: fa fa 00 00 00 fa fa fa 00 fc[fc]fc fa fa fa fa",
+                "  0x503000000080: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                "  0x503000000280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa",
+                .. AddressSanitizersLegend,
+                "==553==ABORTING",
+                string.Empty,
+                "    Start 3: after_test",
+                "3/3 Test #3: after_test .......................   Passed    0.01 sec",
+                string.Empty,
+                "33% tests passed, 2 tests failed out of 3",
+                string.Empty,
+                "Total Test time (real) =   1.69 sec",
+                string.Empty,
+                "The following tests FAILED:",
+                "\t  1 - leak_test (Failed)",
+                "\t  2 - vec_test (Failed)",
+                "Errors while running CTest",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "ctest", null),
+            8)!;
+
+        Assert.Equal(
+            [
+                ("sanitizer", "LeakSanitizer: detected memory leaks", "errored", (6, 25)),
+                ("sanitizer", "AddressSanitizer: container-overflow on address 0x503000000054 at pc 0x55e3a760be70 bp 0x7ffc2560f590 sp 0x7ffc2560f588", "crashed", (29, 82)),
+            ],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Outcome, failure.Log!.Value)));
+        Assert.Equal((0, 1, 1), (digest.Failed, digest.Errored, digest.Crashed));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// The shadow bytes' legend AddressSanitizer prints under the shadow bytes around the address its report names, line
+    /// for line the same in clang 19's reports and g++ 13's.
+    /// </summary>
+    private static readonly string[] AddressSanitizersLegend =
+    [
+        "Shadow byte legend (one shadow byte represents 8 application bytes):",
+        "  Addressable:           00",
+        "  Partially addressable: 01 02 03 04 05 06 07 ",
+        "  Heap left redzone:       fa",
+        "  Freed heap region:       fd",
+        "  Stack left redzone:      f1",
+        "  Stack mid redzone:       f2",
+        "  Stack right redzone:     f3",
+        "  Stack after return:      f5",
+        "  Stack use after scope:   f8",
+        "  Global redzone:          f9",
+        "  Global init order:       f6",
+        "  Poisoned by user:        f7",
+        "  Container overflow:      fc",
+        "  Array cookie:            ac",
+        "  Intra object redzone:    bb",
+        "  ASan internal:           fe",
+        "  Left alloca redzone:     ca",
+        "  Right alloca redzone:    cb",
+    ];
+
+    /// <summary>
+    /// Ninja's <c>FAILED:</c> line is read by the one owner of it (<see cref="DssHarness.Core.Build.Ninja"/>), as the
+    /// build's own reading of its failed units reads it: the exit code ninja writes between <c>FAILED:</c> and the step's
+    /// outputs - a negative one, a Windows crash's - taken off, so the edge whose build failed is the outputs alone,
+    /// never the code glued into the edge's name and every diagnostic's project.
+    /// </summary>
+    [Fact]
+    public void NinjasFailedLine_IsReadByItsOneOwner_ItsExitCodeTakenOffTheEdge()
+    {
+        var digest = Digested(
+            ["FAILED: [code=-1073741819] CMakeFiles/app.dir/src/main.cpp.obj"],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [("ninja", "error", "build of 'CMakeFiles/app.dir/src/main.cpp.obj' failed", "CMakeFiles/app.dir/src/main.cpp.obj", (1, 1))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Severity, diagnostic.Message, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// samurai's lines are read as ninja's are, by the one owner of both programs' own words
+    /// (<see cref="DssHarness.Core.Build.Ninja.WordOf"/>): its job line for a step that failed, which names the command the
+    /// step ran, opens that step's edge - a step whose output said nothing is said by it, and a diagnostic its output said
+    /// names it as its project - its status lines close an edge, and its end says only that the build ended. The lines
+    /// are samurai's form as its source writes them, told to go on past failing steps as the harness tells it.
+    /// </summary>
+    [Fact]
+    public void SamuraisLines_AreReadAsNinjasAre_ByTheOneOwnerOfTheirWords()
+    {
+        const string Killed = "/usr/bin/cc -o CMakeFiles/app.dir/main.c.o -c /home/runner/work/app/app/main.c";
+        const string Failed = "/usr/bin/cc -o CMakeFiles/app.dir/store.c.o -c /home/runner/work/app/app/store.c";
+
+        var digest = Digested(
+            [
+                "[1/3] Building C object CMakeFiles/app.dir/main.c.o",
+                "[2/3] Building C object CMakeFiles/app.dir/store.c.o",
+                $"samu: job terminated due to signal 9: {Killed}",
+                $"samu: job failed with status 1: {Failed}",
+                "/home/runner/work/app/app/store.c:3:5: error: 'count' undeclared (first use in this function)",
+                "samu: cannot make progress due to previous errors",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig { Toolchains = { ["gcc"] = new ToolchainConfig { CompilerId = { ["C"] = "GNU" } } } }, "cmake", "gcc"))!;
+
+        Assert.Equal(
+            [
+                ("ninja", $"build of '{Killed}' failed", Killed, (3, 3)),
+                ("gcc", "'count' undeclared (first use in this function)", Failed, (5, 5)),
+            ],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Tool, diagnostic.Message, diagnostic.Project!, diagnostic.Log!.Value)));
+        Assert.Equal(2, digest.Errors);
+        Assert.Empty(digest.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// MSTest's thrown error is read as one under <c>dotnet test</c>, as xUnit's and NUnit's are: its
+    /// <c>Test method X threw exception:</c> head, the error's <c>Type: message</c> line under it with each inner
+    /// exception folded onto it after <c> ---&gt; </c>, and the stack in the order the runtime printed it, the inner
+    /// one's frames after the <c>Inner Stack Trace</c> marker - the failure's exception whole, where it had been null.
+    /// </summary>
+    [Fact]
+    public void AnMstestThrownError_IsReadAsOne_UnderDotnetTest()
+    {
+        var digest = Digested(
+            [
+                "  Failed Demo.Tests.StoreTests.Loads [31 ms]",
+                "  Error Message:",
+                "   Test method Demo.Tests.StoreTests.Loads threw exception: ",
+                "System.InvalidOperationException: The store could not be loaded. ---> System.ArgumentNullException: Value cannot be null. (Parameter 'name')",
+                "  Stack Trace:",
+                @"    at Demo.Tests.StoreTests.Loads() in D:\a\app\app\tests\StoreTests.cs:line 18",
+                "   ----- Inner Stack Trace -----",
+                @"    at Demo.Library.Store.Load(String name) in D:\a\app\app\lib\Store.cs:line 9",
+                "  Standard Output Messages:",
+                " loading the store",
+            ],
+            PhaseParsers.ForTests(new HarnessConfig(), "dotnet", null))!;
+
+        var failure = Assert.Single(digest.Failures);
+
+        Assert.Equal(("dotnet", "Demo.Tests.StoreTests.Loads"), (failure.Framework, failure.Id));
+        Assert.Equal(
+            ("System.InvalidOperationException", "The store could not be loaded."),
+            (failure.Exception!.Type, failure.Exception.Message));
+        Assert.Equal(
+            [("System.InvalidOperationException", "The store could not be loaded.", 1), ("System.ArgumentNullException", "Value cannot be null. (Parameter 'name')", 1)],
+            CausesOf(failure.Exception));
+
+        return;
+
+        static List<(string Type, string Message, int Frames)> CausesOf(ExceptionRecord thrown)
+        {
+            var causes = new List<(string, string, int)>();
+
+            for (var cause = thrown; cause is not null; cause = cause.CausedBy.FirstOrDefault())
+            {
+                causes.Add((cause.Type, cause.Message, cause.Stack.Count));
+            }
+
+            return causes;
+        }
+    }
+
+    /// <summary>
+    /// CMake's blank line between a block's paragraphs is decided by the line after it: a paragraph under it takes it
+    /// as the separator, a second blank ends the block with it, and any other line ends the block and is offered again
+    /// on its own, the blank given back - so the reading holds one line, never the log below it.
+    /// </summary>
+    [Fact]
+    public void ACMakeBlocksBlankLine_IsDecidedByTheLineAfterIt()
+    {
+        var digest = Digested(
+            [
+                "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
+                "  add_subdirectory given source \"lib/missing\" which is not an existing",
+                "  directory.",
+                string.Empty,
+                string.Empty,
+                "-- Configuring incomplete, errors occurred!",
+            ],
+            PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null))!;
+
+        Assert.Equal(
+            [("CMakeLists.txt", (int?)3, "add_subdirectory: add_subdirectory given source \"lib/missing\" which is not an existing directory.", (1, 5))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.File!, diagnostic.Line, diagnostic.Message, diagnostic.Log!.Value)));
+
+        var answers = new List<string>();
+
+        var ended = Digested(
+            [
+                "CMake Error at CMakeLists.txt:3 (add_subdirectory):",
+                "  a message",
+                string.Empty,
+                "-- something else",
+            ],
+            [.. PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null).Select(parser => parser.Name == "cmake" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Took", "2 Took", "3 Held", "4 Left", "4 Left"], answers);
+        var said = Assert.Single(ended.Diagnostics);
+        Assert.Equal(("add_subdirectory: a message", (1, 2)), (said.Message, said.Log!.Value));
+        Assert.Empty(ended.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// eslint's stylish heading - a file alone on a line - is decided by the problem under it: a problem takes it as
+    /// its file, and any other line gives it back and is offered again on its own, so the reading holds the one line.
+    /// </summary>
+    [Fact]
+    public void AnEslintHeading_IsDecidedByTheProblemUnderIt()
+    {
+        var answers = new List<string>();
+
+        var digest = Digested(
+            [
+                "/home/runner/work/app/app/src/store.js",
+                "  4:9  error  'add' is not defined  no-undef",
+            ],
+            [.. PhaseParsers.ForTests(new HarnessConfig(), "npx", null).Select(parser => parser.Name == "eslint" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Took"], answers);
+        Assert.Equal(
+            [("error", "no-undef", "/home/runner/work/app/app/src/store.js", 4, 9)],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Severity, diagnostic.Code!, diagnostic.File!, diagnostic.Line!.Value, diagnostic.Column!.Value)));
+
+        var noneAnswers = new List<string>();
+
+        var none = Digested(
+            ["/tmp/notes.txt", "something else"],
+            [.. PhaseParsers.ForTests(new HarnessConfig(), "npx", null).Select(parser => parser.Name == "eslint" ? new Recording(parser, noneAnswers) : parser)]);
+
+        Assert.Null(none);
+        Assert.Equal(["1 Held", "2 Left", "2 Left"], noneAnswers);
+    }
+
+    /// <summary>
+    /// GNU ld's <c>in function</c> line is decided by the reference under it: a reference takes it as the block's first
+    /// line, and any other line gives it back and is offered again on its own, so the reading holds the one line.
+    /// </summary>
+    [Fact]
+    public void AnLdInFunctionLine_IsDecidedByTheReferenceUnderIt()
+    {
+        var answers = new List<string>();
+
+        var digest = Digested(
+            [
+                "/usr/bin/ld: /tmp/cc.o: in function `main':",
+                "/home/u/app/link.c:4: undefined reference to `parse_record'",
+            ],
+            [.. PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null).Select(parser => parser.Name == "ld" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Took"], answers);
+        Assert.Equal(
+            [("undefined reference to `parse_record'", "/home/u/app/link.c", (int?)4, (1, 2))],
+            digest.Diagnostics.Select(diagnostic => (diagnostic.Message, diagnostic.File!, diagnostic.Line, diagnostic.Log!.Value)));
+
+        var noneAnswers = new List<string>();
+
+        var none = Digested(
+            ["/usr/bin/ld: /tmp/cc.o: in function `main':", "something"],
+            [.. PhaseParsers.ForBuild(new HarnessConfig(), "cmake", null).Select(parser => parser.Name == "ld" ? new Recording(parser, noneAnswers) : parser)]);
+
+        Assert.Null(none);
+        Assert.Equal(["1 Held", "2 Left", "2 Left"], noneAnswers);
+    }
+
+    /// <summary>
+    /// The one blank line Python prints between the parts of a chain is decided by the line after it: the chain's own
+    /// marker takes it as the part separator, and any other line ends the chain and is offered again on its own, the
+    /// blank given back - so the reading holds one line, never the traceback after it.
+    /// </summary>
+    [Fact]
+    public void APythonChainsBlankLine_IsDecidedByTheLineAfterIt()
+    {
+        var answers = new List<string>();
+
+        var digest = Digested(
+            [
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+                string.Empty,
+                "During handling of the above exception, another exception occurred:",
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/store.py\", line 9, in load",
+                "    raise ValueError(\"store\")",
+                "ValueError: 'store'",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "python-stack" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(
+            ["1 Held", "2 Held", "3 Held", "4 Took", "5 Held", "6 Took", "7 Held", "8 Held", "9 Held", "10 Took"],
+            answers);
+        Assert.Equal(
+            [("python", "ValueError: 'store'", "KeyError", "errored")],
+            digest.Failures.Select(failure => (failure.Framework, failure.Id, failure.Exception!.CausedBy[0].Type, failure.Outcome)));
+
+        var endedAnswers = new List<string>();
+
+        var ended = Digested(
+            [
+                "Traceback (most recent call last):",
+                "  File \"/home/runner/work/app/app/first.py\", line 3, in load",
+                "    raise KeyError(\"port\")",
+                "KeyError: 'port'",
+                string.Empty,
+                "went on",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "python-stack" ? new Recording(parser, endedAnswers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Held", "3 Held", "4 Took", "5 Held", "6 Left", "6 Left"], endedAnswers);
+        var said = Assert.Single(ended.Failures);
+        Assert.Equal(("KeyError: 'port'", "errored", (1, 4)), (said.Id, said.Outcome, said.Log!.Value));
+        Assert.Empty(ended.Unparsed ?? []);
+    }
+
+    /// <summary>
+    /// The one blank line Go prints between a panic's lines and the goroutine that panicked is decided by the line
+    /// after it: the goroutine's head takes it as the panic's, and any other line says the lines were no panic's - both
+    /// given back, the line offered again on its own - so the reading holds one line.
+    /// </summary>
+    [Fact]
+    public void AGoPanicsBlankLine_IsDecidedByTheGoroutineUnderIt()
+    {
+        var answers = new List<string>();
+
+        var digest = Digested(
+            [
+                "panic: runtime error: index out of range [3] with length 3",
+                string.Empty,
+                "goroutine 1 [running]:",
+                "main.main()",
+                "\t/home/runner/work/app/app/main.go:8 +0x1d",
+            ],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "go-panic" ? new Recording(parser, answers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Held", "3 Took", "4 Took", "5 Took"], answers);
+        var crashed = Assert.Single(digest.Failures);
+        Assert.Equal(("panic: runtime error: index out of range [3] with length 3", "crashed", 1), (crashed.Id, crashed.Outcome, crashed.Exception!.Stack.Count));
+
+        var givenAnswers = new List<string>();
+
+        var given = Digested(
+            ["panic: something", "next line"],
+            [.. PhaseParsers.ForRun(new HarnessConfig(), new RunnerConfig()).Select(parser => parser.Name == "go-panic" ? new Recording(parser, givenAnswers) : parser)])!;
+
+        Assert.Equal(["1 Held", "2 Left", "2 Left"], givenAnswers);
+        Assert.Empty(given.Failures);
+        Assert.Equal(["panic: something"], given.Unparsed);
+    }
+
+    /// <summary>
+    /// The digest of <paramref name="lines"/>, a phase's output as its child printed it, by the one rule that turns a log
+    /// into a digest (<see cref="PhaseDigest.Of"/>) - read against a tree that holds none of the files they name, so every
+    /// place stays as the tool wrote it and no frame is the tree's.
+    /// </summary>
+    /// <param name="lines">The lines, each as printed.</param>
+    /// <param name="parsers">The parsers chosen for them.</param>
+    /// <param name="exit">The code the program that printed them ended with; null, as by default, where that is not known.</param>
+    internal static ResultDigest? Digested(IReadOnlyList<string> lines, IReadOnlyList<IResultParser> parsers, int? exit = null)
+        => PhaseDigest.Of(new Printed(lines), exit, parsers, new DigestTree(NoTree.Root, null, new NoTree()));
+
+    /// <summary>A phase's output: the lines given, each one line as its child printed it.</summary>
+    private sealed class Printed(IReadOnlyList<string> lines) : PhaseOutput
+    {
+        public override IEnumerable<string> Lines() => lines;
+    }
+
+    /// <summary>A tree that holds no file and no directory, and reads nothing from the disk.</summary>
+    private sealed class NoTree() : PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create()))
+    {
+        /// <summary>Where the tree is: a root no place a test's lines name is below.</summary>
+        public const string Root = "/no-tree";
+
+        public override bool FileExists(string path) => false;
+
+        public override bool IsLink(string path) => false;
+
+        public override IEnumerable<string> EnumerateDirectories(string path) => [];
+
+        public override Stream OpenRead(string path) => throw new FileNotFoundException($"'{path}' is no file of a tree that holds none.", path);
+    }
+
+    /// <summary>A phase's output read as a log streams, each line noted as it is read.</summary>
+    private sealed class Streaming(List<string> trace, IReadOnlyList<string> lines) : PhaseOutput
+    {
+        public override IEnumerable<string> Lines()
+        {
+            foreach (var line in lines)
+            {
+                trace.Add($"read {line}");
+                yield return line;
+            }
+        }
+    }
+
+    /// <summary>A parser whose reading notes what it answered of each line it was offered, by the line's number.</summary>
+    private sealed class Recording(IResultParser parser, List<string> answers) : IResultParser
+    {
+        public string Name => parser.Name;
+
+        public IResultReading Begin() => new Reading(parser.Begin(), answers);
+
+        private sealed class Reading(IResultReading reading, List<string> answers) : IResultReading
+        {
+            public LineTaken Offer(NumberedLine line, ResultSink sink)
+            {
+                var taken = reading.Offer(line, sink);
+
+                answers.Add($"{line.Number.ToString(CultureInfo.InvariantCulture)} {taken}");
+                return taken;
+            }
+
+            public LineTaken End(ResultSink sink) => reading.End(sink);
+        }
+    }
+
+    /// <summary>A reading that holds lines starting with <c>a</c> until <c>end</c>, and leaves them at any other line.</summary>
+    private sealed class Holding(List<string> offered) : IResultParser
+    {
+        public string Name => "holding";
+
+        public IResultReading Begin() => new Reading(offered);
+
+        private sealed class Reading(List<string> offered) : IResultReading
+        {
+            private bool _holding;
+
+            public LineTaken Offer(NumberedLine line, ResultSink sink)
+            {
+                offered.Add($"A {line.Text}");
+
+                if (line.Text.StartsWith('a'))
+                {
+                    _holding = true;
+                    return LineTaken.Held;
+                }
+
+                _holding = false;
+                return LineTaken.Left;
+            }
+
+            public LineTaken End(ResultSink sink)
+            {
+                offered.Add("A end");
+
+                var held = _holding;
+                _holding = false;
+                return held ? LineTaken.Left : LineTaken.Took;
+            }
+        }
+    }
+
+    /// <summary>A reading that takes lines starting with <c>b</c> or <c>x</c>, and says an error of each <c>x</c>.</summary>
+    private sealed class Taking(List<string> offered) : IResultParser
+    {
+        public string Name => "taking";
+
+        public IResultReading Begin() => new Reading(offered);
+
+        private sealed class Reading(List<string> offered) : IResultReading
+        {
+            public LineTaken Offer(NumberedLine line, ResultSink sink)
+            {
+                offered.Add($"B {line.Text}");
+
+                if (line.Text.StartsWith('x'))
+                {
+                    sink.Add(new Diagnostic("taking", "error", null, line.Text, Log: (line.Number, line.Last)));
+                    return LineTaken.Took;
+                }
+
+                return line.Text.StartsWith('b') ? LineTaken.Took : LineTaken.Left;
+            }
+
+            public LineTaken End(ResultSink sink)
+            {
+                offered.Add("B end");
+                return LineTaken.Took;
+            }
+        }
+    }
+}

@@ -324,6 +324,106 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         Assert.True(holding < pages.Marks.Count, $"page {holding} of {pages.Marks.Count}");
         Assert.Equal(page.Entries.Select(entry => entry.Text).ToArray(), failing);
+
+        // The digest holds no error a tool's form read, so the page goes whole beside it, and the lines no parser held -
+        // each on the page, numbered - are said there alone: every line reaches a model once.
+        var digest = red["digest"]!.AsObject();
+
+        Assert.False(digest.ContainsKey("unparsed"));
+        Assert.False(digest.ContainsKey("unparsedLeftOut"));
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
+    }
+
+    /// <summary>
+    /// A red job is digested from its annotations, read from the forge as data, and its kept log in the forms GitHub
+    /// writes it: the byte order mark, the timestamps and the group markers taken off, every line numbered as the kept
+    /// file numbers it. A problem matcher's line - under the forge's marker in the log, an annotation with its place on the
+    /// forge - is one finding, first, named by its path in the repository; a workflow command's annotation takes its
+    /// line of the log; and a line the forge marked that no form read - the runner's own sentence that the step failed -
+    /// is said among the lines no parser held, never as the first error. The raw page goes, the typed errors standing and
+    /// the line no parser held said in the digest alone.
+    /// </summary>
+    [Fact]
+    public async Task ARedJob_IsDigestedFromItsAnnotationsAndItsLog_EachFindingOnce_NumberedAsTheKeptLog()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var layout = OrchestratorLayout.Of((await harness.ContextLoader.LoadAsync(repository.Path, Token)).Layout, "r1");
+        var log = "\uFEFF" + string.Join(
+            "\n",
+            "2026-11-23T00:39:53.9245022Z ##[group]Run dotnet build",
+            "2026-11-23T00:39:53.9300000Z \u001b[36;1mdotnet build\u001b[0m",
+            "2026-11-23T00:39:54.1000000Z ##[endgroup]",
+            "2026-11-23T00:40:00.0000000Z   Determining projects to restore...",
+            "2026-11-23T00:40:01.0000000Z ##[error]/home/runner/work/app/app/src/Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [/home/runner/work/app/app/src/App.csproj]",
+            "2026-11-23T00:40:01.5000000Z ##[error]Missing semicolon",
+            "2026-11-23T00:40:02.0000000Z ##[error]Process completed with exit code 1.") + "\n";
+        var job = new CiCheck("build", CiCheckState.Red, "failure", "https://ci/build", 7, 70, null) { CheckRunId = 70, Annotations = 3, Repository = "app" };
+        CiAnnotation[] annotations =
+        [
+            new("src/Program.cs", 12, 12, 35, 35, "failure", null, "The name 'x' does not exist in the current context", null),
+            new("src/app.ts", 4, 4, null, null, "failure", "Lint", "Missing semicolon", null),
+            new(null, null, null, null, null, "failure", null, "Process completed with exit code 1.", null),
+        ];
+        var checks = Substitute.For<ICiChecksService>();
+        checks.WaitAsync(Arg.Any<string>(), Arg.Any<CiChecksRequest>(), Arg.Any<CancellationToken>()).Returns(
+            new CiChecksReading("c1", CiChecksFound.Red, [job], [new CiRedCheck(job, "build", "Pipeline", "Build", null, false, log, null) { Annotations = annotations }]));
+
+        var result = await Runner(harness, checks).RunAsync(Run(new WorkflowStep { Name = "wait", Type = "ci-wait", Commit = "c1" }, repository.Path), Token);
+
+        var red = Assert.Single(result.Output!["red"]!.AsArray())!;
+        var digest = red["digest"]!.AsObject();
+        var kept = File.ReadAllLines(Path.Combine(layout.InstanceDirectory("wait", null), OrchestratorLayout.StepLogsDirectoryName, "build.70.log"));
+
+        // Two errors, each once: the matcher's line read by its own form and by the forge is one finding, and so is the
+        // workflow command's; the runner's sentence is no error of a tool's. A count of none is no member of it.
+        Assert.Equal(2, digest["errors"]!.GetValue<int>());
+        Assert.False(digest.ContainsKey("warnings"));
+
+        var first = digest["first"]!.AsObject();
+
+        Assert.Equal(
+            ("msbuild", "CS0103", "src/Program.cs", 12, 35, "msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context"),
+            (first["tool"]!.GetValue<string>(), first["code"]!.GetValue<string>(), first["file"]!.GetValue<string>(), first["line"]!.GetValue<int>(), first["column"]!.GetValue<int>(), first["said"]!.GetValue<string>()));
+        Assert.Equal([5, 5], first["log"]!.AsArray().Select(line => line!.GetValue<int>()));
+        Assert.StartsWith("2026-11-23T00:40:01.0000000Z ##[error]/home/runner/work/app/app/src/Program.cs(12,35): error CS0103", kept[4], StringComparison.Ordinal);
+
+        var next = Assert.Single(digest["diagnostics"]!.AsArray())!;
+
+        Assert.Equal("github-actions src/app.ts(4): Lint: Missing semicolon", next["said"]!.GetValue<string>());
+        Assert.Equal([6, 6], next["log"]!.AsArray().Select(line => line!.GetValue<int>()));
+        Assert.Equal(["Process completed with exit code 1."], digest["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        // The typed errors stand, and the line no parser held is said in the digest alone - never the raw page, nor the line
+        // again beside it.
+        Assert.Empty(red["failing"]!.AsArray());
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
+    }
+
+    /// <summary>
+    /// A red check no workflow run made has no log, and is its annotations alone: one with a place a diagnostic, one with
+    /// none a sentence said among the lines no parser held.
+    /// </summary>
+    [Fact]
+    public async Task ARedCheckWithNoLog_IsDigestedFromItsAnnotationsAlone()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var app = new CiCheck("coverage", CiCheckState.Red, "failure", "https://checks/coverage", null, null, null) { CheckRunId = 90, Annotations = 2 };
+        var checks = Substitute.For<ICiChecksService>();
+        checks.WaitAsync(Arg.Any<string>(), Arg.Any<CiChecksRequest>(), Arg.Any<CancellationToken>()).Returns(
+            new CiChecksReading("c1", CiChecksFound.Red, [app], [new CiRedCheck(app, null, null, null, null, false, null, null)
+            {
+                Annotations = [new("src/Rates.cs", 30, 41, null, null, "warning", null, "These lines are not covered", "11 lines"), new(null, null, null, null, null, "failure", null, "Coverage fell below 80%", null)],
+            }]));
+
+        var result = await Runner(harness, checks).RunAsync(Run(new WorkflowStep { Name = "wait", Type = "ci-wait", Commit = "c1" }, repository.Path), Token);
+
+        var digest = Assert.Single(result.Output!["red"]!.AsArray())!["digest"]!.AsObject();
+
+        Assert.Equal(1, digest["warnings"]!.GetValue<int>());
+        Assert.False(digest.ContainsKey("errors"));
+        Assert.False(digest.ContainsKey("first"));
+        Assert.Equal([("src/Rates.cs", 1)], digest["byFile"]!.AsArray().Select(entry => (entry!["of"]!.GetValue<string>(), entry["count"]!.GetValue<int>())));
+        Assert.Equal(["Coverage fell below 80%"], digest["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
     }
 
@@ -1040,6 +1140,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                 TouchesAll: new Dictionary<string, int> { ["src/Rates/Home.cs"] = 3 },
                 TouchesRequired: 1,
                 HotspotAt: 5,
+                ReopenedTwice: null,
                 comparison);
     }
 
@@ -1087,6 +1188,47 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         // A run whose item decides no class and whose builder found none answers an empty record, and it passes.
         Assert.True(ClassClosureRules.Judge([], [], RunProof(changed: [], calls: [])).Passed);
+    }
+
+    /// <summary>
+    /// The arms the builder's answer lists for the item's own sweep are the arms its record names, each class's own, and
+    /// no other: an arm the record names that the list leaves out would never be swept, and one listed that no class arms
+    /// would be swept for nothing the record claims - both named in one problem. An arm is one id however its case is
+    /// written, as the registry keeps them; the order is the answer's own; and a record that arms nothing lists nothing.
+    /// </summary>
+    [Fact]
+    public void TheArmsTheAnswerListsForTheItemsSweep_AreTheArmsItsRecordNames()
+    {
+        ClassClosureRecord Armed(string id, string? arm)
+        {
+            var entry = Entry(id, home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+
+            if (arm is not null)
+            {
+                entry["arm"] = new JsonObject { ["id"] = arm };
+            }
+
+            return ClassClosureRecord.In(entry)!;
+        }
+
+        IReadOnlyList<ClassClosureRecord> record = [Armed("c-rate", "RATE-1"), Armed("c-tax", "TAX-1"), Armed("c-none", null)];
+
+        IReadOnlyList<string> Problems(IReadOnlyList<ClassClosureRecord> judged, IReadOnlyList<string>? listed)
+            => ClassClosureRules.Judge([], judged, ClassClosureProof.Manual(arms: null, StringComparison.Ordinal) with { ListedArms = listed }).Problems;
+
+        Assert.Empty(Problems(record, ["TAX-1", "RATE-1"]));
+        Assert.Empty(Problems(record, ["rate-1", "Tax-1", "RATE-1"]));
+        Assert.Empty(Problems([Armed("c-none", null)], []));
+        Assert.Empty(Problems(record, null));
+        Assert.Equal(
+            ["the arms the answer lists for the item's own sweep are not those its record names: 'TAX-1' armed by the record and not listed; 'FEE-1', 'OLD-2' listed and armed by no class of the record - list each arm the record names, and no other"],
+            Problems(record, ["RATE-1", "FEE-1", "OLD-2"]));
+        Assert.Equal(
+            ["the arms the answer lists for the item's own sweep are not those its record names: 'RATE-1', 'TAX-1' armed by the record and not listed - list each arm the record names, and no other"],
+            Problems(record, []));
+        Assert.Equal(
+            ["the arms the answer lists for the item's own sweep are not those its record names: 'RATE-1' listed and armed by no class of the record - list each arm the record names, and no other"],
+            Problems([Armed("c-none", null)], ["RATE-1"]));
     }
 
     /// <summary>
@@ -1469,7 +1611,8 @@ public sealed class CheckStepRunnerTests : IDisposable
         IReadOnlyList<string> changed,
         IReadOnlyList<DssHarness.Core.Agents.AgentStreamCall> calls,
         Func<string, string, bool>? declares = null,
-        IReadOnlyDictionary<string, ClassClosureMeasure>? measures = null)
+        IReadOnlyDictionary<string, ClassClosureMeasure>? measures = null,
+        IReadOnlySet<string>? reopenedTwice = null)
         => new(
             changed,
             calls.ToDictionary(call => call.Id, StringComparer.Ordinal),
@@ -1481,6 +1624,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             new Dictionary<string, int>(),
             TouchesRequired: WorkflowStepTypes.DefaultTouches,
             HotspotAt: WorkflowStepTypes.DefaultHotspot,
+            ReopenedTwice: reopenedTwice,
             StringComparison.Ordinal);
 
     /// <summary>An agent service whose fold's dry weighing plans to write <paramref name="written"/>, and nothing else.</summary>
@@ -1495,6 +1639,189 @@ public sealed class CheckStepRunnerTests : IDisposable
                 }));
 
         return agents;
+    }
+
+    /// <summary>
+    /// The <c>route-findings</c> step routes the review's findings by their class: every introduced finding goes back
+    /// as itself, the reopened findings of one class go back as one send-back - the class by its own member, the rounds
+    /// that reopened it and all its findings, graded by the worst of them - and a class reopened a second time goes to
+    /// <c>homeAudit</c> instead, for the next action is the home audit. The item's ledger keeps, in its agent's
+    /// directory, the routings that reopened each class, so a later round knows what the rounds before it reopened, and
+    /// a round that reopens nothing moves nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheRouteFindingsStep_SendsAClassBackOnce_RaisesAHomeAuditOnTheSecondReopening_AndKeepsItsLedger()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+
+        var first = await Route(kit).RunAsync(RouteRun(kit, "rounds#1.items[0].fix#1.route",
+            Routed(text: "the report ships without its frame", severity: "high"),
+            Routed(text: "the rate is decided again in the report", severity: "medium", @class: "reopened", reopens: "c-rate"),
+            Routed(text: "the rate is decided again in the summary", severity: "low", @class: "reopened", reopens: "c-rate")), Token);
+
+        Assert.True(first.Passed);
+        var rework = first.Output!["rework"]!.AsArray();
+        Assert.Equal(2, rework.Count);
+        Assert.Equal("introduced", rework[0]!["class"]!.GetValue<string>());
+        Assert.Equal("the report ships without its frame", rework[0]!["text"]!.GetValue<string>());
+
+        // A send-back names its class by a member of its own, never a finding's class, which says introduced or reopened.
+        var sendBack = rework[1]!.AsObject();
+        Assert.Equal(["reopenedClass", "rounds", "severity", "findings"], sendBack.Select(member => member.Key));
+        Assert.Equal(("c-rate", 1, "medium"), (sendBack["reopenedClass"]!.GetValue<string>(), sendBack["rounds"]!.GetValue<int>(), sendBack["severity"]!.GetValue<string>()));
+        Assert.Equal(["the rate is decided again in the report", "the rate is decided again in the summary"], sendBack["findings"]!.AsArray().Select(finding => finding!["text"]!.GetValue<string>()));
+        Assert.Empty(first.Output["homeAudit"]!.AsArray());
+        Assert.Equal("""[{"class":"c-rate","rounds":1}]""", first.Output["reopened"]!.ToJsonString());
+
+        Assert.Equal(
+            new FlowClosureLedgerFile(1, "builder", [new FlowClosureReopens("c-rate", ["rounds#1.items[0].fix#1.route"])]).Classes.Select(entry => (entry.Class, string.Join(",", entry.By))),
+            kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder")!.Classes.Select(entry => (entry.Class, string.Join(",", entry.By))));
+
+        // The next round reopening the same class: the send-back is a home audit now, the count kept by the ledger.
+        var second = await Route(kit).RunAsync(RouteRun(kit, "rounds#1.items[0].fix#2.route", Routed(text: "once more", @class: "reopened", reopens: "c-rate")), Token);
+
+        Assert.Empty(second.Output!["rework"]!.AsArray());
+        var audit = Assert.Single(second.Output["homeAudit"]!.AsArray());
+        Assert.Equal(("c-rate", 2, "medium"), (audit!["reopenedClass"]!.GetValue<string>(), audit["rounds"]!.GetValue<int>(), audit["severity"]!.GetValue<string>()));
+        Assert.Equal(["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"], kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder")!.Classes.Single().By);
+
+        // A round that reopens nothing leaves the ledger where it was and routes nothing.
+        var third = await Route(kit).RunAsync(RouteRun(kit, "rounds#1.items[0].fix#3.route"), Token);
+
+        Assert.Empty(third.Output!["rework"]!.AsArray());
+        Assert.Empty(third.Output["homeAudit"]!.AsArray());
+        Assert.Equal("""[{"class":"c-rate","rounds":2}]""", third.Output["reopened"]!.ToJsonString());
+        Assert.Equal(2, kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder")!.Classes.Single().Reopens);
+    }
+
+    /// <summary>
+    /// A routing run again - the same instance, after a crash between the ledger's write and the step's own record, a stop
+    /// or a resume - counts its round once: its class is still reopened once, sent back once and never to a home audit,
+    /// and the ledger is left as the first run wrote it.
+    /// </summary>
+    [Fact]
+    public async Task ARoutingRunAgain_CountsItsRoundOnce()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+        var reopening = Routed(text: "the rate is decided again in the report", @class: "reopened", reopens: "c-rate");
+
+        await Route(kit).RunAsync(RouteRun(kit, "rounds#1.items[0].fix#1.route", reopening), Token);
+        var written = File.ReadAllText(kit.Layout.ClosureLedgerFile("builder"));
+
+        var again = await Route(kit).RunAsync(RouteRun(kit, "rounds#1.items[0].fix#1.route", (JsonObject)reopening.DeepClone()), Token);
+
+        Assert.True(again.Passed);
+        var sendBack = Assert.Single(again.Output!["rework"]!.AsArray());
+        Assert.Equal(("c-rate", 1), (sendBack!["reopenedClass"]!.GetValue<string>(), sendBack["rounds"]!.GetValue<int>()));
+        Assert.Empty(again.Output["homeAudit"]!.AsArray());
+        Assert.Equal(written, File.ReadAllText(kit.Layout.ClosureLedgerFile("builder")));
+    }
+
+    /// <summary>
+    /// Findings the route cannot route fail the step with every problem at once, nothing routed and the ledger untouched:
+    /// a finding that is no object, one with no class, a reopened one that names no class or one the item does not have -
+    /// its classes' or its record's, compared exactly, case and all - and a severity off the scale, which would otherwise
+    /// be graded as anything.
+    /// </summary>
+    [Fact]
+    public async Task FindingsTheRouteCannotRoute_FailTheStep_NamingEach()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+
+        var bare = new JsonObject { ["aspect"] = "correctness", ["path"] = "src/one/one.cs:1", ["text"] = "wrong", ["severity"] = "high", ["production"] = true };
+        var refused = await Route(kit).RunAsync(
+            RouteRun(
+                kit,
+                "rounds#1.items[0].fix#1.route",
+                [bare, Routed(@class: "reopened", reopens: ""), Routed(@class: "reopened", reopens: "C-RATE"), Routed(severity: "High"), Routed(@class: "reopened", reopens: "N1")],
+                extra: JsonValue.Create("a line")),
+            Token);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.Exit);
+        Assert.Equal(
+            "'rounds#1.items[0].fix#1.route' cannot route the review's findings: "
+            + "[0].class: 'none' is no class of a finding: every finding is introduced or reopened; "
+            + "[1].reopens: names no class: a reopened finding names the class it reopens, exactly, and the item's are 'c-rate', 'N1'; "
+            + "[2].reopens: 'C-RATE' is no class of the item: the item's are 'c-rate', 'N1'; name one exactly, or class the finding introduced; "
+            + "[3].severity: 'High' is not on the scale a finding is graded on: critical, high, medium, low, nit; "
+            + "[5]: is no finding: a finding is an object. Nothing was routed and the item's ledger was not changed",
+            refused.Error);
+        Assert.Null(kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder"));
+    }
+
+    /// <summary>
+    /// What the route refuses, a reviewer whose answer it routes is held to at its own answer: its findings, by their path
+    /// in its output, so the gate asks it again; findings the route would take hold.
+    /// </summary>
+    [Fact]
+    public void AReviewersFindings_AreHeldToWhatTheRouteTakes()
+    {
+        var holds = FindingRoutes.HeldTo("findings", ["c-rate"]);
+
+        Assert.Equal(
+            ["findings[0].reopens: 'c-Rate' is no class of the item: the item's are 'c-rate'; name one exactly, or class the finding introduced"],
+            holds(new JsonObject { ["findings"] = new JsonArray(Routed(@class: "reopened", reopens: "c-Rate"), Routed()) }));
+        Assert.Empty(holds(new JsonObject { ["findings"] = new JsonArray(Routed(@class: "reopened", reopens: "c-rate"), Routed()) }));
+    }
+
+    /// <summary>
+    /// The class-closure check asks a home audit of a class the item's ledger says the reviews reopened a second time -
+    /// the audit the route asked for, made by the one mechanism the check owns - and the record that carries one passes.
+    /// </summary>
+    [Fact]
+    public async Task TheClassClosureCheck_RequiresAHomeAuditOfAClassTheLedgerReopenedTwice()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+        kit.Harness.OrchestrationStore.WriteClosureLedger(kit.Layout, "builder", new FlowClosureLedgerFile(1, "builder", [new FlowClosureReopens("c-rate", ["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"])]));
+
+        var entry = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+
+        var refused = await Closure(kit, Weighing()).RunAsync(ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), entry), Token);
+
+        Assert.Equal(
+            ["class 'c-rate' reopened twice"],
+            [.. refused.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Equal(ClassClosureExit.HomeAudit, refused.Exit);
+
+        entry["homeAudit"] = new JsonObject { ["consolidated"] = new JsonArray("the rate"), ["invariants"] = new JsonArray("one place"), ["structural"] = new JsonArray("Home holds it") };
+
+        var audited = await Closure(kit, Weighing()).RunAsync(ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), (JsonObject)entry.DeepClone()), Token);
+
+        Assert.True(audited.Output!["passed"]!.GetValue<bool>());
+    }
+
+    /// <summary>
+    /// The check reads the ledger's class ids as the route wrote them, exactly, on every machine: a class id is no path,
+    /// so a class 'C-RATE' the ledger holds reopened twice is not the planned 'c-rate', whether or not this machine's file
+    /// system folds case - the same records ask the same audit everywhere.
+    /// </summary>
+    [Fact]
+    public async Task TheClassClosureCheck_ReadsTheLedgersClassIds_Exactly_OnEveryMachine()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+        kit.Harness.OrchestrationStore.WriteClosureLedger(kit.Layout, "builder", new FlowClosureLedgerFile(1, "builder", [new FlowClosureReopens("C-RATE", ["rounds#1.items[0].fix#1.route", "rounds#1.items[0].fix#2.route"])]));
+
+        var entry = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+
+        var judged = await Closure(kit, Weighing()).RunAsync(ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), entry), Token);
+
+        Assert.Empty(judged.Output!["problems"]!.AsArray());
+        Assert.True(judged.Output["passed"]!.GetValue<bool>());
     }
 
     /// <summary>The class-closure runner over the kit's own services, the agent service and the graph given.</summary>
@@ -1522,6 +1849,45 @@ public sealed class CheckStepRunnerTests : IDisposable
             worksIn: "builder",
             instance: "rounds#1.items[0].class-closure",
             run: OrchestrationKit.Orchestrator);
+
+    /// <summary>A route-findings step of the kit's run, working in the agent 'builder', routing the findings given.</summary>
+    private static RouteFindingsStepRunner Route(OrchestrationKit kit)
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore);
+
+    /// <summary>A route-findings run of the kit's as <paramref name="instance"/>, routing <paramref name="findings"/> over the planned class 'c-rate'.</summary>
+    private static FlowStepRun RouteRun(OrchestrationKit kit, string instance, params JsonObject[] findings)
+        => RouteRun(kit, instance, findings, extra: null);
+
+    /// <summary>
+    /// A route-findings run of the kit's as <paramref name="instance"/>, routing <paramref name="findings"/> and
+    /// <paramref name="extra"/> after them, over the planned class 'c-rate' and the class 'N1' its builder's record added.
+    /// </summary>
+    private static FlowStepRun RouteRun(OrchestrationKit kit, string instance, JsonObject[] findings, JsonNode? extra)
+        => Run(
+            new WorkflowStep { Name = "route", Type = "route-findings", In = "item-agent", Findings = "review.findings", Classes = "input.item.classes", Record = "implement.latest.closure" },
+            kit.Main,
+            read: new Dictionary<string, FlowValue>
+            {
+                ["findings"] = FlowValue.Of(new JsonArray([.. findings, .. extra is null ? Array.Empty<JsonNode>() : [extra]])),
+                ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home"))),
+                ["record"] = FlowValue.Of(new JsonArray(Entry("N1", home: "src/Other.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "it holds"))),
+            },
+            worksIn: "builder",
+            instance: instance,
+            run: OrchestrationKit.Orchestrator);
+
+    /// <summary>One finding of a review, as the review's schema holds it: classed introduced or reopened, the reopened naming its class.</summary>
+    private static JsonObject Routed(string text = "wrong", string severity = "medium", string @class = "introduced", string reopens = "")
+        => new()
+        {
+            ["aspect"] = "closure",
+            ["path"] = "src/one/one.cs:1",
+            ["text"] = text,
+            ["severity"] = severity,
+            ["production"] = true,
+            ["class"] = @class,
+            ["reopens"] = reopens,
+        };
 
     /// <summary>One planned class of the item's plan, as the plan's own check reads it.</summary>
     private static JsonObject Class(string id, string home, string symbol, string? site = null)
@@ -1696,7 +2062,9 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         public void LegEnded(string leg) => throw new InvalidOperationException("a check places no leg");
 
-        public void Used(long tokens, double? usd, string? uncounted = null) => throw new InvalidOperationException("a check spends nothing");
+        public void Used(FlowTurnSpend turn) => throw new InvalidOperationException("a check spends nothing");
+
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) => throw new InvalidOperationException("a check places no leg");
 
         public void HandoffTaken() => throw new InvalidOperationException("a check takes no handoff");
     }

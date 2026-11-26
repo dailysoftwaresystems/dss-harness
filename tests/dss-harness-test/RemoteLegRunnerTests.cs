@@ -20,6 +20,30 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class RemoteLegRunnerTests
 {
+    /// <summary>
+    /// What the end of a leg's command on its host could not reach or end is said under the command running the leg, on
+    /// the leg's own line, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatTheEndOfALegsCommandCouldNotReachOrEnd_IsSaidOnTheLegsOwnLine(bool stopped)
+    {
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+            return HostResults.Finished(command, 0);
+        });
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new RemoteLegRunner(new UnreachingHostCommands(hosts, stop), harness.Output).RunAsync("test", Leg(), [], cancellationToken: token));
+
+        Assert.Equal([UnreachedSaid.Warned("test", Leg().Name)], said);
+    }
+
     [Fact]
     public async Task TheHostIsAskedToRunTheSameCommand_ForThatLegAlone_AndOnItself()
     {
@@ -194,12 +218,13 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
-    /// A leg of a run is sent with that run beside its command, never in its arguments: a leg on the host asking its
-    /// heavy-leg slots is recorded under it, so the legs of one command wait for each other's slots without that wait
-    /// counting. A command that runs no leg of a run sends none.
+    /// A leg of a run is sent with that run and its priority beside its command, never in its arguments: a leg on the host
+    /// asking its heavy-leg slots is recorded under the run, so the legs of one command wait for each other's slots without
+    /// that wait counting, and asks the host's dispatch queue at the run's priority. A command that runs no leg of a run
+    /// sends neither.
     /// </summary>
     [Fact]
-    public async Task ALegOfARun_IsSentWithItsRun_BesideItsCommand()
+    public async Task ALegOfARun_IsSentWithItsRunAndItsPriority_BesideItsCommand()
     {
         var sent = new List<HostCommand>();
         var run = RunId.New();
@@ -211,10 +236,10 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        await Runner(hosts).RunAsync("build", Leg(), [], run, onNote: null, cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", Leg(), [], run, priority: 8, onNote: null, cancellationToken: TestContext.Current.CancellationToken);
         await Runner(hosts).RunAsync("clean", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal([run.Value, null], sent.Select(command => Request(command).RunId));
+        Assert.Equal([(run.Value, 8), (null, null)], sent.Select(command => (Request(command).RunId, Request(command).Priority)));
         Assert.DoesNotContain(run.Value, Request(sent[0]).Arguments);
     }
 
@@ -743,7 +768,8 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>
     /// The last lines the phase that failed on a host printed travel on the leg's line, with that phase's name, read from
-    /// the very document the host writes: its log stays on that host, and a reader here has nothing else.
+    /// the very document the host writes: what a reader here has of them, even where the log of that phase cannot be
+    /// brought back.
     /// </summary>
     [Fact]
     public async Task TheLastLinesAPhaseThatFailedTherePrinted_AreCarriedOnTheLegsLine()
@@ -803,6 +829,58 @@ public sealed class RemoteLegRunnerTests
 
         Assert.Equal(detail, entry.Detail);
         Assert.Equal(["connect mac.invalid: refused"], entry.LogTail);
+    }
+
+    /// <summary>
+    /// What a host's failing phase printed, digested there, travels on its leg's line, read from the very document the
+    /// host writes - every diagnostic, failure, frame and count, each file named as the host named it relative to its
+    /// copy of the tree - each text naming the host as declared, never by an address its name resolved to, as its tail
+    /// does; so this machine's ledger, its --json, a red entry and a continuation record say the host's first error.
+    /// A digest this build cannot read is refused as a ledger it cannot read is, never read as none.
+    /// </summary>
+    [Fact]
+    public async Task WhatAHostsFailingPhaseDigestedTo_IsCarriedOnItsLine_NamingTheHostAsDeclared()
+    {
+        var digest = ResultDigest.Of(
+            [new Diagnostic("msbuild", "error", "CS0103", "no route to 192.0.2.10", "src/Program.cs", 12, 35, Stack: [new StackFrame("at Main() in src/Program.cs:line 12", "src/Program.cs", 12, InTree: true)], Log: (14, 14))],
+            [new TestFailure("xunit", "App.Tests.Holds", Message: "refused by 192.0.2.10", File: "tests/A.cs", Line: 4)],
+            ["connect 192.0.2.10: refused"]);
+        var written = LedgerReport
+            .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.Failed, Detail = "build exited 1", Digest = digest }], durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), NSubstitute.Substitute.For<IHostAddressResolver>()),
+        };
+        var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
+
+        var carried = (await Runner(new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        })).RunAsync("build", leg, [], cancellationToken: TestContext.Current.CancellationToken)).Digest;
+
+        Assert.Equal(digest.Document().ToJsonString().Replace("192.0.2.10", "mac.invalid", StringComparison.Ordinal), carried!.Document().ToJsonString());
+
+        // A digest of no shape this build writes is no digest read: the host's answer is refused, saying which leg's.
+        var unreadable = System.Text.Json.Nodes.JsonNode.Parse(written)!;
+        unreadable["legs"]![0]!["digest"] = System.Text.Json.Nodes.JsonNode.Parse("""{"diagnostics":[{"tool":"msbuild","severity":"error"}]}""");
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => Runner(new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, unreadable.ToJsonString());
+
+            return HostResults.Finished(command, 0);
+        })).RunAsync("build", leg, [], cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            (HarnessExit.HostUnavailable, "ssh mac answered 'build' with a ledger this build cannot read: its digest of leg 'wsl-debug': 'message' is missing"),
+            (refused.ExitCode, refused.Message));
     }
 
     /// <summary>

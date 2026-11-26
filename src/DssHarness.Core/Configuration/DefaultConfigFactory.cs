@@ -137,7 +137,12 @@ public static class DefaultConfigFactory
             "cmake" => new TestInvocation
             {
                 Runner = Ctest.Program,
-                Args = ["--output-on-failure", "--no-tests=error"],
+                Args = ["--output-on-failure", "--no-tests=error", "--output-junit", "{resultsDir}/junit.xml"],
+
+                // The results the runner writes as data, read where the leg did not pass: ctest's JUnit XML, the
+                // file the digest of a red test run starts from. Written into the run's own results directory, which
+                // the harness makes empty before the runner starts, so the file read is this run's or none.
+                Results = ["{resultsDir}/junit.xml"],
 
                 // Several filter units reach ctest - and dotnet test and dart test below - joined by the one join each
                 // reads as alternatives, which the harness owns (FilterUnits.JoinOf), so no filterJoin is written.
@@ -157,7 +162,12 @@ public static class DefaultConfigFactory
             "dotnet" => new TestInvocation
             {
                 Runner = "dotnet",
-                Args = ["test"],
+                Args = ["test", "--logger", "trx", "--results-directory", "{resultsDir}"],
+
+                // Every TRX the run wrote - a solution's projects each write their own, named by machine and moment -
+                // read as one digest, from the run's own results directory, so no earlier run's is among them. The
+                // logger changes nothing the summary says, so the witness and the count stand.
+                Results = ["{resultsDir}/*.trx"],
                 FilterArg = "--filter",
 
                 // The summary is matched as text, and dotnet otherwise translates it into the
@@ -173,7 +183,12 @@ public static class DefaultConfigFactory
             "dart" => new TestInvocation
             {
                 Runner = "dart",
-                Args = ["test"],
+                Args = ["test", "--file-reporter", "json:{resultsDir}/dart-test-results.jsonl"],
+
+                // The JSON stream beside the reporter the console keeps, in the run's own results directory: the digest
+                // of a red dart run comes from it, and the console's own summary - the witness and the count - is
+                // unchanged by the file beside it.
+                Results = ["{resultsDir}/dart-test-results.jsonl"],
                 FilterArg = "--name",
                 CoresArgs = ["--concurrency={cores}"],
                 SuccessPattern = "All tests passed!",

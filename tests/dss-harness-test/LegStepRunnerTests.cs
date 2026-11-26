@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Application;
@@ -5,6 +6,7 @@ using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
@@ -85,8 +87,8 @@ public sealed class LegStepRunnerTests : IDisposable
         };
     }
 
-    private static FlowStepRun Run(WorkflowStep step, string repository, IFlowRunEvents? events = null, string? worksIn = null)
-        => new(step, step.Name, 1, FlowValue.Missing, null, null, [], events ?? new Said(), Place: new FlowRunPlace(repository, "r1", null, Flow), WorksIn: worksIn);
+    private static FlowStepRun Run(WorkflowStep step, string repository, IFlowRunEvents? events = null, string? worksIn = null, IReadOnlyDictionary<string, FlowValue>? read = null, string? instance = null)
+        => new(step, instance ?? step.Name, 1, FlowValue.Missing, null, null, [], events ?? new Said(), Place: new FlowRunPlace(repository, "r1", null, Flow), Read: read, WorksIn: worksIn);
 
     /// <summary>Every event a step's runner said, in the words a test reads them in.</summary>
     private sealed class Said : IFlowRunEvents
@@ -113,7 +115,10 @@ public sealed class LegStepRunnerTests : IDisposable
 
         public void LegEnded(string leg) => Add($"{leg} ended");
 
-        public void Used(long tokens, double? usd, string? uncounted = null) => Add("used");
+        public void Used(FlowTurnSpend turn) => Add("used");
+
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<QueueAhead> ahead)
+            => Add(on.Count == 0 ? "a leg runs" : $"held on {string.Join(", ", on)}{(ahead.Count == 0 ? string.Empty : $", behind {string.Join(", ", ahead.Select(standing => $"{QueueReports.NameOf(standing.Class)}: {string.Join(", ", standing.Tenants)}"))}")}");
 
         public void HandoffTaken() => Add("handoff taken");
 
@@ -141,24 +146,66 @@ public sealed class LegStepRunnerTests : IDisposable
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var legs = new FakeLegs
         {
-            Answer = Result([new LegEntry { Leg = "native", Verdict = LegVerdict.Passed }, new LegEntry { Leg = "here", Verdict = LegVerdict.Passed }], HarnessExit.Success, "passed"),
+            Answer = Result(
+                [
+                    new LegEntry
+                    {
+                        Leg = "native",
+                        Verdict = LegVerdict.Passed,
+                        Duration = TimeSpan.FromSeconds(90),
+                        Phases = [new PhaseRecord("configure", TimeSpan.FromSeconds(20), false), new PhaseRecord("build", TimeSpan.FromSeconds(65), false)],
+                        Admission = new AdmissionFact(true, 42.5),
+                        Digest = ResultDigest.Of(
+                            [
+                                new Diagnostic("msbuild", "warning", "CS0168", "unused", "src/a.cs", 1),
+                                new Diagnostic("msbuild", "warning", "CS0168", "unused", "src/b.cs", 2),
+                                new Diagnostic("msbuild", "warning", "CS0219", "assigned", "src/c.cs", 3),
+                            ],
+                            [],
+                            ["a line no parser read"]),
+                    },
+                    new LegEntry { Leg = "here", Verdict = LegVerdict.Passed },
+                ],
+                HarnessExit.Success,
+                "passed"),
             WhileItRuns = watch =>
             {
                 watch.Placed([new LegPlace("native", InACopy: true), new LegPlace("here", InACopy: false)]);
                 watch.CopyMade("native");
-                watch.Ended("here");
-                watch.Ended("native");
+                watch.Ended(new LegEntry { Leg = "here", Verdict = LegVerdict.Passed });
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Queue, new QueueAhead(DispatchClassName.Heavy, ["local/src/other"])));
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Memory));
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Taken));
+                watch.Admitting("native", "native", new AdmissionTold(AdmissionStage.Ended));
+                watch.Ended(new LegEntry { Leg = "native", Verdict = LegVerdict.Passed });
             },
         };
         var said = new Said();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "checks", Type = "build" }, repository.Path, said), Token);
 
         Assert.True(result.Passed, result.Error);
         Assert.Equal(HarnessExit.Success, result.Exit);
         Assert.Equal([new FlowLeg("native", LegVerdict.Passed), new FlowLeg("here", LegVerdict.Passed)], result.Legs);
-        Assert.Equal(["placed native in a copy", "placed here in the tree", "every leg placed", "copy of native made", "here ended", "native ended"], said.Events);
+
+        // The machine held the step once every leg still to run waited at it - each cause as it began, the queue's with
+        // who stands ahead - and let it go on as its leg started.
+        Assert.Equal(
+            [
+                "placed native in a copy", "placed here in the tree", "every leg placed", "copy of native made", "here ended",
+                $"held on {FlowWaits.MachineQueue}, behind heavy: local/src/other", $"held on {FlowWaits.MachineMemory}", "a leg runs", "native ended",
+            ],
+            said.Events);
+
+        // What each leg did is the attempt's: its time, how long its machine held it, each phase and its digest's counts.
+        Assert.Equal(
+            JsonSerializer.Serialize<IReadOnlyList<FlowStepLeg>>(
+            [
+                new FlowStepLeg("native", "passed", 90, 42.5, [new FlowStepPhase("configure", 20), new FlowStepPhase("build", 65)], 0, 3, 0, 1),
+                new FlowStepLeg("here", "passed"),
+            ]),
+            JsonSerializer.Serialize(result.Attempt!.Legs));
         Assert.Equal(
             """{"passed":true,"exitCode":0,"verdicts":[{"leg":"native","verdict":"passed"},{"leg":"here","verdict":"passed"}],"red":[],"runDirectory":"/runs/r","isolation":{"mode":"required","none":"the test asked none"}}""",
             result.Output!.ToJsonString());
@@ -182,7 +229,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var layout = inAnAgent ? (await AgentAsync(harness, repository)).Layout : await LayoutAsync(harness, repository);
         var legs = new FakeLegs();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
         var step = new WorkflowStep { Name = "checks", Type = "build", In = inAnAgent ? "make" : null };
 
         var result = await runner.RunAsync(Run(step, repository.Path, worksIn: inAnAgent ? "a1" : null), Token);
@@ -204,8 +251,9 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// A step in an agent's worktree runs its legs there and keeps, whole, the log of each red leg's phase that did not
-    /// pass where this machine ran the leg - not a green leg's, not a phase that passed, not a leg a host ran, whose log
-    /// stays on that host - inside the agent's directory; on the main tree the same legs leave the ledger alone.
+    /// pass as it is on this machine - a leg's this machine ran, and a host's its run brought back - inside the agent's
+    /// directory: not a green leg's, not a phase that passed, not a host's whose log could not be brought back. On the
+    /// main tree the same legs leave the ledger alone.
     /// </summary>
     [Fact]
     public async Task InAnAgentsWorktree_EachRedLegsFailingLog_IsKept()
@@ -236,21 +284,37 @@ public sealed class LegStepRunnerTests : IDisposable
                     },
                     new LegEntry { Leg = "green", Verdict = LegVerdict.Passed, Logs = [new PhaseLogFile("test", Log("green.test", "ok\n"))] },
                     new LegEntry { Leg = "far", Verdict = LegVerdict.Failed, TailPhase = "test", HostRunId = RunId.New(), Logs = [new PhaseLogFile("test", Log("far.test", "on the host\n"))] },
+                    new LegEntry
+                    {
+                        Leg = "brought",
+                        Verdict = LegVerdict.Failed,
+                        TailPhase = "test",
+                        HostRunId = RunId.New(),
+                        Logs = [new PhaseLogFile("test", "~/copies/app/.harness-config/runs/r/brought/test.log")],
+                        LogBroughtBack = Log("brought.test", "a test failed there\n"),
+                    },
                 ],
                 HarnessExit.CommandFailed,
                 "a leg failed"),
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
         var step = new WorkflowStep { Name = "checks", Type = "build", In = "make" };
 
         var result = await runner.RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.Equal(worktree, legs.Asked.Single().Directory);
-        Assert.Equal(["native", "far"], result.Output!["red"]!.AsArray().Select(red => red!["leg"]!.GetValue<string>()));
+        Assert.Equal(["native", "far", "brought"], result.Output!["red"]!.AsArray().Select(red => red!["leg"]!.GetValue<string>()));
         var kept = Path.Combine(layout.InstanceDirectory("checks", "a1"), OrchestratorLayout.StepLogsDirectoryName);
-        Assert.Equal(["native.test.log"], Directory.EnumerateFiles(kept).Select(Path.GetFileName));
+        Assert.Equal(["brought.test.log", "native.test.log"], Directory.EnumerateFiles(kept).Select(Path.GetFileName).Order(StringComparer.Ordinal));
         Assert.Equal("a test failed\nboom\n", File.ReadAllText(Path.Combine(kept, "native.test.log")));
+        Assert.Equal("a test failed there\n", File.ReadAllText(Path.Combine(kept, "brought.test.log")));
         Assert.True(File.Exists(Path.Combine(layout.InstanceDirectory("checks", "a1"), OrchestratorLayout.StepLedgerFileName)));
+
+        // Each red entry names the log its digest's ranges number, one read away: the copy the step kept - a host's
+        // brought back among them - and none for a host's whose log could not be brought back.
+        Assert.Equal(
+            [Path.Combine(kept, "native.test.log"), null, Path.Combine(kept, "brought.test.log")],
+            result.Output!["red"]!.AsArray().Select(red => red!["log"]?.GetValue<string>()));
 
         var onMain = await runner.RunAsync(Run(step with { Name = "main-checks", In = null }, repository.Path), Token);
 
@@ -258,6 +322,371 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal(HarnessExit.CommandFailed, onMain.Exit);
         Assert.True(File.Exists(Path.Combine(layout.InstanceDirectory("main-checks", null), OrchestratorLayout.StepLedgerFileName)));
         Assert.False(Directory.Exists(Path.Combine(layout.InstanceDirectory("main-checks", null), OrchestratorLayout.StepLogsDirectoryName)));
+
+        // On the main tree, where no copy is kept, the log its run's records hold.
+        Assert.Equal(Path.Combine(logs, "native.test"), onMain.Output!["red"]![0]!["log"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// Where the run keeps a graph of the tree a leg step's legs ran in, each red leg's digest is joined to the declarations
+    /// the graph holds at its places in the tree, checked first by the files they name: the first error's symbol is the
+    /// member enclosing its line - its kind, its qualified name and its handle in the view - a frame of a failure's stack in
+    /// the tree is rendered with it, a frame outside the tree as printed, and the ledger the step keeps holds the same. A
+    /// run that keeps no graph says none, and the step makes none for it.
+    /// </summary>
+    [Fact]
+    public async Task ARedLegsDigest_IsJoinedToTheDeclarationsOfTheRunsGraph_WhereTheRunKeepsOne()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        repository.WriteFile(
+            "src/Store.cs",
+            "namespace App;\n\npublic sealed class Store\n{\n    public int Load(string name)\n    {\n        var found = 0;\n        return found + x;\n    }\n}\n");
+        await harness.CommitAllAsync(repository.Path, "the store", Token);
+
+        var digest = ResultDigest.Of(
+            [new Diagnostic("csc", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Store.cs", 8, 24)],
+            [
+                new TestFailure(
+                    "xunit",
+                    "App.Tests.StoreTests.Loads",
+                    Exception: new ExceptionRecord(
+                        "System.InvalidOperationException",
+                        "no record",
+                        [
+                            new StackFrame("at App.Store.Load(String name) in src/Store.cs:line 7", "src/Store.cs", 7, Symbol: "App.Store.Load", InTree: true),
+                            new StackFrame("at System.Linq.Enumerable.First()", Symbol: "System.Linq.Enumerable.First"),
+                        ],
+                        [])),
+            ],
+            []);
+        // A leg in the tree itself, which built the file as the tree holds it.
+        var built = new WorkedTree(repository.Path) { Built = new Dictionary<string, FileContent> { ["src/Store.cs"] = FileContent.Of(File.ReadAllBytes(repository.Combine("src/Store.cs"))) } };
+        var legs = new FakeLegs
+        {
+            Answer = Result([new LegEntry { Leg = "native", Verdict = LegVerdict.Failed, TailPhase = "build", Digest = digest, Tree = built }], HarnessExit.CommandFailed, "a leg failed"),
+        };
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
+        var layout = await LayoutAsync(harness, repository);
+
+        var ungraphed = await runner.RunAsync(Run(new WorkflowStep { Name = "plain", Type = "build" }, repository.Path), Token);
+
+        Assert.Null(ungraphed.Output!["red"]![0]!["digest"]!["first"]!["symbol"]);
+        Assert.False(File.Exists(layout.GraphManifestFile));
+
+        var context = await harness.ContextLoader.LoadAsync(repository.Path, Token);
+        await harness.CodebaseGraph.SyncAsync(FlowGraphSyncs.RequestOf(context, new FlowRunPlace(repository.Path, "r1", null, Flow), "test"), Token);
+        var view = new DssHarness.Core.Codebase.CodebaseGraphQueries((await harness.CodebaseGraph.ReadOnlyAsync(layout, null, Token))!);
+        var load = view.AtLine("src/Store.cs", 8)!;
+        var said = $"member App.Store.Load {load.Handle}";
+
+        var graphed = await runner.RunAsync(Run(new WorkflowStep { Name = "graphed", Type = "build" }, repository.Path), Token);
+
+        // The graph's own answer at the place, named as the join names it: a member, its qualified name, its handle.
+        Assert.Equal(("member", "App.Store.Load"), (load.Kind, load.Qualified));
+        var entry = graphed.Output!["red"]![0]!;
+        Assert.Equal(said, entry["digest"]!["first"]!["symbol"]!.GetValue<string>());
+        Assert.Equal(
+            [$"at App.Store.Load(String name) in src/Store.cs:line 7 [{said}]", "at System.Linq.Enumerable.First()"],
+            entry["digest"]!["failures"]![0]!["stack"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        var ledger = JsonNode.Parse(File.ReadAllText(Path.Combine(layout.InstanceDirectory("graphed", null), OrchestratorLayout.StepLedgerFileName)))!;
+        var kept = ledger["legs"]![0]!["digest"]!;
+        Assert.Equal(said, kept["diagnostics"]![0]!["symbol"]!.GetValue<string>());
+        Assert.Equal($"App.Store.Load [{said}]", kept["failures"]![0]!["exception"]!["stack"]![0]!["symbol"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A red leg's place is joined to a declaration only where its file holds what the leg built: the step lets its tree go
+    /// once its legs' copies are made, so a fold may write a file while they work, and the graph reads the tree as it is
+    /// when it is asked. A file written after the copy was made - a method put at the top of its class, so the line the
+    /// build named is another declaration's now - says no declaration at its places, never the new code's, in the entry a
+    /// model reads and the ledger the step keeps alike; a file the tree holds as the copy was made of it is joined.
+    /// </summary>
+    [Fact]
+    public async Task APlaceWhoseFileWasWrittenAfterItsLegsCopyWasMade_IsJoinedToNoDeclaration()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: true));
+        const string Store = "namespace App;\n\npublic sealed class Store\n{\n    public int Load(string name)\n    {\n        var found = 0;\n        return found + x;\n    }\n}\n";
+        const string Other = "namespace App;\n\npublic sealed class Other\n{\n    public int Run()\n    {\n        return y;\n    }\n}\n";
+        repository.WriteFile("src/Store.cs", Store);
+        repository.WriteFile("src/Other.cs", Other);
+        await harness.CommitAllAsync(repository.Path, "the store", Token);
+
+        var layout = await LayoutAsync(harness, repository);
+        var context = await harness.ContextLoader.LoadAsync(repository.Path, Token);
+        await harness.CodebaseGraph.SyncAsync(FlowGraphSyncs.RequestOf(context, new FlowRunPlace(repository.Path, "r1", null, Flow), "test"), Token);
+        var run = new DssHarness.Core.Codebase.CodebaseGraphQueries((await harness.CodebaseGraph.ReadOnlyAsync(layout, null, Token))!).AtLine("src/Other.cs", 7)!;
+
+        // The copy was made of the tree as it was read: both files as committed.
+        var line = new LegEntry
+        {
+            Leg = "native",
+            Verdict = LegVerdict.Failed,
+            TailPhase = "build",
+            Tree = new WorkedTree(repository.Combine(".legs", "native"))
+            {
+                CopyOf = repository.Path,
+                Built = new Dictionary<string, FileContent>
+                {
+                    ["src/Store.cs"] = FileContent.Of(System.Text.Encoding.UTF8.GetBytes(Store)),
+                    ["src/Other.cs"] = FileContent.Of(System.Text.Encoding.UTF8.GetBytes(Other)),
+                },
+            },
+            Digest = ResultDigest.Of(
+                [
+                    new Diagnostic("csc", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Store.cs", 8, 24),
+                    new Diagnostic("csc", "error", "CS0103", "The name 'y' does not exist in the current context", "src/Other.cs", 7, 16),
+                ],
+                [],
+                []),
+        };
+        var legs = new FakeLegs
+        {
+            Answer = Result([line], HarnessExit.CommandFailed, "a leg failed"),
+            WhileItRuns = watch =>
+            {
+                watch.Placed([new LegPlace("native", InACopy: true)]);
+                watch.CopyMade("native");
+
+                // A fold lands while the leg works in its copy: its line 8 is the new method's now.
+                repository.WriteFile("src/Store.cs", Store.Replace("{\n    public int Load", "{\n    public void Validate()\n    {\n        Check();\n    }\n\n    public int Load", StringComparison.Ordinal));
+                watch.Ended(line);
+            },
+        };
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
+
+        var result = await runner.RunAsync(Run(new WorkflowStep { Name = "graphed", Type = "build" }, repository.Path), Token);
+
+        // The written file's place names nothing; the other is joined to the declaration the graph holds at it.
+        var entry = result.Output!["red"]![0]!["digest"]!;
+        Assert.Null(entry["first"]!["symbol"]);
+        Assert.Equal(
+            [null, $"member App.Other.Run {run.Handle}"],
+            JsonNode.Parse(File.ReadAllText(Path.Combine(layout.InstanceDirectory("graphed", null), OrchestratorLayout.StepLedgerFileName)))!["legs"]![0]!["digest"]!["diagnostics"]!
+                .AsArray()
+                .Select(diagnostic => diagnostic!["symbol"]?.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A file written while the graph is asked may have been read as written: a place is joined only where its file holds
+    /// what the leg built both as the graph is asked and once it has answered, so a file written in between says no
+    /// declaration at its places, whatever the graph answered of it, and a file that held still is joined.
+    /// </summary>
+    [Fact]
+    public async Task AFileWrittenWhileTheGraphIsAsked_IsJoinedToNoDeclaration()
+    {
+        using var tree = new TempDirectory();
+        var harness = new HarnessFactory();
+        var store = tree.WriteFile("src/Store.cs", "class Store {}\n");
+        var other = tree.WriteFile("src/Other.cs", "class Other {}\n");
+        var line = new LegEntry
+        {
+            Leg = "native",
+            Verdict = LegVerdict.Failed,
+            TailPhase = "build",
+            Tree = new WorkedTree(tree.Path)
+            {
+                Built = new Dictionary<string, FileContent>
+                {
+                    ["src/Store.cs"] = FileContent.Of(File.ReadAllBytes(store)),
+                    ["src/Other.cs"] = FileContent.Of(File.ReadAllBytes(other)),
+                },
+            },
+            Digest = ResultDigest.Of([new Diagnostic("csc", "error", "CS0103", "x", "src/Store.cs", 1, 1), new Diagnostic("csc", "error", "CS0103", "y", "src/Other.cs", 1, 1)], [], []),
+        };
+        IReadOnlyList<string>? asked = null;
+        var request = new FlowStepLegsRequest(new HarnessConfig(), tree.Path, tree.Path, tree.Combine("step"), tree.Combine("step"), RedLogs: false, "'checks'", "build")
+        {
+            Declarations = (files, _) =>
+            {
+                asked = files;
+
+                // A fold writes the file while the graph reads it.
+                File.WriteAllText(store, "class Validate {}\nclass Store {}\n");
+                return Task.FromResult<Func<string, int, EnclosingDeclaration?>?>((file, _) => new EnclosingDeclaration("type", file, "h1"));
+            },
+        };
+
+        var ran = await new FlowStepLegs(harness.FileSystem, harness.Output, harness.ChildSessions, new TestIsolation())
+            .RunAsync(request, watch: null, (_, _) => Task.FromResult(Result([line], HarnessExit.CommandFailed, "a leg failed")), Token);
+
+        // Both were asked, each holding what the leg built as the graph was asked; only the one that held still is joined.
+        Assert.Equal(["src/Store.cs", "src/Other.cs"], asked);
+        Assert.Equal([null, "type src/Other.cs h1"], ran.Result!.Report.Lines.Single().Digest!.Diagnostics.Select(diagnostic => diagnostic.Symbol));
+    }
+
+    /// <summary>
+    /// A red leg a host ran is as reachable as one this machine ran: its digest holds a ctest failure read from the
+    /// console, which says no more than the test's status, and the assertion the test printed - typed by no parser - is in
+    /// the log its run brought back to this machine, which the entry names as its log; at the line range its first failure
+    /// gives, one read away, so no raw line goes beside the digest.
+    /// </summary>
+    [Fact]
+    public void ARedLegAHostRan_NamesTheLogItsRunBroughtBack_TheAssertionOneReadAway()
+    {
+        using var records = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Assertion = "check.c:9: expected 2 records, found 3";
+        var log = records.WriteFile(
+            "folds/test.log",
+            $"Test project /home/u/copies/app/build\n    Start 3: folds_duplicates\n3/3 Test #3: folds_duplicates .................***Failed    0.01 sec\n{Assertion}\n\n67% tests passed, 1 tests failed out of 3\n");
+        var line = new LegEntry
+        {
+            Leg = "folds",
+            Verdict = LegVerdict.Failed,
+            Detail = "1 test failed",
+            TailPhase = "test",
+            LogTail = ["3/3 Test #3: folds_duplicates .................***Failed    0.01 sec", Assertion, string.Empty, "67% tests passed, 1 tests failed out of 3"],
+            HostRunId = RunId.New(),
+            Records = "~/copies/app/.harness-config/runs/r/folds",
+            Logs = [new PhaseLogFile("test", "~/copies/app/.harness-config/runs/r/folds/test.log")],
+            LogBroughtBack = log,
+            Digest = ResultDigest.Of([], [new TestFailure("ctest", "folds_duplicates", Log: (3, 4))], []),
+        };
+        var legs = new FlowStepLegs(harness.FileSystem, harness.Output, harness.ChildSessions, new TestIsolation());
+        var request = new FlowStepLegsRequest(new HarnessConfig(), records.Path, records.Path, records.Path, records.Path, RedLogs: false, "'checks'", "build");
+
+        var red = LegStepRunner.Output(Result([line], HarnessExit.CommandFailed, "a leg failed"), arms: false, ran => legs.LogOf(ran, request))["red"]!.AsArray().Single()!;
+
+        Assert.Equal(log, red["log"]!.GetValue<string>());
+        Assert.Empty(red["tail"]!.AsArray());
+
+        var range = red["digest"]!["first"]!["log"]!.AsArray().Select(number => number!.GetValue<int>()).ToList();
+
+        Assert.Equal(
+            ["3/3 Test #3: folds_duplicates .................***Failed    0.01 sec", Assertion],
+            File.ReadAllLines(red["log"]!.GetValue<string>())[(range[0] - 1)..range[1]]);
+    }
+
+    /// <summary>
+    /// A red leg a host ran whose log could not be brought back has no log on this machine to read: the entry names none,
+    /// and its digest - a ctest failure that says no more than the test's status - goes with the phase's last lines whole
+    /// beside it, so the assertion the test printed, which no parser typed, is in what a model is handed, once.
+    /// </summary>
+    [Fact]
+    public void ARedLegAHostRanWhoseLogWasNotBroughtBack_HandsItsLastLinesBesideTheDigest()
+    {
+        using var records = new TempDirectory();
+        var harness = new HarnessFactory();
+        const string Assertion = "check.c:9: expected 2 records, found 3";
+        IReadOnlyList<string> tail = ["3/3 Test #3: folds_duplicates .................***Failed    0.01 sec", Assertion, string.Empty, "67% tests passed, 1 tests failed out of 3"];
+        var line = new LegEntry
+        {
+            Leg = "folds",
+            Verdict = LegVerdict.Failed,
+            Detail = "1 test failed",
+            TailPhase = "test",
+            LogTail = tail,
+            HostRunId = RunId.New(),
+            Records = "~/copies/app/.harness-config/runs/r/folds",
+            Logs = [new PhaseLogFile("test", "~/copies/app/.harness-config/runs/r/folds/test.log")],
+            Digest = ResultDigest.Of([], [new TestFailure("ctest", "folds_duplicates", Log: (3, 4))], []),
+        };
+        var legs = new FlowStepLegs(harness.FileSystem, harness.Output, harness.ChildSessions, new TestIsolation());
+        var request = new FlowStepLegsRequest(new HarnessConfig(), records.Path, records.Path, records.Path, records.Path, RedLogs: false, "'checks'", "build");
+
+        var red = LegStepRunner.Output(Result([line], HarnessExit.CommandFailed, "a leg failed"), arms: false, ran => legs.LogOf(ran, request))["red"]!.AsArray().Single()!;
+
+        Assert.Null(red["log"]);
+        Assert.Equal(tail, red["tail"]!.AsArray().Select(said => said!.GetValue<string>()));
+        Assert.Equal("ctest folds_duplicates", red["digest"]!["first"]!["said"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A leg step keeps its ledger as its legs' run goes - naming the run and its records as the run begins, and every
+    /// line so far as each leg ends - so a crash while the legs work leaves the step where their run stands: the account a
+    /// resume reads holds each leg that had ended, its phases among it, and closes where the run's own records last moved;
+    /// before any leg ended, where the ledger was written. The run's end writes the ledger whole over it.
+    /// </summary>
+    [Fact]
+    public async Task ALegStepsLedger_IsKeptAsItsLegsRun_SoACrashIsReadWhereTheirWorkStopped()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var layout = await LayoutAsync(harness, repository);
+        var records = repository.Combine("legs-run");
+        var moved = new DateTime(2030, 1, 2, 9, 30, 0, DateTimeKind.Utc);
+        var linux = new LegEntry
+        {
+            Leg = "linux",
+            Verdict = LegVerdict.Failed,
+            Duration = TimeSpan.FromSeconds(90),
+            Phases = [new PhaseRecord("configure", TimeSpan.FromSeconds(12), false), new PhaseRecord("build", TimeSpan.FromSeconds(78), false)],
+            TailPhase = "build",
+            Digest = ResultDigest.Of([new Diagnostic("gcc", "error", null, "x undeclared", "src/a.c", 3)], [], []),
+        };
+        var step = new WorkflowStep { Name = "checks", Type = "build" };
+        var run = Run(step, repository.Path);
+        var ledger = Path.Combine(layout.InstanceDirectory("checks", agent: null), OrchestratorLayout.StepLedgerFileName);
+        FlowCutAttempt? begun = null;
+        DateTime? begunWritten = null;
+        FlowCutAttempt? midway = null;
+        var legs = new FakeLegs
+        {
+            Answer = Result([linux, new LegEntry { Leg = "windows", Verdict = LegVerdict.Passed }], HarnessExit.CommandFailed, "a leg failed"),
+            WhileItRuns = watch =>
+            {
+                watch.Began(RunId.New(), records);
+                begun = LegStepRunner.CutAccountOf(harness.FileSystem, layout, run);
+                begunWritten = File.GetLastWriteTimeUtc(ledger);
+
+                watch.Placed([new LegPlace("linux", InACopy: false), new LegPlace("windows", InACopy: false)]);
+                watch.Ended(linux);
+
+                // The other leg works on: its log is written after the first leg's line was kept.
+                var working = Path.Combine(records, "windows", "build.log");
+                Directory.CreateDirectory(Path.GetDirectoryName(working)!);
+                File.WriteAllText(working, "compiling\n");
+                File.SetLastWriteTimeUtc(working, moved);
+                midway = LegStepRunner.CutAccountOf(harness.FileSystem, layout, run);
+            },
+        };
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
+
+        var result = await runner.RunAsync(run, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, result.Exit);
+
+        // As the legs' run began: no leg had ended, and nothing of the run had moved since the ledger named it.
+        Assert.Null(begun!.Account.Legs);
+        Assert.Empty(begun.Turns);
+        Assert.Equal(new DateTimeOffset(begunWritten!.Value, TimeSpan.Zero), begun.EndedAt);
+
+        // While the second leg worked: the first leg's line whole, its phases and its digest's counts, and the attempt
+        // closed where the second leg's log last moved.
+        Assert.Equal(1, midway!.Account.N);
+        Assert.Equal([new FlowStepLeg("linux", "failed", 90.0, null, [new FlowStepPhase("configure", 12.0), new FlowStepPhase("build", 78.0)], 1, 0, 0, 0)], midway.Account.Legs);
+        Assert.Equal(new DateTimeOffset(moved), midway.EndedAt);
+
+        // The run's end writes it whole: every leg's line, and the run's own verdict.
+        var whole = LedgerDocument.Read(File.ReadAllText(ledger))!;
+
+        Assert.Equal(["linux", "windows"], whole.Legs!.Select(leg => leg.Leg));
+        Assert.Equal("failed", whole.Verdict);
+    }
+
+    /// <summary>
+    /// A ledger whose line holds no digest's shape is no account of a cut attempt: a digest that says it left out what its
+    /// counts and what it holds do not make is refused by the digest's own reader, so nothing of the attempt is read from
+    /// it - its counts are never taken as they stand - and the engine closes the attempt as it closes one that kept no
+    /// record of its own.
+    /// </summary>
+    [Fact]
+    public async Task ALedgerWhoseDigestDoesNotRead_IsNoAccountOfTheCutAttempt()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var layout = await LayoutAsync(harness, repository);
+        var directory = layout.InstanceDirectory("checks", agent: null);
+        var report = LedgerReport.From(
+            [new LegEntry { Leg = "linux", Verdict = LegVerdict.Failed, Digest = ResultDigest.Of([new Diagnostic("gcc", "error", null, "x undeclared")], [], []) }],
+            durationWarningFactor: 0);
+        var document = JsonNode.Parse(report.ToJson(cancelled: false, unfinished: []))!;
+
+        // Said to have left out five diagnostics it neither holds nor counts: what no digest is.
+        document["legs"]![0]!["digest"]!["leftOut"]!["diagnostics"] = 5;
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, OrchestratorLayout.StepLedgerFileName), document.ToJsonString() + "\n");
+
+        Assert.Null(LegStepRunner.CutAccountOf(harness.FileSystem, layout, Run(new WorkflowStep { Name = "checks", Type = "build" }, repository.Path)));
     }
 
     /// <summary>
@@ -282,14 +711,14 @@ public sealed class LegStepRunnerTests : IDisposable
         var step = new WorkflowStep { Name = "shape", Type = "build", In = "make" };
         var kept = Path.Combine(layout.InstanceDirectory("shape", "a1"), OrchestratorLayout.StepLogsDirectoryName);
 
-        var failed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, red, new TestIsolation())
+        var failed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, red, new TestIsolation(), harness.GraphSyncs)
             .RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.Equal("step (2/2)", failed.Output!["red"]![0]!["phase"]!.GetValue<string>());
         Assert.Equal(["native.step (2-2).log"], Directory.EnumerateFiles(kept).Select(Path.GetFileName));
         Assert.Equal("the second line failed\n", File.ReadAllText(Path.Combine(kept, "native.step (2-2).log")));
 
-        var passed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, new FakeLegs(), new TestIsolation())
+        var passed = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, new FakeLegs(), new TestIsolation(), harness.GraphSyncs)
             .RunAsync(Run(step, repository.Path, worksIn: "a1"), Token);
 
         Assert.True(passed.Passed, passed.Error);
@@ -343,7 +772,7 @@ public sealed class LegStepRunnerTests : IDisposable
         var none = TestIsolation.UnavailableToExecutions("bubblewrap is not here", "install it");
         var step = new WorkflowStep { Name = "checks", Type = "build" };
 
-        var refused = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, none)
+        var refused = await new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, none, harness.GraphSyncs)
             .RunAsync(Run(step, repository.Path), Token);
 
         Assert.Equal(
@@ -354,14 +783,14 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal([repository.Path], none.Executions[0].WritableRoots);
 
         var (preferring, preferred) = await RepositoryAsync(Config(localCopy: false, isolation: "preferred"));
-        var ran = await new BuildStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, none)
+        var ran = await new BuildStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.Output, preferring.ChildSessions, legs, none, preferring.GraphSyncs)
             .RunAsync(Run(step, preferred.Path), Token);
 
         Assert.True(ran.Passed, ran.Error);
         Assert.Equal("""{"mode":"preferred","none":"bubblewrap is not here"}""", ran.Output!["isolation"]!.ToJsonString());
 
         var sweeping = new TestIsolation();
-        _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, sweeping)
+        _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.Output, preferring.ChildSessions, legs, sweeping, preferring.WorktreeService, preferring.GraphSyncs)
             .RunAsync(Run(new WorkflowStep { Name = "arms", Type = "check-mutations" }, preferred.Path), Token);
         var copy = Path.Combine(preferred.Path, HarnessLayout.LegsDirectoryName, "a-copy");
         var actionBuild = Path.Combine(copy, HarnessLayout.ActionBuildRelative("probe", "r9", "native"));
@@ -390,7 +819,7 @@ public sealed class LegStepRunnerTests : IDisposable
     {
         var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
         var legs = new FakeLegs();
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
         var step = new WorkflowStep { Name = "checks", Type = "build", In = "make" };
 
         var unmade = await runner.RunAsync(Run(step, repository.Path), Token);
@@ -420,10 +849,10 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = new FakeLegs();
         IFlowStepTypeRunner[] runners =
         [
-            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs),
         ];
         WorkflowStep[] steps =
         [
@@ -434,7 +863,7 @@ public sealed class LegStepRunnerTests : IDisposable
             new() { Name = "build past", Type = "build", KeepGoing = true },
             new() { Name = "test past", Type = "test", KeepGoing = true },
             new() { Name = "sweep", Type = "check-mutations" },
-            new() { Name = "pending", Type = "check-mutations", Arms = ["A-ONE"], Pending = true },
+            new() { Name = "pending", Type = "check-mutations", Arms = new FlowList(["A-ONE"], Expression: null), Pending = true },
         ];
 
         foreach (var step in steps)
@@ -464,6 +893,273 @@ public sealed class LegStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// Every leg step asks its legs at its run's priority, as the run's workflow declares it - a build's, a test's, a
+    /// run's and a sweep's alike - so every unit of the run is charged against its tenant's share by the one priority;
+    /// a workflow that declares none asks at 1, and a step inside a use that governs itself asks at the priority the
+    /// used workflow declares.
+    /// </summary>
+    [Fact]
+    public async Task EachLegStep_AsksItsLegsAtItsRunsPriority()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var legs = new FakeLegs();
+        IFlowStepTypeRunner[] runners =
+        [
+            new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs),
+            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs),
+        ];
+        var urgent = new FlowRunPlace(repository.Path, "r1", null, Flow with { Priority = 3 });
+        var governing = new WorkflowStep
+        {
+            Name = "items",
+            Use = new FlowUse("./pipeline/pipeline.yml", "flow/pipeline", "fingerprint", [], [], [], null, [], new FlowUseOwn(Priority: 7)),
+        };
+        var governed = new FlowRunPlace(repository.Path, "r1", null, Flow with { Priority = 3, Steps = [governing] });
+
+        foreach (var runner in runners)
+        {
+            var step = new WorkflowStep { Name = runner.Type, Type = runner.Type, Runner = runner.Type == "run" ? "probe" : null };
+            var declared = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-urgent") with { Place = urgent }, Token);
+            var undeclared = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-plain"), Token);
+            var used = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-used") with { Place = governed, Path = $"items.{runner.Type}" }, Token);
+
+            Assert.True(declared.Passed, declared.Error);
+            Assert.True(undeclared.Passed, undeclared.Error);
+            Assert.True(used.Passed, used.Error);
+        }
+
+        Assert.Equal(
+            [("build", 3), ("build", 1), ("build", 7), ("test", 3), ("test", 1), ("test", 7), ("run", 3), ("run", 1), ("run", 7), ("check-mutations", 3), ("check-mutations", 1), ("check-mutations", 7)],
+            legs.Asked.Select(asked => (asked switch { BuildLegsRequest => "build", TestLegsRequest => "test", RunnerLegsRequest => "run", _ => "check-mutations" }, asked.Priority)));
+    }
+
+    /// <summary>
+    /// A sweep that names a commit in <c>base</c> runs on a copy of that commit - made and taken away under the main
+    /// tree's lock, so other items' folds never move the bytes under it - and <c>item</c> is the newest commit the
+    /// run's ledger attributes to the item the step is one of. Its arms it takes from what the engine read where it
+    /// started, pending as it says, and an item whose ledger holds no commit is refused, nothing swept.
+    /// </summary>
+    [Fact]
+    public async Task ASweepThatNamesACommit_RunsItsArmsPendingOnACopyOfIt_TakenAwayAfter()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        OrchestrationKit.Write(repository.Path, "src/rate.cs", "the rate\n");
+        await harness.CommitAllAsync(repository.Path, "the item's fold", Token);
+        var commit = (await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token))!;
+        var layout = OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1");
+
+        harness.OrchestrationStore.UpdateFolds(
+            layout,
+            ledger => ledger with
+            {
+                Folds = [new FlowFoldEntry("f1", "rounds#1.items[0].fold", 1, "fold", "a1", FlowFoldEntry.Intended, DateTimeOffset.UtcNow, [new FlowFoldPath("src/rate.cs", "written", null)], [])],
+                Commits = [new FlowCommitEntry("c1", "rounds#1.items[0].checkpoint", 1, FlowCommitEntry.Committed, null, [new FlowCommitPath("src/rate.cs", null)], ["f1"], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow) { Sha = commit }],
+            });
+
+        string? copy = null;
+        string? swept = null;
+        FakeLegs? made = null;
+        FakeLegs legs = new()
+        {
+            WhileItRuns = _ =>
+            {
+                copy = made!.Asked[^1].Directory;
+                swept = File.ReadAllText(Path.Combine(copy!, "src", "rate.cs"));
+            },
+        };
+        made = legs;
+        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs);
+
+        var byItem = await runner.RunAsync(
+            Run(
+                new WorkflowStep { Name = "item-arms", Type = "check-mutations", Base = SweepStepRunner.ItemBase, Pending = true, Arms = new FlowList([], Expression: "implement.latest.arms") },
+                repository.Path,
+                read: new Dictionary<string, FlowValue> { ["arms"] = FlowValue.Of(new JsonArray("A-ONE")) },
+                instance: "rounds#1.items[0].item-arms"),
+            Token);
+
+        Assert.True(byItem.Passed, byItem.Error);
+        PathAssert.Same(Path.Combine(layout.TempDirectory, "sweep-rounds#1.items@0.item-arms"), copy!);
+        Assert.Equal("the rate\n", swept);
+        Assert.False(Directory.Exists(copy), $"{copy} was left behind");
+        Assert.Empty(await CopiesOfAsync(harness, repository.Path));
+        Assert.Equal(new JsonObject { ["path"] = copy, ["left"] = null }.ToJsonString(), byItem.Output!["copy"]!.ToJsonString());
+        Assert.Equivalent(
+            new MutationLegsRequest { Directory = copy!, ArmNames = ["A-ONE"], Pending = true, Watch = legs.Asked[0].Watch, Isolation = legs.Asked[0].Isolation },
+            legs.Asked[0],
+            strict: true);
+
+        // A base naming a commit outright sweeps a copy of that commit.
+        legs.Asked.Clear();
+        _ = await runner.RunAsync(
+            Run(new WorkflowStep { Name = "sweep", Type = "check-mutations", Base = commit }, repository.Path, instance: "rounds#1.items[0].item-arms"),
+            Token);
+
+        Assert.NotEqual(repository.Path, legs.Asked[0].Directory);
+
+        // An item whose ledger holds no commit is refused, nothing swept.
+        var none = await runner.RunAsync(
+            Run(new WorkflowStep { Name = "sweep", Type = "check-mutations", Base = SweepStepRunner.ItemBase }, repository.Path, instance: "rounds#2.items[0].item-arms"),
+            Token);
+
+        Assert.False(none.Passed);
+        Assert.Equal(HarnessExit.Refused, none.Exit);
+        Assert.Equal("'rounds#2.items[0].item-arms' sweeps the arms of the item's own newest commit, and the run's ledger holds no commit of item 'rounds#2.items[0]' that was made. Nothing was swept.", none.Error);
+        Assert.Single(legs.Asked);
+
+        // A base that names nothing as the step starts - a template whose value was blank - is refused, never read as no
+        // base and swept on the main tree.
+        var blank = await runner.RunAsync(
+            Run(new WorkflowStep { Name = "sweep", Type = "check-mutations", Base = " " }, repository.Path, instance: "rounds#1.items[0].item-arms"),
+            Token);
+
+        Assert.False(blank.Passed);
+        Assert.Equal(HarnessExit.Refused, blank.Exit);
+        Assert.Equal("'rounds#1.items[0].item-arms' sweeps a copy of the commit its base names, and its base named none as it started: it was blank. Nothing was swept.", blank.Error);
+        Assert.Single(legs.Asked);
+    }
+
+    /// <summary>
+    /// The item's own newest commit is the newest the ledger holds as made: of two commits of the item the later one -
+    /// a rearm's refold, never the first checkpoint - whatever another item committed after it, and never a set still
+    /// staged or one git refused, which names no commit.
+    /// </summary>
+    [Fact]
+    public async Task ASweepOfTheItemsOwnCommit_TakesItsNewestMadeCommit_NoOtherItemsAndNoneUnmade()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var layout = OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1");
+        var shas = new List<string>();
+
+        foreach (var text in new[] { "first\n", "refold\n", "another item\n" })
+        {
+            OrchestrationKit.Write(repository.Path, "src/rate.cs", text);
+            await harness.CommitAllAsync(repository.Path, text.Trim(), Token);
+            shas.Add((await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token))!);
+        }
+
+        var at = DateTimeOffset.UtcNow;
+        harness.OrchestrationStore.UpdateFolds(
+            layout,
+            ledger => ledger with
+            {
+                Folds =
+                [
+                    new FlowFoldEntry("f1", "rounds#1.items[0].fold", 1, "fold", "a1", FlowFoldEntry.Intended, at, [new FlowFoldPath("src/rate.cs", "written", null)], []),
+                    new FlowFoldEntry("f2", "rounds#1.items[0].rearm#1.rearm-fold", 1, "fold", "a1", FlowFoldEntry.Intended, at, [new FlowFoldPath("src/rate.cs", "written", null)], []),
+                    new FlowFoldEntry("f3", "rounds#1.items[1].fold", 1, "fold", "a2", FlowFoldEntry.Intended, at, [new FlowFoldPath("src/rate.cs", "written", null)], []),
+                    new FlowFoldEntry("f4", "rounds#1.items[0].fix#1.revise.refold", 1, "fold", "a1", FlowFoldEntry.Intended, at, [new FlowFoldPath("src/rate.cs", "written", null)], []),
+                    new FlowFoldEntry("f5", "rounds#1.items[0].fix#2.revise.refold", 1, "fold", "a1", FlowFoldEntry.Intended, at, [new FlowFoldPath("src/rate.cs", "written", null)], []),
+                ],
+                Commits =
+                [
+                    new FlowCommitEntry("c1", "rounds#1.items[0].checkpoint", 1, FlowCommitEntry.Committed, null, [new FlowCommitPath("src/rate.cs", null)], ["f1"], at, at) { Sha = shas[0] },
+                    new FlowCommitEntry("c2", "rounds#1.items[0].rearm#1.rearm-checkpoint", 1, FlowCommitEntry.Committed, null, [new FlowCommitPath("src/rate.cs", null)], ["f2"], at, at) { Sha = shas[1] },
+                    new FlowCommitEntry("c3", "rounds#1.items[1].checkpoint", 1, FlowCommitEntry.Committed, null, [new FlowCommitPath("src/rate.cs", null)], ["f3"], at, at) { Sha = shas[2] },
+                    new FlowCommitEntry("c4", "rounds#1.items[0].fix#1.revise.recheckpoint", 1, FlowCommitEntry.Unstaged, null, [new FlowCommitPath("src/rate.cs", null)], ["f4"], at, at),
+                    new FlowCommitEntry("c5", "rounds#1.items[0].fix#2.revise.recheckpoint", 1, FlowCommitEntry.Staged, null, [new FlowCommitPath("src/rate.cs", null)], ["f5"], at),
+                ],
+            });
+
+        string? swept = null;
+        FakeLegs? made = null;
+        var legs = new FakeLegs { WhileItRuns = _ => swept = File.ReadAllText(Path.Combine(made!.Asked[^1].Directory, "src", "rate.cs")) };
+        made = legs;
+
+        var result = await new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs)
+            .RunAsync(Run(new WorkflowStep { Name = "item-arms", Type = "check-mutations", Base = SweepStepRunner.ItemBase }, repository.Path, instance: "rounds#1.items[0].rearm#1.item-arms"), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal("refold\n", swept);
+    }
+
+    /// <summary>
+    /// A copy an earlier attempt of the same sweep left at its path - its directory with git's record of it, a stop, a
+    /// pause or a crash before it was taken away - is taken away before the copy is made again, and the sweep runs; and
+    /// one a stop of the step cut off is taken away all the same, the stop's cancellation never reaching the removal:
+    /// nothing is left, of the directory or of git's record.
+    /// </summary>
+    [Fact]
+    public async Task ASweepsCopy_IsTakenAwayAfterAStop_AndOneAnEarlierAttemptLeft_IsTakenAwayFirst()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var commit = (await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token))!;
+        var layout = OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1");
+        var path = Path.Combine(layout.TempDirectory, SweepStepRunner.CopyNameOf("rounds#1.items[0].item-arms"));
+        var step = new WorkflowStep { Name = "item-arms", Type = "check-mutations", Base = commit };
+
+        // A copy an earlier attempt made and never took away, with what its sweep wrote in it.
+        Assert.True((await harness.WorktreeService.CreateCopyAsync(repository.Path, path, commit, Token)).Succeeded);
+        File.WriteAllText(Path.Combine(path, "left.txt"), "written by the attempt a crash ended\n");
+
+        var legs = new FakeLegs();
+        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs);
+        var again = await runner.RunAsync(Run(step, repository.Path, instance: "rounds#1.items[0].item-arms"), Token);
+
+        Assert.True(again.Passed, again.Error);
+        PathAssert.Same(path, legs.Asked.Single().Directory);
+        Assert.False(Directory.Exists(path), $"{path} was left behind");
+        Assert.Empty(await CopiesOfAsync(harness, repository.Path));
+
+        // A stop while the legs run: the step is cancelled, and its copy goes all the same.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var stopped = new FakeLegs
+        {
+            WhileItRuns = _ =>
+            {
+                stop.Cancel();
+                throw new OperationCanceledException(stop.Token);
+            },
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, stopped, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs)
+            .RunAsync(Run(step, repository.Path, instance: "rounds#1.items[0].item-arms"), stop.Token));
+
+        Assert.Single(stopped.Asked);
+        Assert.False(Directory.Exists(path), $"{path} was left behind by the stop");
+        Assert.Empty(await CopiesOfAsync(harness, repository.Path));
+    }
+
+    /// <summary>
+    /// A sweep whose arms expression yielded none - the item's record arms nothing - sweeps nothing and is done, saying
+    /// so: no copy is made and no leg is asked, for an empty list is never every arm. A sweep that names no arms at all
+    /// still sweeps every arm.
+    /// </summary>
+    [Fact]
+    public async Task ASweepWhoseArmsYieldedNone_SweepsNothing_AndIsDone()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        var legs = new FakeLegs();
+        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.WorktreeService, harness.GraphSyncs);
+
+        var none = await runner.RunAsync(
+            Run(
+                new WorkflowStep { Name = "item-arms", Type = "check-mutations", Base = SweepStepRunner.ItemBase, Pending = true, Arms = new FlowList([], Expression: "implement.latest.arms") },
+                repository.Path,
+                read: new Dictionary<string, FlowValue> { ["arms"] = FlowValue.Of(new JsonArray()) },
+                instance: "rounds#1.items[0].item-arms"),
+            Token);
+
+        Assert.Equal((true, HarnessExit.Success), (none.Passed, none.Exit));
+        Assert.Equal(
+            """{"passed":true,"exitCode":0,"verdicts":[],"red":[],"runDirectory":null,"swept":"no arm: its arms 'implement.latest.arms' yielded none, so nothing was swept"}""",
+            none.Output!.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        Assert.Empty(legs.Asked);
+        Assert.Empty(await CopiesOfAsync(harness, repository.Path));
+
+        var every = await runner.RunAsync(Run(new WorkflowStep { Name = "sweep", Type = "check-mutations" }, repository.Path), Token);
+
+        Assert.True(every.Passed, every.Error);
+        Assert.Null(Assert.IsType<MutationLegsRequest>(Assert.Single(legs.Asked)).ArmNames);
+    }
+
+    /// <summary>The worktrees git records of <paramref name="repository"/> besides its main checkout.</summary>
+    private static async Task<IReadOnlyList<string>> CopiesOfAsync(HarnessFactory harness, string repository)
+        => [.. (await harness.GitClient.ListWorktreesAsync(repository, Token)).Where(worktree => !worktree.IsMain).Select(worktree => worktree.Path)];
+
+    /// <summary>
     /// A leg run something other than its legs ended - refused part way, or stopped - ends the step with the run's own
     /// code and line, whatever its reached legs say, and the output it reached is kept with it, passed false.
     /// </summary>
@@ -482,7 +1178,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 Cause = OutcomeCause.None,
             },
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "build", Type = "build" }, repository.Path), Token);
 
@@ -518,7 +1214,7 @@ public sealed class LegStepRunnerTests : IDisposable
                 }
             },
         };
-        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation());
+        var runner = new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.Output, harness.ChildSessions, legs, new TestIsolation(), harness.GraphSyncs);
 
         var result = await runner.RunAsync(Run(new WorkflowStep { Name = "build", Type = "build" }, repository.Path), Token);
 
@@ -538,7 +1234,7 @@ public sealed class LegStepRunnerTests : IDisposable
 
     /// <summary>
     /// What a leg step answers: each leg's own verdict; red holding the red legs alone - a leg that failed, with the phase
-    /// that did not pass, the ledger's line and the last lines it printed, and the units its build failed as the ledger's
+    /// that did not pass, the ledger's line and, in tail, what it printed that its digest does not say, and the units its build failed as the ledger's
     /// --json says them - and not one incomplete or passed; of a sweep,
     /// each arm that is not as its registry says, naming it, and a leg that failed outside every arm with no arm; passed
     /// only where every leg passed; and no run directory where the run made none.
@@ -583,24 +1279,103 @@ public sealed class LegStepRunnerTests : IDisposable
         var legs = LegStepRunner.Output(Result(entries[..3], HarnessExit.CommandFailed, "a leg failed"), arms: false);
 
         Assert.Equal(
-            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"failedUnits":{"tool":"ninja","count":1,"units":[{"source":"src/a.c","step":"CMakeFiles/app.dir/a.c.o"}],"keptGoing":true,"stopsAtFirst":true,"stepsRun":2,"stepsPlanned":3,"said":"1 unit(s) failed to build; ninja went on past them and ran 2 of the 3 steps it had to run: the one it did not run needs one that failed"}}],"runDirectory":"/runs/r"}""",
+            """{"passed":false,"exitCode":20,"verdicts":[{"leg":"broken","verdict":"failed"},{"leg":"moved","verdict":"inputs-moved"},{"leg":"fine","verdict":"passed"}],"red":[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"log":null,"failedUnits":{"tool":"ninja","count":1,"units":[{"source":"src/a.c","step":"CMakeFiles/app.dir/a.c.o"}],"keptGoing":true,"stopsAtFirst":true,"stepsRun":2,"stepsPlanned":3,"said":"1 unit(s) failed to build; ninja went on past them and ran 2 of the 3 steps it had to run: the one it did not run needs one that failed"}}],"runDirectory":"/runs/r"}""",
             legs.ToJsonString());
 
         var sweep = LegStepRunner.Output(Result([entries[0], entries[3], entries[4]], LegExit.Survived, "an arm survived") with { RunDirectory = null }, arms: true);
 
         // A sweep's leg red by an arm says the arm alone; one that also failed outside every arm says both.
         Assert.Equal(
-            """[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"arm":null},{"leg":"swept","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"arm":"A-ONE"},"""
-                + """{"leg":"both","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"arm":"A-THREE"},{"leg":"both","verdict":"failed","phase":"build","detail":"the clean build failed","tail":[],"arm":null}]""",
+            """[{"leg":"broken","verdict":"failed","phase":"build","detail":"build failed","tail":["error: x"],"digest":null,"log":null,"arm":null},{"leg":"swept","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"log":null,"arm":"A-ONE"},"""
+                + """{"leg":"both","verdict":"survived","phase":null,"detail":"no test failed","tail":[],"digest":null,"log":null,"arm":"A-THREE"},{"leg":"both","verdict":"failed","phase":"build","detail":"the clean build failed","tail":[],"digest":null,"log":null,"arm":null}]""",
             sweep["red"]!.ToJsonString());
         Assert.Null(sweep["runDirectory"]);
 
         Assert.True(LegStepRunner.Output(Result([entries[2]], HarnessExit.Success, "passed"), arms: false)["passed"]!.GetValue<bool>());
         Assert.False(LegStepRunner.Output(Result([], HarnessExit.Success, "nothing"), arms: false)["passed"]!.GetValue<bool>());
-
         // Each holds to its type's schema, as the run's records validate it.
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("build")!.Output!)!, legs));
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("check-mutations")!.Output!)!, sweep));
+    }
+
+    /// <summary>
+    /// A red entry whose leg holds a digest renders it for a model: the first error said whole with its stack rendered
+    /// to its frames in the tree, the next distinct to four as one line each, the rest counted by code and by file - and
+    /// every line reaches a model once: the digest holds an error and the phase's log is one read away, so it says the
+    /// lines no parser held and the tail is empty, never repeating them.
+    /// </summary>
+    [Fact]
+    public void ARedEntryHoldingADigest_RendersItForAModel_EachLineOnce()
+    {
+        const string Log = "logs/broken.build.log";
+
+        var digest = ResultDigest.Of(
+            [
+                new Diagnostic(
+                    "msbuild",
+                    "error",
+                    "CS0103",
+                    "The name 'x' does not exist in the current context",
+                    "src/Program.cs",
+                    12,
+                    35,
+                    Project: "src/App.csproj",
+                    Stack:
+                    [
+                        new StackFrame("   at App.Program.Main() in src/Program.cs:line 5", "src/Program.cs", 5, Symbol: "App.Program.Main", InTree: true),
+                        new StackFrame("   at System.Lazy.SetValue()", Module: "System.Private.CoreLib"),
+                        new StackFrame("   at System.Lazy.CreateValue()", Module: "System.Private.CoreLib"),
+                        new StackFrame("   at System.Lazy.Create()", Module: "System.Private.CoreLib"),
+                        new StackFrame("   at App.Program.Run() in src/Program.cs:line 20", "src/Program.cs", 20, Symbol: "App.Program.Run", InTree: true),
+                    ]),
+                new Diagnostic("msbuild", "error", "CS0103", "The name 'x' does not exist in the current context", "src/Program.cs", 12, 35, Project: "src/App.iOS.csproj"),
+                new Diagnostic("msbuild", "error", "CS1002", "; expected", "src/Other.cs", 40, 1),
+            ],
+            [],
+            ["a stray line nobody parsed"]);
+
+        var legs = LegStepRunner.Output(
+            Result([new LegEntry { Leg = "broken", Verdict = LegVerdict.Failed, Detail = "build failed", TailPhase = "build", LogTail = ["error: x"], Digest = digest }], HarnessExit.CommandFailed, "a leg failed"),
+            arms: false,
+            _ => Log);
+
+        var red = legs["red"]!.AsArray().Single()!.AsObject();
+
+        Assert.Equal(Log, red["log"]!.GetValue<string>());
+
+        Assert.Empty(red["tail"]!.AsArray());
+
+        var model = red["digest"]!.AsObject();
+
+        Assert.Equal(["a stray line nobody parsed"], model["unparsed"]!.AsArray().Select(line => line!.GetValue<string>()));
+        Assert.False(model.ContainsKey("unparsedLeftOut"));
+        Assert.Equal(2, model["errors"]!.GetValue<int>());
+
+        var first = red["digest"]!["first"]!.AsObject();
+
+        Assert.Equal("msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context (printed 2 times)", first["said"]!.GetValue<string>());
+        Assert.Equal(2, first["count"]!.GetValue<int>());
+
+        // The stack as a model reads it: every frame in the tree, the crossing frame on each side, and the run between left out.
+        Assert.Equal(
+            [
+                "at App.Program.Main() in src/Program.cs:line 5",
+                "at System.Lazy.SetValue()",
+                "... 1 frames in System.Private.CoreLib",
+                "at System.Lazy.Create()",
+                "at App.Program.Run() in src/Program.cs:line 20",
+            ],
+            first["stack"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        var more = red["digest"]!["diagnostics"]!.AsArray().Single()!.AsObject();
+
+        Assert.Equal("msbuild CS1002 src/Other.cs(40,1): ; expected", more["said"]!.GetValue<string>());
+
+        // The four say every printing, so nothing is left to count by code or by file, and a model is handed no count of it.
+        Assert.False(model.ContainsKey("byCode"));
+        Assert.False(model.ContainsKey("byFile"));
+
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("build")!.Output!)!, legs));
     }
 
     /// <summary>Makes agent a1 of the run as its create-agent step does, and answers the run's layout and the agent's worktree.</summary>

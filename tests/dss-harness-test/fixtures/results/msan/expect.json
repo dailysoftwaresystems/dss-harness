@@ -1,0 +1,21 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["umr.c"],
+  "errored": 1,
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "crashed MemorySanitizer: use-of-uninitialized-value",
+    "errored MemorySanitizer: use-of-uninitialized-value"
+  ],
+  "stack": {
+    "frames": 5,
+    "inTree": [
+      "/home/runner/work/app/app/umr.c:5",
+      "/home/runner/work/app/app/umr.c:11"
+    ]
+  }
+}

@@ -55,9 +55,10 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
 
     /// <summary>
     /// The nearest ancestor of <paramref name="currentId"/> in <paramref name="table"/> that is a process of this tool's
-    /// (<see cref="IsTheTool"/>), walked by each process's parent: a process whose id is its child's parent's but that
-    /// started after that child is another process that inherited a freed id, not the parent, and ends the walk - ids are
-    /// recycled, and the start time is what tells one holder of an id from the next. Where the table was read by names
+    /// (<see cref="IsTheTool"/>), walked by each process's parent as the table names it (<see cref="SampledProcess.ParentId"/>):
+    /// the table's own relation of which process started which, decided as it is read, so a process that inherited a
+    /// freed id is never named a parent and no start is compared here - a clock that stepped between two starts decides
+    /// nothing. Where the table was read by names
     /// alone (<see cref="ProcessTableReading.Degraded"/>), or does not hold this process, which processes started it
     /// cannot be told, and the answer says why rather than reading a tree nobody looked at as one with no agent in it.
     /// </summary>
@@ -87,11 +88,6 @@ public sealed class AgentAncestry(IProcessTable processes, IProcessIdentity iden
 
         while (child.ParentId is { } parentId && seen.Add(parentId) && byId.TryGetValue(parentId, out var parent))
         {
-            if (parent.StartedUtc is { } parentStarted && child.StartedUtc is { } childStarted && parentStarted > childStarted)
-            {
-                break;
-            }
-
             if (IsTheTool(parent, ownProgram, pathComparison, files))
             {
                 return new AgentAncestryAnswer(parent, null);

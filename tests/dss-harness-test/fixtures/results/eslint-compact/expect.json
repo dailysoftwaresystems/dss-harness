@@ -1,0 +1,23 @@
+{
+  "read": {
+    "tests": "npx"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["src/queue.js", "src/store.js"],
+  "errors": 4,
+  "warnings": 1,
+  "first": {
+    "tool": "eslint",
+    "code": "eqeqeq",
+    "file": "/home/runner/work/app/app/src/queue.js",
+    "line": 5,
+    "column": 18
+  },
+  "diagnostics": [
+    "error eqeqeq /home/runner/work/app/app/src/queue.js:5",
+    "error no-undef /home/runner/work/app/app/src/queue.js:6",
+    "warning no-unused-vars /home/runner/work/app/app/src/store.js:4",
+    "error eqeqeq /home/runner/work/app/app/src/store.js:5",
+    "error no-undef /home/runner/work/app/app/src/store.js:6"
+  ]
+}

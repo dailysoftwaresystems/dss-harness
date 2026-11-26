@@ -1,0 +1,20 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "D:\\a\\app\\app",
+  "workingDirectory": "D:\\a\\app\\app\\dart",
+  "tree": [{ "path": "dart/pubspec.yaml", "text": "name: demo\nenvironment:\n  sdk: ^3.5.0\n" }, { "path": "dart/.dart_tool/package_config.json", "text": "{\n  \"configVersion\": 2,\n  \"packages\": [\n    {\n      \"name\": \"demo\",\n      \"rootUri\": \"../\",\n      \"packageUri\": \"lib/\",\n      \"languageVersion\": \"3.5\"\n    }\n  ],\n  \"generator\": \"pub\",\n  \"generatorVersion\": \"3.5.0\"\n}\n" }, "dart/bin/crash.dart", "dart/lib/store.dart"],
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "crashed Bad state: no record named first"
+  ],
+  "stack": {
+    "frames": 4,
+    "inTree": [
+      "package:demo/store.dart:14",
+      "D:/a/app/app/dart/bin/crash.dart:7"
+    ]
+  }
+}

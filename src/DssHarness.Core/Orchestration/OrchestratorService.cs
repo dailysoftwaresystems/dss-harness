@@ -364,6 +364,16 @@ public sealed class OrchestratorService(
                     + "Copy out what you need, or pass --delete-evidence to delete them with it. Nothing was changed.");
             }
 
+            // Swept again right before the removal, inside the section: a record whose owner stood as the command began and
+            // has gone since is swept with the rest, and one kept because its session holds this very process would go with
+            // the orchestrator's directory, and what it holds run on with nothing left to end it - the deletion is refused,
+            // for one run from outside it.
+            if (_sessions.SweepAsync(orchestrator, DeleteCommand).GetAwaiter().GetResult()
+                .Refusal($"Orchestrator '{name}' was not deleted", "its record would go with the orchestrator, leaving what it holds running with nothing left to end it", DeleteCommand) is { } holding)
+            {
+                return CommandOutcome.Refused(holding);
+            }
+
             if (Remove(orchestrator) is { } stopped)
             {
                 return CommandOutcome.Failed(
@@ -390,8 +400,15 @@ public sealed class OrchestratorService(
                 ]);
         }));
 
+        // The copies of commits a run's steps make in its directory - a sweep's, on the bytes an item's fold landed as - are
+        // worktrees git records in the main checkout: one a run cut off before taking it away left has gone with the
+        // run's directory, and its record is taken away with it, by the one owner of a copy's removal.
         return outcome.Succeeded
-            ? outcome with { Details = [.. outcome.Details ?? [], .. RemoveEmptyGroup(group)], Facts = new OrchestratorDeleted(name, deleteEvidence) }
+            ? outcome with
+            {
+                Details = [.. outcome.Details ?? [], .. await _worktrees.RemoveCopiesUnderAsync(layout.MainCheckoutRoot, orchestrator.Directory).ConfigureAwait(false), .. RemoveEmptyGroup(group)],
+                Facts = new OrchestratorDeleted(name, deleteEvidence),
+            }
             : outcome;
     }
 
@@ -529,10 +546,7 @@ public sealed class OrchestratorService(
         }
 
         // Before anything else of each is read: what its steps left running once their starter has gone.
-        foreach (var orchestrator in orchestrators)
-        {
-            await _sessions.SweepAsync(orchestrator, ListCommand).ConfigureAwait(false);
-        }
+        await _sessions.SweepAsync(orchestrators, ListCommand).ConfigureAwait(false);
 
         var listed = await _worktrees.ListAsync(layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
         var inventory = new List<OrchestratorInventory>();

@@ -22,6 +22,22 @@ public static class CliRunner
 
     private static readonly Lazy<string> CliAssembly = new(LocateCliAssembly, LazyThreadSafetyMode.PublicationOnly);
 
+    /// <summary>
+    /// The variables that give a CLI <paramref name="directory"/> for this tool's per-user state, in place of the test
+    /// process's own it inherits (<see cref="TestHost.UserStateDirectory"/>): for a test that reads or holds what the CLI
+    /// keeps there - a hold, a record, a cache - as its own, apart from every other test's. The machine's own user keeps a
+    /// settings file and records every command of theirs shares, and they are no test's: read, the count of heavy legs a
+    /// developer's machine admits would put every test's legs in one queue, beside the developer's own runs, and write
+    /// each test repository's history into the developer's records.
+    /// </summary>
+    /// <param name="directory">The directory the CLI keeps the tool's per-user state in.</param>
+    public static Dictionary<string, string?> OwnUserState(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        return new(StringComparer.Ordinal) { [UserState.Variable] = directory };
+    }
+
     /// <summary>The CLI assembly the tests run: the build a host's DssHarness is compared with.</summary>
     public static string CliAssemblyPath => CliAssembly.Value;
 
@@ -36,7 +52,11 @@ public static class CliRunner
     /// <param name="cancellationToken">Stops the run.</param>
     /// <param name="workingDirectory">The directory the CLI starts in, or the test's own.</param>
     /// <param name="standardInput">Text the CLI reads on standard input, as a host's DssHarness reads a request.</param>
-    /// <param name="environment">Variables to set for the CLI, or to remove where the value is null.</param>
+    /// <param name="environment">
+    /// Variables to set for the CLI, or to remove where the value is null, over the environment it inherits - the tool's
+    /// per-user state of this process's own among it (<see cref="TestHost.UserStateDirectory"/>), which a test that names
+    /// a directory of its own replaces (<see cref="OwnUserState"/>).
+    /// </param>
     public static async Task<ProcessResult> RunAsync(
         string[] arguments,
         CancellationToken cancellationToken,
@@ -69,6 +89,22 @@ public static class CliRunner
             $"'{ToolPackage.Command} {string.Join(' ', arguments)}' did not finish within {Budget}.");
 
         return result;
+    }
+
+    /// <summary>
+    /// Holds <paramref name="result"/> to the exit code <paramref name="expected"/>, saying what the CLI wrote to its
+    /// standard error where it exited otherwise: a CI run keeps nothing of a failed test but its assertion, so an exit code
+    /// alone would leave the cause of a wrong one unread.
+    /// </summary>
+    /// <param name="expected">The exit code the command answers with.</param>
+    /// <param name="result">The CLI's run.</param>
+    public static void ExitedWith(int expected, ProcessResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        Assert.True(
+            result.ExitCode == expected,
+            $"The CLI exited {result.ExitCode}, not {expected}; its standard error said:{Environment.NewLine}{result.StandardError}");
     }
 
     /// <summary>The names of the commands the root help lists, in its order.</summary>

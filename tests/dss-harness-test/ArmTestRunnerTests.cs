@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Mutations;
@@ -302,6 +303,59 @@ public sealed class ArmTestRunnerTests
             ArgumentNullException.ThrowIfNull(request);
 
             clock.Step(step);
+
+            return inner.RunAsync(request, cancellationToken);
+        }
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
+    }
+
+    /// <summary>
+    /// A run's length is measured over the window a bound is held against - from the moment it is begun, where a bounded
+    /// run's timer starts, to the moment its phase ends - so the unmutated run a bound is made from counts what a mutated
+    /// run's timer counts: what this tool takes to start the binary as well as what the binary takes. A start this tool
+    /// took seven seconds over is in the run's length, never only the binary's own milliseconds.
+    /// </summary>
+    [Fact]
+    public async Task ARunsLength_IsMeasuredOverTheWindowItsBoundIsHeldAgainst()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var clock = new AdvancingClock();
+        var heldBack = TimeSpan.FromSeconds(7);
+        var runner = new ArmTestRunner(
+            new PhaseRunner(new AdvancingAsItRuns(harness.ProcessRunner, clock, heldBack), harness.FileSystem, harness.Output),
+            harness.FileSystem,
+            clock);
+
+        var result = await runner.RunAsync(Child("exit", temp.Combine("controls", "fixture_tests"), "0"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.Run.ExitCode);
+        Assert.InRange(result.Duration, heldBack, heldBack + TimeSpan.FromMinutes(1));
+    }
+
+    /// <summary>A clock whose time, on both of its clocks, is the machine's moved on by however far it was advanced.</summary>
+    private sealed class AdvancingClock : TimeProvider
+    {
+        private long _ahead;
+
+        /// <summary>Moves both clocks on by <paramref name="by"/>.</summary>
+        public void Advance(TimeSpan by) => Interlocked.Add(ref _ahead, by.Ticks);
+
+        public override long GetTimestamp()
+            => Stopwatch.GetTimestamp() + (long)(Interlocked.Read(ref _ahead) * (double)Stopwatch.Frequency / TimeSpan.TicksPerSecond);
+
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow + TimeSpan.FromTicks(Interlocked.Read(ref _ahead));
+    }
+
+    /// <summary>The real runner, save that <paramref name="clock"/> is advanced by <paramref name="by"/> as the run asks for its program: a start this tool took that long over.</summary>
+    private sealed class AdvancingAsItRuns(IProcessRunner inner, AdvancingClock clock, TimeSpan by) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            clock.Advance(by);
 
             return inner.RunAsync(request, cancellationToken);
         }

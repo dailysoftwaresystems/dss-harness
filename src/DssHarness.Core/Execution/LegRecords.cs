@@ -34,6 +34,16 @@ public static class PhaseLogs
     /// <param name="phase">The phase, as its log is named for it.</param>
     public static string In(string directory, string phase) => Path.Combine(directory, phase + Extension);
 
+    /// <summary>
+    /// The copy of <paramref name="leg"/>'s log of <paramref name="phase"/> in <paramref name="directory"/>, where logs of
+    /// several legs are kept side by side - a step's red legs' logs, a continuation record's copies of them: named for
+    /// its leg and its phase, the phase as its log is named for it.
+    /// </summary>
+    /// <param name="directory">The directory the copies are kept in.</param>
+    /// <param name="leg">The leg.</param>
+    /// <param name="phase">The phase, as the ledger shows it.</param>
+    public static string OfLeg(string directory, string leg, string phase) => Path.Combine(directory, $"{leg}.{NameFor(phase)}{Extension}");
+
     /// <summary>The phase <paramref name="file"/> is the log of, or <see langword="null"/> where it is no phase's log.</summary>
     /// <param name="file">A file's name or its path.</param>
     public static string? PhaseOf(string file)
@@ -79,6 +89,22 @@ public sealed record LegRecords(string RunDirectory, string Leg)
     /// <summary>The log of <paramref name="phase"/>, in the leg's directory.</summary>
     /// <param name="phase">The phase, as its log is named for it.</param>
     public string PhaseLog(string phase) => PhaseLogs.In(Directory, phase);
+
+    /// <summary>
+    /// The log of <paramref name="phase"/> among <paramref name="leg"/>'s records of run <paramref name="run"/>, relative to
+    /// the tree that ran it, with forward separators - as a copy's transport reads a file of it: a run keeps its records in
+    /// the tree it ran in (<see cref="Repository.HarnessLayout.RunsDirectoryRelative"/>), each leg's in a directory of its
+    /// own, each phase's log named for its phase.
+    /// </summary>
+    /// <param name="run">The run.</param>
+    /// <param name="leg">The leg, as the configuration names it.</param>
+    /// <param name="phase">The phase, as its log is named for it.</param>
+    public static string PhaseLogInTree(RunId run, string leg, string phase)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return $"{Repository.HarnessLayout.RunsDirectoryRelative}/{run.Value}/{leg}/{phase}{PhaseLogs.Extension}";
+    }
 
     /// <summary>
     /// The phase logs that are in the leg's directory now, each with its phase, in the order of their names: none of

@@ -87,6 +87,12 @@ public static class ContainExec
     /// <summary>The word a line that says what failed begins with.</summary>
     private const string FailedWord = "failed";
 
+    /// <summary>
+    /// The word the line that says the handle the step created the program with begins with, on Windows, before the
+    /// placed line: the value the process runner copies it out of the step by.
+    /// </summary>
+    private const string ProgramWord = "program";
+
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>What the step was doing when it failed.</summary>
@@ -218,6 +224,7 @@ public static class ContainExec
 
         var placed = false;
         string? started = null;
+        long? program = null;
 
         foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -230,15 +237,21 @@ public static class ContainExec
                 continue;
             }
 
+            if (words is [ProgramWord, var value] && long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var handle))
+            {
+                program = handle;
+                continue;
+            }
+
             if (words is [FailedWord, var stage, var code]
                 && Enum.TryParse<Stage>(stage, ignoreCase: true, out var failed)
                 && int.TryParse(code, CultureInfo.InvariantCulture, out var number))
             {
-                return new StartHeard(placed, failed, number, started);
+                return new StartHeard(placed, failed, number, started) { Program = program };
             }
         }
 
-        return new StartHeard(placed, null, 0, started);
+        return new StartHeard(placed, null, 0, started) { Program = program };
     }
 
     /// <summary>What the step was doing at <paramref name="stage"/>, as a sentence that says it could not names it.</summary>
@@ -260,6 +273,12 @@ public static class ContainExec
     {
         /// <summary>The failure as the system words its number, where there was one.</summary>
         public string Reason => new Win32Exception(Code).Message;
+
+        /// <summary>
+        /// The value of the handle the step created the program with, in the step, on Windows: what the process runner
+        /// copies it out of the step by (<see cref="Containment.CopiedFrom"/>); <see langword="null"/> where it said none.
+        /// </summary>
+        public long? Program { get; init; }
     }
 
     /// <summary>The step's end of the channel: one line said for each thing it has to say, and closed as it ends.</summary>
@@ -358,6 +377,16 @@ public static class ContainExec
         /// <param name="started">This process's start, as a stamp holds it, or <see langword="null"/> where none is said.</param>
         public void Placed(string? started = null)
             => Say(started is { Length: > 0 } stamp && !stamp.Any(char.IsWhiteSpace) ? $"{PlacedLine} {stamp}" : PlacedLine);
+
+        /// <summary>
+        /// Says the handle this process created the program with, on Windows, by its value here - held for as long as the
+        /// step stands - so the process runner copies it out of this process, holding every right the program was created
+        /// with, before the program can refuse it any (<see cref="Containment.CopiedFrom"/>). Said before the program is
+        /// said placed.
+        /// </summary>
+        /// <param name="handle">The handle's value in this process.</param>
+        public void Program(IntPtr handle)
+            => Say(string.Create(CultureInfo.InvariantCulture, $"{ProgramWord} {handle.ToInt64()}"));
 
         /// <summary>Says what failed, by the stage and the number the system gave.</summary>
         public void Failed(Stage stage, int code)

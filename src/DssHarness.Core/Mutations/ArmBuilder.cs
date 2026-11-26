@@ -117,7 +117,8 @@ internal sealed class ArmBuilder(
     IBuildService buildService,
     IProcessRunner processRunner,
     BuildDirectoryGuard buildDirectoryGuard,
-    IFileSystem fileSystem) : IArmBuilder
+    IFileSystem fileSystem,
+    Output.IHarnessOutput? output = null) : IArmBuilder
 {
     private readonly IBuildService _buildService = buildService;
     private readonly IProcessRunner _processRunner = processRunner;
@@ -138,7 +139,16 @@ internal sealed class ArmBuilder(
         var environment = BuildAdapters.EnvironmentFor(request.Variant.Overlay(config, request.Project), request);
         var program = _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram;
         var records = await NinjaRebuildGraph
-            .ReadRecordsAsync(_processRunner, buildDirectory, request.ProgramDirectories, program, environment, told: null, TimeProvider.System, cancellationToken)
+            .ReadRecordsAsync(
+                _processRunner,
+                buildDirectory,
+                request.ProgramDirectories,
+                program,
+                environment,
+                line => output?.Warn(MutationService.CommandName, $"{request.Leg}: {line}"),
+                told: null,
+                TimeProvider.System,
+                cancellationToken)
             .ConfigureAwait(false);
         var manifest = NinjaManifest.Read(_fileSystem, buildDirectory);
 

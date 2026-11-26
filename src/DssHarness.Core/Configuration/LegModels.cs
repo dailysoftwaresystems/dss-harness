@@ -304,10 +304,32 @@ public sealed class TestInvocation
     public List<string>? KeepOnFailure { get; init; }
 
     /// <summary>
+    /// Paths - files, directories, patterns - relative to the leg's build directory, named as
+    /// <see cref="KeepOnFailure"/> names its paths, that hold the structured results the runner writes: a TRX, a JUnit
+    /// XML, Dart's JSON stream, a SARIF log. Where the invocation does not pass, each is read where it is - nothing is
+    /// copied - and digested into the typed diagnostics and failures the leg's entry carries, so a red result starts
+    /// from what a file already holds instead of a log searched for it. A path naming nothing is said in the digest,
+    /// not refused: the failure may have been before the file was written. Given empty in the file, it is refused when
+    /// the file is read; a list a caller builds empty reads as left out.
+    /// </summary>
+    /// <remarks>
+    /// The file is read as data, before any log line is parsed, and its messages are masked as the log's are. What the
+    /// file does not hold no parser invents; where it holds nothing the log's own parsers answer as they would anyway.
+    /// </remarks>
+    public List<string>? Results { get; init; }
+
+    /// <summary>
     /// The most to keep in all, in bytes, when <see cref="KeepOnFailure"/> names paths; 64 MiB where
     /// it is left out. Files past the cap are not copied and are named on the leg's line. Given where
     /// no <see cref="KeepOnFailure"/> it applies to names a path - this section's, or for
     /// <c>all</c>'s cap each system's that gives no cap of its own - it caps nothing, and is refused.
     /// </summary>
     public long? KeepOnFailureCapBytes { get; init; }
+
+    /// <summary>
+    /// The problem matchers of <c>results.matchers</c> that read this invocation's tests, by name, beside every matcher
+    /// no runner or invocation names. A matcher an invocation or a runner names reads only their output. Given empty in
+    /// the file, it is refused when the file is read; a name <c>results.matchers</c> does not declare is refused too.
+    /// </summary>
+    public List<string>? Matchers { get; init; }
 }

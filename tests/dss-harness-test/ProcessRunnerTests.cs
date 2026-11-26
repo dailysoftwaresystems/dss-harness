@@ -2,10 +2,12 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using Microsoft.Win32.SafeHandles;
 
 namespace DssHarness.Tests;
 
@@ -17,6 +19,56 @@ namespace DssHarness.Tests;
 public sealed class ProcessRunnerTests
 {
     private static ProcessRunner CreateRunner() => new(new HostPlatform(), FilePermissionsFactory.Create());
+
+    /// <summary>
+    /// The wait for a child's output held open once it has ended is told every five minutes naming what holds it: what the
+    /// child left running, or - where its end could not reach or end a process it was to - such a process or one the child
+    /// left running, never the child's leftover alone.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "has waited 5m00s for the output of 'tool' to end, held open by what it left running")]
+    [InlineData(true, "has waited 5m00s for the output of 'tool' to end, held open by a process its end could not reach or end, or one it left running")]
+    public async Task TheWaitForAnOutputHeldOpen_IsToldNamingWhatHoldsIt(bool unreached, string told)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new TimerClock();
+        var runner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock };
+        var gate = new Lock();
+        using var held = new UnendedRead();
+        var output = new ProcessRunner.StreamCapture(held, pipe: null, ProcessRunner.AsDotNetReadsIt, gate, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        var error = new ProcessRunner.StreamCapture(new MemoryStream(), pipe: null, ProcessRunner.AsDotNetReadsIt, gate, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<string?> drained;
+
+        using (DssHarness.Core.Waiting.Waits.TellingTo(wait => lines.Enqueue(wait.Line())))
+        {
+            drained = runner.DrainedAsync("tool", output, error, unreached, stop.Token);
+        }
+
+        try
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+
+            var toldBy = Stopwatch.StartNew();
+
+            while (lines.IsEmpty)
+            {
+                Assert.True(toldBy.Elapsed < TimeSpan.FromSeconds(30), "the wait for the output held open was never told");
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+            }
+
+            Assert.Equal([told], lines);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            held.End();
+        }
+
+        Assert.Null(await drained.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+    }
 
     [Fact]
     public async Task RunAsync_PassesEveryArgumentThroughUnchanged()
@@ -112,6 +164,57 @@ public sealed class ProcessRunnerTests
         Assert.Equal(["first", "second"], Lines(result.StandardOutput));
         Assert.Equal(["problem"], Lines(result.StandardError));
         Assert.Equal(["problem"], errorLines);
+    }
+
+    /// <summary>
+    /// The lines one read of a stream returned - what the child wrote to it at once - are handed on together, never parted
+    /// by a line of its other stream: a .NET program's error heading and the frame it wrote with it, parted by an empty
+    /// line of its error stream, are read as no error at all, and a red step's digest would hold nothing of the error it
+    /// died of. The error stream's line is written while the output's first line is being handed on, and waits for the
+    /// rest of the output's read.
+    /// </summary>
+    [Fact]
+    public async Task TheLinesOfOneRead_AreHandedOnTogether_NeverPartedByALineOfTheOtherStream()
+    {
+        using var temp = new TempDirectory();
+        var written = temp.Combine("written");
+        var handed = new List<string>();
+        using var errorHanded = new ManualResetEventSlim(false);
+        var heldOff = false;
+
+        var request = TestHost.ChildRequest("say-wait-say", "first\nsecond", written, "between") with
+        {
+            OnOutputLine = line =>
+            {
+                lock (handed)
+                {
+                    handed.Add(line);
+                }
+
+                if (line == "first")
+                {
+                    // The child writes its error stream's line now, while this read is still being handed on, and it is
+                    // held off for as long as this read is.
+                    File.WriteAllText(written, string.Empty);
+                    heldOff = !errorHanded.Wait(TimeSpan.FromMilliseconds(500));
+                }
+            },
+            OnErrorLine = line =>
+            {
+                lock (handed)
+                {
+                    handed.Add(line);
+                }
+
+                errorHanded.Set();
+            },
+        };
+
+        var result = await CreateRunner().RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(heldOff, "the error stream's line was handed on while the output's read still was");
+        Assert.Equal(["first", "second", "between"], handed);
     }
 
     /// <summary>
@@ -380,6 +483,411 @@ public sealed class ProcessRunnerTests
         Assert.True(
             grandchild.WaitForExit(TimeSpan.FromSeconds(30)),
             $"Grandchild process {grandchildId} was still running after the run was cancelled.");
+    }
+
+    /// <summary>
+    /// A child stopped at its time limit whose descendant - holding the output it inherited - is still ending when the stop
+    /// has killed it, as a killed process is on every system, the kill answered before its end has run, is read to the end
+    /// of its output: the stop waits until every process it ended has gone before the output's end is looked for, so a
+    /// process the stop itself ended is never taken for one the child left running, and the run says nothing holds its
+    /// output. The descendant's slow end is stood in for: it ends only once the stop first asks whether what it ended has
+    /// gone. The clock the limit is measured by is moved past it once the descendant runs, so the stop finds it there.
+    /// </summary>
+    [Fact]
+    public async Task AChildStoppedWhileADescendantItsStopKilledIsStillEnding_IsReadToTheEndOfItsOutput()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learned = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = LearnedProcess.None;
+        var limit = TimeSpan.FromMinutes(1);
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            learned.TrySetResult(found);
+                        }
+                    },
+                },
+                cancellationToken);
+
+            holder = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            ends.Slow(holder.Id);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+
+            Assert.Equal((true, $"holder={holder}\n", (string?)null), (result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // The stop found the descendant and its end was held back: what this test is about happened.
+            Assert.Equal(1, ends.HeldBack);
+            Assert.False(holder.Running, $"the descendant {holder} outlived the stop that ended it");
+        }
+        finally
+        {
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A child stopped at its time limit whose descendant, as the stop ends it, makes another process that holds the output
+    /// it inherited - once the walk of the child's tree has last read Windows' list of every process - has that one ended
+    /// too, and gone before the end of the output is looked for: once every process the stop ended has gone, the tree is
+    /// walked again, and what that finds is ended and waited for in turn, so the run says nothing holds its output. A
+    /// killed process's thread already inside a process's creation completes it; the descendant's slow end is stood in
+    /// for, and it makes the late process at the stop's first ask whether what it ended has gone, before its end is made.
+    /// </summary>
+    [Fact]
+    public async Task AChildStopped_WhileADescendantItsStopEndsMakesAnother_HasThatOneEndedToo_BeforeTheEndOfItsOutputIsLookedFor()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a stopped tree is walked again once what its walk ended has gone on Windows alone; on Linux and macOS each process is held still before its children are taken, and a held one starts no other (AChildStoppedWhileADescendantItsStopKilledIsStillEnding_IsReadToTheEndOfItsOutput).");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (asked, up) = (temp.Combine("asked.txt"), temp.Combine("up.txt"));
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learnedHolder = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var learnedLate = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (holder, late) = (LearnedProcess.None, LearnedProcess.None);
+        var limit = TimeSpan.FromMinutes(1);
+
+        ends.AtFirstAsk(_ =>
+        {
+            File.WriteAllText(asked, "asked");
+            late = learnedLate.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken).GetAwaiter().GetResult();
+        });
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, up, "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            learnedHolder.TrySetResult(found);
+                        }
+
+                        if (LearnedProcess.In(line, "late=") is { } made)
+                        {
+                            learnedLate.TrySetResult(made);
+                        }
+                    },
+                },
+                cancellationToken);
+
+            holder = await learnedHolder.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            ends.Slow(holder.Id);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+
+            Assert.Equal((true, $"holder={holder}\nlate={late}\n", (string?)null), (result.TimedOut, result.StandardOutput, result.OutputHeld));
+
+            // The descendant's end was held back, and it made the late process while it was: what this test is about happened.
+            Assert.Equal((1, true), (ends.HeldBack, late.Id != 0));
+            Assert.False(late.Running, $"the late process {late} outlived the stop");
+        }
+        finally
+        {
+            late.TryEnding();
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A stop's look again at the child's tree is the stop's too: a process a kept descendant makes while the stop ends it,
+    /// and that refuses its end, is found once every process kept has gone, passed over, and said in what the stop could
+    /// not end (<see cref="ProcessResult.Uncontained"/>) with the first walk's refusals - never taken for a process the child
+    /// left running where it holds the output. The descendant's slow end is stood in for, and it makes the refusing process
+    /// at the first ask; the run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), which lifts the late process's refusal and ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AChildStopped_WhileADescendantItsStopEndsMakesAnotherThatRefusesItsEnd_SaysSo_NeverAsAProcessTheChildLeftRunning()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a stopped tree is walked again once what its walk ended has gone on Windows alone, and a process's own security is Windows'.");
+
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                $"timed out True, held back 1, refused True, unended not every process of the tree of pid {{child}} could be ended: pid {{late}} could not be ended: {new Win32Exception(5).Message.TrimEnd('.')}, "
+                    + "output held the output of '{program}' is held by a process its end could not reach or end, or one it left running: every character it wrote was read, and what that process writes from now on is its own, and is not read, "
+                    + "late stands True",
+                ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(ALateRefusingProcessOfAStoppedTreeAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child's side of <see cref="AChildStopped_WhileADescendantItsStopEndsMakesAnotherThatRefusesItsEnd_SaysSo_NeverAsAProcessTheChildLeftRunning"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> ALateRefusingProcessOfAStoppedTreeAsync()
+    {
+        using var temp = new TempDirectory();
+        var (asked, up, go, refused) = (temp.Combine("asked.txt"), temp.Combine("up.txt"), temp.Combine("go.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var ends = new SlowEnds();
+        var learnedHolder = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var learnedLate = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (holder, late) = (LearnedProcess.None, LearnedProcess.None);
+        var limit = TimeSpan.FromMinutes(1);
+
+        // The late process needs no handle of this process's got before it refuses: its refusal is lifted by its owner's right.
+        File.WriteAllText(go, "go");
+
+        ends.AtFirstAsk(_ =>
+        {
+            File.WriteAllText(asked, "asked");
+            late = learnedLate.Task.WaitAsync(TimeSpan.FromMinutes(2)).GetAwaiter().GetResult();
+
+            // Its refusal stands before the end of what made it is made, and the tree looked at again.
+            for (var waited = Stopwatch.StartNew(); !File.Exists(refused); Thread.Sleep(20))
+            {
+                if (waited.Elapsed > TimeSpan.FromMinutes(2))
+                {
+                    throw new TimeoutException($"the late process {late} never refused its end");
+                }
+            }
+        });
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock, Ends = ends }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "spawn-late-holder", asked, up, "300000", "deny-terminate", go, refused, "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } found)
+                        {
+                            learnedHolder.TrySetResult(found);
+                        }
+
+                        if (LearnedProcess.In(line, "late=") is { } made)
+                        {
+                            learnedLate.TrySetResult(made);
+                        }
+                    },
+                },
+                CancellationToken.None);
+
+            holder = await learnedHolder.Task.WaitAsync(TimeSpan.FromMinutes(2));
+            ends.Slow(holder.Id);
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2));
+            var unended = result.Uncontained is null
+                ? "nothing"
+                : System.Text.RegularExpressions.Regex.Replace(result.Uncontained, @"tree of pid \d+", "tree of pid {child}").Replace($"pid {late} could", "pid {late} could", StringComparison.Ordinal);
+            var outputHeld = result.OutputHeld is null ? "by nothing" : System.Text.RegularExpressions.Regex.Replace(result.OutputHeld, "'[^']*'", "'{program}'");
+
+            return $"timed out {result.TimedOut}, held back {ends.HeldBack}, refused {!RefusedEnd.MayEnd(late.Id)}, unended {unended}, output held {outputHeld}, late stands {RefusedEnd.Stands(late)}";
+        }
+        finally
+        {
+            RefusedEnd.End(late);
+            holder.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// A child whose own security refuses its end to everyone, its owner included - as a program that guards itself against
+    /// being ended by other software of the same user does - is ended at its time limit all the same, on Windows, and has
+    /// gone when the run answers: the stop keeps it by a copy of the handle the runtime got as it created the child, granted
+    /// before the child could refuse anything, never by one opened by its id, which its security refuses - opened so,
+    /// nothing would be ended, and the run would wait for the child for as long as it ran. The run is made from a child of
+    /// the suite whose token holds no debug privilege (<see cref="ChildRun.UnprivilegedAsync"/>), so the refusal holds
+    /// against it on an administrator's elevated run as on any other; that child holds the stopped child by a handle of its
+    /// own, got before it refuses, which ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AChildWhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItWasCreatedWith()
+    {
+        Assert.SkipUnless(
+            OperatingSystem.IsWindows(),
+            "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's, and a stop at a child's limit is held by AChildStoppedWhileADescendantItsStopKilledIsStillEnding_IsReadToTheEndOfItsOutput.");
+
+        Assert.Equal(
+            new ChildRunAnswer(0, "refused True, timed out True, output its id, gone True", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(ARefusingChildStoppedAtItsLimitAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A stop that cannot end a process of the child's tree - a holder of the child's output whose own security refuses its
+    /// end - says so in its result, on Windows: what of the tree it could not end, and why (<see cref="ProcessResult.Uncontained"/>),
+    /// and that what holds the output is a process its end could not reach or end, or one the child left running - never
+    /// that the child left it running, which a refusal it dropped would read as. The holder is passed over, every other
+    /// process ended, the child among them; the run is made from a child of the suite whose token holds no debug privilege
+    /// (<see cref="ChildRun.UnprivilegedAsync"/>), which lifts the holder's refusal and ends it on every path.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task AStopThatCannotEndAProcessOfTheChildsTree_SaysSoInItsResult_NeverAsAProcessTheChildLeftRunning()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a process's own security is Windows'; on Linux and macOS a process of the user's is signalled by the user's.");
+
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                $"refused True, timed out True, unended not every process of the tree of pid {{child}} could be ended: pid {{holder}} could not be ended: {new Win32Exception(5).Message.TrimEnd('.')}, "
+                    + "output held the output of '{program}' is held by a process its end could not reach or end, or one it left running: every character it wrote was read, and what that process writes from now on is its own, and is not read, "
+                    + "holder stands True",
+                ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(AStopPassingAHolderOverAsync), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A privilege a child of the suite removes from its own token is gone from it, read back: what a test of a process's
+    /// own security counts on of the child it runs in (<see cref="ChildRun.UnprivilegedAsync"/>), shown on a privilege every
+    /// user's token holds - the debug privilege only an administrator's does.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task APrivilegeAChildOfTheSuiteRemoves_IsGoneFromItsToken()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a token's privileges are Windows'.");
+
+        Assert.Equal(
+            new ChildRunAnswer(0, "held True, removed nothing left, held after False, debug privilege False", ""),
+            await ChildRun.UnprivilegedAsync(typeof(ProcessRunnerTests), nameof(RemovedFromTheToken), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child's side of <see cref="APrivilegeAChildOfTheSuiteRemoves_IsGoneFromItsToken"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static string RemovedFromTheToken()
+    {
+        const string WorkingSet = "SeIncreaseWorkingSetPrivilege";
+
+        var held = RefusedEnd.Holds(WorkingSet);
+        var removed = RefusedEnd.Removed(WorkingSet);
+
+        return $"held {held}, removed {removed ?? "nothing left"}, held after {RefusedEnd.Holds(WorkingSet)}, debug privilege {RefusedEnd.Holds(RefusedEnd.DebugPrivilege)}";
+    }
+
+    /// <summary>The child's side of <see cref="AChildWhoseOwnSecurityRefusesItsEnd_IsEndedAtItsLimit_ByTheHandleItWasCreatedWith"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> ARefusingChildStoppedAtItsLimitAsync()
+    {
+        using var temp = new TempDirectory();
+        var (held, refused) = (temp.Combine("held.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var learned = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var limit = TimeSpan.FromMinutes(1);
+        Process? child = null;
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock }.RunAsync(
+                TestHost.ChildRequest("say-pid-then", "deny-terminate", held, refused, "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (line.StartsWith("pid=", StringComparison.Ordinal) && int.TryParse(line[4..], NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+                        {
+                            learned.TrySetResult(id);
+                        }
+                    },
+                },
+                CancellationToken.None);
+
+            var id = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2));
+
+            // Opened before the child refuses its end, a handle keeps every right it was granted.
+            child = Process.GetProcessById(id);
+            _ = child.SafeHandle;
+            File.WriteAllText(held, "held");
+
+            for (var waited = Stopwatch.StartNew(); !File.Exists(refused); await Task.Delay(20))
+            {
+                Assert.True(waited.Elapsed < TimeSpan.FromMinutes(2), $"the child {id} never refused its end");
+            }
+
+            var refusing = !RefusedEnd.MayEnd(id);
+
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2));
+
+            return $"refused {refusing}, timed out {result.TimedOut}, output {(result.StandardOutput == $"pid={id}\n" ? "its id" : result.StandardOutput)}, gone {child.HasExited}";
+        }
+        finally
+        {
+            if (child is { HasExited: false })
+            {
+                child.Kill();
+            }
+
+            child?.Dispose();
+        }
+    }
+
+    /// <summary>The child's side of <see cref="AStopThatCannotEndAProcessOfTheChildsTree_SaysSoInItsResult_NeverAsAProcessTheChildLeftRunning"/>.</summary>
+    [SupportedOSPlatform("windows")]
+    private static async Task<string> AStopPassingAHolderOverAsync()
+    {
+        using var temp = new TempDirectory();
+        var (go, refused) = (temp.Combine("go.txt"), temp.Combine("refused.txt"));
+        var clock = new TimerClock();
+        var learned = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var limit = TimeSpan.FromMinutes(1);
+        var holder = LearnedProcess.None;
+
+        // The holder needs no handle of this process's got before it refuses: its refusal is lifted by its owner's right.
+        File.WriteAllText(go, "go");
+
+        try
+        {
+            var run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()) { Clock = clock }.RunAsync(
+                TestHost.ChildRequest("spawn-holder", "sleep", "300000", "deny-terminate", go, refused, "sleep", "300000") with
+                {
+                    Timeout = limit,
+                    OnOutputLine = line =>
+                    {
+                        if (LearnedProcess.In(line, "holder=") is { } made)
+                        {
+                            learned.TrySetResult(made);
+                        }
+                    },
+                },
+                CancellationToken.None);
+
+            // Named once it has refused its end.
+            holder = await learned.Task.WaitAsync(TimeSpan.FromMinutes(2));
+
+            var refusing = !RefusedEnd.MayEnd(holder.Id);
+
+            clock.Advance(limit);
+
+            var result = await run.WaitAsync(TimeSpan.FromMinutes(2));
+            var unended = result.Uncontained is null
+                ? "nothing"
+                : System.Text.RegularExpressions.Regex.Replace(result.Uncontained, @"tree of pid \d+", "tree of pid {child}").Replace($"pid {holder} could", "pid {holder} could", StringComparison.Ordinal);
+
+            var outputHeld = result.OutputHeld is null ? "by nothing" : System.Text.RegularExpressions.Regex.Replace(result.OutputHeld, "'[^']*'", "'{program}'");
+
+            return $"refused {refusing}, timed out {result.TimedOut}, unended {unended}, output held {outputHeld}, holder stands {RefusedEnd.Stands(holder)}";
+        }
+        finally
+        {
+            RefusedEnd.End(holder);
+        }
     }
 
     [Fact]
@@ -813,6 +1321,59 @@ public sealed class ProcessRunnerTests
         => Assert.Equal(exiting, ProcessGoing.ThreadExiting(stat));
 
     /// <summary>
+    /// A thread's <c>stat</c> line says it has ended only where it is a zombie or dead - never where its flags say only
+    /// that it is exiting, its process's files maybe still open, which is what a stop's wait for what it ended waits out -
+    /// read after the last parenthesis of its name.
+    /// </summary>
+    [Theory]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194308 120 0 0 0", false)]
+    [InlineData("41 (a (b) c) Z 40 41 41 0 -1 4194304 120 0 0 0", true)]
+    [InlineData("41 (x) X 40 41 41 0 -1 0 1 0 0 0", true)]
+    public void AThreadsStatLine_SaysWhetherItHasEnded(string stat, bool ended)
+        => Assert.Equal(ended, ProcessGoing.ThreadEnded(stat));
+
+    /// <summary>
+    /// A process a stop ended that is a zombie nobody reaps - its parent alive and never asking - has gone, as a stop's wait
+    /// asks it, on Linux and macOS: its descriptors are closed, so it holds nothing the wait waits out, and a wait held for
+    /// it would never end. It is still the very process kept, its start read as it was - read past its last reference, as
+    /// macOS reads one still in its exit, which nothing can take a reference to either; this test process, its parent,
+    /// never reaps it until the end - and that live parent has not gone.
+    /// </summary>
+    [Fact]
+    public async Task AZombieNobodyReaps_HasGone_AsAStopsWaitAsksIt()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no zombie: a process's handle is signalled once it has run down.");
+
+        var identity = new DssHarness.Core.Execution.ProcessIdentity(new HostPlatform());
+        var zombie = Unreaped.Spawn("/bin/sh", group: null, "sh", "-c", "exit 0");
+
+        try
+        {
+            var stamp = identity.StampOf(zombie);
+
+            Assert.NotNull(stamp);
+
+            using var kept = new KeptProcess(zombie, stamp);
+            using var parent = new KeptProcess(Environment.ProcessId, identity.Current!);
+            var bound = Stopwatch.StartNew();
+
+            while (!ProcessEnds.Machine.Gone(kept))
+            {
+                Assert.True(bound.Elapsed < TimeSpan.FromSeconds(30), $"the zombie {zombie} was never taken for gone");
+                await Task.Delay(TimeSpan.FromMilliseconds(20), TestContext.Current.CancellationToken);
+            }
+
+            Assert.True(identity.IsSame(zombie, stamp), $"pid {zombie} was reaped, so it was never a zombie nobody reaps");
+            Assert.False(ProcessEnds.Machine.Gone(parent), "a live process was taken for gone");
+        }
+        finally
+        {
+            Unreaped.Reap(zombie);
+        }
+    }
+
+    /// <summary>
     /// A start that fails as a program being written does is made again until it succeeds, where the system refuses to
     /// start one held so: a process forked while the program was written holds it for a moment, and a program written
     /// and closed a line earlier then failed to start.
@@ -1210,94 +1771,107 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
-    /// A look at a child's output settles on a quiet pipe only where a read of it waits and the pipe itself holds
-    /// nothing: on Linux and macOS a read can wait merely to be run, its task no answer at all while what the child
-    /// wrote already sits in the pipe - and what a runner once read from such a look was that the pipe was held by a
-    /// leftover, the child's own answer given up with it, so git asked to size an object, or to name a repository,
-    /// answered nothing. Where the pipe answers while a read pends on it, it is asked: a read whose pipe holds what
-    /// the child wrote is no quiet pipe, whatever its task says; one whose pipe holds nothing, still waiting, is - the
-    /// leftover's hold, told as it always was.
+    /// A look at a child's output that ends a read still waiting to be made - the child's answer in the pipe, the read not
+    /// yet run, as on Windows a read of a child's pipe waits for a pool thread to make it - reads the answer and keeps it,
+    /// whole: the read took nothing, and the pipe, asked, holds the answer. A look that took a waiting read for a quiet
+    /// pipe would give git's whole answer up with it, and a command asking git to name its repository would fail. Once the
+    /// answer is read, a look finds the pipe holding nothing while a writer still holds it, and the stream is the
+    /// leftover's from there, held open.
     /// </summary>
     [Fact]
-    public void AReadWhosePipeHoldsTheChildsAnswer_IsNotAQuietPipe()
+    public async Task ALookAtAReadNotYetMade_ReadsTheChildsAnswerInThePipe_AndKeepsItWhole()
     {
-        Assert.SkipWhen(OperatingSystem.IsWindows(), "The pipe is asked only where a read pending on it leaves it askable: Linux and macOS.");
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var pipe = new ChildPipe();
 
-        using var server = new AnonymousPipeServerStream(PipeDirection.In);
-        using var client = new AnonymousPipeClientStream(PipeDirection.Out, server.GetClientHandleAsString());
+        // The child's answer, in the pipe before any read has taken it; the writer stays, as a process the child left would.
+        pipe.Write("the child's answer\n");
 
-        // The child's answer, in the pipe before any read has taken it.
-        var said = "the child's answer"u8;
-        client.Write(said);
-        client.Flush();
+        using var read = new UnmadeFirstRead(pipe.Read);
+        var capture = new ProcessRunner.StreamCapture(read, pipe.Handle, ProcessRunner.AsDotNetReadsIt, new Lock(), onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
 
-        var first = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var reader = new HeldRead(first.Task, first.Task, server);
-        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        await LookUntilItEndsAsync(capture, cancellationToken);
 
-        // The read waits - by its task alone, a quiet pipe, twice over - while the pipe holds the child's answer.
-        Assert.False(capture.ReadAll());
-        Assert.False(capture.ReadAll(), "a read whose pipe holds the child's answer was read as a pipe waiting on a leftover");
+        Assert.Equal(1, read.Ended);
+        Assert.Equal("the child's answer\n", capture.Taken().Text);
+        Assert.True(capture.HeldOpen, "a pipe a writer still held, holding nothing once the answer was read, was not taken as held open");
     }
 
     /// <summary>
-    /// A look at a child's output settles on a quiet pipe only where a read of it waits - a read whose task is still to
-    /// end: one being made, its task not yet given, has not returned, and what a runner once read from such a look was
-    /// that the pipe was held by a leftover while the child's own answer was still coming - git asked to name a
-    /// repository answered nothing, its output given up with the pipe. The read that waits is told from one that does
-    /// not, so what a child wrote is kept.
+    /// A look at a child's output that ends a read still waiting to be made, once every writer has let the pipe go - the
+    /// child ended, and nothing it left holds its output, as git's answer stands - reads on to the stream's end: the answer
+    /// in the pipe is kept whole, and the stream ended by itself, never taken as held open by a leftover.
     /// </summary>
-    /// <remarks>
-    /// The second read is held where it is being made - the capture's loop parked inside the reader, its task not yet
-    /// given - which holds the state a look must settle or refuse for as long as the test wants, on however busy a
-    /// machine: no wait of the test's own rides on the pool scheduling a continuation, and every wait is bounded. A
-    /// first read that answered at once would park the constructor itself, on the test's own thread, and the test
-    /// would never begin.
-    /// </remarks>
     [Fact]
-    public async Task AReadIsQuietOnlyWhereItsTaskWaits()
+    public async Task ALookAtAReadNotYetMade_WhoseWritersAreGone_ReadsTheAnswerToTheStreamsEnd()
     {
-        using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var first = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var second = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var made = new ManualResetEventSlim(false);
-        using var letGo = new ManualResetEventSlim(false);
+        using var pipe = new ChildPipe();
 
-        // A real pipe under the reader, as a child's output is read through, for what a capture asks whether its read waits on.
-        using Stream pipe = OperatingSystem.IsWindows()
-            ? new FileStream(Path.Combine(temp.Path, "pipe"), FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read)
-            : new AnonymousPipeServerStream(PipeDirection.In);
-        using var reader = new HeldRead(first.Task, second.Task, pipe)
-        {
-            // Where the second read is being made: the capture's loop waits here, the read's task not yet given, and
-            // lets go of its own accord, so nothing is held longer than this test's moment.
-            OnSecond = () =>
+        pipe.Write("the child's answer\n");
+        pipe.CloseWriter();
+
+        using var read = new UnmadeFirstRead(pipe.Read);
+        var capture = new ProcessRunner.StreamCapture(read, pipe.Handle, ProcessRunner.AsDotNetReadsIt, new Lock(), onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+
+        await LookUntilItEndsAsync(capture, cancellationToken);
+
+        Assert.Equal(1, read.Ended);
+        Assert.Equal("the child's answer\n", capture.Taken().Text);
+        Assert.False(capture.HeldOpen, "a stream whose every writer had gone was taken as held open by a leftover");
+    }
+
+    /// <summary>
+    /// Once the child has ended, a look ends the system's own read waiting on an empty pipe a process the child left still
+    /// holds open - on Windows the read of a synchronous pipe, made by a pool thread, and on Linux and macOS the runtime's -
+    /// and the stream's reading ends there, everything before it kept and its last line handed on: so a leftover holding
+    /// the output holds the run only until every character the child wrote has been read.
+    /// </summary>
+    [Fact]
+    public async Task ALookAtAReadWaitingOnAnEmptyPipeALeftoverHolds_EndsTheReading_EverythingBeforeItKept()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var pipe = new ChildPipe();
+        var lines = new List<string>();
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var capture = new ProcessRunner.StreamCapture(
+            pipe.AsTheProcessGivesIt(),
+            ProcessRunner.AsDotNetReadsIt,
+            new Lock(),
+            onLine: line =>
             {
-                made.Set();
-                letGo.Wait(TimeSpan.FromSeconds(30));
+                lines.Add(line);
+                answered.TrySetResult();
             },
-        };
+            StreamKept.Whole,
+            cut: null,
+            pieced: null,
+            log: null);
 
-        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+        pipe.Write("the child's answer\nand its last line, with no break");
+        await answered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
 
-        // The first read returns the child's answer; the capture's loop keeps it and comes for a second, and is held
-        // where that second is being made - its task not yet given, the read itself out.
-        const string Said = "the child's answer\n";
-        Said.AsSpan().CopyTo(reader.Asked.Span);
-        first.TrySetResult(Said.Length);
-        Assert.True(made.Wait(TimeSpan.FromSeconds(30), cancellationToken), "the capture never came for its second read");
+        await LookUntilItEndsAsync(capture, cancellationToken);
 
-        // Two looks while the read is being made: neither settles the pipe as quiet - a read with no task to wait on
-        // is not a leftover holding it - and the second look is where one that read the waiting mark alone would settle.
-        Assert.False(capture.ReadAll());
-        Assert.False(capture.ReadAll(), "a read being made was read as a pipe waiting on a leftover");
+        Assert.Equal("the child's answer\nand its last line, with no break", capture.Taken().Text);
+        Assert.Equal(["the child's answer", "and its last line, with no break"], lines);
+        Assert.True(capture.HeldOpen, "a read waiting on an empty pipe a leftover held was not ended by a look");
+    }
 
-        // Let the second read out, at the stream's end: the answer is kept, whole, as the child's own.
-        letGo.Set();
-        second.TrySetResult(0);
-        await capture.Reading.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-        Assert.Equal(Said, capture.Taken().Text);
+    /// <summary>Looks at <paramref name="capture"/> at a runner's pace until its reading ends, as a runner does once the child has ended.</summary>
+    private static async Task LookUntilItEndsAsync(ProcessRunner.StreamCapture capture, CancellationToken cancellationToken)
+    {
+        var bound = Stopwatch.StartNew();
+
+        while (!capture.Reading.IsCompleted)
+        {
+            Assert.True(bound.Elapsed < TimeSpan.FromSeconds(30), "the capture's reading never ended, however often it was looked at");
+            capture.Look();
+            await Task.WhenAny(capture.Reading, Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken));
+        }
+
+        await capture.Reading;
     }
 
     private static List<string> Lines(string text)
@@ -1335,36 +1909,162 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
-    /// A reader whose first read answers by a task a test completes, into the buffer the read was given, whose second
-    /// is held where it is being made - before its task is given - until the test lets it go, and whose third says the
-    /// stream has ended: the capture's loop can be parked mid-read, its task not yet given, for as long as a look at
-    /// the capture needs, on however busy a machine.
+    /// A pipe as a child's output reaches the runner: its read end as the process gives it - on Windows a synchronous file
+    /// over the pipe's handle, on Linux and macOS the pipe's own stream - and its write end, the child's, which the test
+    /// writes and lets go of.
     /// </summary>
-    private sealed class HeldRead(Task<int> first, Task<int> second, Stream pipe) : StreamReader(pipe)
+    private sealed class ChildPipe : IDisposable
     {
-        private Memory<char> _asked;
-        private int _read;
+        private readonly AnonymousPipeServerStream _server = new(PipeDirection.In);
+        private readonly AnonymousPipeClientStream _writer;
+        private readonly List<Stream> _given = [];
 
-        /// <summary>Runs where the second read is being made, before its task is given: the reader waits here as long as it says.</summary>
-        public Action? OnSecond { get; init; }
+        public ChildPipe() => _writer = new AnonymousPipeClientStream(PipeDirection.Out, _server.ClientSafePipeHandle);
 
-        /// <summary>The buffer a read was given, the same for each.</summary>
-        public Memory<char> Asked => _asked;
+        /// <summary>The pipe's read end, which a look asks.</summary>
+        public SafeHandle Handle => _server.SafePipeHandle;
 
-        public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        /// <summary>The read end read through as a capture reads it: no byte kept between reads.</summary>
+        public Stream Read => Given(bufferSize: 0);
+
+        /// <summary>The read end as the process gives a child's output: on Windows a file that buffers what it reads.</summary>
+        public Stream AsTheProcessGivesIt() => Given(bufferSize: 4096);
+
+        /// <summary>Writes <paramref name="text"/> as the child would, at once.</summary>
+        public void Write(string text)
         {
-            _asked = buffer;
-
-            switch (_read++)
-            {
-                case 0:
-                    return new ValueTask<int>(first);
-                case 1:
-                    OnSecond?.Invoke();
-                    return new ValueTask<int>(second);
-                default:
-                    return ValueTask.FromResult(0);
-            }
+            _writer.Write(Encoding.UTF8.GetBytes(text));
+            _writer.Flush();
         }
+
+        /// <summary>Lets go of the write end, as a child that ends and leaves nothing holding its output does.</summary>
+        public void CloseWriter()
+        {
+            _writer.Dispose();
+            _server.DisposeLocalCopyOfClientHandle();
+        }
+
+        public void Dispose()
+        {
+            CloseWriter();
+
+            foreach (var given in _given)
+            {
+                given.Dispose();
+            }
+
+            _server.Dispose();
+        }
+
+        private Stream Given(int bufferSize)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return _server;
+            }
+
+            // Over the pipe's own handle, never owning it: the server stream closes it.
+            var file = new FileStream(new SafeFileHandle(_server.SafePipeHandle.DangerousGetHandle(), ownsHandle: false), FileAccess.Read, bufferSize, isAsync: false);
+            _given.Add(file);
+            return file;
+        }
+    }
+
+    /// <summary>
+    /// The read a capture makes through <paramref name="pipe"/>: its first waits to be made until its token ends it,
+    /// taking nothing - as the runtime ends a read of a child's pipe no pool thread has run yet - and every later one is
+    /// the pipe's own.
+    /// </summary>
+    private sealed class UnmadeFirstRead(Stream pipe) : Stream
+    {
+        private int _reads;
+        private int _ended;
+
+        /// <summary>How many reads were ended before they were made.</summary>
+        public int Ended => Volatile.Read(ref _ended);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    Interlocked.Increment(ref _ended);
+                    throw;
+                }
+            }
+
+            return await pipe.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A child's stream held open with nothing in it, under no pipe a look can ask: every read waits until the test ends
+    /// it, as an output a process the child left holds open waits - read to its end, for a look ends nothing here.
+    /// </summary>
+    private sealed class UnendedRead : Stream
+    {
+        private readonly TaskCompletionSource<int> _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        /// <summary>Ends every read: the stream is at its end.</summary>
+        public void End() => _ended.TrySetResult(0);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => new(_ended.Task.WaitAsync(cancellationToken));
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

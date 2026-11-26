@@ -70,6 +70,10 @@ public interface IIsolationPlatform
 /// given.
 /// </param>
 /// <param name="clock">Times the probe's waits; the system's clock where left out.</param>
+/// <param name="output">
+/// Where what a stop of the probe could not reach or end is said, a stopped probe being no answer to report it in; nowhere
+/// where none is given.
+/// </param>
 public sealed partial class IsolationPlatform(
     IHostPlatform platform,
     IProcessRunner runner,
@@ -80,7 +84,8 @@ public sealed partial class IsolationPlatform(
     Func<string, bool>? userWrites = null,
     Func<int>? landlock = null,
     Action<WaitTold>? told = null,
-    TimeProvider? clock = null) : IIsolationPlatform
+    TimeProvider? clock = null,
+    Output.IHarnessOutput? output = null) : IIsolationPlatform
 {
     private readonly Action<WaitTold> _told = told ?? (static _ => { });
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
@@ -577,7 +582,11 @@ public sealed partial class IsolationPlatform(
                 : null);
     }
 
-    /// <summary>One run of a trial, contained and inside <paramref name="isolation"/>: what it ended with, or how it did not.</summary>
+    /// <summary>
+    /// One run of a trial, contained and inside <paramref name="isolation"/>: what it ended with, or how it did not - one
+    /// whose end could not reach or end all it started among the ways, for a container that leaves a process of it running
+    /// proves nothing (<see cref="ProcessResult.Uncontained"/>).
+    /// </summary>
     private async Task<(ProcessResult? Result, string? Failed)> TrialRunAsync(ProcessIsolation isolation, string probe, string program, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
         try
@@ -593,7 +602,7 @@ public sealed partial class IsolationPlatform(
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            return (result, null);
+            return result.Uncontained is { } unreached ? (null, $"ended, and {unreached}") : (result, null);
         }
         catch (ProgramStartException ex)
         {
@@ -606,13 +615,14 @@ public sealed partial class IsolationPlatform(
     /// that takes (<see cref="Waits.ForAsync"/>): told every <see cref="Waits.SaidEvery"/> while it runs, naming the
     /// program, and ended only by <paramref name="cancellationToken"/>. No bound of the tool's own ends it: a machine whose
     /// first start of a sandbox is slow - a cold disk, a scanner reading every program - proves its mechanism all the same,
-    /// and one whose trial never ends is the person's to stop.
+    /// and one whose trial never ends is the person's to stop: what that stop could not reach or end is said, a stopped
+    /// probe being no answer to report it in.
     /// </summary>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> ended it.</exception>
     private async Task<ProcessResult> ProbeRunAsync(ProcessRequest request, CancellationToken cancellationToken)
     {
         var end = await Waits.ForAsync(
-            token => runner.RunAsync(request, token),
+            token => runner.RunAsync(request, token).SayingStopUnreached($"the isolation probe's '{request.FileName}'", line => output?.Warn(Hosts.ToolPackage.Command, line)),
             new WaitWatch($"the isolation probe's '{request.FileName}' to end", _told, Bound: null, _clock),
             cancellationToken).ConfigureAwait(false);
 

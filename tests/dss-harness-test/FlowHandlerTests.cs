@@ -1704,12 +1704,12 @@ public sealed class FlowHandlerRecordsTests
         Assert.Null(flow.Redirects);
         Assert.Equal("fix", flow.Steps.Single(step => step.Instance == "build").HandledBy);
 
-        // The report says what handled the failure, apart from the steps passed over.
-        var left = FlowReports.Write(harness.FileSystem, layout, flow, null, "done; 1 failure was handled: build, by fix", 0, clock.GetUtcNow());
-        var report = harness.FileSystem.ReadAllText(layout.ReportFile);
+        // The report says what handled the failure, apart from the steps passed over: the failed attempt by its id - the
+        // step and its attempt - with its code, its error and the handler that took it.
+        var left = FlowReports.Write(harness.FileSystem, new FlowRunReportSource(layout, flow), "done; 1 failure was handled: build, by fix", 0, clock.GetUtcNow());
+        var report = harness.FileSystem.ReadAllText(layout.ReportFile).Replace("\r\n", "\n");
 
-        Assert.Contains("## Failures a handler took", report, StringComparison.Ordinal);
-        Assert.Contains("- build, by fix", report, StringComparison.Ordinal);
+        Assert.EndsWith("\n## Errors\n\n- build@1, exit 20: leg 'windows' ended Red (20) (handled by fix)\n", report, StringComparison.Ordinal);
         Assert.Empty(left);
     }
 

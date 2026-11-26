@@ -116,6 +116,7 @@ internal static class ClassClosureReading
 /// <param name="Sites">Each path it was decided at, read as <paramref name="HomePath"/> is: the file, the symbol, what decided there before, and what decides there after.</param>
 /// <param name="Searches">Each search the data was searched by: what was searched, how, the query, and the call that made it.</param>
 /// <param name="Axes">The names of the universe the record pins.</param>
+/// <param name="CellsPinned">How many cells of the universe the pin covers, as the record says it.</param>
 /// <param name="PinTests">Each test the pin names.</param>
 /// <param name="ArmId">The arm that proves the class closed, where one is named.</param>
 /// <param name="ArmWhy">Why no arm is named, where none is.</param>
@@ -131,6 +132,7 @@ public sealed record ClassClosureRecord(
     IReadOnlyList<(string Path, string Symbol, string Before, string After)> Sites,
     IReadOnlyList<(string Data, string Query, string Call)> Searches,
     IReadOnlyList<string> Axes,
+    int CellsPinned,
     IReadOnlyList<string> PinTests,
     string? ArmId,
     string? ArmWhy,
@@ -138,6 +140,27 @@ public sealed record ClassClosureRecord(
     string Claim,
     ClassHomeAudit? HomeAudit)
 {
+    /// <summary>What decides at a site after the work where the site now reads its home: the decision consolidated there.</summary>
+    public const string ReadsHome = "reads-home";
+
+    /// <summary>What decides at a site after the work where the site is gone.</summary>
+    public const string Deleted = "deleted";
+
+    /// <summary>What a neighbour's measurement showed where none was made, with the reason.</summary>
+    public const string Unmeasured = "unmeasured";
+
+    /// <summary>How many of its sites now read their home: the decisions consolidated into it.</summary>
+    public int SitesConsolidated => Sites.Count(site => site.After == ReadsHome);
+
+    /// <summary>How many of its sites the work deleted.</summary>
+    public int SitesDeleted => Sites.Count(site => site.After == Deleted);
+
+    /// <summary>How many of its neighbours were measured: passed, or failed and fixed.</summary>
+    public int NeighboursMeasured => Neighbours.Count - NeighboursUnmeasured;
+
+    /// <summary>How many of its neighbours were not measured, each with its reason.</summary>
+    public int NeighboursUnmeasured => Neighbours.Count(neighbour => neighbour.Result == Unmeasured);
+
     /// <summary>
     /// The record <paramref name="node"/> holds, or <see langword="null"/> where it is not an object: the schema the
     /// answer was held to has already judged its shape.
@@ -154,6 +177,7 @@ public sealed record ClassClosureRecord(
                 ReadSites(entry["sites"] as JsonArray),
                 ReadSearches(entry["searches"] as JsonArray),
                 ClassClosureReading.Axes(entry["universe"] as JsonObject),
+                entry["universe"]?["cellsPinned"] is JsonValue pinned && pinned.TryGetValue<int>(out var cells) ? cells : 0,
                 ReadTests((entry["pin"] as JsonObject)?["tests"] as JsonArray),
                 Text(entry["arm"]?["id"]),
                 Text(entry["arm"]?["why"]),
@@ -353,6 +377,10 @@ public sealed record ClassClosureMeasured(string Leg, string Variant, string Fil
 /// <param name="TouchesAll">How often each home path was touched in this run, this item's own commits among them.</param>
 /// <param name="TouchesRequired">How many touches by others require a home audit; 0 where none is required.</param>
 /// <param name="HotspotAt">How many touches name a home a hotspot; never reached, nothing is listed.</param>
+/// <param name="ReopenedTwice">
+/// The classes the item's ledger says the run's reviews reopened a second time, by id - what <c>route-findings</c> keeps
+/// and this check asks for; null where none is read, as a manual lane's fold holds no ledger.
+/// </param>
 /// <param name="PathComparison">How this machine compares paths (<see cref="Platform.IHostPlatform.PathComparison"/>), as the plan check compares a class's.</param>
 public sealed record ClassClosureProof(
     IReadOnlyList<string>? Changed,
@@ -365,10 +393,17 @@ public sealed record ClassClosureProof(
     IReadOnlyDictionary<string, int> TouchesAll,
     int TouchesRequired,
     int HotspotAt,
+    IReadOnlySet<string>? ReopenedTwice,
     StringComparison PathComparison)
 {
     /// <summary>Whether the record is a manual lane's, judged by hand: no stored stream holds its calls.</summary>
     public bool ByHand => Calls is null;
+
+    /// <summary>
+    /// The arms the item's own sweep runs, as the builder's answer lists them beside its record, by id; null where nothing
+    /// lists them - a manual lane, or a check that reads no list. Held to the arms the record names, each once.
+    /// </summary>
+    public IReadOnlyList<string>? ListedArms { get; init; }
 
     /// <summary>
     /// Whether <paramref name="path"/> and <paramref name="other"/> name one file of the tree, as the plan check that held
@@ -400,6 +435,7 @@ public sealed record ClassClosureProof(
             new Dictionary<string, int>(),
             TouchesRequired: 0,
             HotspotAt: int.MaxValue,
+            ReopenedTwice: null,
             pathComparison);
 }
 
@@ -445,8 +481,9 @@ public sealed record ClassClosureJudged(
 /// it was not;
 /// every test of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the
 /// arm is one of its arms and mutates the home's own file, or the record says why the class has none; the universe holds
-/// every axis the plan names, and the claim names every axis of it; and where the home was touched by other work, the
-/// record carries a home audit. A class's paths - in the plan and in the record, the paths changed, an arm's site and the
+/// every axis the plan names, and the claim names every axis of it; and where the home was touched by other work, or the
+/// item's ledger says the run's reviews reopened the class a second time, the record carries a home audit. A class's
+/// paths - in the plan and in the record, the paths changed, an arm's site and the
 /// touches - are read as the plan check reads them, either separator, and compared as this machine compares paths
 /// (<see cref="ClassClosureProof.SamePath"/>).
 /// </summary>
@@ -502,7 +539,43 @@ public static class ClassClosureRules
             problems.Add("the record names no class: a row closes by the record of each class it closes, and an empty one closes none");
         }
 
+        if (proof.ListedArms is { } listed && ArmsProblem(record, listed) is { } arms)
+        {
+            problems.Add(arms);
+        }
+
         return new ClassClosureJudged(problems, audits, hotspots, touches);
+    }
+
+    /// <summary>
+    /// Why the arms an item's own sweep runs - <paramref name="listed"/>, as the builder's answer lists them - are not the
+    /// arms its <paramref name="record"/> names, each class's own; null where they are the same, whatever their order: an
+    /// arm the record names and the list leaves out would never be swept, and one the list names that no class arms would
+    /// be swept for nothing the record claims. An id is one arm however its case is written, as the registry keeps its
+    /// ids unique and a sweep selects them (<see cref="DssHarness.Core.Mutations.MutationRegistry.Find"/>).
+    /// </summary>
+    /// <param name="record">The record.</param>
+    /// <param name="listed">The arms the answer lists beside it.</param>
+    private static string? ArmsProblem(IReadOnlyList<ClassClosureRecord> record, IReadOnlyList<string> listed)
+    {
+        List<string> armed = [.. record.Select(entry => entry.ArmId).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)];
+        List<string> unarmed = [.. listed.Distinct(StringComparer.OrdinalIgnoreCase).Where(arm => !armed.Contains(arm, StringComparer.OrdinalIgnoreCase))];
+        List<string> unlisted = [.. armed.Where(arm => !listed.Contains(arm, StringComparer.OrdinalIgnoreCase))];
+
+        if (unarmed.Count == 0 && unlisted.Count == 0)
+        {
+            return null;
+        }
+
+        List<string> said =
+        [
+            .. unlisted.Count == 0 ? [] : new[] { $"{Quoted(unlisted)} armed by the record and not listed" },
+            .. unarmed.Count == 0 ? [] : new[] { $"{Quoted(unarmed)} listed and armed by no class of the record" },
+        ];
+
+        return $"the arms the answer lists for the item's own sweep are not those its record names: {string.Join("; ", said)} - list each arm the record names, and no other";
+
+        static string Quoted(IEnumerable<string> arms) => string.Join(", ", arms.Select(arm => $"'{arm}'"));
     }
 
     /// <summary>The problems of one entry of the record, judged against its class's plan and the proof.</summary>
@@ -533,12 +606,12 @@ public static class ClassClosureRules
             // A site that is a whole file names no symbol of its own: what it declared there was the class's, by its home's name.
             var symbol = string.IsNullOrWhiteSpace(site.Symbol) ? entry.HomeSymbol : site.Symbol;
 
-            if (site.After == "deleted" && proof.Declares is { } declares && declares(site.Path, symbol))
+            if (site.After == ClassClosureRecord.Deleted && proof.Declares is { } declares && declares(site.Path, symbol))
             {
                 problems.Add($"class '{entry.Class}': the site '{site.Path}' is deleted, but it still declares '{symbol}'");
             }
 
-            if (site.After == "reads-home" && proof.Changed is { } changed && !changed.Any(path => proof.SamePath(path, site.Path)))
+            if (site.After == ClassClosureRecord.ReadsHome && proof.Changed is { } changed && !changed.Any(path => proof.SamePath(path, site.Path)))
             {
                 problems.Add($"class '{entry.Class}': the site '{site.Path}' reads its home, but the agent changed nothing at it");
             }
@@ -583,7 +656,7 @@ public static class ClassClosureRules
 
         foreach (var (cell, measuredBy, result, reason) in entry.Neighbours)
         {
-            if (result == "unmeasured")
+            if (result == ClassClosureRecord.Unmeasured)
             {
                 if (reason.Length == 0)
                 {
@@ -750,9 +823,18 @@ public static class ClassClosureRules
             hotspots.Add(new ClassClosureHotspot(entry.Class, entry.HomePath, all));
         }
 
-        if (entry.HomeAudit is null && proof.TouchesRequired > 0 && byOthers >= proof.TouchesRequired)
+        if (entry.HomeAudit is not null)
+        {
+            return;
+        }
+
+        if (proof.TouchesRequired > 0 && byOthers >= proof.TouchesRequired)
         {
             audits.Add($"class '{entry.Class}': home touched {byOthers.ToString(System.Globalization.CultureInfo.InvariantCulture)} times in this run by other work");
+        }
+        else if (proof.ReopenedTwice?.Contains(entry.Class) == true)
+        {
+            audits.Add($"class '{entry.Class}' reopened twice");
         }
     }
 }

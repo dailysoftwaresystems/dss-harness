@@ -438,6 +438,97 @@ public sealed class FlowUpdatesTests
         Assert.Equal("the run's plan updates", OrchestrationStore.UpdatesKind);
     }
 
+    /// <summary>
+    /// One owner says which check opens a round: the validate-plan a forEach declared beside it expands from, where that
+    /// group runs in rounds - declared in an iteration of a repeat, or the group plan updates owe their work to, to which
+    /// an update adds a round with no loop around it, in a group or at the flow's top alike - and never the plan's check,
+    /// a recovery's, a check beside a forEach that runs once, or a check no forEach expands from. The shipped flow's
+    /// rounds' check is the one check of it that opens a round.
+    /// </summary>
+    [Fact]
+    public void TheCheckThatOpensARound_IsTheOpeningCheckOfAGroupThatRunsInRounds_WhicheverOpensTheRound()
+    {
+        var shipped = WorkflowTemplates.ShippedDefinition();
+        var rounds = shipped.Steps.Single(step => step.Name == "rounds");
+        var planning = shipped.Steps.Single(step => step.Name == "planning");
+        var recovery = shipped.Recover!.Declaration;
+
+        Assert.Equal("rounds.items", FlowUpdateGates.RoundOpenedBy(shipped, "rounds", rounds, rounds.Steps.Single(step => step.Name == "item-check")));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, "planning", planning, planning.Steps.Single(step => step.Name == "check")));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-check")));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(shipped, FlowScope.Recovery, recovery, recovery.Steps.Single(step => step.Name == "remedy-recheck")));
+
+        var once = Definition("""
+            name: flow
+            steps:
+              - name: work
+                steps:
+                  - name: check
+                    type: validate-plan
+                    items: 'input.items'
+                  - name: items
+                    forEach: 'check.items'
+                    dependsOn: [check]
+                    steps:
+                      - name: build
+                        type: orient
+              - name: check
+                type: validate-plan
+                items: 'input.items'
+              - name: side
+                type: validate-plan
+                items: 'input.items'
+              - name: items
+                forEach: 'check.items'
+                dependsOn: [check]
+                steps:
+                  - name: build
+                    type: orient
+            """);
+        var work = once.Steps.Single(step => step.Name == "work");
+        var inWork = work.Steps.Single(step => step.Name == "check");
+        var atTop = once.Steps.Single(step => step.Name == "check");
+        var side = once.Steps.Single(step => step.Name == "side");
+        static FlowAmend AddingTo(string scope)
+            => new(Input: "request", ChangedAnswerMinutes: 5, Before: null, Step: "planner.replan", Then: null, Scope: "x", WhenAddScope: scope, WhenChangeScope: scope, WhenRemoveScope: scope, MaxAddedIterations: null);
+
+        // With no plan updates and no loop, a group runs once: its check opens no round.
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(once, "work", work, inWork));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(once, null, null, atTop));
+
+        // The group plan updates owe their work to runs in rounds an update adds, in a group or at the flow's top; the
+        // check of any other group, and a check no forEach expands from, opens none.
+        Assert.Equal("work.items", FlowUpdateGates.RoundOpenedBy(once with { Amend = AddingTo("work.items.build") }, "work", work, inWork));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(once with { Amend = AddingTo("work.items.build") }, null, null, atTop));
+        Assert.Equal("items", FlowUpdateGates.RoundOpenedBy(once with { Amend = AddingTo("items.build") }, null, null, atTop));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(once with { Amend = AddingTo("items.build") }, "work", work, inWork));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(once with { Amend = AddingTo("items.build") }, null, null, side));
+
+        // A repeat runs the group declared in its iterations in rounds, whatever the run takes plan updates by.
+        var looped = Definition("""
+            name: flow
+            steps:
+              - name: rounds
+                repeat:
+                  until: 'false'
+                  maxIterations: 2
+                steps:
+                  - name: check
+                    type: validate-plan
+                    items: 'input.items'
+                  - name: items
+                    forEach: 'check.items'
+                    dependsOn: [check]
+                    steps:
+                      - name: build
+                        type: orient
+            """);
+        var loop = looped.Steps.Single();
+
+        Assert.Equal("rounds.items", FlowUpdateGates.RoundOpenedBy(looped, "rounds", loop, loop.Steps.Single(step => step.Name == "check")));
+        Assert.Null(FlowUpdateGates.RoundOpenedBy(looped, "rounds", loop, loop.Steps.Single(step => step.Name == "items")));
+    }
+
     /// <summary>The definition of the gates' tests, parsed from <paramref name="text"/>.</summary>
     private static WorkflowDefinition Definition(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);

@@ -1,0 +1,21 @@
+{
+  "read": {
+    "ci": "dss-harness"
+  },
+  "errors": 3,
+  "warnings": 1,
+  "unparsed": 2,
+  "first": {
+    "tool": "cc",
+    "code": null,
+    "file": "native/src/store.c",
+    "line": 12,
+    "column": 9
+  },
+  "diagnostics": [
+    "error - native/src/store.c:12",
+    "error CS0103 src/App/Program.cs:12",
+    "warning CS0219 src/App/Service.cs:40",
+    "error C2065 native/src/store.cpp:7"
+  ]
+}

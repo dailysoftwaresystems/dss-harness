@@ -1,0 +1,15 @@
+D:\a\app\app\net\App\Program.cs(8,16): error CS0103: The name 'response' does not exist in the current context [D:\a\app\app\net\App\App.csproj::TargetFramework=net10.0]
+D:\a\app\app\net\App\Program.cs(7,13): warning CS0219: The variable 'count' is assigned but its value is never used [D:\a\app\app\net\App\App.csproj::TargetFramework=net10.0]
+D:\a\app\app\net\App\Program.cs(8,16): error CS0103: The name 'response' does not exist in the current context [D:\a\app\app\net\App\App.csproj::TargetFramework=net9.0]
+D:\a\app\app\net\App\Program.cs(7,13): warning CS0219: The variable 'count' is assigned but its value is never used [D:\a\app\app\net\App\App.csproj::TargetFramework=net9.0]
+
+Build FAILED.
+
+D:\a\app\app\net\App\Program.cs(7,13): warning CS0219: The variable 'count' is assigned but its value is never used [D:\a\app\app\net\App\App.csproj::TargetFramework=net10.0]
+D:\a\app\app\net\App\Program.cs(7,13): warning CS0219: The variable 'count' is assigned but its value is never used [D:\a\app\app\net\App\App.csproj::TargetFramework=net9.0]
+D:\a\app\app\net\App\Program.cs(8,16): error CS0103: The name 'response' does not exist in the current context [D:\a\app\app\net\App\App.csproj::TargetFramework=net10.0]
+D:\a\app\app\net\App\Program.cs(8,16): error CS0103: The name 'response' does not exist in the current context [D:\a\app\app\net\App\App.csproj::TargetFramework=net9.0]
+    2 Warning(s)
+    2 Error(s)
+
+Time Elapsed 00:00:01.76

@@ -176,7 +176,7 @@ public sealed record HoldRefusal(string Said, TreeHeld Held);
 /// <param name="runLock">The lock, whose live entries in the way name the holders.</param>
 /// <param name="slots">The record of heavy legs, whose line says where a holder's leg stands.</param>
 /// <param name="identity">This process, which tells this machine from another and spells the holder.</param>
-public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessIdentity identity)
+public sealed class TreeHolders(RunLock runLock, MachineDispatchQueue slots, IProcessIdentity identity)
 {
     /// <summary>
     /// Who holds what <paramref name="takes"/> and <paramref name="removes"/> name - every live entry in the way of any of
@@ -293,7 +293,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// <summary>
     /// Whether the leg of <paramref name="entry"/>'s run asks this machine's record of heavy legs for its slot: a leg of
     /// this machine itself, and one in a WSL distribution, which the command that dispatched it asks for here, where it
-    /// runs (<see cref="HeavyLegSlots"/>) - every leg but one on an ssh host, which asks that host's own record.
+    /// runs (<see cref="MachineDispatchQueue"/>) - every leg but one on an ssh host, which asks that host's own record.
     /// </summary>
     private static bool AsksThisMachine(LockEntry entry)
         => !(HostId.TryParse(entry.Host, out var host) && host.Kind == HostKind.Ssh);
@@ -389,7 +389,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         };
 
     private readonly RunLock _runLock = runLock;
-    private readonly HeavyLegSlots _slots = slots;
+    private readonly MachineDispatchQueue _slots = slots;
     private readonly IProcessIdentity _identity = identity;
 
     /// <summary>

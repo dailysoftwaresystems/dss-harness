@@ -96,6 +96,13 @@ public sealed record PhaseResult(
     public bool Passed => Stopped == PhaseStop.None && ExitCode == 0 && Witnessed != false && MissingOutputs.Count == 0;
 
     /// <summary>
+    /// The code the phase's program ended with, where it ended on its own; null where a bound stopped it, for the code a
+    /// stopped child reports says how it was stopped, never how its program would have ended - as its log's exit line says
+    /// <c>(stopped)</c>. What the parsers of its log are told of how it ended (<see cref="Results.PhaseDigest.Of"/>).
+    /// </summary>
+    public int? ProgramExit => Stopped == PhaseStop.None ? ExitCode : null;
+
+    /// <summary>
     /// The characters the last lines a phase is shown by may take, each with its ending: a page of a tool's answer
     /// (<see cref="Pages.PageRoom"/>), the one owner of how much one look gives - what a reader is shown first, never what
     /// there is: the whole output is in <see cref="LogFile"/>, read by page.
@@ -111,15 +118,22 @@ public sealed record PhaseResult(
     public IReadOnlyList<string> LastLines { get; init; } = [];
 
     /// <summary>
-    /// What a contained phase's container could not reach when the phase ended, and why
-    /// (<see cref="Processes.ProcessResult.Uncontained"/>), for what it started may still run; null where it reached everything, and
-    /// for a phase that was not contained.
+    /// What the phase's end could not reach or end, and why (<see cref="Processes.ProcessResult.Uncontained"/>) - a contained
+    /// phase's container, a process of its tree a stop could not end - for what it started may still run, warned as the
+    /// phase ends, as it is where the phase's caller stopped it and no result is made; null where its end reached and ended
+    /// everything it was to.
     /// </summary>
     public string? Uncontained { get; init; }
 
     /// <summary>
-    /// <see cref="LastLines"/> where the phase did not pass; empty where it did. What a reader who cannot
-    /// open the log - another host's, which stays on that host - needs first.
+    /// The directory the child ran in, which a relative path it printed is read from; <see langword="null"/> where it ran
+    /// in the directory this process did.
+    /// </summary>
+    public string? WorkingDirectory { get; init; }
+
+    /// <summary>
+    /// <see cref="LastLines"/> where the phase did not pass; empty where it did. What a reader needs first,
+    /// before the whole log - this machine's, or another host's once its run brings it back.
     /// </summary>
     public IReadOnlyList<string> Tail => Passed ? [] : LastLines;
 
@@ -137,8 +151,12 @@ public sealed record PhaseResult(
     /// <param name="phases">The phases, in the order they ran.</param>
     public static string? TailPhaseOf(IEnumerable<PhaseResult> phases) => LastFailing(phases)?.Phase;
 
-    /// <summary>The last of <paramref name="phases"/> that did not pass, or <see langword="null"/> where every one passed.</summary>
-    private static PhaseResult? LastFailing(IEnumerable<PhaseResult> phases)
+    /// <summary>
+    /// The last of <paramref name="phases"/> that did not pass - the one a build stopped at, or a run's last failure, whose
+    /// tail and digest a leg's line carries - or <see langword="null"/> where every one passed.
+    /// </summary>
+    /// <param name="phases">The phases, in the order they ran.</param>
+    public static PhaseResult? LastFailing(IEnumerable<PhaseResult> phases)
     {
         ArgumentNullException.ThrowIfNull(phases);
 

@@ -61,7 +61,7 @@ public static partial class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.EvidenceDirectoryName}/", "its evidence roots' files, kept when it is deleted"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/", "API clients only: one conversation with the provider, in the provider's own form"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
-                ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included"),
+                ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included; every step the run drew holds what its work measured (`measure` in step.json and flow.json: when it was ready, its waits by cause whole across sessions - the machine holding every leg of it still to run among them, a wait on its dispatch queue keeping the class of it and each tenant waited behind - its run time, its pause, a crash's among it, and one entry per attempt - each run of it, what served it, its spend by the model that served each part at the price copied as it was counted, the tokens by kind, the dollars, the turns, the tools with their failures and denials, the compactions, the pages past the first its graph calls asked for, a machine step's legs - with the advisor's spend beside them; the run's `spent` is the sum of its steps'), and an attempt a crash cut off is completed at the resume from the step's own records: a reason step's stored stream, charging only what its record had not, and a machine step's ledger in its directory, its legs and where its work stopped"),
                 ($"  {HarnessLayout.OrchestratorTempDirectoryName}/<launch>/", "every temporary directory a run's launch and its children keep, one directory a launch - its children's and Claude Code's own process's beside it - made with the launch, held for the run's life and never in the user's own places; taken away whole with the run's directory"),
                 ($"  {HarnessLayout.OrchestratorArtifactsDirectoryName}/", "the run's artifacts, made with the run and kept for its life: read and copied wherever they are asked for while it runs, and taken away with the run's directory"),
                 ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it"),
@@ -133,6 +133,9 @@ public static partial class HelpTopics
         builder.AppendLine("      [--again] [--json]");
         builder.AppendLine($"  {command} {FlowService.PauseCommand} <run> [--all] [--json]");
         builder.AppendLine($"  {command} {FlowService.StopCommand} <run> [--now] [--json]");
+        builder.AppendLine($"  {command} {FlowService.ReadReportCommand} <run> [--steps <instance>...] [--by step|agent|model|provider|type]");
+        builder.AppendLine("      [--top <n>] [--markdown] [--json]");
+        builder.AppendLine($"  {command} {FlowService.AnalyzeReportCommand} <run> [--markdown] [--json]");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -282,13 +285,97 @@ public static partial class HelpTopics
             + "reporter's attempt, the conversations its client stores (sessions/) and ask.json, a directory the engine never reads. Both commands only read: no state file, no "
             + "step, no agent, no budget, no lock an engine needs - they take no lock at all - and they work while a run goes on, is "
             + "paused, waits, or has ended. Where no model words them the status still prints the facts, says no model worded this "
-            + "and why, and exits 0: the facts are the answer, and the words were a service; the person's question is refused - 12 "
-            + "where the workflow names no reporter or the reporter's own files do not read, 13 where the key is not there, 14 "
-            + "where npm or Claude Code is missing or too "
-            + "old, 20 where the model failed, 21 where it could not be reached or its account is at its limit - and neither "
+            + "and why, and exits 0 (130 where an interrupt stopped its reporter): the facts are the answer, and the words were a "
+            + "service; the person's question is refused - 12 where the workflow names no reporter or the reporter's own files do "
+            + "not read, 13 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model "
+            + "failed, 21 where it could not be reached or its account is at its limit, 130 where an interrupt stopped the "
+            + "reporter - what a reporter that was begun spent said and kept in ask.json however it ended, at the model that "
+            + "served it, and neither "
             + "command installs Claude Code or brings one up to date: that is a run's to do, and these only read. An orchestrator "
             + "made by hand, which no flow runs, has no reporter and fewer facts: its status prints what list-orchestrator has of it "
             + "and says so, and the person's question is refused (12).");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"The report of a run. {FlowService.ReadReportCommand} answers it from the run's records alone - the same bytes for "
+            + "the same records, whatever a model might say - and never asks one: what the run was and how it stands, with its "
+            + "sessions, its wall time, its active time (the union of every attempt's runs), its pause (the time between its "
+            + "sessions), its wait for a person and its budget; the totals of its tokens by kind and its dollars grouped "
+            + "(totals.dollarsBy: each part of an attempt by the model that served it, each advice by the advisor's); one row "
+            + "per step instance, in the order the run made them, with its state, its attempts, its waits by cause - a wait "
+            + "on the machine's dispatch queue naming the class of it and each tenant waited behind, so a reader can tell "
+            + "its own run's units from another repository's - its run "
+            + "time, its model, its tokens, its dollars, its exit, its error, its handler and why it was skipped; the critical "
+            + "path, the chain of steps a faster run must shorten, each weighed by its runs and its waits for room, through "
+            + "repeats, items and visits alike; every attempt that failed, with why it ended, what it threw, the first error "
+            + "its digests read and the question its ending raised - each the attempt's own, kept by its measure entry, never "
+            + "the last attempt's; every question a person was asked, how long each waited for its first answer and what was "
+            + "recommended; what its reviews converged to - the classes closed, each item's counts (its rounds of review and "
+            + "home audits, and of each class the sites consolidated and deleted, the cells pinned, the neighbours measured and "
+            + "not, and how often a review sent it back), the classes reopened, the hotspots, the issues carried to a later "
+            + "round, fixed there or left, and what its loops left - and the signals a reader starts from: the slowest and most "
+            + "expensive steps, the most retried, every fallback, the longest wait for a person, queue waits over a share of a "
+            + "step's own time, a cache share of input under the bound on an attempt whose input reaches past it, a step that "
+            + "read past the depth of one graph answer (its query was too wide), a leg's "
+            + "output no parser read, a review at its bound, a class reopened twice, a hotspot, spend that could not be "
+            + "counted. Every row of a list holds an id of its own - a "
+            + "failed attempt '<instance>@<attempt>', a signal '<kind>#<n>' - and notes say what the report could not read "
+            + $"(a torn last line of events.jsonl, a definition that does not read). Its thresholds are the keys of "
+            + $"defaults.report in config.json: {string.Join("; ", FlowReportThresholds.Keys.Select(key => $"{key.Key} ({key.Takes}, {key.Default} where none is given)"))}. "
+            + $"The rows can be kept to named instances (--steps; one the run does not hold is refused), the dollars grouped "
+            + $"(--by {string.Join(", ", FlowRunReport.Groupings)}) and the signal lists bounded (--top). A run still going is "
+            + "answered too, said so at the time of its last record and marked partial; the command only reads, and the report "
+            + "the session's end writes is this same report - report.json holds it with the session's own members (its line, "
+            + "its code, when it ended, its handoffs), report.md says it with the session's questions, updates, handoffs and "
+            + "what is left for a person in full. --markdown answers the same as Markdown for a pull request, a ticket or the "
+            + "clipboard, and --json as one JSON document - its code, its line and the report, null where none was read.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"Analysing that report. {FlowService.AnalyzeReportCommand} has one agent read it and bring the pain points - "
+            + "where the run's time and money went, and each change to make, ordered by what it cost. It runs only where a "
+            + "person calls it: never by a run, a session's end or a view. The analyst is the tool's own (report-analyst, "
+            + "run by the one runner of the agents that read a run's records, the reporter's): it only reads, narrowed to "
+            + "the run's records, it is tried again where it fails as the run's reasoning steps are (the workflow's "
+            + "maxRetries and backoffSeconds), and its answer is held twice, by the structured-output gate in its own "
+            + "conversation under one count of repairs (twice at most, then refused) - to the schema the tool ships, and "
+            + "to the report it read: each citation names a section, the row by its id (a step's instance, a failed "
+            + "attempt's <instance>@<attempt>, a signal's <kind>#<n>), the member by its path and the value the report "
+            + "holds there, a number read for its value; each step it names is a row of the report's steps; and no member of "
+            + "the analysis but its recommendation states a number of its own. Its impact - the time and dollars it cost - is "
+            + "a template whose every figure is a placeholder naming one of its citations by its place in the evidence, {1} "
+            + "the first, which the tool writes as the cited value with the unit the report holds that member in, as the "
+            + "report writes it (a time in seconds, 412.3 s; the budget's reasoning in minutes, 90.0 minutes; a cost in "
+            + "dollars, 0.0200 USD; a cache share in percent, 28.0%; tokens, 180000 tokens; any other count with what it "
+            + "counts, 2 tries; a number that is no amount after its label, exit 20). A placeholder stands apart: one a "
+            + "letter, a number, a currency's sign, % or another placeholder touches, or a sign before it (${1}, {1}h, {1}%, "
+            + "{1}{2}, -{1}), is refused, and so are one past its evidence and one whose citation holds no number the report "
+            + "measures. A digit anywhere else - in the impact, the summary, a pain point's title or cause, or what "
+            + "was noted and why - is refused but inside an id: a word that starts with a letter, holds a digit and "
+            + "the report holds - a name of its rows, sections and members (c@1, a step named build2), or a word of "
+            + "its texts, whole between white space (Sizes/ParserTest.ReadsItsForm/1, src/3rdparty/zlib/inflate.c, "
+            + "C++20) or a piece of one between the characters no id is written with, a quote, a parenthesis, a colon, "
+            + "a slash, a plus or a comma among them (CS0246 and Parser2.cs of src/Parser2.cs(12,5): error CS0246), "
+            + "each read from its first letter or digit to its last - or a path a citation writes (c@1.exit), any "
+            + "citation's in the summary and what was noted, its own pain point's in a title, a cause and an impact. A "
+            + "word of the analysis is read whole first, its ends read off the same way, and where no id is it whole, "
+            + "each id standing whole inside it is read as one; a word that starts with a digit - a time, a date, a "
+            + "version - is never one. The recommendation is not read: it states the values it proposes - "
+            + "a key's exact text - and is never a measurement. So the summary, the titles, the causes, the impacts and what "
+            + "was noted cannot invent a measurement: their only figures are the citations, the report's own, and the "
+            + "impacts', written by the tool. Each pain point "
+            + "names its steps, its evidence, its impact in time and dollars, its cause and the exact change it recommends "
+            + "- a configuration key, a workflow key, a prompt's line or a repository fix - and an analysis of a run with "
+            + "nothing to change names none. What a run of the analyst leaves is kept under the run's analysis/<stamp>/ "
+            + "whatever it answered: report.json, the very bytes it read, whose hash it names; analysis.json, the "
+            + "analysis - each impact as the tool wrote it, the template beside it as impactTemplate - or why it was "
+            + "refused, with what it cost; analysis.md where an analysis was given; and the "
+            + "analyst's stream - every one named on every exit, and what it cost said, at the model that served it, refused, "
+            + "failed or interrupted (130). What it costs is "
+            + "the person's, never the run's. It runs on the tier 'reporting' names in tierConfig - which init seeds, as "
+            + "it seeds every other tier, with the balanced tier's models, the person's to change - and is refused (12) "
+            + "where the configuration defines none, saying which key to set. --markdown answers as Markdown and --json as one "
+            + "JSON document, the analysis apart from its cost and its record, the analysis null where none was given.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -299,10 +386,18 @@ public static partial class HelpTopics
             + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
             + "own end keeps it. Every command over an orchestrator - the three "
             + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
-            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL five seconds later), "
+            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL at once, each process killed waited for until it has gone), "
             + "removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json; stop-orchestrator --now does it again once it has ended the engine and its "
-            + "tree, and says what it ended. A session or group whose starter still runs is left; one whose id a later process "
+            + "tree, and says what it ended. A session or group whose starter still runs is left; one that holds the command "
+            + "itself - it runs in it, or descends from its leader - is said and left with its record, nothing in it signalled, for "
+            + "a command run from outside it to end, and delete-orchestrator, which would take that record with the orchestrator, "
+            + "and run-orchestrator, resume-orchestrator and answer-orchestrator, which would make the command a run's engine "
+            + "inside it, are refused (13), naming the record, nothing changed - each over a sweep taken at the act itself: "
+            + "delete-orchestrator its orchestrator's right before the removal, the others every run of the repository's, as "
+            + "list-orchestrator sweeps them, once their last look at the run's owner has found none live, before it is taken, "
+            + "so an owner gone since the command began - one an answer was handed to among them - is swept with the rest, and "
+            + "a refusal leaves the owner as it was; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
             + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
             + "that started it.");
@@ -619,7 +714,8 @@ public static partial class HelpTopics
             + $"it refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents "
             + "kept, whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but "
             + "records, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever "
-            + "asked - goes with it and is never counted among what --delete-evidence guards. It "
+            + "asked - goes with it and is never counted among what --delete-evidence guards, as does a copy of a commit a run's "
+            + "sweep made in its directory and was cut off before taking away, git's record of it with it. It "
             + "removes the record last, so one that stops part way finishes when run again.");
 
         return builder.ToString();

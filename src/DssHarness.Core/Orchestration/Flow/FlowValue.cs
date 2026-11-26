@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -183,7 +184,10 @@ public readonly record struct FlowValue
 
     /// <summary>
     /// This value as a template fills it: a scalar as its text - a number as it is written, a boolean as true or
-    /// false, null as <c>null</c> - and a list or an object as JSON.
+    /// false, null as <c>null</c> - and a list or an object as JSON, escaped only where JSON itself must, so a text
+    /// inside it reads as it was written: an apostrophe, angle brackets or a word in another script reaches an agent's
+    /// prompt and a record as itself, never as a <c>\u</c> escape - written as an agent's envelope is
+    /// (<see cref="AgentEnvelope.Written"/>), at any depth.
     /// </summary>
     public string AsTemplateText()
         => _value switch
@@ -194,7 +198,7 @@ public readonly record struct FlowValue
             bool truth => truth ? "true" : "false",
             long whole => whole.ToString(System.Globalization.CultureInfo.InvariantCulture),
             double fraction => fraction.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            JsonNode node => node.ToJsonString(),
+            JsonNode node => node.ToJsonString(AgentEnvelope.Written),
             _ => string.Empty,
         };
 }

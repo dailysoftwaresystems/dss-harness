@@ -22,7 +22,9 @@ namespace DssHarness.Core.Agents;
 /// it may, is sent back told so - and each assumption and question is held to its record's own rules
 /// (<see cref="AgentAssumption.Problems"/>, <see cref="AgentQuestion.Problems"/>): every text written, and a question's
 /// options no two alike, one of them recommended word for word. A text an <c>enum</c> or a <c>const</c> of the step's
-/// schema holds in another case reads as the schema spells it.
+/// schema holds in another case reads as the schema spells it. An output that reads against the schema is held to the
+/// step's own rules too, where it has any (<see cref="AgentOutput.Holds"/>): each problem is sent back as a schema's is,
+/// under the same count of repairs.
 /// </para>
 /// <para>
 /// An answer that reads ends the run: <see cref="AgentRunStatus.Asked"/> where it asks, with its questions, and
@@ -183,7 +185,14 @@ public sealed class StructuredOutputGate
             else
             {
                 output = JsonSchemaSubset.Respelled(_step, given);
-                problems.AddRange(JsonSchemaSubset.Problems(_step, output, $"$.{AgentEnvelope.Output}"));
+                var schema = JsonSchemaSubset.Problems(_step, output, $"$.{AgentEnvelope.Output}");
+                problems.AddRange(schema);
+
+                // The step's own rules read an output the schema holds, so they are asked only of one that reads against it.
+                if (schema.Count == 0 && _output.Holds is { } holds && output is not null)
+                {
+                    problems.AddRange(holds(output).Select(problem => $"$.{AgentEnvelope.Output}.{problem}"));
+                }
             }
         }
 

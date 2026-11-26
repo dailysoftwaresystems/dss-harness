@@ -7,6 +7,36 @@ namespace DssHarness.Tests;
 public sealed class IsolationPlatformTests
 {
     /// <summary>
+    /// What a trial's end could not reach or end is the probe's own report: a container that leaves a process of the trial
+    /// running proves nothing, said as why there is no mechanism and nowhere else. A stop of the probe, which is no answer to
+    /// report it in, says it under the tool, naming the program, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatATrialsEndCouldNotReachOrEnd_IsTheProbesReport_AndAStoppedProbeSaysIt(bool stopped)
+    {
+        using var tree = new TempDirectory();
+        var harness = new HarnessFactory();
+        IsolationAvailability? proved = null;
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            async (stop, token) => proved = await new IsolationPlatform(
+                    new SaidPlatform(PlatformId.MacOs),
+                    UnreachingRunner.For(stop),
+                    mac: new MacSandboxHost(path => path == SandboxExec.ProgramPath, () => false, () => "15.3", path => path),
+                    output: harness.Output)
+                .ProbeAsync(tree.Path, token));
+
+        Assert.Equal(stopped ? [UnreachedSaid.Warned(DssHarness.Core.Hosts.ToolPackage.Command, "the isolation probe's '/bin/sh'")] : [], said);
+        Assert.Equal(
+            stopped ? null : $"macOS 15.3's sandbox ('{SandboxExec.ProgramPath}') did not prove itself: its probe ended, and {UnreachingRunner.Unreached}",
+            proved?.Unavailable);
+    }
+
+    /// <summary>
     /// Where Ubuntu restricts unprivileged user namespaces, the remedy names the commands this machine needs: the profile
     /// loaded in place where the apparmor package ships it there, copied first from the extra profiles where they hold
     /// it, and the package that carries those installed first where neither is.

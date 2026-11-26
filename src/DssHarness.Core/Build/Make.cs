@@ -27,9 +27,6 @@ internal static class Make
     /// </summary>
     public static IReadOnlyList<string> KeepGoingArguments { get; } = ["-k"];
 
-    /// <summary>A terminal's colour codes, which make writes around what it says where something makes it colour its output.</summary>
-    private static readonly Regex Colour = LinearRegex.Compile(@"\x1B\[[0-9;]*m");
-
     /// <summary>
     /// The line GNU make says a target failed on, read by its structure alone: its own name, the depth of the make that
     /// says it where it is not the first, <c>*** </c>, and in brackets the makefile and line of the rule and then the target
@@ -108,7 +105,7 @@ internal static class Make
 
         foreach (var raw in lines)
         {
-            if (Failed.Match(Colour.Replace(raw, string.Empty).TrimEnd('\r')) is not { Success: true } failure)
+            if (Failed.Match(TerminalText.Plain(raw).TrimEnd('\r')) is not { Success: true } failure)
             {
                 continue;
             }

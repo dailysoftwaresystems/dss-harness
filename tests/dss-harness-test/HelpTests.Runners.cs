@@ -383,7 +383,9 @@ public sealed partial class HelpTests
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
         Assert.Contains(
             "A leg that did not pass carries, in --json, the last lines its last failing phase printed as logTail and that phase's "
-                + "name as tailPhase - a host's leg among them, whose log stays there.",
+                + "name as tailPhase - a host's leg among them, whose log of that phase is brought back into this run's records as "
+                + "the leg ends, named as logBroughtBack, so the whole of it is one read away here too. Each leg's line carries its "
+                + "phases with their times as phases.",
             text,
             StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);

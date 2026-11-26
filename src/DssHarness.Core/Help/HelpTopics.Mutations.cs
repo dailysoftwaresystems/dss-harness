@@ -237,8 +237,10 @@ public static partial class HelpTopics
             + "and stops each of its arms. "
             + "Its run bounds theirs: a mutated run may take runTimeFactor times as long, never less than it and its start "
             + "and exit again - what it took beyond the time its report says its cases took, measured on this machine, the "
-            + "whole run where the report says nothing of their time - and is stopped as unattributed past that, naming which "
-            + "of the two set its bound. Each arm is admitted as a unit of its own where its machine "
+            + "whole run where the report says nothing of their time - nor than "
+            + $"{PristineJudge.LeastBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} seconds, the least a run is "
+            + "waited for, past what a busy machine holds a short run back by; and is stopped as unattributed past that, "
+            + "naming which of the three set its bound. Each arm is admitted as a unit of its own where its machine "
             + "declares admission ('help admission'), pre-flighted, mutated - its sites dated past the worker's last build "
             + "and the clock by the granularity the file system there dates files at, measured there, and the build waiting, "
             + "told, until the clock has passed that date, however far ahead of the clock the last build's files are "
@@ -469,8 +471,9 @@ public static partial class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName}, "
-            + "only where it differs. Its workers are kept in the leg's own tree, as a sweep's are, in a family of "
+            $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName} - "
+            + $"{MutationFixture.DirectoryName} in the directory {UserState.Variable} names, where it names one - only where it differs. "
+            + "Its workers are kept in the leg's own tree, as a sweep's are, in a family of "
             + $"their own - <tree>/{HarnessLayout.MutationsDirectoryName}/<key>{WorkerFamily.SelfTestMark}-<n>, a few megabytes each - so they are "
             + "that repository's: counted by its room, built by its toolchain, and removed by a clean of the leg, and "
             + "with its worktree or its host's copy. A self-test is placed by no room a build of the leg's tree needs, "

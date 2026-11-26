@@ -39,7 +39,7 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 15;
+    public const int Version = 16;
 
     /// <summary>
     /// How often, in seconds, the machine that asked writes <see cref="BeatLine"/> on the input it holds open while a run
@@ -516,6 +516,15 @@ public sealed class HostAgentRequest
     public string? RunId { get; init; }
 
     /// <summary>
+    /// The priority of <see cref="RunId"/>'s run, as its workflow declared it: what each unit a leg there asks the host's
+    /// dispatch queue for is charged at - its tenant's share multiplied by it - as the run's legs on the machine that asked
+    /// are, so a run's priority reaches every unit it runs, wherever it runs. Run only; <see langword="null"/> where the
+    /// command runs no leg of a run.
+    /// </summary>
+    /// <remarks>Carried beside the command, as its run is, for the same reason.</remarks>
+    public int? Priority { get; init; }
+
+    /// <summary>
     /// For a leg of a WSL distribution, the drive of the machine that asked where WSL keeps the distribution's disk, as that
     /// machine names it - <c>C:\</c> - which the leg's build fills as the disk grows, and which the distribution's own room
     /// does not show: the leg holds its build to the floor on it through the drive's mount there. Run only;
@@ -644,12 +653,14 @@ public sealed record Dispatch
 {
     private Dispatch(
         RunId? runId,
+        int? priority,
         string? diskImageDrive,
         string? nonce,
         Configuration.AdmissionSettings? machineAdmission,
         IReadOnlyDictionary<string, string> distributions)
     {
         RunId = runId;
+        Priority = priority;
         DiskImageDrive = diskImageDrive;
         Nonce = nonce;
         MachineAdmission = machineAdmission;
@@ -664,6 +675,12 @@ public sealed record Dispatch
 
     /// <summary>The run of that machine the command runs a leg of; <see langword="null"/> where it runs none.</summary>
     public RunId? RunId { get; }
+
+    /// <summary>
+    /// The priority of that run, which every unit a leg here asks this machine's dispatch queue for is charged at - see
+    /// <see cref="HostAgentRequest.Priority"/>; <see langword="null"/> where none was carried, and the command's own is.
+    /// </summary>
+    public int? Priority { get; }
 
     /// <summary>
     /// For a leg of a WSL distribution, the drive of that machine where WSL keeps the distribution's disk - see
@@ -685,12 +702,13 @@ public sealed record Dispatch
 
     /// <summary>
     /// What <paramref name="request"/> says of the command it asks for, read as strictly as anywhere else: its run as a run
-    /// id, which a leg here records its heavy-leg slot under, and its drive as one named, which a leg here holds its build
-    /// to the floor on.
+    /// id, which a leg here records its heavy-leg slot under, its run's priority as one a run may have, which a leg here
+    /// asks the dispatch queue at, and its drive as one named, which a leg here holds its build to the floor on.
     /// </summary>
     /// <param name="request">A run request.</param>
     /// <exception cref="HarnessException">
-    /// The request names its run by what is no run id, or names a blank drive: refused, and nothing it asks for runs.
+    /// The request names its run by what is no run id, its run's priority below the least a run has, or a blank drive:
+    /// refused, and nothing it asks for runs.
     /// </exception>
     public static Dispatch Of(HostAgentRequest request)
     {
@@ -703,6 +721,13 @@ public sealed record Dispatch
             run = Execution.RunId.TryParse(named, out var parsed)
                 ? parsed
                 : throw new HarnessException(HarnessExit.UsageError, $"the request names its run as '{named}', which is not a run id");
+        }
+
+        if (request.Priority is { } priority && priority < DispatchOrder.LeastPriority)
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                string.Create(CultureInfo.InvariantCulture, $"the request names its run's priority as {priority}, below the least a run has, {DispatchOrder.LeastPriority}"));
         }
 
         if (request.DiskImageDrive is { } drive && string.IsNullOrWhiteSpace(drive))
@@ -718,6 +743,7 @@ public sealed record Dispatch
 
         return new Dispatch(
             run,
+            request.Priority,
             request.DiskImageDrive,
             request.Nonce,
             request.MachineAdmission,

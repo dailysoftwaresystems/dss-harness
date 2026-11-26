@@ -275,6 +275,11 @@ public sealed class ClassClosureStepRunner(
         List<string> homes = [.. entries.Select(entry => entry.HomePath).Distinct(platform.PathComparer())];
         var touches = await TouchesAsync(place, layout, store, run, homes, cancellationToken).ConfigureAwait(false);
 
+        // The classes the run's reviews reopened a second time, from the item's ledger - what route-findings keeps and
+        // the home audit is asked for again here, whichever course sent the class back - by their ids, compared
+        // ordinally on every machine: a class id is no path.
+        var reopened = store.ReadClosureLedger(layout, agent)?.ReopenedTwice();
+
         var judged = ClassClosureRules.Judge(planned, entries, new ClassClosureProof(
             changed,
             calls,
@@ -286,7 +291,12 @@ public sealed class ClassClosureStepRunner(
             TouchesAll: touches.All,
             TouchesRequired: run.Step.Touches ?? WorkflowStepTypes.DefaultTouches,
             HotspotAt: run.Step.Hotspot ?? WorkflowStepTypes.DefaultHotspot,
-            platform.PathComparison));
+            ReopenedTwice: reopened,
+            platform.PathComparison)
+        {
+            // The arms the item's own sweep runs, as the answer lists them beside the record: held to the record's own.
+            ListedArms = FlowStepKeys.NamesOf(run.Step.Arms, run, "arms"),
+        });
 
         var output = new JsonObject
         {
@@ -305,6 +315,9 @@ public sealed class ClassClosureStepRunner(
                 ["byOthers"] = touch.ByOthers,
                 ["all"] = touch.All,
             })]),
+
+            // The record judged, as it was read: what the run's words and its report gather of the item.
+            ["record"] = record.DeepClone(),
         };
 
         if (judged.Problems.Count > 0)
@@ -527,6 +540,7 @@ public sealed class CiWaitStepRunner(
         foreach (var check in reading.Red)
         {
             string? kept = null;
+            string? masked = null;
             long? lines = null;
             IReadOnlyList<string> failing = [];
 
@@ -534,7 +548,7 @@ public sealed class CiWaitStepRunner(
             // case or by a character no path carries - would otherwise keep one file, each the other's log.
             if (check.Log is { } log && check.Check.JobId is { } jobId)
             {
-                var masked = mask.Redact(log);
+                masked = mask.Redact(log);
                 kept = Path.Combine(logs, $"{PhaseLogs.NameFor(check.Job ?? check.Check.Name)}.{jobId.ToString(CultureInfo.InvariantCulture)}{PhaseLogs.Extension}");
                 fileSystem.CreateDirectory(logs);
                 fileSystem.WriteAllTextAtomic(kept, masked);
@@ -554,6 +568,15 @@ public sealed class CiWaitStepRunner(
                 failing = [.. (await FailingPageAsync(pages, masked.Contains(ErrorMark, StringComparison.Ordinal), cancellationToken).ConfigureAwait(false)).Entries.Select(entry => entry.Text)];
             }
 
+            // The check digested: its annotations with a place first, then its kept log read by every form a CI log holds,
+            // each path placed against the job's own workspace on its runner - so a red job's entry starts from what
+            // failed, not from a page; and beside it only the raw lines it does not say, every line once.
+            var handed = ResultDigest.Handed(
+                CiDigest.Of(masked, check.Annotations, check.Check.Repository, mask.Redact, context.Config.Results.Matchers),
+                failing,
+                entry => CiLog.TextOf(TextPages.Unnumbered(entry)),
+                logHere: kept is not null);
+
             red.Add(new JsonObject
             {
                 ["name"] = check.Check.Name,
@@ -563,9 +586,10 @@ public sealed class CiWaitStepRunner(
                 ["leg"] = check.Leg,
                 ["overran"] = check.Overran,
                 ["url"] = check.Check.Url,
-                ["failing"] = new JsonArray([.. failing.Select(line => (JsonNode?)line)]),
+                ["failing"] = new JsonArray([.. handed.Lines.Select(line => (JsonNode?)line)]),
                 ["log"] = kept,
                 ["lines"] = lines,
+                ["digest"] = handed.Digest,
                 ["conclusion"] = check.Check.Conclusion,
                 ["description"] = check.Check.Description,
                 ["unread"] = check.Unread,

@@ -149,8 +149,8 @@ public sealed class CheckMutationsEndToEndTests
             await harness.InitializeHarnessAsync(repository, token, config);
             await harness.CommitAllAsync(repository, "a repository declaring no arm", token);
 
-            var (environment, data) = OwnUserData(temp);
-            var fixture = Path.Combine(data, ToolPackage.Command, MutationFixture.DirectoryName);
+            var (environment, state) = OwnUserState(temp);
+            var fixture = Path.Combine(state, MutationFixture.DirectoryName);
             var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
 
             try
@@ -220,7 +220,7 @@ public sealed class CheckMutationsEndToEndTests
             await harness.InitializeHarnessAsync(repository, token, config);
             await harness.CommitAllAsync(repository, "a repository declaring no arm", token);
 
-            var (environment, _) = OwnUserData(temp);
+            var (environment, _) = OwnUserState(temp);
             var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
 
             try
@@ -588,28 +588,13 @@ public sealed class CheckMutationsEndToEndTests
             StringComparer.Ordinal);
 
     /// <summary>
-    /// An environment giving the CLI a user's data of its own below <paramref name="temp"/>, kept short so a worker's build
-    /// below it stays within the path limit, and the directory this tool's own data is then kept in.
+    /// An environment giving the CLI a directory of its own for this tool's state below <paramref name="temp"/>, kept short
+    /// so a worker's build below it stays within the path limit, and that directory.
     /// </summary>
-    private static (Dictionary<string, string?> Environment, string Data) OwnUserData(TempDirectory temp)
+    private static (Dictionary<string, string?> Environment, string State) OwnUserState(TempDirectory temp)
     {
-        var home = temp.Combine("h");
-        var local = temp.Combine("d");
-        var share = temp.Combine("s");
+        var state = temp.Combine("d");
 
-        Directory.CreateDirectory(home);
-
-        var data = OperatingSystem.IsMacOS() ? Path.Combine(home, "Library", "Application Support")
-            : OperatingSystem.IsWindows() ? local
-            : share;
-
-        return (
-            new Dictionary<string, string?>(StringComparer.Ordinal)
-            {
-                ["HOME"] = home,
-                ["XDG_DATA_HOME"] = share,
-                ["LOCALAPPDATA"] = local,
-            },
-            data);
+        return (CliRunner.OwnUserState(state), state);
     }
 }

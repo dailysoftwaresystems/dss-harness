@@ -21,6 +21,12 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Issues">Every pre-existing issue the run listed, proven, as the run's own file of them holds it.</param>
 /// <param name="Refused">Every answer handed over through the inbox that the run refused, as its file of questions holds them; null where none was.</param>
 /// <param name="AffectedTests">Each key's test units the run kept, as its own record of them holds them; null where the state was read from no record.</param>
+/// <param name="NextRound">Every issue the run owes its next round, as its own file of them holds it; none where the run's directory holds no file of them.</param>
+/// <param name="LastRecordAt">
+/// When the session before last wrote a record - its last whole event's time, every state change writing one - the
+/// time the run is taken to have stood still from: what was open then is closed there, and the time from there to the
+/// resume is its pause. Null where the run's events hold none.
+/// </param>
 public sealed record FlowResumeState(
     FlowFile File,
     IReadOnlyList<string> Differing,
@@ -29,7 +35,9 @@ public sealed record FlowResumeState(
     IReadOnlyList<FlowQuestionEntry>? Questions = null,
     IReadOnlyList<PreExistingIssue>? Issues = null,
     IReadOnlyList<FlowRefusedAnswer>? Refused = null,
-    IReadOnlyList<FlowAffectedTests>? AffectedTests = null);
+    IReadOnlyList<FlowAffectedTests>? AffectedTests = null,
+    IReadOnlyList<FlowNextIssue>? NextRound = null,
+    DateTimeOffset? LastRecordAt = null);
 
 /// <summary>
 /// Reads what a killed or stopped run left and hands it to a resume: the run's state in one file checked against the
@@ -99,6 +107,10 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
         var affected = _store.ReadAffectedTests(_layout)
             ?? throw Missing(_layout.AffectedTestsFile, "its affected tests", "the tests its finished work affects would be lost from every step that reads run.affectedTests");
 
+        // The next round's issues are read as none where the run's directory holds no file of them: a run an older
+        // build began never had one, and an empty round in its place loses nothing it owed.
+        var next = _store.ReadNextRound(_layout)?.Issues ?? [];
+
         var records = StepRecords();
         var steps = new List<FlowStepRecord>();
         var differing = new List<string>();
@@ -138,7 +150,11 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 
         _store.WriteFlow(_layout, reconciled);
 
-        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused, affected.Entries);
+        // Where the session before stood still: its events' last whole line, every state change writing one after the
+        // records that tell of it.
+        var events = _fileSystem.FileExists(_layout.EventsFile) ? FlowEventLog.Read(_fileSystem, _layout.EventsFile).Events : [];
+
+        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused, affected.Entries, next, events.Count > 0 ? events[^1].At : null);
     }
 
     /// <summary>Every step record the run's directories hold - the run's, then each agent's - by instance id, each with any handoff its record does not name yet taken back.</summary>
@@ -373,11 +389,14 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     /// Claims the run for this process: refused (13) where a live owner holds it - an engine that paused its run and
     /// is still recording the machine steps the pause left running is a live owner like any other - and a dead one is
     /// reclaimed and said. Called inside the repository's one section, so two sessions can never both claim one run.
+    /// Once the owner is found gone, or none is recorded, and before this process takes the run, <paramref name="taking"/>
+    /// decides what the claim still waits on - a refusal it throws leaves the owner file as it was.
     /// </summary>
     /// <param name="layout">The run's layout.</param>
+    /// <param name="taking">What is decided at the claim itself, once no live owner holds the run; null where nothing is.</param>
     /// <returns>What is said of a dead owner's record reclaimed; null where none was recorded.</returns>
-    /// <exception cref="HarnessException">A live owner holds the run (<see cref="HarnessExit.Refused"/>).</exception>
-    public string? Claim(OrchestratorLayout layout)
+    /// <exception cref="HarnessException">A live owner holds the run, or <paramref name="taking"/> refuses it (<see cref="HarnessExit.Refused"/>).</exception>
+    public string? Claim(OrchestratorLayout layout, Action? taking = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -385,7 +404,8 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
             layout.OwnerFile,
             OrchestrationStore.OwnerKind,
             $"run '{layout.Name}'",
-            held => $"run '{layout.Name}' is owned by a live engine ({held}); stop-orchestrator {layout.Name} ends it, or wait for the engine to leave it. Nothing was changed.");
+            held => $"run '{layout.Name}' is owned by a live engine ({held}); stop-orchestrator {layout.Name} ends it, or wait for the engine to leave it. Nothing was changed.",
+            taking);
     }
 
     /// <summary>

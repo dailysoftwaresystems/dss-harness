@@ -1,5 +1,22 @@
 Review this change, for your aspect.
 
+## The class-closure record
+
+Read this first, whatever your aspect. The classes of the decisions this item closes, each with its invariant, its one
+home and its sites:
+
+{input.item.classes}
+
+The record of each class so far, as the last report gave it:
+
+{implement.latest.closure}
+
+A finding of yours that is another instance of a class the item closes - the same data decided again somewhere the
+change or its class's sites reach - is not a new defect: class it `reopened`, and name the class id in `reopens`,
+exactly as the classes or the record above name it. Every other finding is `introduced`, a defect the diff made. Where
+the item declares no class, every finding of yours is `introduced`, and `reopens` is empty. A `reopens` that names no
+class of the item's, or a severity off the schema's scale, is sent back to you to answer again.
+
 ## The item
 
 {input.item.title}
@@ -53,7 +70,9 @@ again, and say in its text why the reason does not hold. Entries of other aspect
 ## What to return
 
 Whether the change has anything of your aspect, and each finding: your aspect, the file and line, what goes wrong and
-in which case, what would put it right, how much it matters, and whether it is in production code. A statement of the
+in which case, what would put it right, how much it matters, whether it is in production code, and its class -
+introduced, a defect the diff made, or reopened, another instance of a class the item closes, with the class id in
+`reopens`. A statement of the
 item's definition of done that the change does not hold is a `correctness` finding; other aspects leave it.
 
 Report what you confirmed in the code. An empty list is the answer for a change with nothing wrong in your aspect.

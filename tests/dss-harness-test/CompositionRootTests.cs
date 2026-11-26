@@ -11,6 +11,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Secrets;
 using DssHarness.Core.Sync;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
 
 namespace DssHarness.Tests;
@@ -21,6 +22,61 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class CompositionRootTests
 {
+    /// <summary>
+    /// The root hands the operation's output to the process table it builds: what a stop of the program the table is read
+    /// through could not reach or end is said under the tool, naming the reading, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheRoot_HandsTheOperationsOutput_ToTheProcessTable(bool stopped)
+    {
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            async (stop, token) =>
+            {
+                await using var provider = Root(harness, UnreachingRunner.For(stop), HostDoubles.Platform(PlatformId.Windows));
+
+                await provider.GetRequiredService<IProcessTable>().ReadAsync(token);
+            });
+
+        Assert.Equal([UnreachedSaid.Warned(ToolPackage.Command, "PowerShell reading the process table")], said);
+    }
+
+    /// <summary>
+    /// The root hands the operation's output to the isolation platform it builds, and its own seams of the machine: what a
+    /// stop of the isolation probe could not reach or end is said under the tool, naming the probe's program, once
+    /// (<see cref="UnreachedSaying"/>); a trial whose end could not is the probe's report, said nowhere else.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheRoot_HandsTheOperationsOutput_ToTheIsolationPlatform(bool stopped)
+    {
+        using var tree = new TempDirectory();
+        var harness = new HarnessFactory();
+        var mac = new MacSandboxHost(path => path == SandboxExec.ProgramPath, () => false, () => "15.3", path => path);
+        IsolationAvailability? proved = null;
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            async (stop, token) =>
+            {
+                await using var provider = Root(harness, UnreachingRunner.For(stop), new SaidPlatform(PlatformId.MacOs), mac);
+
+                proved = await provider.GetRequiredService<IIsolationPlatform>().ProbeAsync(tree.Path, token);
+            });
+
+        Assert.Equal(stopped ? [UnreachedSaid.Warned(ToolPackage.Command, "the isolation probe's '/bin/sh'")] : [], said);
+        Assert.Equal(
+            stopped ? null : $"macOS 15.3's sandbox ('{SandboxExec.ProgramPath}') did not prove itself: its probe ended, and {UnreachingRunner.Unreached}",
+            proved?.Unavailable);
+    }
+
     /// <summary>
     /// The root builds with every dependency present, and resolves the services the two hidden commands serve: today
     /// only process tests catch a missing registration, which is a slow way to learn of one.
@@ -125,5 +181,25 @@ public sealed class CompositionRootTests
 
         Assert.IsNotType<ConsoleHarnessOutput>(provider.GetRequiredService<IHarnessOutput>());
         Assert.NotNull(provider.GetRequiredService<ISuperuserPrompt>());
+    }
+
+    /// <summary>
+    /// The root as a command builds it, its output <paramref name="harness"/>'s, its programs run by
+    /// <paramref name="runner"/> - which starts nothing - on <paramref name="platform"/>, and macOS's sandbox standing as
+    /// <paramref name="mac"/> says where one is given.
+    /// </summary>
+    private static ServiceProvider Root(HarnessFactory harness, IProcessRunner runner, IHostPlatform platform, MacSandboxHost? mac = null)
+    {
+        var services = new ServiceCollection()
+            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New(), _ => harness.Output)
+            .Replace(ServiceDescriptor.Singleton(runner))
+            .Replace(ServiceDescriptor.Singleton(platform));
+
+        if (mac is not null)
+        {
+            services.Replace(ServiceDescriptor.Singleton(mac));
+        }
+
+        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
     }
 }

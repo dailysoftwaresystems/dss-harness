@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
@@ -452,6 +453,9 @@ public sealed class FlowPauseTests
             Asked.Add(run);
             return body;
         }
+
+        public Task<FlowCutAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+            => Task.FromResult<FlowCutAttempt?>(null);
     }
 
     /// <summary>A handoff turn that runs past its bound - the workflow's handoffSeconds, or 180 where it says none - is ended there, and the engine writes the handoff, saying the bound it passed.</summary>
@@ -1623,7 +1627,7 @@ public sealed class FlowPauseTests
         {
             // Each attempt reports what the whole conversation has spent so far.
             at++;
-            run.Events.Used(tokens: 1_000, usd: 45.10 * at);
+            run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10 * at));
             return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
         });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
@@ -1700,7 +1704,7 @@ public sealed class FlowPauseTests
         var runner = new FakeRunner()
             .On("think", run =>
             {
-                run.Events.Used(tokens: 1_000, usd: 45.10);
+                run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
             })
             .HandsOff("think", "half way through");
@@ -1762,15 +1766,15 @@ public sealed class FlowPauseTests
                 // Only the first attempt reports this spend: the re-run goes on with the same conversation.
                 if (run.Attempt == 1)
                 {
-                    run.Events.Used(tokens: 1_000, usd: 2.0);
-                    run.Events.Used(tokens: 500, usd: null, uncounted: Why);
+                    run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 2.0));
+                    run.Events.Used(new FlowTurnSpend(new AgentUsage(500, 0, 0, 0, 0, 0), null, Uncounted: Why));
                 }
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
             })
             .On("after", run =>
             {
-                run.Events.Used(tokens: 1_000, usd: 1.0);
+                run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 1.0));
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
             });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
@@ -1865,7 +1869,7 @@ public sealed class FlowPauseTests
             // Only the first attempt reports this spend: the re-run goes on with the same conversation.
             if (run.Attempt == 1)
             {
-                run.Events.Used(tokens: 1_000, usd: 45.10);
+                run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
             }
 
             return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
@@ -1942,7 +1946,7 @@ public sealed class FlowPauseTests
             first = runner.Runs.Single();
         }
 
-        first.Events.Used(tokens: 9_000, usd: 0);
+        first.Events.Used(new FlowTurnSpend(new AgentUsage(9_000, 0, 0, 0, 0, 0), 0));
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
@@ -1971,7 +1975,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner().On("think", run =>
         {
-            run.Events.Used(tokens: 9_000, usd: 0);
+            run.Events.Used(new FlowTurnSpend(new AgentUsage(9_000, 0, 0, 0, 0, 0), 0));
             return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
         });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
@@ -2042,7 +2046,7 @@ public sealed class FlowPauseTests
                 // Only the first attempt reports this spend: the re-run goes on with the same conversation.
                 if (run.Attempt == 1)
                 {
-                    run.Events.Used(tokens: 1_000, usd: 45.10);
+                    run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
                 }
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
@@ -2082,7 +2086,7 @@ public sealed class FlowPauseTests
                 // The re-run continues the same conversation: only its first attempt reports this spend.
                 if (run.Attempt == 1)
                 {
-                    run.Events.Used(tokens: 1_000, usd: 45.10);
+                    run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
                 }
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
@@ -2126,7 +2130,7 @@ public sealed class FlowPauseTests
                 // Only the first attempt reports this spend: the re-run goes on with the same conversation.
                 if (run.Attempt == 1)
                 {
-                    run.Events.Used(tokens: 1_000, usd: 45.10);
+                    run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 45.10));
                 }
 
                 return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
@@ -2520,7 +2524,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner().On("first", run =>
         {
-            run.Events.Used(tokens: 1_000, usd: 5.0);
+            run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 5.0));
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
         });
 
@@ -2556,7 +2560,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner().On("think", run =>
         {
-            run.Events.Used(tokens: 1_000, usd: 44.0);
+            run.Events.Used(new FlowTurnSpend(new AgentUsage(1_000, 0, 0, 0, 0, 0), 44.0));
             return FlowStepResult.AtTheRunsReserve("'think' spent what was left of the run's budget before its reserve");
         });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");

@@ -4,8 +4,18 @@ using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Execution;
 
+/// <summary>One process as the list Windows keeps of every process holds it.</summary>
+/// <param name="Id">Its id.</param>
+/// <param name="ParentId">
+/// The id of the process that created it, as it stood then: Windows never changes it, so once the creator has gone it may
+/// name a later holder of that id - one created after the process, which no creator can be.
+/// </param>
+/// <param name="Created">When it was created, as a file time: what a handle to it says of its creation too.</param>
+internal readonly record struct ListedProcess(int Id, int ParentId, long Created);
+
 /// <summary>
-/// When a process on this Windows machine started, read from the list Windows keeps of every process for whoever asks.
+/// The list Windows keeps of every process for whoever asks: when a process on this machine started, and every process
+/// with the one that created it.
 /// </summary>
 /// <remarks>
 /// <see cref="System.Diagnostics.Process.StartTime"/> opens the process, which one of another account refuses to a
@@ -46,18 +56,40 @@ internal static class SystemProcessList
     /// </summary>
     /// <param name="processId">The process id.</param>
     public static long? StartTicks(int processId)
-        => StartTicks(processId, (IntPtr list, int length, out int needed) => NtQuerySystemInformation(ProcessInformation, list, length, out needed));
+        => StartTicks(processId, TheSystems);
 
     /// <summary>The start of the process carrying <paramref name="processId"/>, the list read through <paramref name="read"/>.</summary>
+    /// <param name="processId">The process id.</param>
+    /// <param name="read">Reads the list into a room.</param>
+    internal static long? StartTicks(int processId, ListReading read)
+        => Read(read, list => Entries(list).Where(entry => entry.Id == processId).Select(entry => (long?)DateTime.FromFileTime(entry.Created).Ticks).FirstOrDefault());
+
+    /// <summary>
+    /// Every process the list holds, each with the one that created it; <see langword="null"/> where the list could not be
+    /// read.
+    /// </summary>
+    public static IReadOnlyList<ListedProcess>? Every() => Every(TheSystems);
+
+    /// <summary>Every process the list holds, the list read through <paramref name="read"/>.</summary>
+    /// <param name="read">Reads the list into a room.</param>
+    internal static IReadOnlyList<ListedProcess>? Every(ListReading read)
+        => Read<IReadOnlyList<ListedProcess>?>(read, list => [.. Entries(list)]);
+
+    /// <summary>Windows' own reading of the list.</summary>
+    private static int TheSystems(IntPtr list, int length, out int needed)
+        => NtQuerySystemInformation(ProcessInformation, list, length, out needed);
+
+    /// <summary>What <paramref name="walk"/> finds in the list read through <paramref name="read"/>; its default where the list could not be read.</summary>
     /// <remarks>
     /// The list grows while it is read on a machine starting processes, and Windows says so - <c>LENGTH_MISMATCH</c>, with
     /// the room it needs - a cause that passes by nature: the room is grown to what it says, and a little more, and the list read
     /// again for as long as it says it (<see cref="Retrying"/>), never a count of tries, which once left a machine starting
     /// processes fast unread. Any other status is the list's answer, and a failing one is the list unread.
     /// </remarks>
-    /// <param name="processId">The process id.</param>
+    /// <typeparam name="T">What the walk finds.</typeparam>
     /// <param name="read">Reads the list into a room.</param>
-    internal static long? StartTicks(int processId, ListReading read)
+    /// <param name="walk">What is found in the list, read whole.</param>
+    private static T? Read<T>(ListReading read, Func<IntPtr, T> walk)
     {
         ArgumentNullException.ThrowIfNull(read);
 
@@ -65,7 +97,7 @@ internal static class SystemProcessList
 
         // Nothing waits between two reads: the room the next read needs is what this one said, and growing it is the
         // whole of what passes. Told nowhere, since nothing here waits for anything a person would see.
-        var ended = Retrying.RunAsync<long?>(
+        var ended = Retrying.RunAsync<T?>(
             (_, _) =>
             {
                 var list = Marshal.AllocHGlobal(length);
@@ -76,14 +108,14 @@ internal static class SystemProcessList
 
                     if (status != LengthMismatch)
                     {
-                        return Task.FromResult<RetryTry<long?>>(new RetryTry<long?>.Done(status < 0 ? null : Find(list, processId)));
+                        return Task.FromResult<RetryTry<T?>>(new RetryTry<T?>.Done(status < 0 ? default : walk(list)));
                     }
 
                     // What the list said it needs, and room besides for what starts before the next read; a list that said
                     // no more than it was given is given half as much again.
                     length = checked(needed > length ? needed + GrowthRoom : length + (length / 2));
 
-                    return Task.FromResult<RetryTry<long?>>(new RetryTry<long?>.Passing(
+                    return Task.FromResult<RetryTry<T?>>(new RetryTry<T?>.Passing(
                         string.Create(CultureInfo.InvariantCulture, $"the list outgrew its room; read again into {length} bytes"),
                         TimeSpan.Zero));
                 }
@@ -104,24 +136,26 @@ internal static class SystemProcessList
     /// </summary>
     internal static int IdOffset => IntPtr.Size == 8 ? 0x50 : 0x44;
 
-    /// <summary>The start of the entry for <paramref name="processId"/>, walking the list entry by entry.</summary>
-    private static long? Find(IntPtr list, int processId)
+    /// <summary>Where an entry keeps the id of the process that created its own: the field after its id.</summary>
+    internal static int ParentIdOffset => IdOffset + IntPtr.Size;
+
+    /// <summary>Every entry of the list, walked entry by entry, each read as the walk reaches it.</summary>
+    private static IEnumerable<ListedProcess> Entries(IntPtr list)
     {
-        var idOffset = IdOffset;
         var entry = list;
 
         while (true)
         {
-            if (Marshal.ReadIntPtr(entry, idOffset) == processId)
-            {
-                return DateTime.FromFileTime(Marshal.ReadInt64(entry, CreateTimeOffset)).Ticks;
-            }
+            yield return new ListedProcess(
+                (int)Marshal.ReadIntPtr(entry, IdOffset),
+                (int)Marshal.ReadIntPtr(entry, ParentIdOffset),
+                Marshal.ReadInt64(entry, CreateTimeOffset));
 
             var next = Marshal.ReadInt32(entry);
 
             if (next == 0)
             {
-                return null;
+                yield break;
             }
 
             entry += next;

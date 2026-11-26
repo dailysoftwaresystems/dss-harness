@@ -369,6 +369,30 @@ public sealed class CtestDescriptionTests
     private static readonly string Program = Path.Combine(Worker, "fixture_tests");
 
     /// <summary>
+    /// What a stop of ctest describing the tests could not reach or end is said under the sweep, naming the program it
+    /// describes, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatAStopOfCtestsDescriptionCouldNotReachOrEnd_IsSaidUnderTheSweep(bool stopped)
+    {
+        var harness = new HarnessFactory();
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            harness,
+            stopped,
+            (stop, token) => new CtestDescription(
+                    UnreachingRunner.For(stop, _ => HostResults.Ok("""{"kind": "ctestInfo", "version": {"major": 1}, "tests": []}""")),
+                    harness.FileSystem,
+                    new HostPlatform(),
+                    harness.Output)
+                .AskAsync(Question(new TestConfig { All = new TestInvocation { Runner = "ctest" } }), token));
+
+        Assert.Equal([UnreachedSaid.Warned(DssHarness.Core.Mutations.MutationService.CommandName, $"ctest describing the tests of '{Program}'")], said);
+    }
+
+    /// <summary>
     /// Nothing is asked - and nothing started - where the subject has no test settings, or their runner is no ctest; a
     /// leg whose tests run through ctest is asked with the command the test command makes, no filter and no label, the
     /// description option appended, started where that command starts, and waited for to its end - no bound of the code's

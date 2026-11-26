@@ -45,23 +45,6 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// </remarks>
     public const string HereOption = "--here";
 
-    /// <summary>
-    /// How many times a leg's command is started once more on its host where the DssHarness there fails as a defect before
-    /// anything ran (<see cref="HostAnswer.FailedBeforeAnythingRan"/>) the same way at every start: once, since the same
-    /// cause met twice ends the starts. A start that fails for a cause not met before is started once more, however many
-    /// causes come (<see cref="Retrying"/>) - safe, since nothing ran, and what a tool or a runtime replaced there while it
-    /// started needs: a consumer's leg met a DssHarness in a WSL distribution that could not load one of the runtime's own
-    /// assemblies, once, and the next run was fine. Never once anything ran there.
-    /// </summary>
-    private static readonly JsonSerializerOptions LedgerOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-
-        // At any depth (JsonDepth): a host's ledger is refused for what its shape cannot hold, never for how deep it nests.
-        MaxDepth = JsonDepth.Unbounded,
-    };
-
     private readonly IHostCommandRunner _hostCommands = hostCommands;
     private readonly IHarnessOutput _output = output;
     private readonly IFileSystem _fileSystem = fileSystem ?? new PhysicalFileSystem(FilePermissionsFactory.Create());
@@ -82,6 +65,10 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.
     /// </param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="priority">
+    /// The run's priority, which each unit the leg asks the host's dispatch queue for is charged at there
+    /// (<see cref="HostAgentRequest.Priority"/>); <see langword="null"/> for a command that runs no leg of a run.
+    /// </param>
     /// <param name="onNote">Told each whole note the host's command writes while it runs, as it arrives; never relayed; <see langword="null"/> where this reads none.</param>
     /// <param name="setUpsLeftRunning">
     /// Told each set-up the leg left running on the host where it ended there with no line to carry it, so this run
@@ -112,6 +99,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         PlacedLeg leg,
         IReadOnlyList<HostArgument> arguments,
         RunId? run = null,
+        int? priority = null,
         Action<string, string>? onNote = null,
         Action<IReadOnlyList<SetUps.SetUpFact>>? setUpsLeftRunning = null,
         HostRestarts? earlier = null,
@@ -128,6 +116,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 session,
                 [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. Verbosity, .. arguments],
                 run,
+                priority,
                 onNote,
                 writesLedger: true,
                 again: "its start there once more",
@@ -183,6 +172,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 session,
                 [commandName, "--legs", leg.Name, HereOption, leg.Host.Host.ToString(), .. Verbosity, .. arguments],
                 run: null,
+                priority: null,
                 onNote: null,
                 writesLedger: false,
                 again: "its check there once more",
@@ -247,6 +237,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="session">The session to its host.</param>
     /// <param name="commandLine">The command line, as typed after <c>DssHarness</c>.</param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="priority">The run's priority; <see langword="null"/> for a command that runs no leg of a run.</param>
     /// <param name="onNote">Told each whole note the command writes while it runs; <see langword="null"/> where this reads none.</param>
     /// <param name="writesLedger">Whether the command was asked for its ledger (<c>--json</c>), which its standard output then is.</param>
     /// <param name="again">What the warning before a start once more says is waited for: <c>its start there once more</c>.</param>
@@ -264,6 +255,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         HostSession session,
         IReadOnlyList<HostArgument> commandLine,
         RunId? run,
+        int? priority,
         Action<string, string>? onNote,
         bool writesLedger,
         string again,
@@ -292,7 +284,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                             restarts = restarts.Then(last.SaidAsItStarted(leg));
                         }
 
-                        last = await AskAsync(commandName, leg, session, commandLine, run, onNote, writesLedger, token).ConfigureAwait(false);
+                        last = await AskAsync(commandName, leg, session, commandLine, run, priority, onNote, writesLedger, token).ConfigureAwait(false);
 
                         return last.FailedBeforeAnythingRan
                             ? new RetryTry<HostAnswer>.Failed(last.SaidAsItStarted(leg), last.Cause)
@@ -322,6 +314,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="session">The session to its host.</param>
     /// <param name="commandLine">The command line, as typed after <c>DssHarness</c>.</param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="priority">The run's priority; <see langword="null"/> for a command that runs no leg of a run.</param>
     /// <param name="onNote">Told each whole note the command writes while it runs; <see langword="null"/> where this reads none.</param>
     /// <param name="writesLedger">Whether the command was asked for its ledger (<c>--json</c>), which its standard output then is.</param>
     /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
@@ -334,6 +327,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         HostSession session,
         IReadOnlyList<HostArgument> commandLine,
         RunId? run,
+        int? priority,
         Action<string, string>? onNote,
         bool writesLedger,
         CancellationToken cancellationToken)
@@ -347,6 +341,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             Arguments = [.. commandLine],
             Nonce = nonce,
             RunId = run?.Value,
+            Priority = priority,
 
             // The drive a WSL distribution's disk grows on, which the leg's build fills, and which only this machine sees.
             DiskImageDrive = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.DiskImageSpace?.Filesystem : null,
@@ -446,6 +441,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     },
                 },
                 cancellationToken)
+            .SayingUnreached(leg.Name, line => _output.Warn(commandName, line))
             .ConfigureAwait(false);
 
         // A command that ended badly ends on its failure line, with what follows it, and that is the host's conclusion:
@@ -493,7 +489,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="leg">The leg asked for.</param>
     /// <param name="commandName">The command the host ran.</param>
     /// <exception cref="HarnessException">The host wrote a ledger this build cannot read.</exception>
-    private static RemoteLedger? Parse(string output, PlacedLeg leg, string commandName)
+    private static LedgerDocument? Parse(string output, PlacedLeg leg, string commandName)
     {
         var document = output.Trim();
 
@@ -504,7 +500,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
         try
         {
-            return JsonSerializer.Deserialize<RemoteLedger>(document, LedgerOptions);
+            return LedgerDocument.Read(document);
         }
         catch (JsonException ex)
         {
@@ -585,19 +581,25 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 + (failure is null ? "so nothing there said what happened." : $"saying: {failure}"));
         }
 
-        var verdict = Verdicts.Parse(entry.Verdict) ?? LegVerdict.Poisoned;
+        // The leg's line as the host's ledger wrote it, read by the ledger's own reader: every text its work printed or
+        // its harness wrote about it named by the host this machine knows - a phase's last lines reach the reader on its
+        // standard error too, under --verbose, and say it there - and its digest, made there, read as it was written.
+        LegEntry line;
 
-        // What the host's own work printed is shown under the name the configuration declares, as every line the host
-        // writes is: a phase's last lines reach the reader on its standard error too, under --verbose, and say it there.
-        var detail = HostProbes.AsConfigured(entry.Detail ?? string.Empty, connection);
+        try
+        {
+            line = entry.Entry(said => HostProbes.AsConfigured(said, connection));
+        }
+        catch (JsonException ex)
+        {
+            throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{leg.Host.Host} answered '{commandName}' with a ledger this build cannot read: its digest of leg '{leg.Name}': {ex.Message}");
+        }
 
-        return new LegEntry
+        return line with
         {
             Leg = leg.Name,
-            Verdict = verdict,
-
-            // Every item the host's detail stands for, whole, as its ledger's line keeps them.
-            Named = [.. entry.Named ?? []],
 
             // A refusal of the run the host made once the leg had its line - a sweep that had judged arms by then - is
             // this run's refusal as one with no line is: the line is this leg's, and the refusal ends the run after it,
@@ -610,102 +612,18 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // Why a leg did not run there is that host's reason, and is named by the host this
             // machine knows: the host places the leg on itself, and has no name for itself but
             // "this machine".
-            Detail = detail.Length > 0 && (Verdicts.IsSkip(verdict) || verdict is LegVerdict.RefusedLocked or LegVerdict.LogHeld or LegVerdict.NotAdmitted)
-                ? $"{leg.Host.Host}: {detail}"
-                : detail,
-            Duration = TimeSpan.FromSeconds(entry.DurationSeconds),
-            CommandTime = TimeSpan.FromSeconds(entry.CommandSeconds),
+            Detail = line.Detail.Length > 0 && (Verdicts.IsSkip(line.Verdict) || line.Verdict is LegVerdict.RefusedLocked or LegVerdict.LogHeld or LegVerdict.NotAdmitted)
+                ? $"{leg.Host.Host}: {line.Detail}"
+                : line.Detail,
             Emulated = leg.Emulated,
-            TestCount = entry.TestCount,
-
-            // What the count belongs to, as the host counted it: the host ran what it had, which
-            // under --use-staged may name another test set than this machine's configuration now does.
-            Project = entry.Project,
-            TestSet = entry.TestSet,
-            TimingNotes = [.. entry.TimingNotes ?? []],
 
             // The host ran the leg under a run of its own, whose records are there: named so the
             // caller is told where, as it is for a leg this machine ran.
-            RunDirectory = ledger?.RunDirectory,
+            RunDirectory = ledger.RunDirectory,
 
             // The run the host ran the leg under, as its command named it and its document says: a leg's reader cites
             // it as this run's own id is cited.
-            HostRunId = ledger?.RunId is { } id && RunId.TryParse(id, out var under) ? under : null,
-
-            // The leg's own records in that run, and each phase log in them, as the host spelled their paths: its home
-            // as ~, for the host's ledger writes them through its own shorthand.
-            Records = entry.Records,
-            Logs = entry.Logs is null ? null : [.. entry.Logs.Select(log => new PhaseLogFile(log.Phase, log.File))],
-            SkippedSteps = [.. entry.SkippedSteps ?? []],
-            RanSteps = [.. entry.RanSteps ?? []],
-            ManualSteps = [.. entry.ManualSteps ?? []],
-            UnselectedSteps = [.. entry.UnselectedSteps ?? []],
-
-            // What the phase that failed there printed last: its log stays on that host.
-            LogTail = [.. (entry.LogTail ?? []).Select(line => HostProbes.AsConfigured(line, connection))],
-            TailPhase = entry.TailPhase,
-            Compilers = [.. entry.Compilers ?? []],
-            DeveloperEnvironment = entry.DeveloperEnvironment,
-
-            // What the leg did there with each set-up its work named: they came up and went down on that host.
-            SetUps = [.. entry.SetUps ?? []],
-
-            // How that host's machine took the leg, as it measured itself.
-            Admission = entry.Admission,
-
-            // Measured there, of the directory there: the host's own path and filesystem.
-            Space = entry.Space,
-
-            // Relative to the tree, which is the same path in this machine's tree: what sync --pull takes.
-            KeptOutputs = [.. entry.KeptOutputs ?? []],
-
-            // What the host's test invocation kept there when it did not pass, as the host's ledger wrote it: its
-            // directory spelled as that host spells it, its home as ~, and each file it names.
-            KeptOnFailure = entry.KeptOnFailure,
-
-            // The units the host's build failed to build there, as its ledger named them: relative to the tree, which is the
-            // same path in this machine's tree, and why which is not known named by the host this machine knows, as the
-            // leg's detail is.
-            FailedUnits = entry.FailedUnits is { } failed
-                ? failed with { Units = [.. failed.Units ?? []], Unread = failed.Unread is { } unread ? HostProbes.AsConfigured(unread, connection) : null }
-                : null,
-
-            // Each arm the host's sweep was asked about, as it judged it there: its records stay on that host, named as
-            // the host names them, and its detail named by the host this machine knows, as the leg's is.
-            Arms = [.. (entry.Arms ?? []).Select(arm => new ArmEntry
-            {
-                Arm = arm.Arm ?? string.Empty,
-                Verdict = Verdicts.Parse(arm.Verdict) ?? LegVerdict.Poisoned,
-                Detail = HostProbes.AsConfigured(arm.Detail ?? string.Empty, connection),
-                Duration = TimeSpan.FromSeconds(arm.DurationSeconds),
-                Worker = arm.Worker,
-                Cases = arm.Cases,
-                DeclaredCases = arm.DeclaredCases,
-                Reds = arm.Reds,
-                DeclaredReds = [.. arm.DeclaredReds ?? []],
-                Records = arm.Records,
-                Key = arm.Key,
-                Held = arm.Held,
-                Pending = arm.Pending is { } pending ? pending with { Said = HostProbes.AsConfigured(pending.Said, connection) } : null,
-            })],
-
-            // What --pending made of the leg's arms there, as the host counted them.
-            PendingSweep = entry.PendingSweep,
-
-            // Each control of the host's sweep that did not pass, as it judged it there: its detail named by the host this
-            // machine knows, as the leg's is, and its records named as the host names them, which stay on that host.
-            Controls = [.. (entry.Controls ?? []).Select(control => new ControlEntry(
-                control.Runner ?? string.Empty,
-                control.Verdict ?? string.Empty,
-                HostProbes.AsConfigured(control.Detail ?? string.Empty, connection),
-                [.. control.Reds ?? []],
-                control.Records ?? string.Empty,
-                control.Ctest is { } ctest
-                    ? new CtestControl(
-                        ctest.Matched,
-                        ctest.Unread is { } unread ? HostProbes.AsConfigured(unread, connection) : null,
-                        [.. ctest.Tests ?? []])
-                    : null))],
+            HostRunId = ledger.RunId is { } id && RunId.TryParse(id, out var under) ? under : null,
         };
     }
 
@@ -727,7 +645,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="HostRun">The run its command named as it began, where it named one.</param>
     /// <param name="Noted">Whether it wrote any note of its work.</param>
     /// <param name="Said">What its failure line itself said, the first line of <paramref name="Failure"/>; <see langword="null"/> where it wrote none.</param>
-    private sealed record HostAnswer(RemoteLedger? Ledger, int Finished, string? Failure, RunId? HostRun, bool Noted, string? Said)
+    private sealed record HostAnswer(LedgerDocument? Ledger, int Finished, string? Failure, RunId? HostRun, bool Noted, string? Said)
     {
         /// <summary>
         /// What the start failed of: the code it ended with and what its failure line said. Two starts that fail of the
@@ -753,95 +671,4 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         public string SaidAsItStarted(PlacedLeg leg)
             => $"{leg.Host.Host}'s DssHarness exited {Finished} as it started, before anything ran there, {Saying(Failure)}";
     }
-
-    /// <summary>The shape a host's ledger arrives in, read back by name rather than by position.</summary>
-    /// <param name="Legs">Each leg's line.</param>
-    /// <param name="RunDirectory">Where the host's own run keeps its records, when it got that far.</param>
-    /// <param name="RunId">The run the host's command named as it began, when it began one.</param>
-    /// <param name="Verdict">
-    /// The verdict of the host's run, which a run that reported on its legs names; <see langword="null"/> where
-    /// something other than its legs ended it, as <see cref="LedgerReport"/> writes such a run.
-    /// </param>
-    /// <param name="SetUpsLeftRunning">Each set-up a leg of the host's run left running, where one did.</param>
-    private sealed record RemoteLedger(
-        [property: JsonPropertyName("legs")] IReadOnlyList<RemoteLedgerLeg>? Legs,
-        [property: JsonPropertyName("runDirectory")] string? RunDirectory = null,
-        [property: JsonPropertyName("runId")] string? RunId = null,
-        [property: JsonPropertyName("verdict")] string? Verdict = null,
-        [property: JsonPropertyName("setUpsLeftRunning")] IReadOnlyList<RemoteSetUpLeft>? SetUpsLeftRunning = null);
-
-    /// <summary>A set-up a leg of the host's run left running, as the host's ledger names it.</summary>
-    /// <param name="Leg">The leg.</param>
-    /// <param name="SetUp">The set-up.</param>
-    /// <param name="Up">How it came up for the leg.</param>
-    /// <param name="Inputs">The values it was brought up with.</param>
-    /// <param name="Detail">Why it did not come down.</param>
-    private sealed record RemoteSetUpLeft(
-        [property: JsonPropertyName("leg")] string Leg,
-        [property: JsonPropertyName("setUp")] string SetUp,
-        [property: JsonPropertyName("up")] string? Up = null,
-        [property: JsonPropertyName("inputs")] IReadOnlyDictionary<string, string>? Inputs = null,
-        [property: JsonPropertyName("detail")] string? Detail = null);
-
-    /// <summary>One leg's line of a host's ledger.</summary>
-    private sealed record RemoteLedgerLeg(
-        string? Verdict,
-        string? Detail,
-        double DurationSeconds,
-        double CommandSeconds,
-        int? TestCount,
-        IReadOnlyList<string>? TimingNotes,
-        IReadOnlyList<string>? SkippedSteps = null,
-        IReadOnlyList<Build.CompilerFact>? Compilers = null,
-        DeveloperEnvironmentFact? DeveloperEnvironment = null,
-        string? Project = null,
-        string? TestSet = null,
-        IReadOnlyList<string>? LogTail = null,
-        IReadOnlyList<string>? ManualSteps = null,
-        IReadOnlyList<string>? UnselectedSteps = null,
-        IReadOnlyList<string>? RanSteps = null,
-        BuildSpace? Space = null,
-        IReadOnlyList<string>? KeptOutputs = null,
-        KeptOnFailure? KeptOnFailure = null,
-        AdmissionFact? Admission = null,
-        IReadOnlyList<RemoteLedgerArm>? Arms = null,
-        string? Records = null,
-        IReadOnlyList<PhaseLogFile>? Logs = null,
-        PendingSweep? PendingSweep = null,
-        IReadOnlyList<RemoteLedgerControl>? Controls = null,
-        IReadOnlyList<SetUps.SetUpFact>? SetUps = null,
-        string? TailPhase = null,
-        Build.FailedUnits? FailedUnits = null,
-        IReadOnlyList<string>? Named = null);
-
-    /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
-    private sealed record RemoteLedgerControl(
-        string? Runner,
-        string? Verdict,
-        string? Detail,
-        IReadOnlyList<string>? Reds = null,
-        string? Records = null,
-        RemoteCtestControl? Ctest = null);
-
-    /// <summary>What ctest registered for a control's red cases, as the host read it.</summary>
-    private sealed record RemoteCtestControl(
-        string? Matched = null,
-        string? Unread = null,
-        IReadOnlyList<CtestTestLine>? Tests = null);
-
-    /// <summary>One arm's line of a host's sweep, beneath its leg's.</summary>
-    private sealed record RemoteLedgerArm(
-        string? Arm,
-        string? Verdict,
-        string? Detail,
-        double DurationSeconds,
-        int? Worker,
-        int? Cases,
-        int DeclaredCases,
-        IReadOnlyList<string>? Reds,
-        IReadOnlyList<string>? DeclaredReds,
-        string? Records,
-        string? Key = null,
-        ArmHeld? Held = null,
-        ArmPending? Pending = null);
 }

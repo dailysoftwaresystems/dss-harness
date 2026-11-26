@@ -665,8 +665,8 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// A side-task's graph's paths are the graph records' own - the directory, the map and what the map was made from -
-    /// named by the one layout every graph's records take, so neither can drift from the other.
+    /// A side-task's graph's paths are the graph records' own - the directory and the map - named by the one layout every
+    /// graph's records take, so neither can drift from the other.
     /// </summary>
     [Fact]
     public void ASideTasksGraphPaths_AreTheOneGraphLayoutsOwn()
@@ -674,8 +674,8 @@ public sealed class SideTaskServiceTests
         var layout = new SideTaskLayout(Path.Combine(Path.GetTempPath(), ".side-tasks"), "named");
 
         Assert.Equal(
-            (layout.AsGraph.GraphDirectory, layout.AsGraph.GraphMapFile, layout.AsGraph.GraphMapMetaFile),
-            (layout.GraphDirectory, layout.MapFile, layout.MapMetaFile));
+            (layout.AsGraph.GraphDirectory, layout.AsGraph.GraphMapFile),
+            (layout.GraphDirectory, layout.MapFile));
         Assert.Equal(Path.Combine(layout.Directory, DssHarness.Core.Orchestration.OrchestratorLayout.GraphDirectoryName), layout.GraphDirectory);
     }
 

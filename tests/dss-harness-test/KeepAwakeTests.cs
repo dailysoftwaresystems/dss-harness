@@ -12,6 +12,26 @@ public sealed class KeepAwakeTests
 {
     private static readonly string[] Directories = ["/opt/homebrew/bin"];
 
+    /// <summary>
+    /// What the end of a machine's keepAwake could not reach or end - at its own end, or at the stop that releases it -
+    /// is said on the leg's own line under the command running the leg, once (<see cref="UnreachedSaying"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatTheEndOfKeepAwakeCouldNotReachOrEnd_IsSaidOnTheLegsOwnLine(bool stopped)
+    {
+        var factory = new HarnessFactory();
+        var host = new LocalHostConfig { KeepAwake = ["caffeinate", "-w", "{pid}"] };
+
+        var (said, _) = await UnreachedSaid.ByAsync(
+            factory,
+            stopped,
+            async (stop, token) => await new KeepAwake(UnreachingRunner.For(stop), factory.Output).Hold("test", "native", host, [], token).DisposeAsync());
+
+        Assert.Equal([UnreachedSaid.Warned("test", "native: keepAwake")], said);
+    }
+
     /// <summary>A machine that declares no command is held with nothing, and nothing is started.</summary>
     [Fact]
     public async Task AMachineThatDeclaresNoCommand_IsHeldWithNothing()

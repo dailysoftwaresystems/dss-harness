@@ -30,7 +30,9 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) { }
+        public void Used(FlowTurnSpend turn) { }
+
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }
@@ -176,6 +178,9 @@ public sealed class ReasonStepRunnerTests
         /// <summary>The refusal the run throws, where a test sets one.</summary>
         public HarnessException? Refusal { get; set; }
 
+        /// <summary>What a test does while the run works, given the request and the run, before its line is answered.</summary>
+        public Action<DssHarness.Core.Application.Legs.TestLegsRequest, DssHarness.Core.Execution.RunId>? WhileItRuns { get; set; }
+
         public Task<DssHarness.Core.Runs.LegRunResult> RunAsync(DssHarness.Core.Application.Legs.TestLegsRequest request, DssHarness.Core.Execution.RunId run, CancellationToken cancellationToken = default)
         {
             Asked.Add(request);
@@ -185,6 +190,8 @@ public sealed class ReasonStepRunnerTests
             {
                 throw refusal;
             }
+
+            WhileItRuns?.Invoke(request, run);
 
             var passed = Verdict == DssHarness.Core.Execution.LegVerdict.Passed;
 
@@ -1017,9 +1024,72 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// What a crash cut off is read back from the attempt's stored stream: the events of the attempt the step's record says
+    /// it was on - every run of it, to the end the crash left, a last line torn in two passed over - replayed through the
+    /// engine's own count, each turn priced as it was reported and handed back with its spend, with what served it and when
+    /// its last event was written. Another attempt's events are never its; a stream with no run of the attempt has nothing
+    /// to add; one a whole line of which does not read says so, for what it spent past its record is then not known.
+    /// </summary>
+    [Fact]
+    public async Task ACutOffAttempt_IsReadBackFromItsStream_ItsTurnsPricedAsReported()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        Priced(kit);
+        await kit.CreateReadingAgentAsync("reader");
+        var runner = (IFlowHandoffRunner)Runner(kit, agents);
+        var directory = kit.Layout.AgentStepDirectory("reader", "think");
+        var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
+
+        await stream.EmitAsync(new RunStarted(1));
+        await stream.EmitAsync(new SessionStarted("claude-api", "claude-opus-5-5", "sha", [], [], HandedConversation: false, Provider: "anthropic", Effort: "high"));
+        await stream.EmitAsync(new UsageReported(new AgentUsage(9000, 900, 0, 0, 0, 0), new AgentUsage(9000, 900, 0, 0, 0, 0)));
+        await stream.EmitAsync(new RunFinished(AgentRunStatus.Failed));
+        await stream.EmitAsync(new RunStarted(2));
+        await stream.EmitAsync(new SessionStarted("claude-api", "claude-opus-5-5", "sha", [], [], HandedConversation: false, Provider: "anthropic", Effort: "high"));
+        await stream.EmitAsync(new TurnFinished(1, "claude-opus-5-5", new AgentUsage(1000, 100, 0, 0, 0, 0), "tool_use"));
+        await stream.EmitAsync(new UsageReported(new AgentUsage(1000, 100, 0, 0, 0, 0), new AgentUsage(1000, 100, 0, 0, 0, 0)));
+        await stream.EmitAsync(new TurnFinished(2, "claude-opus-5-5", new AgentUsage(2000, 200, 0, 0, 0, 0), "end_turn"));
+        await stream.EmitAsync(new UsageReported(new AgentUsage(2000, 200, 0, 0, 0, 0), new AgentUsage(3000, 300, 0, 0, 0, 0)));
+        stream.Dispose();
+
+        var file = Path.Combine(directory, StoredStream.FileName);
+        var whole = File.ReadAllText(file);
+        var endedAt = kit.Harness.OrchestrationStore.ReadStepStream(directory)[^1].At;
+        File.AppendAllText(file, "{\"kind\":\"usageRep");
+
+        var cut = await runner.AttemptOf(Run(kit, agent: "reader", attempt: 2), Token);
+
+        Assert.NotNull(cut);
+        Assert.Null(cut.Unread);
+        Assert.Equal(
+            [(1100L, (double?)0.015, "claude-opus-5-5"), (2200L, 0.03, "claude-opus-5-5")],
+            cut.Turns.Select(turn => (turn.Usage.AllTokens, turn.Usd is { } usd ? Math.Round(usd, 9) : (double?)null, turn.Serving)));
+        Assert.Equal(("anthropic", "claude-opus-5-5", "high", 2), (cut.Account.Provider, cut.Account.Model, cut.Account.Effort, cut.Account.Turns));
+        Assert.Equal(endedAt, cut.EndedAt);
+
+        // An attempt a newer one followed has nothing past its record to add (AgentAttempt.Of): its record was written
+        // whole before the newer began. And attempt 3 never started: the stream has nothing of it either, never the
+        // newest attempt's events read as its.
+        Assert.Null(await runner.AttemptOf(Run(kit, agent: "reader", attempt: 1), Token));
+        Assert.Null(await runner.AttemptOf(Run(kit, agent: "reader", attempt: 3), Token));
+
+        // A line in the middle that does not read: what the attempt spent past its record is not known, and the account says so.
+        var first = whole.IndexOf('\n', StringComparison.Ordinal) + 1;
+        File.WriteAllText(file, whole[..first] + "{not json\n" + whole[first..]);
+
+        var unread = await runner.AttemptOf(Run(kit, agent: "reader", attempt: 2), Token);
+
+        Assert.NotNull(unread);
+        Assert.StartsWith("its stream does not read whole, so what it spent past its record is not known: ", unread.Unread, StringComparison.Ordinal);
+        Assert.Empty(unread.Turns);
+    }
+
+    /// <summary>
     /// A continuation record says how each step before ended, as its own record states it, lists the paths this
-    /// agent's folds wrote into the main tree, and holds the red legs of its newest red build or test with where the
-    /// copied ledger and its logs are.
+    /// agent's folds wrote into the main tree, and holds the red legs of its newest red build or test: each by its
+    /// ledger line, its digest, the raw lines its entry carries beside it - the phase's last lines where nothing was
+    /// digested - and a copy of the log its entry names, whose lines the digest's ranges number.
     /// </summary>
     [Fact]
     public async Task AContinuationRecord_SaysHowEachStepEnded_AndHoldsTheChangedPathsAndTheRedLegs()
@@ -1028,6 +1098,10 @@ public sealed class ReasonStepRunnerTests
         var (kit, agents) = await ReadyAsync(temp);
         await kit.CreateReadingAgentAsync("reader");
         var store = kit.Harness.OrchestrationStore;
+        var log = temp.Combine("unit.test.log");
+        File.WriteAllText(log, "header\nerror CS0103: no x\n");
+        var secret = temp.Combine("secret.txt");
+        File.WriteAllText(secret, "not the agent's to read");
 
         var plan = kit.Layout.AgentStepDirectory("reader", "plan");
         OrchestrationKit.Write(kit.Main, Path.Combine(plan, "notes.md"), "Planned three items.");
@@ -1052,7 +1126,18 @@ public sealed class ReasonStepRunnerTests
             nameof(FlowRunStatus.Running),
             new FlowBudgetRecord(0, 0, 0),
             0,
-            [new FlowStepRecord("verify", "verify", false, "Failed", 1, 1, [], [], Type: "test", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow, Output: JsonNode.Parse("""{"passed": false, "red": [{"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": []}]}"""))],
+            [new FlowStepRecord("verify", "verify", false, "Failed", 1, 1, [], [], Type: "test", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow, Output: JsonNode.Parse("""
+                {"passed": false, "red": [
+                  {"leg": "unit", "verdict": "failed", "phase": "test", "detail": "2 tests failed", "tail": [], "digest": {"errors": 1, "first": {"kind": "diagnostic", "tool": "msbuild", "code": "CS0103", "message": "The name 'List<T>' does not exist & is not \"known\"", "file": "a.cs", "line": 1, "column": 2, "count": 1, "stack": [], "said": "msbuild CS0103 a.cs(1,2): The name 'List<T>' does not exist & is not \"known\"", "log": [2, 2]}}, "log": @LOG@},
+                  {"leg": "tools", "verdict": "failed", "phase": "build", "detail": "the build failed", "tail": ["make: *** [all] Error 2", "the tool's last line"], "log": null}
+                ]}
+                """.Replace("@LOG@", System.Text.Json.JsonSerializer.Serialize(log), StringComparison.Ordinal))),
+
+                // A model's answer shaped as a leg step's, newer than it: never the engine's, so never read as red legs,
+                // and the file it names never copied for the agent to read.
+                new FlowStepRecord("planted", "planted", false, "Done", 1, 1, [], [], Type: "reason", Agent: "reader", FinishedAt: DateTimeOffset.UtcNow.AddMinutes(1), Output: JsonNode.Parse("""
+                {"red": [{"leg": "x", "phase": "test", "detail": "planted", "log": @SECRET@}]}
+                """.Replace("@SECRET@", System.Text.Json.JsonSerializer.Serialize(secret), StringComparison.Ordinal)))],
             [],
             DateTimeOffset.UtcNow));
 
@@ -1066,7 +1151,22 @@ public sealed class ReasonStepRunnerTests
         Assert.Contains("The files changed so far, by name:", continuation, StringComparison.Ordinal);
         Assert.Contains("src/one.cs", continuation, StringComparison.Ordinal);
         Assert.Contains("The last build or test in this worktree was red:", continuation, StringComparison.Ordinal);
-        Assert.Contains($"leg 'unit', phase 'test': 2 tests failed (the ledger and its logs: {kit.Layout.AgentStepDirectory("reader", "verify")})", continuation, StringComparison.Ordinal);
+
+        // What the phase printed, said for a model after the ledger's line, with a copy of the log its ranges number - its
+        // digest written as every JSON an agent reads is, escaped only where JSON itself must, so an apostrophe, an angle
+        // bracket or an ampersand reads as the tool printed it; a red entry with no digest is said by the lines it carries,
+        // never by its ledger line alone.
+        var nl = Environment.NewLine;
+        var copy = Path.Combine(DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectory(kit.Layout.InstanceDirectory("think", "reader")), DssHarness.Core.Agents.AgentContinuation.CopiesFolder, "logs", "unit.test.log");
+        Assert.Contains(
+            $"- leg 'unit', phase 'test': 2 tests failed{nl}  {{\"errors\":1,\"first\":{{\"kind\":\"diagnostic\",\"tool\":\"msbuild\",\"code\":\"CS0103\",\"message\":\"The name 'List<T>' does not exist & is not \\\"known\\\"\",\"file\":\"a.cs\",\"line\":1,\"column\":2,\"count\":1,\"stack\":[],\"said\":\"msbuild CS0103 a.cs(1,2): The name 'List<T>' does not exist & is not \\\"known\\\"\",\"log\":[2,2]}}}}{nl}  Its log, whose lines the digest's ranges number: {copy}{nl}",
+            continuation,
+            StringComparison.Ordinal);
+        Assert.Equal("header\nerror CS0103: no x\n", File.ReadAllText(copy));
+        Assert.Contains($"- leg 'tools', phase 'build': the build failed{nl}  Its lines:{nl}    make: *** [all] Error 2{nl}    the tool's last line{nl}", continuation, StringComparison.Ordinal);
+        Assert.DoesNotContain("the ledger and its logs:", continuation, StringComparison.Ordinal);
+        Assert.DoesNotContain("planted", continuation, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(copy)!, "x.test.log")));
     }
 
     /// <summary>
@@ -1403,6 +1503,85 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// The attempt's own account rides its answer back to the engine: what served it - the provider, the model, the
+    /// effort, where a fallback moved it from and why - the turns, the tools by name with their failures and denials, and
+    /// the compactions. Its spend is not in it: each turn is handed on as it is reported, served by the model serving the
+    /// run then and costed at that model's price, copied as it was counted - a fallback's turns at its own model's. A
+    /// call the policy denied is counted a call and a denial, never a failure.
+    /// </summary>
+    [Fact]
+    public async Task TheAttemptsOwnAccount_RidesItsAnswer_AndEachTurnItsModelsPrice()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        File.WriteAllText(
+            Path.Combine(kit.Main, ".harness-config", "config.json"),
+            """
+            {
+              "worktrees": { "root": ".worktrees" },
+              "providers": [
+                {
+                  "name": "anthropic",
+                  "type": "anthropic",
+                  "api": "https://api.anthropic.com",
+                  "apiKeyNames": ["ANTHROPIC_KEY"],
+                  "client": "claude-api",
+                  "currency": "USD",
+                  "readOn": "2026-10-01",
+                  "models": [
+                    { "code": "claude-opus-5-5", "name": "Opus", "tiers": ["best"], "efforts": ["high"], "contextTokens": 200000, "maxOutputTokens": 32000,
+                      "priceInputMiss": 10, "priceInputHit": 1, "priceOutput": 50, "priceCacheWrite": 12.5, "priceCacheWrite1h": 20 },
+                    { "code": "claude-sonnet-5-5", "name": "Sonnet", "tiers": ["fallback"], "efforts": ["low"], "contextTokens": 200000, "maxOutputTokens": 32000,
+                      "priceInputMiss": 2, "priceInputHit": 0.2, "priceOutput": 10, "priceCacheWrite": 2.5, "priceCacheWrite1h": 4 }
+                  ]
+                }
+              ],
+              "tierConfig": { "best": ["claude-opus-5-5"], "fallback": ["claude-sonnet-5-5"] },
+              "defaults": { "agentTier": "best" }
+            }
+            """);
+        await kit.CreateReadingAgentAsync("reader");
+        agents.Says.Add(new SessionStarted("claude-api", "claude-opus-5-5", "sha", [], [], HandedConversation: false, Provider: "anthropic", Effort: "high"));
+        agents.Says.Add(new TurnFinished(1, "claude-opus-5-5", new AgentUsage(1000, 100, 0, 0, 0, 0), "tool_use"));
+        agents.Says.Add(new ToolCallStarted("t1", "read", default));
+        agents.Says.Add(new ToolCallFinished("t1", Ok: true, TimeSpan.FromSeconds(1), "{}", "{}"));
+        agents.Says.Add(new UsageReported(new AgentUsage(1000, 100, 0, 0, 0, 0), new AgentUsage(1000, 100, 0, 0, 0, 0)));
+        agents.Says.Add(new Compacted("the context was full", "what it left", "where it began", KeptWordForWord: 2, Reduced: 3, SizeBefore: 10, SizeAfter: 4));
+        agents.Says.Add(new FallbackStarted(
+            FromModel: "claude-opus-5-5", FromProvider: "anthropic", FromClient: "claude-api",
+            ToModel: "claude-sonnet-5-5", ToProvider: "anthropic", ToClient: "claude-api",
+            Why: "the account is out of credit", How: "the request is sent again", Turn: 1, ThrewAway: false, CreditAsked: false,
+            ToEffort: "low"));
+        agents.Says.Add(new TurnFinished(2, "claude-sonnet-5-5", new AgentUsage(500, 50, 0, 0, 0, 0), "end_turn"));
+        agents.Says.Add(new ToolCallStarted("t2", "read", default));
+        agents.Says.Add(new ToolCallFinished("t2", Ok: false, TimeSpan.FromSeconds(1), "{}", "the read failed"));
+        agents.Says.Add(new ToolCallStarted("t3", "bash", default));
+        agents.Says.Add(new PermissionDenied("bash", "rm -rf /", "never remove outside the tree", AgentPermissionSource.Builtin, "it removes outside the tree"));
+        agents.Says.Add(new ToolCallFinished("t3", Ok: false, TimeSpan.FromSeconds(0), "{}", "denied"));
+        agents.Says.Add(new UsageReported(new AgentUsage(500, 50, 0, 0, 0, 0), new AgentUsage(1500, 150, 0, 0, 0, 0)));
+        var events = new SpendingEvents();
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader") with { Events = events }, Token);
+
+        Assert.True(result.Passed, result.Error);
+        var account = result.Attempt!;
+        Assert.Equal(("anthropic", "claude-sonnet-5-5", "low"), (account.Provider, account.Model, account.Effort));
+        Assert.Equal(("claude-opus-5-5", "the account is out of credit"), (account.FallbackFrom, account.FallbackReason));
+
+        Assert.Equal(2, account.Turns);
+        Assert.Equal([new FlowStepToolUse("bash", 1, 0, Denied: 1), new FlowStepToolUse("read", 2, 1)], account.Tools);
+        Assert.Equal(1, account.Compactions);
+
+        // Each turn at the price of the model that served it, copied as the configuration gave it then.
+        Assert.Equal(
+            [
+                ("claude-opus-5-5", (double?)0.015, "2026-10-01", (double?)10.0, (double?)50.0),
+                ("claude-sonnet-5-5", (double?)0.0015, "2026-10-01", (double?)2.0, (double?)10.0),
+            ],
+            events.Turns.Select(turn => (turn.Serving, turn.Usd is { } usd ? Math.Round(usd, 9) : (double?)null, turn.Price!.ReadOn, turn.Price.InputMiss, turn.Price.Output)));
+    }
+
+    /// <summary>
     /// An attempt's launch is held to what is left of the run's dollars before its reserve where that is less than its
     /// agent's own bound, and a launch that bound ended reaches the run's reserve - the run pauses for its budget - never
     /// the step's own budget; where its own bound is the less, it ends at the step's own budget, which asks.
@@ -1546,6 +1725,9 @@ public sealed class ReasonStepRunnerTests
         /// <summary>Every turn's spend, in the order handed on.</summary>
         public List<(long Tokens, double? Usd, string? Uncounted)> Spent { get; } = [];
 
+        /// <summary>Every turn handed on, whole, in order.</summary>
+        public List<FlowTurnSpend> Turns { get; } = [];
+
         public void LegPlaced(string leg, bool inACopy) { }
 
         public void EveryLegPlaced() { }
@@ -1554,7 +1736,13 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) => Spent.Add((tokens, usd, uncounted));
+        public void Used(FlowTurnSpend turn)
+        {
+            Spent.Add((turn.Usage.AllTokens, turn.Usd, turn.Uncounted));
+            Turns.Add(turn);
+        }
+
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() { }
     }
@@ -1573,7 +1761,9 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) { }
+        public void Used(FlowTurnSpend turn) { }
+
+        public void Held(IReadOnlyList<string> on, IReadOnlyList<DssHarness.Core.Execution.QueueAhead> ahead) { }
 
         public void HandoffTaken() => Taken++;
     }
@@ -1664,7 +1854,11 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(support);
         Assert.NotNull(support.Tool);
         Assert.True(support.Narrow);
-        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack], support.Operations!.Order());
+
+        // The run's map of this tree - its configuration's every member a declaration - goes on past its first page, so
+        // map is among the operations, as pack is for a pack that goes on past its message's page.
+        Assert.True(DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(asked.Map!) > 1, asked.Map);
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
         Assert.Null(promptLine.Why);
@@ -1812,6 +2006,43 @@ public sealed class ReasonStepRunnerTests
         record.Ended();
 
         Assert.False(File.Exists(file));
+    }
+
+    /// <summary>
+    /// A measure call's ledger is kept as its leg runs, as a leg step's is: written in the call's records as the leg's run
+    /// begins, naming that run and its records, so an engine killed while the leg works leaves the measurement's run named
+    /// where the next command over the run reads it; the run's end writes it whole.
+    /// </summary>
+    [Fact]
+    public async Task AMeasureCallsLedger_IsKeptAsItsLegRuns()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        WithLegs(kit);
+        var step = kit.Layout.InstanceDirectory("think", "a9");
+        var records = AgentMeasureSupport.RecordsOf(step, "toolu_1");
+        var ledger = Path.Combine(records, OrchestratorLayout.StepLedgerFileName);
+        DssHarness.Core.Execution.RunId? began = null;
+        DssHarness.Core.Execution.LedgerDocument? asItBegan = null;
+        var tests = new MeasuredTests
+        {
+            WhileItRuns = (request, run) =>
+            {
+                began = run;
+                request.Watch!.Began(run, $"/runs/{run.Value}");
+                asItBegan = DssHarness.Core.Execution.LedgerDocument.Read(File.ReadAllText(ledger));
+            },
+        };
+
+        var result = await Runner(kit, agents, tests: tests).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        _ = await agents.Asked.Single().Measure!.Measure(new AgentMeasureCall("toolu_1", "windows", "debug", "", "windows", records), Token);
+
+        Assert.Equal((began!.Value, $"/runs/{began.Value}"), (asItBegan!.RunId, asItBegan.RunDirectory));
+        Assert.Empty(asItBegan.Legs ?? []);
+        Assert.Equal(["windows"], DssHarness.Core.Execution.LedgerDocument.Read(File.ReadAllText(ledger))!.Legs!.Select(leg => leg.Leg));
     }
 
     /// <summary>
@@ -2025,7 +2256,7 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(asked.Map);
         Assert.Contains("the graph tool answers for the tree as it is now", asked.Map, StringComparison.Ordinal);
         Assert.True(File.Exists(kit.Layout.GraphMapFile), "the map was not kept");
-        Assert.True(File.Exists(kit.Layout.GraphMapMetaFile), "what the map was made from was not kept");
+        Assert.True(File.Exists(kit.Layout.GraphMapMetaFileOf(reads: null)), "what the map was made from was not kept");
         Assert.True(first.Graph!["mapTokens"]!.GetValue<int>() > 0, "the map's tokens are not in the step's figures");
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
@@ -2044,6 +2275,52 @@ public sealed class ReasonStepRunnerTests
 
         Assert.Equal(asked.Map, agents.Asked[^1].Map);
         Assert.Equal(kept, File.ReadAllText(kit.Layout.GraphMapFile));
+    }
+
+    /// <summary>
+    /// A run's map of several pages is made once and kept whole: every step of its ground is given its first page as it
+    /// was kept - the bytes a client caches, the same after the base moved - the pages after it are kept beside it, and
+    /// a step whose graph is tools is offered the graph's <c>map</c>, whose page 2 is the kept page 2, the step after the
+    /// first reading the count from the kept first page as the first was given it. Red where a step is given a map made
+    /// again, the pages after the first are not kept, or <c>map</c> is not offered.
+    /// </summary>
+    [Fact]
+    public async Task AMapOfSeveralPages_IsGivenEveryStepAsKept_ItsLaterPagesAskedOfTheGraphsMap()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Alpha.cs"), "namespace Demo;\n\npublic sealed class Alpha\n{\n}\n"), (Path.Combine("src", "Beta.cs"), "namespace Demo;\n\npublic sealed class Beta\n{\n}\n"));
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
+        var run = Graphing(kit, Graphed(head: "codebaseGraph:\n  mapTokens: 30\n"));
+
+        var first = await runner.RunAsync(run, Token);
+
+        // The base moves - a fold lands - and the map does not: a map made again would count the file the fold added.
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Other.cs"), "namespace Demo;\n\npublic sealed class Other\n{\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "more code", Token);
+        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+
+        var second = await runner.RunAsync(run with { Visit = 2 }, Token);
+
+        Assert.True(first.Passed, first.Error);
+        Assert.True(second.Passed, second.Error);
+
+        // Every page of the map is kept, page 1 in map.md naming how many there are.
+        var kept = File.ReadAllText(kit.Layout.GraphMapFile);
+        var files = Directory.EnumerateFiles(kit.Layout.GraphDirectory, "map*.md").ToList();
+        var pages = files.Count;
+
+        Assert.True(pages > 1, kept);
+        Assert.Equal(Enumerable.Range(1, pages).Select(page => kit.Layout.GraphMapPageFileOf(reads: null, page)).Order(StringComparer.Ordinal), files.Order(StringComparer.Ordinal));
+        Assert.EndsWith($"\nmap page 1 of {pages} · the rest is on the pages after it, which a step whose graph is tools asks the graph for", kept, StringComparison.Ordinal);
+        Assert.Equal([kept, kept], agents.Asked.Select(asked => asked.Map));
+        Assert.All(agents.Asked, asked => Assert.Contains(GraphOp.Map, asked.Graph!.Operations!));
+
+        var later = agents.Asked[^1].Graph!;
+        var answer = await later.Tool!.RunAsync(new JsonObject { ["op"] = "map", ["page"] = 2 }, later.Operations!, Token);
+
+        Assert.Equal((GraphToolOutcome.Answered, File.ReadAllText(kit.Layout.GraphMapPageFileOf(reads: null, 2))), (answer.Outcome, answer.Text));
+        Assert.StartsWith("repository map page 2\n", answer.Text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2070,11 +2347,20 @@ public sealed class ReasonStepRunnerTests
         Assert.DoesNotContain("src/Keys.cs", agents.Asked[1].Map, StringComparison.Ordinal);
         Assert.Contains("class Planner | src/Planner.cs", agents.Asked[1].Map, StringComparison.Ordinal);
 
-        // Each kept on its own: the run's for the steps no rule narrows, the narrowed steps' named by their rules.
-        var maps = Directory.EnumerateFiles(kit.Layout.GraphDirectory, "map*.md").Select(Path.GetFileName).Order(StringComparer.Ordinal).ToList();
-        Assert.Equal(2, maps.Count);
-        Assert.Equal("map.md", maps[^1]);
-        Assert.Equal(agents.Asked[1].Map, File.ReadAllText(Path.Combine(kit.Layout.GraphDirectory, maps[0]!)));
+        // Each kept on its own, every page of it: the run's for the steps no rule narrows, the narrowed steps' named by
+        // their rules - a first page's file named with no page, each page after it beside it - and no page of the
+        // narrowed one lists the file its steps may not read.
+        var files = Directory.EnumerateFiles(kit.Layout.GraphDirectory, "map*.md").Select(Path.GetFileName).OfType<string>().ToList();
+        var firsts = files.Where(name => name.Count(character => character == '.') == 1).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(2, firsts.Count);
+        Assert.Equal("map.md", firsts[^1]);
+
+        var narrowedName = Path.GetFileNameWithoutExtension(firsts[0]);
+        var narrowedPages = files.Where(name => name == firsts[0] || name.StartsWith(narrowedName + ".", StringComparison.Ordinal)).Select(name => File.ReadAllText(Path.Combine(kit.Layout.GraphDirectory, name))).ToList();
+        Assert.Equal(agents.Asked[1].Map, File.ReadAllText(Path.Combine(kit.Layout.GraphDirectory, firsts[0])));
+        Assert.Equal(DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(agents.Asked[1].Map!), narrowedPages.Count);
+        Assert.Equal(files.Count, DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(agents.Asked[0].Map!) + narrowedPages.Count);
+        Assert.All(narrowedPages, page => Assert.DoesNotContain("src/Keys.cs", page, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -2146,8 +2432,20 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(earlier.Passed, earlier.Error);
         Assert.True(later.Passed, later.Error);
-        Assert.Equal("page 1 of 4 · 64 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
-        Assert.Equal("page 2 of 4 · 64 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+        Assert.Equal("page 1 of 4 · 67 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal("page 2 of 4 · 67 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+
+        // The 67 results are the hub's 30 methods named M and the 37 symbols holding an M in the files init seeds, in
+        // one order - the hub's first, by name - 20 to a page: the later page is that one result's next 20, its first
+        // 10 the hub's last 10 methods, and no line is on both.
+        string[] hub = [.. Enumerable.Range(0, 30).Select(at => $"M{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal)];
+        string[] LinesOf(string page) => [.. page.Split('\n').Skip(1).Where(line => line.Length > 0)];
+        string[] MethodsOf(string page) => [.. LinesOf(page).Where(line => line.Contains(" void ", StringComparison.Ordinal)).Select(line => line[(line.IndexOf(" void ", StringComparison.Ordinal) + 6)..line.IndexOf("()", StringComparison.Ordinal)])];
+
+        Assert.Equal((20, 20), (LinesOf(first.Text).Length, LinesOf(second.Text).Length));
+        Assert.Equal(hub[..20], MethodsOf(first.Text));
+        Assert.Equal(hub[20..], MethodsOf(second.Text));
+        Assert.Empty(LinesOf(first.Text).Intersect(LinesOf(second.Text), StringComparer.Ordinal));
         Assert.Single(Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("again", "a9"), OrchestratorLayout.StepPagesDirectoryName)));
     }
 
@@ -2193,8 +2491,8 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(depends.Passed, depends.Error);
         Assert.True(goesOn.Passed, goesOn.Error);
-        Assert.Equal("page 2 of 4 · 64 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unread.Text.Split('\n')[0]);
-        Assert.Equal(["page 2 of 4 · 64 results · ask again with page: 3 for the next", "the newer visit's"], read.Text.Split('\n')[..2]);
+        Assert.Equal("page 2 of 4 · 67 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unread.Text.Split('\n')[0]);
+        Assert.Equal(["page 2 of 4 · 67 results · ask again with page: 3 for the next", "the newer visit's"], read.Text.Split('\n')[..2]);
     }
 
     /// <summary>

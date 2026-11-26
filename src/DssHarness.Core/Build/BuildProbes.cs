@@ -19,6 +19,11 @@ internal static class BuildProbes
     /// <param name="runner">Runs the program.</param>
     /// <param name="request">The probe, which sets no timeout of its own.</param>
     /// <param name="subject">What is waited for, as a line names it after <c>waits for</c>: <c>ninja's dependency records</c>.</param>
+    /// <param name="what">What ran, as a line names it before what a stop of it could not reach or end.</param>
+    /// <param name="say">
+    /// Says, through the output of the caller that owns the operation, what a stop of the probe could not reach or end
+    /// (<see cref="UnreachedSaying"/>).
+    /// </param>
     /// <param name="told">Told where the wait stands, every <see cref="Waits.SaidEvery"/> it lasts; nothing where null.</param>
     /// <param name="clock">Times the wait.</param>
     /// <param name="cancellationToken">Ends the probe.</param>
@@ -28,6 +33,8 @@ internal static class BuildProbes
         IProcessRunner runner,
         ProcessRequest request,
         string subject,
+        string what,
+        Action<string> say,
         Action<WaitTold>? told,
         TimeProvider clock,
         CancellationToken cancellationToken)
@@ -37,7 +44,7 @@ internal static class BuildProbes
         ArgumentNullException.ThrowIfNull(clock);
 
         var ended = await Waits.ForAsync(
-                token => runner.RunAsync(request, token),
+                token => runner.RunAsync(request, token).SayingUnreached(what, say),
                 new WaitWatch(subject, told ?? (_ => { }), Bound: null, clock),
                 cancellationToken)
             .ConfigureAwait(false);

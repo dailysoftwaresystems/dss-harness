@@ -16,11 +16,11 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `class-closure`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`, `read-orchestrator-report`, `analyze-orchestrator-report`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `class-closure`, `route-findings`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-arms`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
-`down` and `help`.
+`down`, `queue` and `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -122,8 +122,11 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
   provider's pause - retried while it lasts, as long as its own answer says to wait; a failure retried while it is a new
   one, by its digest; and a final one ended at once.
 - `Text\`: every regular expression made by one maker on .NET's linear-time engine, with no timeout, a construct that
-  engine lacks refused by name (`LinearRegex`); and two sequences diffed by one owner with no edit bound - anchors that
-  occur once on each side first, Myers' linear-space algorithm where a region has none (`SequenceDiff`).
+  engine lacks refused by name (`LinearRegex`) - none source-generated, whose matcher backtracks - and each `\z` of a
+  pattern with groups compiled as `(?:\Z\z)`, the same end, at which that engine keeps the groups it loses at a lone
+  `\z` after a final line feed; a match sought from where a reader stands, the pattern's `\A` there, for the `\G` that
+  engine lacks (`LinearRegex.MatchFrom`); and two sequences diffed by one owner with no edit bound - anchors that occur
+  once on each side first, Myers' linear-space algorithm where a region has none (`SequenceDiff`).
 
 Four owners gained members of the same kind. A one-line message names every item that fits its room and says where the
 whole list is (`Output\Names.Line`). JSON is read, written and walked at any depth (`Json\JsonDepth`, and
@@ -145,7 +148,8 @@ on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `I
 Below that seam a few primitives ask the runtime for one fact each, where nothing else is
 asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
 session, group, signal and job-object calls containment is made of, and the choice between them
-that `ContainExec` places a child through), `UserState`,
+that `ContainExec` places a child through, and the one walk that ends a process with its tree,
+each process it ends kept in what its caller gives it, for that caller to wait for as it needs), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory),
 `AgentChildEnvironment.Own` (the tool's own environment, which an agent's child would inherit),
 `SystemWebNames` (a host name's addresses) and `HarnessFetch.Connecting` (the sockets the harness's
@@ -261,17 +265,62 @@ it was given on to it. The step says nothing on the runner's channel until the r
 one byte saying its connection was taken (`ContainExec.Taken`), so a step seen to end with its
 connection not taken said nothing, however late the system would have handed over a connection
 made just before its end, and is given up at once. On Windows the job is ended as the child ends or is stopped, and every
-member goes with it; and since its members also end when its last handle closes, what a killed
+member goes with it - one whose own security refuses another its end among them, since the job's end asks nothing of
+it, and each is waited for by a handle that only waits and asks when it was created; and since its members also end when its last handle closes, what a killed
 engine leaves behind ends with it there. On Linux and macOS the runner ends the child's session as
 the child ends or is stopped - every process still in it, and at a stop every one still in the
-child's tree, read before anything is signalled, asked to end with SIGTERM and waited for while
-any of it stands - told every five minutes, and killed at what is left of the child's time limit,
-or at once where a sweep ends what a killed run left, that run's bound having passed with it - and
-the output is read until every character the child wrote has been, to its end or until the pipe
-holds nothing more and its read waits on it (`PipeBytes` taking the pipe; the waiting read itself
-the answer - anything more would have ended it - and the system asked nothing, for on Windows the
-handle a synchronous read pends on answers no peek, which waits for that read); what a leftover
-writes after that is its
+child's tree, as the process table names each parent (`SampledProcess.ParentId`, no start compared), read before anything is signalled, asked to end with SIGTERM and waited for while
+any of it stands, a zombie - which nothing may ever reap - standing for none and a process still in
+its exit standing until it is one, one the harness may not signal - another user's - not waited for,
+and the group for none once every member it is listed to hold is one, never by a signal alone, which
+macOS passes a process in its exit over for - told every five minutes, and killed at what is left of the child's time limit,
+or at once where a sweep ends what a killed run left, that run's bound having passed with it.
+What still stands is held still before it is killed: the group as one, each member of the first
+reading still that very process - known by its id and its start read as that reading was taken - and
+then, round by round until a round takes none, every process the system names in the session, or the
+group, and every child of a process held, so what a member outside the group started after the first
+reading goes too; one whose session or group cannot be asked - in its creation or its exit, anywhere on
+the machine - is never waited on, one of the run's in its creation reached as its held parent's child
+or once all is killed. The system is
+read in place - its own listing of every process with its parent - never through a program: on macOS,
+for as long as a child of a process stands stopped, that process's runtime spins over reaping its
+children and holds the lock every start of a program takes, so a reading through `ps` there, with the
+group - which may hold the process's own child - held, never began, and every start of the process
+waited behind it. The process running the end is never held, nor walked below. Once all it
+killed has gone the system is read again the same way, and what stands in the session, or the group,
+is held and killed in turn until a look finds none: a child whose creation was under way as its parent
+was held joins the listing only after the last round, and its parent's kill ends that call or leaves
+it standing there. Such a child of a member outside the group, born outside it, is reached by nothing
+once its parent has gone.
+Nothing a session's end does acts on the process running it: a session, or a group, that holds that
+process, or whose leader it descends from, is refused before anything is signalled - the asking is
+taken for a cancel and gone on through, and the hold after it would stop that process where it
+stands with everything it runs in - and left for a process outside it to end.
+Whatever a stop or a container's end ends is waited for until it has gone before the output's end
+is looked for (`EndedProcesses`): the system answers a kill before the process's end has run - a
+descendant still unmapping its memory or running down its handles holds the write end of the
+child's output for that while - and a process the stop itself ended, taken then for one the child
+left running, was said to hold the output on a run whose stop had ended everything. So each process
+ended is kept as it is ended - on Windows by a handle, the job's members listed and kept before the
+job is ended, each checked to be in it by its own handle; on Linux and macOS by its id and its start,
+read while it is held still (SIGSTOP) before anything is killed - and waited for, told every five
+minutes and with no grace of any length: on Windows until its handle is signalled, which comes only
+once its handle table has run down, and on Linux and macOS until no process carries its id with its
+start or that process is a zombie, whose descriptors are closed, whether or not anything ever reaps
+it - its start read through its exit too, while it is still closing what it held: macOS lets nothing
+take a reference to a process from the moment it enters its exit, before its descriptors are closed,
+so there the start is read from the kernel's own record of it, kept until it is reaped, and never
+from the runtime, whose reading refuses such a process. On Windows the job, and a stopped tree, are listed again once every process kept has gone, for a
+child one made while it was being ended - a process of the tree a look again passes over said once, with the first
+walk's, in what the stop could not end (`EndedProcesses.Refused`, read once the wait is over). Then
+the output is read until every character the child wrote has been, to its end or until a look finds
+the pipe holding nothing while something still holds it open (`ProcessRunner.StreamCapture`: each
+look, once the child has ended, ends the read that waits - a read ended so has taken nothing, the
+runtime ending a read only before it takes a byte - and asks the pipe through `PipeBytes`, no read
+waiting on it, by a peek on Windows and by poll on Linux and macOS; never by the read's task, which on
+Windows waits for a pool thread to make the read while what the child wrote sits in the pipe, and a
+pipe holding bytes, or one every writer has let go of, is read on); what a leftover writes after
+that is its
 own, said in `ProcessResult.OutputHeld` and not read: a process
 that made a session of its own away from the child's tree is not reached, and nothing waits for
 what it holds. On macOS, where the isolation keeps no process namespace, such a process of an
@@ -298,7 +347,8 @@ started it with that process's machine and stamp (`ChildSessions`, the request's
 under a `ProcessScope`), taken back once the child has ended and nothing is left in its group. A
 record that cannot be
 written - one whose child's start nothing can read among them - is a start that failed: the child
-is ended, and never said to have started; a defect that keeps one from being written, a record that
+is ended as a stop ends it, and never said to have started, the failure saying what that end could
+not end beside why the record was not written; a defect that keeps one from being written, a record that
 would not read back among them, ends the child too, and is raised as it is. Every command
 over an orchestrator - `create-`, `list-` and `delete-orchestrator`, each agent verb, and each run
 verb over a run already made - first
@@ -310,11 +360,36 @@ its record removed and the end said in the command's lines and in its document's
 answers with one, where anything was left in it - but only where the process carrying its id still
 has the recorded start, or no process carries the id at all: none is given an id a session or a
 group still carries, so what a leader killed with the engine's tree handed on is still found by
-it. An id given to a later process ends nothing, and that record simply goes.
+it. An id given to a later process ends nothing, and that record simply goes. A session or group
+that holds the command sweeping - it runs in it, or descends from its leader, read up the chain of
+parents the walk's own refusal reads (`Containment.TheCallersChain`) - is never ended from inside:
+nothing in it is signalled, the refusal is said, and its record kept for a command run from outside
+it to end - kept for real: the sweep answers what it kept so beside what it ended (`ChildSweep`), and
+a command that would lose that record or take the run inside it refuses (13), naming the record and
+changing nothing - `delete-orchestrator`, whose deletion would take the record with the run's
+directory, and every command that makes this process a run's engine, whose engine would run inside
+what the next command from outside ends: a new run's start (`run-orchestrator`,
+`FlowSessions.CreateAsync`) and a session of a run already made (`resume-orchestrator`,
+`answer-orchestrator`, each claiming the run's owner, `FlowSessions.ClaimAsync`). Each refuses over
+a sweep taken at the act itself, so the record it refuses over is never older than the act: the
+start and the claim sweep every run of the repository, as `list-orchestrator` does, inside the
+section that decides the run's owner, once the last look at it has found it gone or none and
+before the run is made or the owner taken (`ProcessOwner.Claim`, `taking`) - an owner seen gone
+there cannot come back, and a live one is never claimed - so a refusal leaves the owner file as it
+was; and `delete-orchestrator` sweeps its orchestrator again inside its section right before the
+removal. An owner seen standing as the command began and gone since, one an answer was handed to
+and waited on among them, is swept with the rest, what it left ended before the new session runs,
+and a record kept refuses the act; every other command goes on with the warning. A command that
+sweeps more than once - as it begins, and again at the act - says each thing its sweeps say of a
+record once, and keeps each end once in its document's `ended`: one guard in `ChildSessions`
+(`SaidFirst`) over every line a sweep says - the record kept, one that does not read, one this
+system never writes, one that could not be removed, and the end - and over the end it keeps, so a
+later sweep that finds a record as before says and keeps nothing more of it.
 `stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
-ended: what outlived that end. A tree is ended by stopping each process before killing it, and the
-system hangs up a group that loses its last parent in the session while one of its members is
-stopped, so a leftover may die of that hangup with the engine, and is then not said. A
+ended: what outlived that end. A tree is ended by holding each process of it still before any is
+killed (`Containment.EndTree`, below), and the system hangs up a group that loses its last parent in
+the session while one of its members is held, so a leftover may die of that hangup with the engine,
+and is then not said. A
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
@@ -406,7 +481,9 @@ questions of the machine one seam a test answers anywhere (`MacSandboxHost`: the
 sandbox already, the version of macOS a record names, each path's real spelling from `realpath`);
 on Windows the container, where MXC's library says the machine has it and can deny a place
 outright - its question one seam a test answers anywhere too (`WindowsContainerHost`: the library's
-backends, and its version, which a record names). Each is proved once per process, on the tree's
+backends, and its version, which a record names). Both seams are the root's, registered beside the
+other registrations that observe the operating system, so a test answers them through the tool's
+own registrations too. Each is proved once per process, on the tree's
 own file system under its runs directory (`isolation-probe-<id>`, removed after), by a probe started
 exactly as every isolated child is - each of its programs - bubblewrap's version, each canary and
 start it tries - run to its end with no bound of the tool's own (`Waits`), told every five minutes
@@ -429,10 +506,13 @@ own - which ends every member when its last handle closes; so the harness ending
 kill among them, ends
 the child and all it started at once. Its own end and a stop are as any other child's: nothing is
 terminated as it ends, and what it leaves running lives on until the harness ends - so, on every
-system, its output is read, once it has ended, until every character it wrote has been - to its
-end, or until the pipe holds nothing more and its read waits on it - as a contained child's is
+system, its output is read, once it has ended - and at a stop once everything the stop ended has
+gone - until every character it wrote has been - to its
+end, or until a look finds the pipe holding nothing with no read waiting on it - as a contained child's is
 once its container has: what still holds the output then is one of those leftovers, a server its
-phase started in the background, whose later output is its own and is said not read
+phase started in the background, or at a stop a process the stop could not end, said in
+`ProcessResult.Uncontained` - and the output's holder is then said, as its wait is told, to be such a
+process or one the child left running - whose later output is its own and is said not read
 (`ProcessResult.OutputHeld`), so the run is held neither for as long as it lives nor cut short of
 anything the child wrote; the child's own last
 line is handed on. Every phase of
@@ -471,7 +551,83 @@ interruption typed at the harness's terminal is sent to a group, and that group 
 On Windows such a child starts as any other, since a child started with no window already has a
 console of its own that an interruption typed at the harness's never reaches. A child apart from
 the terminal is stopped by its process tree, as any other, and on Linux and macOS by its group as
-well, at once, which reaches what its tree handed on; what it leaves at its own end is left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
+well, at once, which reaches what its tree handed on; what it leaves at its own end is left. A
+tree, and the group beside it, is ended by one walk (`Containment.EndTree`) - for a stop, for
+`stop-run --now` and `stop-orchestrator --now`, and for a host agent's last resort alike. It never
+acts on the process running it: a tree whose root is that process, or one it descends from - read
+up its own chain of parents, each the parent the walk itself reads - on Linux and macOS the one the
+system names now, a child being handed on as its parent ends, before that parent's id is given out;
+on Windows one made no later than its child, as the walk orders a creator and its child (below) -
+is refused before anything is held or ended, which `--now` answers as could not be ended,
+its owner kept, and the last resort as left. On Linux
+and macOS it holds each process still (SIGSTOP) before it takes that process's children - once it
+has stopped, a process starts no other, and a child of it is never reaped and its id given out
+before the walk acts on it; the table of every process with its parent - Linux's `/proc`, macOS's
+listing of every process - is read once a round however deep the tree, each child asked again once
+its parent is held, until a round takes none, and a child the table names that no hold answers yet
+is asked again, paced and told every five minutes, until it is held or the table no longer names it.
+A process stops only once a call it is inside has returned, so a child whose creation was already
+under way when its parent was held may join the table after the round that took none: nothing an
+unprivileged process may ask closes that instant, and a contained child's session, or a group, is
+the end that reaches what its tree started in it - a session's end reads the system again once all it
+killed has gone. Then the group, as one before it is listed and each member by its own
+id, and only then it kills it all: the group as one first, while it stands, so a member its listing did not show - one
+`/proc` hides, or whose reading failed - goes with it and is never left held still, each member killed by the group
+alone, since its id may be given out again once the group is killed, and every other process by its own id, the child
+last (`Containment.HeldStill`, the one order a session's end kills in too). On Windows, where nothing is held still, it
+ends each process as it finds it, the root first - each process its caller holds the handle it was
+created with for kept by a copy of that handle, which ends and waits for it whatever its own security
+refuses another: the child the process runner ends, at a stop or where its start could not be read,
+by the handle the runtime got as it was created, and the program the tool's own step created for a
+bound, contained or isolated child by the handle `contain-exec` got as it created it, whose value
+`contain-exec` says on its channel before it says the program placed and the runner copies out of it
+while it stands (`Containment.CopiedFrom`); the process `--now` or a last resort ends is opened by its
+id, all they know of it - a child being one the list Windows keeps of every process names as created
+by a process of the tree and made after it, and the very one the list named, as its own handle's
+creation time says, so an id taken since the list was read is never ended. Made after is read by the
+sequence number Windows gives each process as it creates it (`ProcessSequenceNumber`, counted up once
+a boot and never moved by the clock) where both could be opened to read theirs, and by their creation
+times, the clock's, where either could not (`CreationOrder`, the one order of a creator and its child,
+which the chain of parents above reads too). A process of the tree that cannot be opened - one running
+as another user, one whose own security refuses the harness its end, or one gone as it was reached -
+is passed over, its refusal said once, and still has its children taken from the reading that found
+it, by its listed id and creation time alone, no right asked of it, as a root that could not be ended
+has its own from the first reading. What a stop could not end it says beside what a container could
+not reach (`ProcessResult.Uncontained`, and `ProcessStoppedException.Uncontained`, which the stop its caller gave up is
+thrown carries in place of a result), and what then holds the child's
+output is said to be such a process or one the child left running, never a refusal taken for a
+leftover (`ProcessResult.OutputHeld`). That is data of the run, worded once by the runner, and said by
+the caller that owns the operation's output - once, with its own context, from the result and from the
+stop alike (`UnreachedSaying`, read where the run is awaited, inside any wait over it that would end
+at the caller's token with a cancellation of its own) - and by no second teller of the process's, so
+nothing is said twice: a leg's phase on the leg's line (`PhaseRunner`); a leg run on its host on
+the leg's line, under the command running it (`RemoteLegRunner`); a sync's request, a hold and
+`host-exec`'s command under their command, naming the host (`RemoteSyncTransport`,
+`HoldAwakeRegistry`, `HostExecService`, with WSL naming its default distribution); a machine's `keepAwake` on the leg's line (`KeepAwake`); git and gh under
+their own names, by the command line asked (`GitClient`, `GhProcess`); the tool's probes under the
+tool or the command they serve, naming what ran - ssh's settings and shell probe, a program a
+connection, a lookup, an inspection or a provisioning runs on a host, a copy asked its version, an
+emulator's witness, `vswhere`, `vcvarsall.bat`, the process table's reader, a stopped isolation
+probe, ctest describing the tests, `dotnet tool list`, the drop of WSL's page cache - and a
+set-up's line under its direction (`SetUpService`). A caller with no output of its own for the
+operation is handed its caller's way of saying it and names what it ran: git's question of the
+variables it reads (`GitLocalVariables`), handed git's or gh's; the build's questions of a compiler
+and of ninja (`CompilerVersionProbe`, `NinjaDeadOutputCheck`, `NinjaDependencyCheck`,
+`NinjaRebuildGraph`), handed the build's line or, through the arms' builder each sweep makes over its
+own output (`MutationService.Builder`), a mutation worker's; npm's client and Claude
+Code's installation (`NpmClient`, `ClaudeCodeInstall`), handed the command that asks Claude Code
+ready. A host's commands (`HostCommandRunner`) hand it on as it came, a pinned ssh call run again
+without its pin with what both attempts could not reach or end; an isolation probe's trial reports
+it as why no mechanism proved itself, since a container that leaves a process of the trial running
+proves nothing; Claude Code's launch says it as its end's notice and keeps it in the step's result. The
+root hands the operation's output to the process table and the isolation platform it builds
+(`ServiceRegistration`), which have no other. The
+walk keeps each process it ends in what its caller gives it (`EndedProcesses`), and each
+caller waits for what it needs: a stop waits until every process it ended has gone before the
+child's output's end is looked for (above), as a contained child's end does, so what is said to hold
+the output then is only ever what the stop did not end; `--now` waits for the recorded process
+alone, the rest of its tree let go of as it is ended; and a host agent's last resort, and a child
+whose start could not be read, wait for none. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
 Windows, as above, and as any other child elsewhere.
 
 ### Paths come from git
@@ -1120,6 +1276,79 @@ it lasts (`Waits.SaidEvery`), as it is for a host agent running it for another m
 way is a worktree nobody can check again. Only a second interruption, the hard stop, ends it, the process with it; that
 can leave it partly done on any platform, and running `delete-worktree <name> --force` then finishes it.
 
+## The dispatch queue
+
+The admission owner is the machine's dispatch queue (`Execution\MachineDispatchQueue.cs`): one queue per machine and
+per user of it, three classes of unit each with its own capacity - heavy legs (`heavyLegs`, 2), machine steps of the
+process class (`processes`, the machine's logical processors) and reasoning agents of every run (`agents`, 8). Only
+heavy legs ask it yet; the process and agent classes are configured and shown by `queue` with their capacities.
+
+**Granting.** A unit holds a slot once the queue grants it one, and the grant is a mark (`QueuedUnit.HeldSinceUtc`)
+written in the same change of the record that grants it: the marked units hold until they give their slots back,
+whatever arrives after them - nothing is pre-empted - and the order chooses only among the units not marked. Every
+look a waiting leg takes reads the line under the record's lock, reclaims the holders whose processes have ended, and
+grants the slots left in the one order (`DispatchOrder.Read`), which `Look`, a dry run's `Line` and `queue` all read.
+The slots' own room rules stay whole: a unit is granted one only while the holders are fewer than the machine's own
+count, where its settings file declares one, else than the fewest any holder or the unit itself allows; and the unit
+the order puts first that does not fit holds back every unit behind it, so a unit whose own count allows fewer legs at
+once is never passed for ever - the holders end, none is granted beside them meanwhile, and it fits.
+
+**The order.** Deficit round-robin over the tenants of the units waiting, as plan 2.0 part 06 sets it. Each round,
+every tenant with a unit waiting is credited its share - its weight (`DispatchOrder.LocalWeight`, 1 for every tenant
+of a local command) times its run's priority (a workflow's `priority`, a limit a use that governs itself declares for
+its steps, `FlowUse.PriorityOf`; 1 where none), doubled for each whole period of `ageAfterMinutes` its head unit has
+waited (`DispatchOrder.ShareOf`) - and a unit starts once its tenant owes nothing, charged its cost as it starts. The
+rounds are counted, never stepped: a tenant's turn comes after as many rounds as its debt is short of nothing, over
+its share, and never fewer than one, so one decision is linear in the units waiting whatever their costs. Within a
+tenant its units go in the order they asked; a tie between tenants goes to the unit that asked first. A tenant's debt
+is kept in the record after its last unit has gone - paid back, for each round another tenant is served, at the
+unaged share of the unit it last started (`TenantDeficit.Share`) - and, once its next unit waits, at that unit's share,
+doubled for each period it has waited: aging is what repays a carried debt the faster, so no unit waits behind its
+tenant's debt for ever. A credit is kept only while the tenant has a unit waiting, never carried past what the unaged
+share gives. An `ageAfterMinutes` of 0 counts every period at once - a share past any cost - so a tenant's debt is
+gone in one round, though no round credits it past its unaged share, and its units go in the order they asked, the
+tenants in turn; a wait of more doublings than a number holds is the same.
+
+**The cost.** A unit's cost is the median of the newest ten times a unit of its name held its slot on this machine, in
+minutes, by when each ended, and one quantum (a minute) where none is kept (`UnitDurations`): the queue measures each
+unit itself, from when it was let start to when it gave its slot back, on the monotonic clock, and keeps one history a
+name - its repository, its command and its unit (the leg, or a sweep's worker or arm) - in a file of its own named by a
+digest of that name, read whole at one ask, never a scan. A history that cannot be read is said, and charges one
+quantum. A WSL sweep, sent whole as one unit, is measured whole, so it is charged its whole time and its tenant owes
+that much before its next unit starts - a debt that unit's share repays the faster once it has waited past its aging
+bound, as the order says.
+
+**The records.** The slots' record (`admission-<machine id>.json`) keeps exactly the members an older build reads, and
+what the queue keeps of each unit - its tenant, weight, priority, cost, aging bound and grant - and each tenant's
+deficit, a debt whether or not the tenant has a unit waiting and a credit only while it has, is kept beside it in
+`admission-<machine id>.queue.json`, read and written only inside the slots' record's own machine-wide step, joined
+to the live entries; a row whose entry has gone counts for nothing and leaves
+with the next write. An entry with no row is an older build's, which admits its own leg while the leg is fewer from
+the front of the line than every count up to it allows: it is counted holding exactly where that build holds it, and
+while one waits no unit behind it is granted a slot - that build counts every unit ahead of its own, so a unit granted
+behind it would run beside it once the units ahead of it left. The histories are kept in
+`admission-<machine id>.durations`. The crash rule is the slots': a holder whose process has ended is released by the
+next look.
+
+**Departures from part 06, said.** The tenant is a local command's repository (`local/<repository>`, the repository
+as `IHarnessContextLoader.RepositoryOfAsync` spells its main checkout, whichever worktree or copy the leg works in):
+part 06's `local` tenant with the repository its sub-tenant, the round-robin served over the sub-tenants, for with no
+environment every local command is of the one tenant `local`. The cost is the queue's own measure of each unit, not a
+reading of the ledgers and `step.json`: a ledger's duration is a whole leg's, waits included, never a sweep's worker or
+arm, and kept per tree, where the slot a unit holds is what the machine gives it, and one history a name is read in
+constant time where the records would be scanned at every ask. A unit is charged its cost as it starts, against part
+06's "a unit starts when its tenant's deficit covers its estimated cost", for that is the reading under which the same
+part's WSL sentence holds - a sweep charged whole leaves its tenant owing what it cost, where credit earned before a
+start would leave a tenant that runs alone owing nothing; and a tenant's debt is thereby bounded by what its last unit
+cost. Aging repays a debt at the doubled share, part 06's aging read over its WSL sentence: a sweep's tenant owes its
+whole time, but once its next unit has waited past the bound the debt is repaid the faster, since a debt repaid only
+at the unaged share would hold that unit behind it for as long as the debt, however long it waited. Aging never
+carries a credit past the unaged share, and no debt clears in fewer than one round. The rule that the first unit of the
+order that does not fit holds back the units behind it, the older builds' rule, and an aging bound of 0 clearing a
+debt in one round, each tenant's units in the order they asked, are this build's, which part 06 does not say. A server
+holding the queue in memory, the process and agent classes' askers and an environment's weight arrive with their parts.
+A machine shared by several users is not seen whole: each user's queue is their own.
+
 ## Orchestrators and agents
 
 An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its
@@ -1178,7 +1407,7 @@ requests the apply takes (`AgentService.Holds`, the one spelling of them, shared
 main tree and the agent's worktree for a fold, a refresh and a live agent's deletion; the worktree alone for a rebase,
 and for the deletion of an agent already closed or whose worktree is gone. Every live
 holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `HeldBy` reads: nothing reclaimed,
-nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
+nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`MachineDispatchQueue.Line`,
 joined by `TreeHolders`, the one sentence: it waits in line with how many are ahead, or it holds a slot, or a leg on
 an ssh host's own record says; a run that asked for no slot is said by the lock's own words alone, `running
 '<command>'`, and so is every run of a leg of this machine - a WSL distribution's among them, whose slot this machine's
@@ -1861,8 +2090,9 @@ iteration only that step and the steps it waits for (V64), and every other step 
 runs before it - one it waits for - or after it, waiting for it as a handler of its ending does
 (V65), so none is left running unseen in an iteration the loop ended at its decision
 (`WorkflowValidator`'s `DecisionRules`). The shipped
-review loop decides at its `review`, so the last rework of a loop that ends at its bound is
-reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
+review loop decides at its `route`, where the review's findings are routed, so the last rework of a loop that ends at
+its bound is reviewed by the round after it and what it leaves is what its last routing left - its rework and its home
+audits alike. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own. The file writes no YAML alias - a
@@ -1951,7 +2181,9 @@ own in the place of the run's, counted across every instance of the use (`Counte
 place of the run's own cap for them (`InstanceBoundOf`); its `maxRetries` and `backoffSeconds` are
 what its steps fall back to where they say neither (`FlowUse.RetriesOf`, which `RetryCap` and the
 reason runner both read, and `BackoffSecondsOf`, which the reason runner reads); its
-`handoffSeconds` bounds the handoff of its paused reasoning steps; and its advisor recommends for
+`handoffSeconds` bounds the handoff of its paused reasoning steps; its `priority` is what its
+steps' legs ask the machine's dispatch queue at, in the place of the run's (`FlowUse.PriorityOf`,
+which every leg step's request reads); and its advisor recommends for
 its steps' questions in the place of the run's (`SeekAdvice`): its agent and prompt files read in its own directory, its prompt handed the
 inputs the use filled and the texts its steps see, its bar the workflow's own `texts.recommendations`
 where it declares one (`BarOf`, reading `texts.recommendations` first, then the run's
@@ -2220,11 +2452,14 @@ takes no `on`, `when` or `always`, sends
 a fix to a declared `recover`, and names no triage of its own, which would be it calling itself;
 where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
 base commit and answers `fix` (in a step's way, related to the work, or critical: given to the
-recovery, the step it was in the way of running again after), `list` (added, proven, to the run's
+recovery, the step it was in the way of running again after), `next` (a defect in code the run's
+change does not touch that blocks nothing: owed the run's next round, sized - its files, what must
+be built, what measured first, an answer whose size names no file refused - never holding the round
+it came from; see the routing paragraph below), `list` (added, proven, to the run's
 `pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
 kept whole), `duplicate` (naming in `duplicates` the listed issue it
-repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
-read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
+repeats) or `unproven`; an answer whose course is none of the five, or whose issue to list or send
+to the next round does not read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
 one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
 of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
@@ -2822,7 +3057,7 @@ connected, every tool of it taken, no other server (`ClaudeCodeTools.ServerTools
 `--tools`, each with an ask rule, and `ClaudeToolDecider` allows a call of one as asked: its rules
 are its tool's, each address decided and recorded as it runs, as on the API clients, and what the
 runtime refused and asked of the web is counted in the step's result. Once a launch has ended, however it ended, a session file it
-left is removed, and what its container could not reach where the runner hands its end back
+left is removed, and what its end could not reach or end where the runner hands its end back
 (`ProcessResult.Uncontained`) is said and kept in the result's `uncontained`; a call the engine's
 own deciding fails on is a denial like any other, by the rule `undecided`. The client holds each
 launch to the protocol in the same loop: the user's settings read first by `ClaudeUserSettings` (a
@@ -3022,8 +3257,16 @@ every answer of it on all three clients: the members by the subset's check, the 
 `$.output` (`JsonSchemaSubset.Problems` from a path, `JsonSchemaSubset.Respelled` for an enum's spelling), what no
 schema says (the notes not empty, a null output only where the answer asks, and each assumption and question by its
 record's own rule - `AgentAssumption.Problems`, `AgentQuestion.Problems`: every text written, options no two alike, a
-recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), and the
-run's end - `Completed` or `Asked`, with `PersonAsked`, or a repair sent back, then `InvalidOutput`. The runner writes
+recommendation among them - which `AgentRunResult.Problem` and the run's `questions.json` hold them to as well), an
+output that reads against its schema held to the step's own rules where it has any (`AgentOutput.Holds`, each problem a
+path under `$.output`, sent back as a schema's is and counted with its repairs - the route's rules of a review's
+findings and the analyst's evidence alike, one hook), and the run's end - `Completed` or `Asked`, with `PersonAsked`, or
+a repair sent back, then `InvalidOutput`. Every JSON an agent reads or its call carries is written by one writer,
+`AgentEnvelope.Written`, JSON's own escapes alone and at any depth, so an apostrophe, an angle bracket, an ampersand
+or a letter past ASCII reads as it was written: the envelope, a value a problem quotes, a template's JSON value
+(`FlowValue.AsTemplateText`, `{run.closure}` among them), the engine's account of the work a piece starts from
+(`{piece.before}`), a red leg's digest in the continuation record, a handoff given as the whole answer
+(`AgentHandoffSignal.AnswerOf`), each tool's input schema and a measure call's answer. The runner writes
 the notes as `notes.md` (`OrchestratorLayout.StepNotesFileName`) before `result.json`, and removes an earlier attempt's
 before an attempt begins, for the step's directory is every attempt's; it writes the first user message as sent, masked,
 as `user.md` (`OrchestratorLayout.StepUserFileName`) before the client is taken - the parts the attempt was given, held
@@ -3252,6 +3495,93 @@ anything is folded. The same rules judge a manual lane's `closure.json` where `a
 and measurements read as given, a record naming no class refused, its arms against the registry its worktree holds); a
 run's own folds - its `fold` and `delete-agent` steps, the engine's own deleting of an agent and the check's weighing,
 each request `ByRun` - are held to no `closure.json`, for the builder's answer is their record and the check judged it.
+After a review's gather and before its revise stands the `route-findings` step (`RouteFindingsStepRunner`, the one owner
+of the routing), reading the findings expression the review's gather collected - each finding classed `introduced` or
+`reopened` by its reviewers, a reopened one naming its class in `reopens` - and writing the item's ledger
+(`closure-ledger.json` in its agent's directory, `FlowClosureLedgerFile`): for each class the routings that reopened
+it, one send-back a round, kept across the fix loop's iterations and across a resume, where no reviewer could carry it -
+for reviewers are fresh each round and `previous.*` is refused in every prompt. A class's count is how many routings
+name it (`FlowClosureLedgerFile.Counting`), so a routing run again after a crash, a stop or a resume counts nothing
+more and a first reopening is never read as a second. Every introduced finding goes back in `rework` as itself; the
+reopened findings of one class go back as one send-back - the class (`reopenedClass`, never a finding's own `class`),
+the rounds that reopened it and all its findings, graded by the worst of them; and a class reopened twice or more goes
+to `homeAudit` instead, as one such send-back, which the `class-closure` check asks its home audit for - the one
+mechanism, whichever cause asks. The loop reads both lists alike: its `until` waits for both to be empty, its `blocking`
+grades `union(route.rework, route.homeAudit)` as it graded `review.findings`, and what it leaves at its bound is that
+union (`leftover`, and the pipeline's own `leftover` output, read from the loop's last routing), so a class whose home
+audit was still owed at the bound is written to the backlog and named in the pull request and the handoff. What a finding must say to be routed has one owner, `FindingRoutes`: an object, classed `introduced` or
+`reopened`, graded on the route's scale, and a reopened one naming a class of the item's - its `classes`' or its
+`record`'s, exactly, compared ordinally on every machine, for a class id is no path. The reviewers whose answers a
+route reads (a reason step its `findings` names, or each reason step of a group that gathers the member it reads) are
+held to the same rules at their own answer (`FlowStepRun.AnswerHolds`, `AgentOutput.Holds`): the gate asks a reviewer
+again in its own conversation, under the same repairs as a schema's problem, for the recovery cannot change a
+reviewer's answer; an answer that still does not hold after those repairs ends `InvalidOutput` and fails the
+reviewer's step (20), as one its schema refuses does, nothing routed; findings that reach the route unheld - from no
+reviewer's gate - fail it (12), nothing routed and the ledger untouched. The shipped flow's fix loop decides after `route` (`decideAfter`), and its
+`rework.md` reads `route.rework` and `route.homeAudit`. A pre-existing issue the triage answers `next` for - a defect in
+code the run's change does not touch that blocks nothing - is owed the run's next round instead: `FlowCoordinator` sizes
+it from the triage's answer (`size`: its files, what must be built, what measured first - an answer whose size names no
+file refused, by the record's own rules: `FlowNextIssue.Problem`) into `next-round.json` (`FlowNextRoundFile`, written
+as the run's issues are, and read again from the triage's own answer by a resume that finds the file without it), which
+`run.nextRound` reads as the issues no work item of the run has settled. A `forEach` item settles one by naming its id
+in `settles`, once it ends done with a commit of its own made - a `commit` step within it done with `committed` true;
+an item a person skipped, done with nothing landed, settles nothing - and the file names the item
+(`FlowNextIssue.SettledBy`, `FlowCoordinator.SettleTheIssueOf`, called as the item ends and again for every ended item
+a resume finds), whatever the run takes plan updates by. The check that opens a round - a `validate-plan` the `forEach`
+declared beside it expands from (`FlowUpdateGates.OpeningCheckOf`), where that group runs in rounds: declared in an
+iteration of a `repeat`, or the group plan updates owe their work to, to which an update adds a round where no loop is
+around it - is decided by one owner (`FlowUpdateGates.RoundOpenedBy`), whichever opens the round: that check is handed
+the owed issues under `next` and, where its group is the one updates owe, their work (`owed`, `owedAlone`) and the plan
+update its problems raise; and `PlanCheckRunner` refuses a round whose items leave one unsettled, refuses an item that names an issue the run does not
+owe, and orders the settling items first; no other check - the plan's, a plan update's, a recovery's - is handed any,
+and an item of one that names an issue is refused. The rounds' `until` reads `empty(run.nextRound)`, so a clean
+self-audit does not end them while one is left; never holding the round the issue came from, for the triage never holds
+a loop. The value an issue is read as and the schema typing `run.nextRound` are made from one list of its members
+(`FlowNextIssue.Value`, `ValueSchema`).
+After the checkpoint of an item's first fold, holding no tree (`FlowClaims`: a sweep whose `base` names a commit
+claims none), `item-arms` sweeps the arms the builder's answer lists (`arms: 'implement.latest.arms'`, read where the
+step starts, `pending: true`) on a copy of the commit the item's fold landed as - `base: item` is the newest commit the
+run's ledger attributes to the item that a commit made (`FlowCommitEntry.Committed`, a staged set or one git refused
+naming none), so a rearm's refold is the bytes a re-run sweeps. An arms expression that yields none sweeps nothing
+(`SweepStepRunner.NothingToRun`: the step done, its `swept` saying so, no copy made and no leg asked), and every
+class-closure check of the item holds the answer's `arms` to the arms its record names (`ClassClosureProof.ListedArms`,
+an id one arm whatever its case, as `MutationRegistry.Find` reads it). The copy is a detached worktree under the run's
+temp at a path of the instance's own (`SweepStepRunner.CopyNameOf`), made and taken away under `MainTreeWriteLock` by
+the one owner of such copies (`IWorktreeService.CreateCopyAsync`, `RemoveCopyAsync`): its making takes away first a
+copy an earlier attempt left at the path, directory and git's record of it - a stop, a pause, a crash - its taking away
+runs whatever ended the legs, never cancelled, by the same forced removal a worktree's deletion uses, and the step's
+`copy` says its path and what could not be taken away; `delete-orchestrator` takes away each copy git still records
+under the run's directory (`RemoveCopiesUnderAsync`). An item whose ledger holds no commit that was made is refused with
+nothing swept, and so is a base that names nothing as the step starts - a template whose value is blank is never read as
+no base, which would sweep the main tree as it moves; `base: item` in a step no `forEach` holds - the forEach of a
+workflow that uses its file among them, as the ledger attributes an item's commits (`FlowInstanceId.ItemOf`) - is
+refused where the file is read (`WorkflowValidator`). An arm that is not as it should be - violated (1), survived (2) or unattributed (8), the codes only an
+arm reaches - raises `rearm`, a group that goes on with the implementation on `prompts/rearm.md` and carries its change
+the way a rework's does - `rearm-verify`, `rearm-closure`, `rearm-fold`, `rearm-checkpoint` - before the sweep runs
+again; any other failure of the sweep is the machine's and goes to the pipeline's `failTo`. Only the item's own release
+waits for its arms: its agent is not released until both its review and its arms stand (`release` depends on `fix` and
+`item-arms`). What the run's closure checks and routings say of its items' classes has one owner,
+`FlowClosureRecords`, read alike by the run's words (`RunTexts`) and its report (`FlowRunReport`): of each item, the
+newest `class-closure` check that ended done - the record it judged, which its output carries (`record`), and the
+hotspots it named - and the newest routing that ended done, with how many rounds reopened each class; a step is known by
+its type, never by the shape of its output, so a plan audit's own `closure` member is no item's record, and an item no
+check judged - one a person skipped - has none. `{run.closure}` gives each record whole and `{run.hotspots}` the
+hotspots, read by the self-audit's instance-closure lens (`self-audit.md`, `auditor.md`: the tells - one site and a case
+named, a theme in the run's commit subjects, a hotspot's path, a pin listing the case by hand - and the disproof,
+searching the data and measuring unnamed cells and the optimised form); the pull request's body (`pr-body.md`) carries
+the counts - each class's claim alone (`{run.claims}`), each item's counts (`{run.counts}`), the classes the reviews
+reopened with how many rounds (`{run.reopened}`) and the hotspots with their touches - and says what became of each
+issue carried to a later round (`{run.preExisting}`), and the report's convergence the same claims, items' counts and
+hotspots, its reopenings read from the items' ledgers (`FlowClosureLedgerFile`), whose count its `classReopenedTwice`
+signal reads by the route's own rule (`FlowClosureReopens.AsksItsHomeAudit`), and each issue of `next-round.json`, fixed
+in a later round by the item that settled it or left owed (`FlowNextIssue.Said`, whose two states `{run.preExisting}`
+says too). An item's counts (`FlowClosureRecords.ItemsOf`, said by `FlowClosureItem.Said` alike in the run's text and
+the report, kept in `report.json` as `FlowClosureItem.ToJson` writes it) are read where they are held: of each class of
+the record its newest check judged, the sites now reading their home and those deleted, the cells its pin covers and the
+neighbours measured and those not, by the record's one reading (`ClassClosureRecord`: `SitesConsolidated`,
+`SitesDeleted`, `CellsPinned`, `NeighboursMeasured`, `NeighboursUnmeasured`), whether it carries a home audit, and how
+many rounds a review sent it back, as the item's newest routing counted its ledger; and the item's rounds of review, its
+routings that ended done, each instance once however often it ran.
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
@@ -3324,7 +3654,7 @@ reflogs; the push step sends the commit the run's
 commit steps recorded, never what the branch names later - the launch's own temporary directory, kept in the
 run's temp (`OrchestratorLayout.TempDirectory`, `temp/` under the run's directory: one directory a launch,
 named by the hash of the launch's directory, held for the run's life and taken away with the run's directory)
-where the launch belongs to a run, and under the isolation's own (`IsolationCaches.Root`, then `tmp/`, taken
+where the launch belongs to a run, and under the isolation's own (`UserState.IsolationDirectory`, then `tmp/`, taken
 away when the launch ends) for a side-task's; none where the mechanism gives one, `OwnTemp`) and the declared
 tool caches (`IsolationCaches.Declared`, each variable
 pointed into the directory of the child's write scope under `caches/`, `IsolationCaches.Prepared`: one for each set of
@@ -3670,7 +4000,175 @@ is kept with what was spent, never in the engine's memory alone (`FlowBudgetSpen
 `spent.reserveMetAt`, absent where nothing met the reserve past its count and refused at a grant the run was never
 given): the uncounted part's with its charge, the share's set before the write that records the launch's end, so a
 resume after a crash at any write from there asks once, before anything starts again - never by running the step past
-the reserve to meet it a second time - and a grant of more recorded since goes on. A step that says `ask` is paused on its agent's questions
+the reserve to meet it a second time - and a grant of more recorded since goes on.
+
+Every step instance's work is measured as it runs, on its own record (`FlowStepMeasure`, `step.json`'s and
+`flow.json`'s `measure`, one owner in `Orchestration\Flow\FlowStepMeasure.cs`), null until the run draws it: when it was
+ready (`readyAt`, the first walk - the admission's or a record's - that found nothing holding it but room; what held it
+before, the steps it depends on or the run's own holds, is theirs and never its wait; a group, which runs nothing of
+its own, holds none), how long it waited and on what (`waited[]`, by the words a record's `waitsOn` holds - the
+reasoning limit, a claim, a person's answer, the machine its legs run on holding every one of them still to run in its
+queue, for its memory or for its room - folded where the causes change at every write and every walk, each period as
+exact as the clock gave it), how long it ran (`ran`, the sum of its attempts' runs) and how long it stood stopped for
+the run's own pause or a crash (`paused`). The open wait is kept in the record with its time (`waitingOn`,
+`waitingSince`), so a wait that spans two sessions is one wait, whole; at a resume every open wait but a person's is
+closed where the session before wrote its last record (`FlowResumeState.LastRecordAt`), and the time from there is its
+pause. One entry per attempt (`attempts[]`), opened as the attempt starts, holds its own times and outcome, each run of
+it (`runs[]`: an asking closes one and its answer's continuation opens the next, as the machine holding its legs and
+letting one start does), what served it - the provider, the model, the effort, where a fallback moved it from and
+why - its tokens by kind and dollars, each part of them by the model that served it at the price copied as its cost was
+counted (`parts[]`: a price changed in the configuration later never changes what a past turn cost), the uncounted
+reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns, the tool calls
+by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, what
+it asked of the codebase graph in pages past the first (`graphPages`: how many, and the deepest page one answer
+reached, with the operation that asked it and how many pages were asked of that answer - an answer its operation and
+its inputs less the page, keyed as a kept result is - whichever client called the tool, by the one reading of a
+stream's tool names (`AgentStreamCalls.ToolOf`); a page refused counts nothing, for it read nothing, and an ask is
+counted as its call ends well, so a resume replays the same count from the stream), and
+for a machine step what each leg did (`legs[]`: its verdict, its time, how long its machine held it before it let it
+start, each phase's time and its digest's counts), the first error its digests read as it ended and the question raised
+of the step while it was its own - kept after the question is answered, so each attempt says its own and never the
+step's newest; the failed attempt the engine runs again carries its backoff
+(`retryAfter`). What an attempt spends is counted once, at the one place a token is counted
+(`FlowCoordinator.TakeMessage`'s usage branch, `Charge`): every turn charges the run's budget and the attempt's entry
+with the same numbers, so the run's `spent` is the sum of its instances' - and is summed from them again at a resume,
+for a step's record is written before the run's, with what a build that kept no measures recorded before them
+(`flow.json`'s `spent.unmeasured`). What the advisor spent answering a step's own questions is kept beside them
+(`measure.advice`, never in an attempt, for the advisor's turns are its own records'). An attempt a crash cut off - its
+record still `Running` - is completed at the resume from its own stored stream (`IFlowHandoffRunner.AttemptOf`: the
+events of the attempt the record says it was on, replayed through the engine's own count of a run's spending, each turn
+priced as it was reported): only the turns past what its entry was charged (`reports`) are charged now, its run ends
+where its stream did, and a stream that does not read whole, or cannot be priced, says so as the part's uncounted
+reason. A machine step keeps no stream: its cut attempt is completed from the ledger its legs' run keeps in its step
+directory as it goes (`FlowStepLegs`: written as the run claims its directory of records, naming the run and that
+directory, again as each leg ends with every line so far, and whole at the run's end - `ILegRunWatch.Began` and
+`ILegRunWatch.Ended`, which carries the leg's line; each write as the legs work is a record of their progress, never a
+reason to lose their run, so one the file system refuses - a full disk, access refused, where another program's hold on
+the file is waited out by the atomic write itself - is said once, as a warning, and the legs work on, the write at
+the run's end being the one that must succeed), read by the ledger's own reader (`LegStepRunner.CutAccountOf`, read
+through the same account every cut step is completed by) - each line a leg of the attempt that ended, as its measure keeps
+it (`FlowStepLeg.Of`, the live ending's own reading, its phases with their times and its digest's counts among it), and
+the attempt closed where its legs' work stopped: the latest the ledger and any record of the run it names were written,
+each phase's log as it streams among them, so a build cut off two hours into its legs closes two hours in, with the legs
+that had ended; a directory that holds no ledger, one that does not read - a line's digest of no digest's shape among it -
+or one an attempt before left there - written before this attempt's run began, and so not this attempt's - leaves the
+attempt with no legs and its run closed at the run's last record, as a step that kept no record of its own. The machine a step's legs run on tells its holds as each wait of a leg's admission begins and ends
+(`AdmissionRequest.Told`, `ILegRunWatch.Admitting`; an ssh host's by a note its dispatcher reads) - a wait for a slot in
+the dispatch queue's fair order, for the memory and for the room, then taken as the queue grants the leg its slot and
+ended as the slot is given back or the leg is refused or stopped as it waits, so the measure sees every wait the queue
+makes - and the step is held - its run stopped, its wait on those causes open - while every leg it placed that has not
+ended waits there and none holds a slot (`LegStepRunner.StepHold`).
+
+The report of a run is built from its records alone by their one owner (`FlowRunReport`, from `flow.json`,
+`questions.json`, `updates.json`, `events.jsonl`, the item agents' closure ledgers and the frozen definition, read for
+every report of the run in one place, `FlowService.SourceOf`): the same records give the same bytes in every form -
+text for a terminal, `--json` as one document, `--markdown` for a pull request or the clipboard - with the steps in the
+run's order (the instance order of `flow.json`), every row of a list with an id of its own (an error
+`<instance>@<attempt>`, a signal `<kind>#<n>`, a convergence row its list, the item, step or agent that said it and
+what it is of), every number in one fixed form (durations to one decimal, dollars to four with the currency, times as the records keep them) and never a word
+of now: a run still going is said so at the time of its last record, marked partial. What the records cannot give is
+said in its `notes` - an events file whose last line was torn (the report is as of the event before it), a definition
+that is not there, or one that does not read with why it does not (`OrchestrationStore.ReadDefinitionOrWhy`; no
+critical path is named). Its sections are the run (its sessions, its wall time, its active
+time - the union of every attempt's runs, two steps at once counted once - its pauses between sessions, its waits for a
+person, each question's to its first answer or, still open, to the last record, and its budget), the totals (tokens by
+kind, the cache's share of input, the dollars grouped - `dollarsBy`, by the model that served each part of each attempt
+and each step's advice by its advisor's, or by provider, step, agent or type - the retries and the fallbacks), one row
+per step (its state, attempts, waits by cause - a wait on the machine's dispatch queue naming the class of it and each
+tenant waited behind, joined over the whole wait, so a reader can tell its own run's units from another repository's -
+run time, model, tokens, dollars, exit, error, handler and why it did
+not run), the critical path (the longest road through the run's instances, each read as its declaration through
+`FlowInstanceId` and linked from the latest visit of each instance its declaration names in its own scope, a group as
+every instance inside it, the first in a scope from what its group came after, the first of an iteration from the
+iteration before it, a visit after the first from what sent it back, a handler from what raised it - walked once in
+the order of its links, each weighed by its runs and its waits for room, never a person's wait or a pause - what a
+faster run must shorten), the failed attempts (each with its cause, the exception it threw with its stack and causes,
+its digest's first error and the question its ending raised - each the attempt's own, read from its measure entry,
+never the last attempt's), the questions people answered with their waits and recommendations, the convergence
+(classes closed, each item's counts, classes reopened, hotspots, the issues carried to a later round, fixed there or
+left, what loops left) and the signals a reader starts from - the slowest and most
+expensive steps, the most retried, every fallback, the longest wait for a person, queue waits past a share of a step's
+own time, a cache share under its bound on an attempt whose input reaches past it, a step that read past the depth of
+one graph answer (`graphPageDepth`, which says a query was too wide), output a digest held that no
+parser read, a review at its bound, a class reopened twice (by agent and class), a hotspot, spend that could not be
+counted - each naming its steps and its numbers, their thresholds keys of `defaults.report` read by one owner
+(`FlowReportThresholds.Of`) for every report of the run. The session's end writes this same report
+(`FlowReports.Write` keeps its place; `report.json` is the document with the session's own members - its line, its
+code, its end and its handoffs - beside it, `report.md` its sections with the session's own words at its head and its
+questions, updates, handoffs and what is left for a person said in full), and `read-orchestrator-report <run>`
+answers it any time - reads only, its `--json` the code, the line and the report on every exit (the report null where
+the read stopped early), with `--steps` keeping the rows to named instances (one the run does not hold refused,
+named), `--by` regrouping the dollars in every form and `--top` bounding the signal lists.
+
+`analyze-orchestrator-report <run>` has one agent read that report and bring its pain points, only where a person
+calls for it. The analyst (`report-analyst`, its agent, prompt and schema the build's own) and the reporter are one
+runner (`RecordsAgentRunner`), given each its agent, its prompt, its schema, its record directory and what its answer
+is held to beyond the schema: a reason step that only reads, narrowed to the run's directory, tried again where its
+agent fails as the run's reasoning steps are (`WorkflowDefinition.RetriesOf`, the workflow's `backoffSeconds`), its
+cost the person's. The analyst's answer is held to the report by the structured-output gate itself
+(`AgentOutput.Holds`, `FlowAnalysisEvidence.Problems`), asked only of an answer the schema holds and sent back in the
+analyst's own conversation under the schema's one count of repairs - never a run asked anew: each citation names a
+section of the report (the schema's enum), the row by its `id`, the member by its path and the value the report holds
+there, read by its JSON kind - a number for its value, a text and a truth word for word - each step a point names is a
+row of the report's steps, and no member of the analysis but its recommendation states a number of its own: the
+figures of its summary, titles, causes, impacts and what it noted are its citations, the report's own, and its
+impacts', written by the tool. An impact - the time and dollars it cost - is a template: every figure it
+states is a placeholder naming one of its pain point's citations by its place in the evidence, `{1}` the first, and
+once the gate holds the answer the tool writes each as the cited value with the unit the report holds that member in,
+as the report itself writes it (`FlowAnalysisEvidence.Rendered`, `FlowRunReport.SaidIn`, which says a value by the
+report's own forms: `412.3 s`, `90.0 minutes`, `0.0200 USD`, `28.0%`, `180000 tokens`), so no figure is ever written
+bare for a word beside it to claim: any other count with what it counts (`2 tries`, `1 session`), a number that is no
+amount after its label (`exit 20`, `attempt 2`), and a failed attempt's exception and first error each number after its
+own path (`firstError line 3`). One owner holds the unit of every number the cited sections hold, beside the builder
+that writes them: `FlowRunReport.Units`, keyed by the member's path (`theRun.wallSeconds`, `theRun.budget.minutes`,
+`steps[].usd`, `steps[].tries`, `totals.graph.calls`; an entry of an object covering every number inside it but where
+one of its own says otherwise, an entry of a text the unit of the one number it holds whole, as a step's `ran` in
+seconds), its every count's noun and every label pinned, and held to every number the builder writes by
+`FlowRunReportTests`. A placeholder names a citation that holds a number the report measures - a number, or a text
+that is one number whole, of a member the table gives a unit - so one past its evidence (`{3}` beside two citations),
+`{0}`, and one that names a text of words are refused; and it stands apart: a letter, a number, a currency's sign, `%`
+or another placeholder - whose figure would run into its own - touching it on either side, or a sign before it
+(`${1}`, `{1}h`, `{1}k`, `{1}%`, `{1}{2}`, `-{1}`), is refused, only what touches it read. A digit anywhere else is a
+number of its own and refused, once for each word it stands in, whatever wraps it or joins it (`60`, `3600s`,
+`q1:3600s`, `(20)`, `$0.02`, `½`, `{1}0`), in the impact and as much in the summary, each pain point's title and
+cause, and each thing noted and why, which hold no placeholder - but inside an id. The ids are built once for each
+check, by one owner (`FlowAnalysisEvidence`'s `Names`), and are the words that start with a letter and hold a digit
+among: a row's id, a name the id is made of as the row's own members hold it (a hotspot's item and path), a section's
+or a member's name; every word of the report's texts (`WordsIn`) - each run of a text between white space, whole
+(`Sizes/ParserTest.ReadsItsForm/1`, `src/3rdparty/zlib/inflate.c`, `C++20`), and each piece of such a run between the
+characters no id is written with, all but a letter, a digit, a mark, `_`, `-`, `.`, `@`, `#`, `[` and `]` (a quote, a
+parenthesis, a colon, a slash, a backslash, a plus, a comma), each read from its first letter or digit to its last, or
+to a `]` closing a `[` it holds (`Inner`), so a failed attempt's `src/Parser2.cs(12,5): error CS0246` holds
+`Parser2.cs` and `CS0246`, a signal's `leg 'win-arm64'` and `[win-arm64]` hold `win-arm64` and a fallback's
+`moved from glm-4.6.` holds `glm-4.6`; and the paths the citations write (`c@1.exit`): any citation's in the summary
+and the noted, which belong to no pain point, and the pain point's own in its title, cause and impact. A word of the
+analysis - its run between white space - is read whole first, its ends read off the same way, and is an id where one
+is it whole, written as the report wrote it (`_C++20_`, `**C++20**`); else it is read through, a name in it an id
+where it stands whole - no letter, digit, mark or underscore joining it, nor a hyphen, a point or a comma with a
+letter or a digit beyond - so `c@1`, `slowestStep#2` and a step named `build2` or `windows-2022` are written as the
+report names them while `c@2`, `build3` or `build2-fast` the report holds nowhere are refused, and a word that starts
+with a digit - a time, a date, a version, whatever text of the report holds it - is never one. The recommendation is
+not read: it states the values it proposes - a configuration key's or a workflow key's exact text - and is never a
+measurement. No word of the analysis is read for a unit or a currency: the figure and its unit are the tool's, so its
+checked members cannot invent a measurement by how they write one. `analysis.json` keeps each impact as the tool wrote
+it and, beside it, its template (`impactTemplate`); `analysis.md`, the text and `--json` say the written one, and an
+answer the report does not hold is no analysis - the run's spend still said and kept.
+Every rule a text must keep is the schema's (a pattern for every text, an enum for every closed list), and a run with
+nothing to change is analysed as one, no pain point named. What a run of the analyst leaves is kept under
+`analysis/<stamp>/` whatever it answered -
+`report.json`, the very bytes it read and whose hash it names, `analysis.json` with the analysis - each impact as the tool
+wrote it, its template beside it - or why it was refused and what it cost, `analysis.md` where an analysis was given, and its stream - and every exit names them and says what
+it cost, the `--json` document's `record` the same directory the text's lines name wherever any record is; where no
+analyst ran, the command says nothing was written. What a run that was begun spent is said however it ended - a client
+that throws after paid turns, or an interrupt that stops it (130), is why no analysis holds, its spend and the model its
+spend's own account says served - a fallback's, where one moved it - held past the throw (`RecordsAgentRunner`'s begun
+run) and still said and kept in `analysis.json`, the cost said in the one form an ask's is (`FlowReports.CostSaid`: the
+dollars, the model and the tokens). An interrupt before the run was begun spent nothing, and ends the command as an
+interrupt ends every command. It runs on the tier `reporting` names in
+`tierConfig`, which `init` seeds as it seeds every other tier (`Agents\Templates\agent-providers.json`: the balanced
+tier's models, the person's to change), refused (12) naming the key where a configuration defines none.
+
+A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
 into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the
@@ -4193,7 +4691,7 @@ The inbox is named on every exit after the write, a cancelled
 wait and a session refused before it weighed the entry among them. Where the engine leaves before it takes a request, the command answers from the
 run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
 only on this machine, and only the process whose start matches the one its owner recorded - and
-removes the owner once it is gone. Whether a run's engine is live is asked of one owner
+removes the owner once the engine's process has gone, the rest of its tree not waited for. Whether a run's engine is live is asked of one owner
 (`FlowRunOwner`) by every command: `delete-orchestrator` refuses a run a live engine owns (13,
 naming `pause-orchestrator` and `stop-orchestrator`) and removes a gone engine's owner with the run,
 and `list-orchestrator` says what the engine is doing - none, running, pausing, recording what a
@@ -4244,8 +4742,8 @@ repeat with no numeric bound, a step whose pre-existing issues each raise a tria
 sends the run back outside its own group, a plan update still to be planned - is named, the run's own
 bound of instances the only one that holds it; and a question open at a bound is named as what can
 grant more past it. Where the
-workflow's `reporter` names an agent, its words follow the facts, run by the reason step's own
-runner as the advisor is (`ReporterRunner`), its reads narrowed to the run's directory alone
+workflow's `reporter` names an agent, its words follow the facts, run by the one runner of the
+agents that read a run's records (`RecordsAgentRunner`, the analyst's too), its reads narrowed to the run's directory alone
 (`AgentPolicyGround.ReporterRoot`: no command, no write, no web - the three tools that read and no
 other), its answer masked, its cost the person's and never the run's. Both commands only read: no
 state file, no step, no agent, no budget, no lock an engine needs, not even the sweep every other
@@ -4253,13 +4751,17 @@ command over an orchestrator makes first - what a call leaves behind is its own 
 run's `asks/<stamp>/` (the facts as given, the files of its reporter's attempt, the conversations
 its client stores under `sessions/` - never under an agent's of the run - and `ask.json`), a
 directory the engine never reads. Where no model words them the status still prints the facts, says
-`no model worded this` and why, and exits 0 - the facts are the answer, and the words were a
-service; the person's question is refused, naming why (12 where the workflow names no reporter or
+`no model worded this` and why, and exits 0 - 130 where an interrupt stopped its reporter, as an interrupt ends every
+command - the facts are the answer, and the words were a service; the person's question is refused, naming why (12 where the workflow names no reporter or
 the reporter's own files do not read - whatever keeps the reporter from wording the facts is why no
 model did, read by `KnownCauses.Meaning`, and never an error of the command - 13
 where the key is not there, 14 where npm or Claude Code is missing or too old, 20 where the model
 failed, 21 where it could not be reached or its account is at its limit - `AgentRunResult.ToOutcome`
-the one mapping), and neither command installs Claude Code or brings one up to date. An orchestrator
+the one mapping - and 130 where an interrupt stopped the reporter),
+and what a run that was begun spent is said however it ended - a client that throws after paid turns, or an interrupt
+that stops it, is why no model worded them, its spend and the model its spend's own account says served held past the
+throw (`RecordsAgentRunner`'s begun run) and still said and kept in the call's own `ask.json`, the `--json` answer in
+the command's shape with its record named - and neither command installs Claude Code or brings one up to date. An orchestrator
 made by hand, which no flow runs, has no reporter and fewer facts: its status prints what
 `list-orchestrator` has of it and says so, and the person's question is refused (12).
 
@@ -4307,8 +4809,8 @@ refused to every agent where a word of a command or of a script the policy reads
 the shell expands may, and refusing itself where the agent's mark, `AgentChildEnvironment.AgentMarker`,
 is in its environment, a command that sets it, takes it away, may take it away or names it but as data refused
 (`AgentPolicy.MarkerTouched`), or where a process of this tool's is among the ones that started it
-(`AgentAncestry`, over the process table's seam: the tree walked parent by parent, a process that took a
-freed id - started after the child that names it - never read as a parent, the tool - its own runtime, as the engine is -
+(`AgentAncestry`, over the process table's seam: the tree walked parent by parent as the table names each, a process
+that took a freed id never read as a parent (`SampledProcess.ParentId`, below), the tool - its own runtime, as the engine is -
 told by the file the table gives a process: a runtime whose application - the first word past its own options, never
 an argument of it - is the tool's assembly, the file this process runs as, or a host of the tool's package
 (`ToolPackage.HostsPackage`: a file of the tool's command beside the tool's assembly, as a build puts it, or beside the
@@ -5628,8 +6130,12 @@ gone through and its neighbours are ranked down, never cut; a
 node the step may not read is neither listed, named nor gone through, only counted. It is laid in
 pages of the step's tokens
 (`GraphTextPages`, `EstimatedTokens`), best first, a page's task lines by file, generated code
-last in each section: page 1 is given, and its last line says nothing is left out or how to ask
-graph's `pack` with page for the next; each later page continues the same walk as it is asked; a
+last in each section, the pages laid whole when the pack is made - every line laid before any page
+is written, so every page knows the total and the count of nodes the read rule left out of the whole
+walk: page 1 is given, and its last line says nothing is left out or which page of how many and how to
+ask graph's `pack` with page for the next, the total exact on every page and the last saying it
+is; a step whose graph is not tools is told, in the same place, that the rest is on the pages
+after it, which a step whose graph is tools asks the graph for; a
 size too small for a page's first and last lines gives no pack, every node counted left out; the
 first line names the view, its commit, the files that differ
 from its base and what the pack was seeded from, the last its nodes, its tokens and what was left out.
@@ -5669,7 +6175,25 @@ launch that begins a conversation of its own, after the run's map (`AgentPromptP
 the sentence for a step that left no output in its place - and the tool its `Near`; a launch that goes on with a
 stored conversation is told the changes instead, the one decision `AgentPromptParts.CodebaseOf`'s, made as each
 launch's first message is written, so a fallback to another client or provider begins with the map and the pack. A
-graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it. Its reads
+graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it.
+The run's repository map (`CodebaseRepositoryMap`, `FlowStepGraph.MapOfAsync`) is made once for each ground of reads
+the run's steps share, from the base as it stands when the first graphed reason step of that ground is given its
+prompt, raised for the run's task, holding no declaration of a file its steps may not read: a header line, the
+projects and top directories with their counts, then the most central declarations one line each. It is paged at
+whole lines under `codebaseGraph.mapTokens` by the one owner of a given text's pages (`GraphTextPages`, in its
+exact-room form: page 1 holds the header and the whole lines whose joined text fits the size, then its last line where
+more pages follow), and no line is dropped - the pages after the first are kept with it
+(`OrchestratorLayout.GraphMapPageFileOf`: `map.2.md` and on, `map-<reads>.2.md` and on where read rules narrow),
+written by `OrchestrationStore.MapOnce` in the map's own cross-process section, what it was made from first
+(`map.json`), then the pages after the first, then the first itself last, so a `map.md` that is there says its pages
+are. A kept map's count is read from its first page's own last line (`CodebaseRepositoryMap.PagesOf`), the line every
+step of the ground is told, so a step is offered every page it is told there is, whatever became of the map's other records; a
+page is read back by the one reader beside the writer (`OrchestrationStore.MapPage`), for a run's steps and a
+side-task alike, a page the disk will not give back said with why. Every step of the ground reads
+the same first page - the prefix a client caches never moves - and a step given the tool asks the rest of it as
+`graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
+it: it says the rest is on the pages after it, which a step whose graph is tools asks the graph for, never how this
+step asks for it, for the map is one file every step of the ground reads and no step's kind is written into it. Its reads
 narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on every client - Claude
 Code's served by the engine's tool server - of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
 the refusal; a range, a search and a write pass; a file the graph is not sure of
@@ -6320,11 +6844,16 @@ running, or writing a line nobody reads - is ended by the agent's last resort, a
 agent itself is stopped meanwhile
 (`HostAgentLastResort`): every process the agent started, each with its tree, as the process table
 lists them, then the agent itself, exit 130, whatever the ending of them came to. Which processes
-those are is read from one table: the parent's start and each child's by the same clock - on Linux
-one that counts from the machine's start, so that held against the agent's own start as the
-runtime tells it every child read as older than its parent and none was ended - and never the
+those are is the table's own relation of which process started which (`SampledProcess.ParentId`,
+below), read as it is and never decided again by a clock - one that counts from the machine's start,
+held against the agent's own start as the runtime tells it, once read every child as older than its
+parent and ended none - never the
 console the agent runs in, which Windows lists as its child (`conhost`) and ends everything in the
-console with. The agent's last line says what that came to: each process ended, by its id, each it
+console with, and never the program the table was read through, which lists itself as the agent's
+child - PowerShell on Windows, `ps` on macOS - and which the reading names by the id its runner
+started it under (`ProcessTableReading.Reader`, from `ProcessResult.ProcessId`; Linux reads `/proc`
+in place and names none): counted, every reading named one, and whether anything the agent started
+still runs was answered yes for as long as it ran. The agent's last line says what that came to: each process ended, by its id, each it
 could not end, or why none could be listed. That line and the request's completion line are handed
 to the stream as one write (`Gone.SayingAsync`), and where the agent itself was stopped meanwhile
 the end stands behind that write: it is awaited, so a machine slow to take it is waited for as long
@@ -6763,7 +7292,12 @@ running at once never interleave within a line. The log files keep each line as 
 the tag is for the terminal, so nothing that reads a log has to know about it. Only a line longer
 than the longest string .NET makes (1,073,741,791 characters) is kept otherwise, in pieces of at
 most that many, each a line of its own and said,
-since no line is held whole on its way there (see Reporting).
+since no line is held whole on its way there (see Reporting). A child's two streams reach its log
+under one gate (`ProcessRunner.StreamCapture`): the lines one read of a stream returns - what the
+child wrote to it at once, as much as a pipe hands back in one read - go in together, never parted
+by a line of the other stream, so a stack's heading and the frames written with it are read as one
+error. Which stream's read goes in first is whichever took the gate first: two pipes say nothing of
+the order their writes were made in.
 
 Within a leg the order is fixed:
 
@@ -6815,13 +7349,15 @@ it (*The machine declares what it holds* below) - each heavy leg, its tree synce
 taken, waits for the machine to take it:
 
 1. **One of the machine's `heavyLegs` slots** (2, at least 1), shared by every command this user
-   runs there, given in the order legs asked for one. The slots are kept in
+   runs there, given in the dispatch queue's fair order (*The dispatch queue*). The slots are kept in
    `<user data>/dssharness/admission-<machine id>.json` - the user data being `LOCALAPPDATA` on
    Windows, `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on
-   Linux - beside the hold that keeps the machine awake: one per user of the machine, whichever
-   repository asks, never in a directory other users can write, and never anywhere else when no
-   such directory can be named. The record is named by the identifier the system keeps for the
-   machine (Windows's `MachineGuid`, Linux's `machine-id`, the Mac's hardware UUID), never by its
+   Linux, and `<user data>/dssharness` the directory `DSSHARNESS_USER_STATE` names in its place
+   where it names one (*Where the tool keeps its per-user state* below) - beside the hold that keeps
+   the machine awake: one per user of the machine, whichever repository asks, never in a directory
+   other users can write, and never anywhere else when no such directory can be named. The record
+   is named by the identifier the system keeps for the machine (Windows's `MachineGuid`, Linux's
+   `machine-id`, the Mac's hardware UUID), never by its
    name, which a Mac takes from each network it joins: read by name, the legs still running under
    the old one would be another machine's to every command started under the new, and their slots
    free. Where the system keeps none - a container its image gave no `machine-id` - the record is
@@ -6844,9 +7380,10 @@ taken, waits for the machine to take it:
 Where the machine's settings file says nothing, what a command's own configuration declares is the
 rule its legs are admitted by: a repository that declares none never joins the line. Each entry of
 the record carries the count its command's rule allows, since commands of repositories that declare
-different counts share one record, and a leg starts only while it is fewer legs from the front than
-the fewest any leg up to it allows: the legs holding slots are always the front of the line, no leg
-runs beside more legs than its own configuration allows, and none passes a leg that asked before it.
+different counts share one record, and a unit is granted a slot only while fewer hold one than its own
+count and every holder's allow: no leg runs beside more legs than its own configuration allows, and
+the unit the fair order puts first that does not fit holds back every unit behind it, so none is
+passed for ever.
 Where the settings file declares `heavyLegs`, that count is every leg's in line, whatever count its
 entry carries, read again at each look - so a machine whose count is raised while legs wait takes them
 by it. The entries keep the members a build before this one reads, which refuses a record holding a
@@ -6854,15 +7391,18 @@ member it does not know; such a build still weighs each entry's own count.
 
 **The machine declares what it holds.** `config.json` is tracked, so every worktree holds the copy of
 its last commit: a consumer's main checkout raised `hosts.local.admission.heavyLegs` to 3 while the
-agents' worktrees made before still said 2, and since a leg starts only while every count up to it in
-line allows it, the main checkout's legs waited on "one of this machine's 2 heavy-leg slot(s)". What a
+agents' worktrees made before still said 2, and since a leg is granted a slot only while every holder's
+count allows it, the main checkout's legs waited on "one of this machine's 2 heavy-leg slot(s)". What a
 machine can hold is the machine's, so it is declared once, for the machine, in its settings file:
 `<user data>/dssharness/settings-<machine id>.json`, beside the slots' record and named the same way,
 one per machine and per user (`MachineSettingsFile`). It holds `{ "admission": { ... } }` in the keys
 `config.json`'s `admission` takes, read by the same options and the same rules
 (`HarnessConfigValidator.ValidateAdmission`): a key it does not know, a key written twice or a value
 out of its bounds is refused, naming the file, and no heavy leg is admitted by it - nor by a tree's
-`config.json` in its place - until it is put right; a file that is not there declares nothing. A leg's
+`config.json` in its place - until it is put right; a file that is not there declares nothing, and so
+does a process given no home, which can name none, while a `DSSHARNESS_USER_STATE` that names no
+directory is refused as a file that cannot be read is, naming the variable
+(`VariableNamesNoDirectoryException`), never read as a machine that declares nothing. A leg's
 rule is read once, as its work begins, and carried with it (`PlacedLeg.AdmittedBy`, an
 `AdmissionReading`): its slot, its floor - in a WSL distribution too, which is sent that reading - and
 the page cache dropped as it ends all answer to it, and nothing reads the file again after the leg's
@@ -6871,7 +7411,7 @@ leg that has run. Its refusal is a configuration's, which ends the run in the fi
 heavy leg of the machine would meet it (`AdmissionReading.RuleInForce`), never one leg's defect; a light
 leg asks no rule, and runs, its page cache left where the rule could not be read, saying why. Only the
 count of slots is read again at each look of the slots' record, which turns a refusal of the file into
-that record's own (`HeavyLegSlots`): a dry run reading the line - naming a tree's holders among them -
+that record's own (`MachineDispatchQueue`): a dry run reading the line - naming a tree's holders among them -
 says it could not be read rather than failing, and a leg's own admission, before its work, is refused by
 it. A unit of a leg whose work has begun - an arm of a sweep, a worker made - asks for its slot carrying
 the reading that work began by (`AdmissionRequest.WorkBegunBy`, kept by its `SlotPlace`), and a look
@@ -6891,7 +7431,30 @@ an ssh host's own section, then `defaults.admission`. `legs` says, for each host
 in force and where each field came from, or why the settings file could not be read: an ssh host
 answers its own file in the survey's answer (`HostAgentInfo.MachineSettings`), its
 home written `~`, and `--json` gives each host's `settingsFile`, its `admission` fields (`key`,
-`value`, `from`) and `admissionUnread`.
+`value`, `from`) and `admissionUnread`. A field whose built-in value only the admitting machine knows -
+`processes`, its own logical processors - is said as that (`AdmissionSettings.MachinesProcessors`), never
+as the count of the machine reading the rule, and the rule carries no count for it; the machine decides
+it as it admits.
+
+**Where the tool keeps its per-user state.** One owner names it (`UserState`): the slots' record, the
+settings file, the hold that keeps the machine awake, the set-ups' holds, the search sources' paces,
+the workflow cache and the mutation fixture all live in `UserState.Directory`, and the isolation's
+caches and temporary directories in `UserState.IsolationDirectory`. `DSSHARNESS_USER_STATE`
+(`UserState.Variable`), read first on every system, names a directory that holds the state in place of
+`<user data>/dssharness`, with the isolation's own directory, `dssharness-isolation`, below it; where it
+names none, the state is in the user data and the isolation's directory in the user's cache directory
+(`XDG_CACHE_HOME`, else `~/.cache` - `~/Library/Caches` on macOS - and `LOCALAPPDATA` on Windows). The
+variable is the tool's own: the home, the user data and the user cache are every program's, and moving
+one of them to move the tool's state would move with it every reader of `~` - the host's home written
+`~`, the agent policy's, ssh's keys - and every other program's caches, NuGet's and npm's among them.
+An empty value counts as unset on every system, as the XDG variables' empty values do: a shell's
+`export` of a variable that holds nothing gives it so. Any other value that
+is not a fully qualified path names no directory: it is refused (`VariableNamesNoDirectoryException`),
+never read as the default the variable was set to leave - the settings file is refused as one that
+cannot be read, a heavy leg's slot has nowhere to be kept, and an isolation has nowhere for its caches,
+each said naming the variable. The test suite gives its own process a directory below
+its temporary root through it, which every child it starts inherits, so no test reads or writes what
+the machine's user keeps, and every reader of `~` still reads the machine's home.
 
 A waiting leg says where it stands as it starts each wait - who holds the slots, the memory in use, or
 the room and who claims it - again whenever the holders or the claimants change, and again, as it reads
@@ -6924,8 +7487,10 @@ it. Measured: a command's WSL leg, asked for at once with its two Windows legs b
 dispatched them all, waited out its hour behind them and was `not-admitted`. A host serving a leg for
 another machine records the leg's slot under that machine's run, which the run request carries beside
 the command (`HostAgentRequest.RunId`, since protocol 7), so the legs one command sends there wait for each
-other the same way; a request naming its run by what is no run id, or naming a blank drive where WSL
-keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
+other the same way, and asks the host's dispatch queue at that run's priority, carried beside it
+(`HostAgentRequest.Priority`, since protocol 16), so a run's priority reaches every unit it runs, wherever
+it runs; a request naming its run by what is no run id, its run's priority below the least a run has, or a
+blank drive where WSL keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
 for it, never by a timeout: given back when the work ends, and, where that process ended
 first - a command that crashed or was killed holding a slot - reclaimed by the next leg that looks,
 and said to be. Every entry of the record is this machine's, whatever name it carries, so an entry
@@ -7010,7 +7575,7 @@ back, its build staying. What each build holds is weighed first, by what its las
 recorded or else by what it holds, and none is removed where all that could be comes to less than the
 least the leg lacks - at the floor, what brings it back to it: destroying every one would not let the
 leg go on. One leg makes room on a filesystem at a time, across every command this user runs on the
-machine (`HeavyLegSlots.MakeRoomOn`, a third record beside the slots',
+machine (`MachineDispatchQueue.MakeRoomOn`, a third record beside the slots',
 `admission-<machine id>.making.json`, held by its process as a slot is): two legs short of room there would each read the room before the
 other's removals gave it back, each remove the whole of what it lacked, and meet in one build. A leg
 that finds another making room there removes nothing beside it and is told so - at admission it waits
@@ -7222,7 +7787,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run` and `query-codebase-graph` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `check-anchor-arms`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down`, `stop-run`, `query-codebase-graph`, `read-orchestrator-report`, `analyze-orchestrator-report` and `queue` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty
@@ -7467,8 +8032,16 @@ while a gate ran turned a green suite red, with four test processes live at once
   child made a slow launch on a loaded machine read as a hung command. A child that starts and then
   says nothing is still bounded, because starting is itself something the clock is told about.
 - A process is identified by its id together with a stamp that tells it from the next
-  holder of that id, and a parent link is followed only when the parent started no later
-  than the child. Process ids are recycled: on Windows a freed id was measured coming back
+  holder of that id, and a parent link is the table's own relation of which process started
+  which (`SampledProcess.ParentId`), decided as the table is read by the relation the walk of a
+  tree keeps and read as it is by every reader - the sampler's placing of a process in the
+  harness's tree, an agent's ancestry, the host agent's last resort, an update's wait on what
+  started it: on Linux and macOS the parent the system names now, which a child is handed on from
+  before its parent's id is given out, so no start is compared; on Windows, which goes on naming
+  a creator once it has gone, a process listed under the creator's id that was made after the
+  child is a later holder of it and no parent is named - made after read by the sequence numbers
+  Windows gives the two where both can be opened, by their creation times where either cannot
+  (`CreationOrder`). Process ids are recycled: on Windows a freed id was measured coming back
   after about a hundred allocations.
 - **That stamp holds no clock.** On Linux it is the boot this machine is on and the tick
   within it the process started, read from `/proc`; on Windows and macOS it is the start
@@ -7516,7 +8089,8 @@ while a gate ran turned a green suite red, with four test processes live at once
 - The ledger reports command time and harness overhead (sync, fingerprints, sampling)
   separately. A phase slower than `defaults.durationWarningFactor` times the same phase
   on sibling legs of the same kind is marked suspect. A timing mark never
-  changes a verdict. An emulated leg is never compared with a native one.
+  changes a verdict. An emulated leg is never compared with a native one, and a leg another
+  machine ran is compared there, among the legs it ran, never against this machine's.
 - `keepAwake` holds a host awake while a leg's own work runs there. A host that slept once
   reported a 4 millisecond test at 729 seconds. The command is started on the machine that
   runs the work - by the DssHarness on a host a leg was dispatched to, under that host's own
@@ -7797,6 +8371,9 @@ reads the folded tree.
 - A lock, or a log path, that cannot be given up once its work is done is a warning naming it,
   and the work's verdict stands. The entry names a process that has ended, and is reclaimed as
   a dead holder's is.
+- A run gives its log path up however it ends: the claim is followed at once by what gives it up
+  (`LegRunService`), so a failure in anything the run does once it holds the path - what its
+  caller's watch is told as it begins among it - leaves no claim for the next run to call abandoned.
 - A run killed, or stopped with its machine, before it finished writes no verdict and gives up
   nothing, and nothing would ever claim its log path again, every run having its own. So a run,
   once it owns its own path, releases every path beside it that a run on this machine holds
@@ -7840,7 +8417,8 @@ asked since, giving the directory up however it ends (`RunStopWatch.EndThenAsync
 ever said to have stopped a run whose work was done. Not
 stopped in time, the request stays asked (13), and `--now` ends the dispatcher's process where it
 stands with its whole tree - only one of this machine, and only the process its owner file names by
-its start - and releases its claim; its ledger is never written. A run that has ended, or whose
+its start - and releases its claim once the dispatcher has gone, the rest of its tree not waited for; its ledger is
+never written. A run that has ended, or whose
 dispatcher went without giving its directory up, is nothing to stop (13), and an abandoned claim is
 released - one killed while the stop was waited for too, said stopped (0) where it had taken the
 stop first; a request nothing will read any more goes with the claim of the run that left it,
@@ -7873,7 +8451,16 @@ refused, not admitted, skipped - has no line. A leg another host ran was run the
 its own: the dispatcher names it once, `<leg>: run <id> on <host>`, never relaying the host's own
 run line (a later one of that shape is a program's own output, and is relayed as it came), the
 leg's `--json` holds the id as `hostRunId`, and its records and logs arrive as the host spelled
-them, its home written as `~` (see "A host's home is `~`").
+them, its home written as `~` (see "A host's home is `~`"). The log of the phase such a leg did not pass is brought back
+as the leg ends (`LegRunService.BroughtBackAsync`): read through the host's copy of the tree, where the host's run keeps
+its records (`LegRecords.PhaseLogInTree`), a piece at a time and put in place only once it reads back whole
+(`ISyncService.BringBackAsync`, the pull's own verified copy), and kept in this run's records as a local leg keeps its own
+(`<leg>/<phase>.log`), named on the leg's line as `logBroughtBack` - so the whole of what that phase printed is one read
+away here, as a leg of this machine's is. One that cannot be brought back is said on the leg's progress, why and from
+which host, and its line names none. Each leg's line in `--json` carries its phases with their times as `phases` (each
+`phase`, `durationSeconds`, `clockStepped`), and the document is read back by one reader, the ledger's
+(`Execution\LedgerDocument.cs`): the line a host answers for its leg, and the ledger a step of an orchestrator run keeps
+in its directory, alike - each line's digest through the digest's own reader.
 
 ## Disk space
 
@@ -9565,6 +10152,364 @@ arm, the workers and the first part that differs (`KeyDifference`); one worker a
 compared its keys with no other's. A self-test's keys are on no line: nothing of a self-test is
 kept.
 
+## Results digested
+
+What a red phase or a failed test prints is typed, never left as a log to search: one owner of the
+shapes (`Results\ResultDigest.cs`) and one of the parsers that read them
+(`Results\ResultParsers.cs`). A `Diagnostic` is a compiler's or a linter's line - its tool, its
+severity, its code, its message, its file, line and column, the declaration enclosing that place where
+a graph of the tree was asked (`ResultDigest.Declared`), its project, how many times it was
+printed again (once per translation unit or per target framework, folded into one), the chain that
+led to it as `StackFrame`s and the line range of its log - and a `TestFailure` is a failed test's
+identity, its assertion, its duration, its outcome (`failed`, `errored`, `timedOut`, `crashed`),
+its log range and, where the failure is a thrown error, its `ExceptionRecord`: type, message, stack
+and the cause chain, each cause a record nested under the one it caused - the failure's stack held
+there, never twice. A `StackFrame` carries its line as printed, its place, its symbol - the function
+as printed, and the declaration the tree's graph holds at its line where one was joined, said beside
+it in the record (`StackFrame.SymbolSaid`) - its kind
+(`call`, `include`, `instantiation`, `macro`, `async`) and whether the tree holds its file. A
+`ResultDigest` is made in one place (`ResultDigest.Gathering`), a finding at a time in the order
+the output met them, and applies every bound there, each said: a diagnostic printed again is
+folded into the one held where it stands, its count grown, so the first error is the first the
+tool met and the fold is linear; the first 50 diagnostics of each severity are held - an error is
+never displaced by warnings - with the first 50 failures and the last 50 unparsed lines - the ones
+nearest the failure, as a log's tail is, with how many the bound left out said - and the rest are
+counted by severity, by outcome, by code and by file over the whole output; every stack
+is held to 64 frames - the first 48 and the last 16, the middle cut and its count kept
+(`stackCut`), which the log range still holds - and every cause chain to 8 causes below its
+outermost error, the records below them counted (`causesCut`); and a finding that is not one a digest holds - a severity, an outcome or a
+line no tool means - is said among the unparsed lines with why, never held and never dropped
+unsaid. A digest says whether output the parsers did not understand remains: never a guess.
+
+The built-in parsers (`Results\ResultParsers.cs` for the build tools' forms, `Results\StackForms.cs`
+for the runtimes' stacks, `Results\ConsoleParsers.cs` for the test consoles) read a log a line at a
+time as it streams - never held whole - in one pass (`PhaseParsers.FindingsOf`): each line, its
+terminal escapes taken off (`Text\TerminalText.cs`), is offered first to the parser with a record
+open, then to each chosen parser in the order chosen, until one takes it or holds it undecided -
+held only until the runtime's or the tool's own next line says whether it is the parser's (a logged
+error's `Type: message` head by a frame under it, a heading by the problem under it, a blank line by
+the paragraph or the chain after it), so no hold grows with the log; one
+that leaves what it held gives it back, and each held line is offered to the others, never to it
+again, while the line that ended its hold, which says only that the held lines were not its, is
+offered again as a line of its own, to it as well - a thrown error's head after a logged one is the
+head of the parser's next record - so each line is one parser's at most, and a line no parser took is said unparsed only where
+it holds an error's marker as a word (`error:`, `error CODE:`, `FAILED`, `fatal:`, a line's own
+`panic:`, a thrown error's `Type: `). The findings are merged in the order of the lines they begin
+at, each with its log range as the log's file numbers its lines (`NumberedLine`), and at the end
+every parser finishes what it holds, the last chosen first, so a runner's console chosen ahead of
+its tests' own forms ends knowing what they said: a line that only says a build or a test run failed -
+collect2's, the compiler driver's, link's `LNK1120`, MSBuild's recap, Ninja's edge, CTest's status
+and list, cargo's `error: test failed` - is said only where nothing before it said why, and a failed
+test CTest's own status line says holds the log range from that line through the test's output, so
+the output is one read away. The forms
+are read as the tools print them at the versions CI runs: MSBuild's canonical form wherever it is
+printed (MSBuild and csc, MSVC's cl and link, tsc with `--pretty false`), a Windows
+drive's path and cl's `fatal error` among them, each diagnostic named for the tool its code belongs
+to and its project the project's file (what MSBuild writes after it for an inner build of a project
+that targets several frameworks, `::TargetFramework=...`, left with the build); gcc's and clang's form -
+clang-cl's place written in MSVC's parentheses with no code among it, read as clang's ahead of the
+canonical form - the chain that led to an error its stack - the include chain, the
+instantiation chain, the macro expansions - handed whole, for the digest is the one owner of a
+stack's bound; the source and caret lines are the record's they follow, printed with the line-number
+gutter and, as clang before 17 printed them, with none - a bare source line held for the caret under
+it, which says it is the source - so the notes after it still read as its chain on the clang of
+macOS's runner and of Ubuntu 22.04; the linkers (GNU ld - a reference by its line where the object holds line information,
+behind its object where ld names it first as MinGW's does, behind a linker named by a drive's path -
+gold, lld, ld64, link); CMake's message blocks (the command that raised one
+said ahead of its message, for a diagnostic's project is the project or target a build names, never the CMake
+command that raised it); Ninja's `FAILED:` edge and samurai's job line for a step that failed - the
+edge named as each program names the step, ninja by its outputs and samurai by its command - with
+each program's own errors, warnings, status lines and end, read by the one owner of their words
+(`Build\Ninja.cs`, `Ninja.WordOf`) under either program's name; tsc's own form; eslint's stylish and compact forms; the Dart analyser and front end;
+the stacks the runtimes print (.NET's with its ` ---> ` inner exceptions and awaited boundaries - MSTest's
+console saying one by its `Test method X threw exception:` head, each inner exception folded onto the
+error's line after ` ---> `, the stack in the runtime's order - the
+JVM's with `Caused by:` and `... N more`, Python's chained tracebacks, V8's with Node's `[cause]:`
+among the properties it prints in braces - each nested cause, printed inside the braces of the one
+before it, that one's cause - Dart's, Go's panic and
+`go test`'s console - its verbose stream read too, where a test's lines come under the `===` line
+that named it and its result line says none of them again; a failed test's message and place are the
+first line it logged that names its place, and its log range runs from the first line it logged
+through its result line, so every other line it logged is one read away and nothing held grows with
+how much a test logs - of a running test only where its lines begin and that first line are held,
+dropped at its result line or its package's, so nothing is held past the test it is of; a result line read at any indent,
+for plain `-v` nests a subtest's under its parent's, a nested `--- PASS` no line its parent logged,
+the failed tests open at once held by their indent - a line indented past a test's result line its
+own, a parent's printed after its subtest's block among them and one of whitespace alone, as Go
+prints a message's empty line, and one at or above it its end - and a
+parent whose subtest failed said by it where it logged nothing of its own by its end - and every package
+that did not build said by its own block, the `# pkg` line ahead of its compiler's words read
+whenever it comes and holding for the line under it, a compiler's line a diagnostic of the package
+whose head was the last, its `[build failed]` result, printed later in the packages' order, said
+only where that package's own block said nothing, so neither another package's block nor its
+failing tests silence it, Rust's panic and `cargo test`'s, the sanitizers' reports - each read over
+its own lines alone, before its summary and after it alike: its frames, blank and indented lines,
+the runtime's `==pid==` lines, every sentence compiler-rt's runtimes print (a thread named where its
+program named it, `freed by thread T2 (io-worker) here:`, the creation stack of the thread the error
+was in, printed after the summary, LeakSanitizer's suppressions, container-overflow's and the ODR
+violation's lines, the hints after the summary), its summary and shadow bytes, and UBSan's notes
+with the memory each shows - to the line its sanitizer halts with or the first line that is none of
+them, which is offered again to the others, so a report printed with no halt line holds no line the
+program printed after it but a blank or indented one, and never a line CTest prints - a native crash as gdb
+or lldb reports it with the C runtime's failed assertion); and the test consoles that print their
+failures (`dotnet test`'s for VSTest and Microsoft.Testing.Platform, GoogleTest's, CTest's, `dart
+test`'s - a failure whose top frame is the test framework's own an expectation that failed, any other
+a thrown error that errored the test, as its JSON reporter says of it - jest's, vitest's). A crash a report says ended the program inside a test a runner said began
+is that test's failure, said once - the report's own words its message, its stack and place the
+failure's - and the runner says the test crashed only where no report said it already; a report the
+program recovered from and ran on is the report's own, its message naming the test it ran in, and the
+runner says that test as it ended, passed or failed. A test its runner never saw end, its program
+having died in it, is one failure too: the last report said while it ran - whichever sanitizer, and
+whether or not it printed a line to halt with, as UBSan's and ThreadSanitizer's halting modes print
+none - becomes its crash in place of the report's own record (`ResultSink.Died`), and the runner says
+it crashed only where no report was said in it. An error that ended its program has `crashed` it, on every runtime - .NET's
+`Unhandled exception.`, the JVM's `Exception in thread`, Node's printed under the header of where it
+was thrown, Python's whose traceback runs through a module's top level where its program ended with a
+code not 0 or how it ended is not known - the phase's own exit, or the one the runner's line that a CI
+job's step failed says (`Process completed with exit code N.`), which every parser is told as it ends
+(`ResultSink.Exit`), never a line printed after the traceback, which may be another program's (where
+the program ended 0, a handler at its top level logged the error and it ran on: errored), Dart's `Unhandled exception:`,
+Go's panic, Rust's on `main` - and one a program caught and printed, the program going on, has
+`errored`, as a sanitizer's report has where the program ran on: crashed only where the line its
+sanitizer halts the program with closed it - AddressSanitizer's `==pid==ABORTING`, MemorySanitizer's
+`Exiting`, the last line of its report - or where it is the last said inside a test its program died in,
+errored where the program recovered and ran on, or where, as UBSan and ThreadSanitizer, the sanitizer
+prints no line to halt with and no test's end says the program died. A frame whose runtime prints only its source file's name - the JVM's,
+lldb's - names no file, only its line: a base name is no path, and is never read as the tree's.
+
+The parsers a phase's log is read by are chosen by what the phase runs (`Results\PhaseParsers.cs`,
+the one owner of the choice): a .NET build's by MSBuild's form, a Dart build's by the Dart tools' -
+each its build's own adapter reading the project's type, ignoring case, as every asker of it does -
+a CMake build's by the compiler its toolchain declares (`compilerId`: MSVC's canonical form, gcc's with
+the linkers, clang's with them and the canonical form link and MSBuild print beside clang-cl, every C
+compiler's form ahead of the canonical one where it declares none or more than one) with
+CMake's and Ninja's; a test's by its runner - CTest's console with GoogleTest's, the sanitizers',
+the native crash's and CMake's; `dotnet test`'s with .NET's stacks and MSBuild's; `dart test`'s and
+`flutter test`'s; Python's; Node's runners with jest's, vitest's, V8's, tsc's and eslint's; Go's;
+Cargo's; the JVM's build tools - and a runner none of these is, a test binary run directly or a
+script, by GoogleTest's console and every runtime's stack form; a runner step's by every runtime's
+stack form; a CI job's by every form a log holds. `results.matchers` in `config.json` declares a
+parser for any other tool, in the shape editors and CI take: a regex whose named groups say where
+its severity, file, line, column, code and message are - a severity group's text read as editors
+read it, case ignored, `warn` a warning, `info`, `hint` and `notice` a note, anything else an error -
+an `end` where a diagnostic runs over the lines after its match, and a `stack` (`frame`, `until`)
+where the tool prints a chain under it; its log range runs from its match to the last line it read.
+A runner's or a test invocation's `matchers` names the matchers that read its output, and a matcher
+no runner or invocation names reads every build, test and runner phase; a CI job's log is read by
+all. Each is compiled and its groups checked at load (`Configuration\ProblemMatcher.cs`), each
+pattern by `LinearRegex` as every pattern of the file is, so one holding a construct that matcher
+lacks refuses the file, naming the matcher, the pattern and the construct; a name no matcher answers
+to is refused too.
+Where a step's runner throws an error the engine did not expect, the attempt's measure entry keeps its record
+(`FlowStepAttempt.Exception`, `ExceptionRecord.Of`): the live exception's own stack read by the one owner of the .NET
+frame form (`StackForms.DotNetFramesOf`), each inner exception nested under the one it caused, held to the bounds every
+record is with its cuts counted - its frames the tool's own, in no tree of the run's.
+
+Before any log line is parsed, what a tool wrote as data is read (`Results\ResultFiles.cs`). Each
+run of a test invocation has a results directory of its own, `{resultsDir}`
+(`Testing\TestResults.cs`, `<run>/<leg>/results/<phase>/`), made empty before its runner starts,
+so a results file read there is that run's and never an earlier one's: its args point the runner
+there, `test.results` names paths under it - refused at load where an entry names anything else -
+and nothing but a test invocation's args and results may name it. The files one names are found
+by the one owner of an invocation's declared paths (`Testing\DeclaredFiles.cs`, which the keep
+finds its files by too: patterns over one listing, never through a link), and where the tests'
+failure is the leg's verdict each is read where it is - never copied, as a stream - and digested
+with every other onto the leg's entry (`LegEntry.Digest`), every file's findings gathered before
+the digest's bounds apply. A file is known by its own shape, never by its name: a TRX by its
+`TestRun` root, a test result at a time (each that failed - `Failed`, `Error`, `Timeout`,
+`Aborted`, `Disconnected` - with its `ErrorInfo` message and its stack, parsed by the one owner of
+the .NET frame form, a data-driven test by its rows; a skipped one is no failure), a JUnit XML by
+the mutation arm's reader a case at a time (`JUnitReport`, which reads the message, file, line,
+time and outcome of a failed case - GoogleTest's attributes, Catch2's summaries, doctest's
+`path(line):` places, a case CTest's `--output-junit` marks `status="fail"` ended as its failure's
+`message` says in CTest's console words (`CTestParser.OutcomeOf`: `Timeout` timed out, a signal or
+a fault crashed) - through its one reader that takes no document type, a case whose class is its own
+name, as CTest writes every one, named once in the digest with no class), Dart's JSON reporter
+stream a line at a time by its `type`-carrying lines (a failing test with its error event as its
+message and its `#n` stack, a thrown error its record by the one reading of a Dart error that `dart
+test`'s console and the VM's `Unhandled exception:` are read by - its type what its first line says
+before its first `: ` - an error no test owns as a diagnostic), and a SARIF log by its runs in
+its 2.1 and 1.0 forms, read from its stream a result at a time and never held whole (each result a diagnostic: the driver's name, the level - `warning` where it
+names none - the rule, the message, the place and its range). A member of another shape than the
+form's is read as absent; a file a crash cut short gives every finding before the break and says
+the break, and a line of the Dart stream that is no event is counted and the first said. A message a
+file holds as one text - a TRX's, a JUnit failure's, a Dart error event's - is cut into its lines by
+the one rule of where lines end and joined as a message read off a log is (`ParsedText.Message`), so
+a failure says the same message whichever its producer wrote. Text read
+from these files is masked as the phase's log is, through the one mask its log is written through
+(`ResultDigest.Gathering.Through`), every text a digest holds. A path naming nothing, or a file no form
+owns, is said in the digest's unparsed lines - never refused, for the failure may have been before
+the file was written. `init` seeds the arguments the shipped runners take for these files where
+they take them: `ctest --output-junit`, `dotnet test --logger trx` with `--results-directory`,
+`dart test --file-reporter` - each writing into `{resultsDir}`, and each named under `results` to
+match (`Configuration\DefaultConfigFactory.cs`).
+
+Where a digest goes (`LegStepRunner.Output`, `Execution\LedgerReport.cs`, `Orchestration\Flow\FlowChecks.cs`): every
+red entry of a leg step's output carries one, in `digest`, said for a model - the first error whole with its stack
+rendered to the frames inside the tree (the crossing frame on each side, a line for each run left out, which module
+held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the
+rest - every printing the four do not say - counted by code and by file, the lines no parser held; each thing said once,
+the first problem's message in its saying alone, and a member that says nothing - a count of none, an empty list, a
+null - left out at every depth, for a model pays for every byte it is handed (`ResultDigest.ForAModel`),
+each place inside the tree with the declaration it stands in where the step's run keeps a graph of the tree; and what
+raw lines go beside it is one owner's to say (`ResultDigest.Handed`): where the digest holds an error or a failure and
+the phase's log is one read away it says the lines no parser held - the last 50, the nearest the failure, with how many
+the bound left out - and the entry's tail holds none, and otherwise - it holds neither, or no log of the phase is on this
+machine - the tail goes whole - a red job's failing page as well - and the digest says those of its lines no parser held
+that the tail does not, each tail line read as the digest's were answering for one, so every line reaches a model once
+and none it printed is out of reach; and in `log` the log that phase wrote (`FlowStepLegs.LogOf`, over the line's one
+answer of where its failing log is on this machine, `LedgerLine.FailingLog`: the copy the step kept in an agent's
+worktree, else the run's own - a leg a host ran among them, whose log its run brought back - none only where a host's
+could not be). Each diagnostic's log range names the lines as the
+file a reader opens numbers them, by the one rule of where lines end (`PhaseOutput.NumberedLines` over
+`Text\LineEnds.cs`): counted below the header the harness wrote above the child's lines, a carriage return the child
+printed alone ending a line as it does for the reader, so the range is one read of the named log away
+(`PhaseParsers.FindingsOf` maps each parser's place among the lines it read to the file's numbers). The four is a rule
+of rendering, never of the record: the ledger's `--json` carries the digest typed (`ResultDigest.Document`) with its
+bounds said - the first problem, each stack's and each cause chain's cut, how many diagnostics, failures and unparsed
+lines the bound left out, and the counts by code and by file over the whole output - the text ledger says each red
+leg's first error in a block below its table, and `{run.red}` says it on each red line. A leg a host ran is digested
+there, against the host's copy of the tree, and its digest travels on its line: read back from the host's `--json` by
+the names it was written under (`ResultDigest.Read`, the one owner of the shape writing it and reading it), every text
+naming the host as the configuration declares it, never by an address its name resolved to, and a digest of no shape
+this build writes refused as a ledger it cannot read is. A phase is digested in one place (`Results\PhaseDigest.cs`)
+wherever its failure is the leg's verdict - a moving tree's or a shared directory's says nothing of the code - a
+build's failing phase by the parsers its project and its toolchain's compiler chose, a test's by its runner's and a
+runner's failing step by every runtime's stack form, each
+with the matchers that read it (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results files first
+- what a JUnit case's own test printed (its failure's body, `system-out`, `system-err`) read by the runner's parsers, a
+stack there by its runtime's own form, the case said through one failure there (`ResultDigest.Gathering.SaidThroughOf`:
+the crash its program died of where the case crashed or timed out, so that test and the case are one failure, else the
+first) and taking from it what it lacks (`ResultDigest.Gathering.SaidThrough`) - a case that says only how its test ended
+(CTest's `Failed`) its message and place, one that says only that its test failed its crash - or saying all it printed
+where nothing is typed - and its log read beside them in the same digest all the same, each finding said once
+(`ResultDigest.Gathering.Beside`): a diagnostic the files lack, a crash, a host that died, a test that hung, every failure
+where the files name none, is added; a test both name is the file's, given what the log holds of it and the file lacks
+(`ResultDigest.Gathering.Given`), its range in the log among it - and so is the console's printing of a failure a case's
+test printed, the one the case was said through and every other, matched as the same reader's failure of the same id that
+ended the same way and given to the failure the test read whose own output the console printed it under
+(`PhaseFindings.Tests`, which CTest's reader says of the lines under each failed test's status line,
+`ResultSink.Printed`), never by the order the files met them: one gtest test two CTest tests ran - one binary for each of
+two backends - keeps each its own range whichever ended first, and where the console says no test's output a printing
+lies in it is the one test's that printed it, none where several did. A case said through none - the file kept none of
+its test's output, or nothing typed in it - reads the console's lines under that test's status line as that output: it
+is said through a failure printed there by the same rule, its message, place and range that failure's, the first error
+there giving its place where no failure was printed, and every other failure there is said as its own, matched to a
+file's failure of its id where a file names one plainly, so nothing the run printed of a failure is out of the digest's
+reach; where two such cases name one test, nothing says which the output is, and every failure there is its own. One
+under the output of a test whose case was said through its own output's printings, and that output printed none of, is
+no printing of theirs, and is read as any other failure of the log, and a failure a test's output printed is never
+matched by its id alone, which another test's output may have printed too. Never by an error's
+heading alone, so a process that died of the error a case's test threw is a crash the files lack, said beside it; and
+what the files could not give is said beside them. Every place is then read against the
+tree once (`ResultDigest.WithInTree`, the one place a path of a digest is placed - a diagnostic's file and its
+project's, each frame's, a failure's, each count's by file): a path - relative ones read from the directory the tool
+ran in - is the tree's where the tree holds that file, named relative to its root with `/`, read by
+its own text in the form it is written in (`PlatformPaths.RelativeAsWritten`) and never by the reading machine's rules
+- a Windows path a tool wrote is in no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a bare name the
+tree has no file of (`Thread.java`) in none, a `file:` URI the path it names - and a failure's place is the top frame
+of its stack the tree holds, where one is. A runtime's own name for one of the project's files is read through the
+file the project declares that name in. A Go test's place is read from its package's directory, for `go test` prints
+it relative to that directory and names the package by its import path on its result line after the failures, which
+the parser gives each as its class: the import path less the module path of the `go.mod` nearest the tree's root that
+owns it - of two equally near, the longer module path - and where no `go.mod` of the tree owns the package the place
+stays as printed, never read from where the tool ran. The `go.mod` files are found by reading the tree a level at a
+time from its root, no deeper than a question needs and each level at most once for a digest however many of its
+places ask, never going down into git's own directory, at any depth, or into the tool's own state the tree holds
+(`HarnessLayout.StatePaths`: the copies its legs work in, its mutation workers, its agents' worktrees, its
+orchestrators' records), so the placing stays linear in the tree and the places (`ResultDigest.WithInTree`, the one
+place a digest's paths ask the tree's file system). A Dart frame's `package:demo/store.dart` is read as Dart reads
+it: through the `.dart_tool/package_config.json` of the package the tool ran in - the nearest above the directory it
+ran in, up to the tree's root, a workspace's where the package keeps none of its own - read once for a digest, the
+package's root read against the configuration's own directory and the file below the directory of its URIs it names;
+a package it places outside the tree (the pub cache's), one it does not name, and every `package:` name where no
+configuration is above where the tool ran stay as written, and nothing of the tree is walked for them.
+
+The declaration a place stands in is joined where the graph is, never where the phase ran: a host keeps no graph, and a
+plain `build`, `test` or `run` asks none, so their digests' symbols are null. A workflow's leg step whose run keeps a
+codebase graph of the tree its legs ran in - the base for the main tree, the agent's view for its worktree, none for a
+sweep on a copy of a commit - joins each red leg's digest to it before its ledger is kept (`FlowStepLegs`,
+`FlowGraphSyncs.DeclarationsAsync`): the view is checked by the files the digests' places in the tree name, as every
+answer the graph gives checks the files it names, and each place is asked by its line
+(`CodebaseGraphQueries.AtLine`), once however many findings name it, through the one owner of a digest's symbols
+(`ResultDigest.Declared`). Only a place in the tree is asked - a diagnostic's own, named as the tree names its files,
+and each frame the placing marked the tree's, a diagnostic's chain and every failure's stack down its causes - never a
+frame outside it - and only where its file holds what its leg built, proven by content: the step lets its tree go once
+its legs' copies are made and its legs in the tree itself have ended, so a fold, or anything else, may write a file
+while the legs work, and the graph reads the tree as it is when it is asked. Each leg's line holds what it built of
+each file its digest names, taken as the line is made (`WorkedTree.Built`, by `LegRunService`): for a leg in a copy,
+the file as the run's reading of the tree held it - what the copy was made from and checked against file by file, on
+this machine or a host - and for a leg in the tree itself, the file as the tree held it as the leg ended, while the
+step still held it. A file is asked of the graph only where the tree holds that content just before the graph is asked,
+and joined only where it still does once the graph has answered (`FlowStepLegs`); a file written since, or one nothing
+proves the leg built - one its copy was not given, gone, unreadable, a run on what is staged - says no declaration at its
+places, never one of code its leg did not build. A diagnostic's symbol is the declaration - a type, a member, a section - with its kind, its
+qualified name and its handle, said as the graph names a node; a frame holds it beside the function its line printed
+(`StackFrame.Declaration`), and the record says both. A model reads it as the first error's `symbol` and in brackets
+after each frame of a rendered stack inside the tree, so a place joins to the code it stands in by a handle the graph
+answers; a check that fails is said as every sync of the engine's own that fails is, and the step goes on with its
+places joined to none.
+
+The model surfaces read it the same way: `mend.md` starts from the digest's `first`, the first thing that went wrong in
+the order the tool met it, the lines its `log` names one read away in the entry's `log` file; `diagnose.md` and
+`rediagnose.md` say the same, and the continuation record carries each red leg's ledger line, its digest - written as
+every JSON an agent reads is (`AgentEnvelope.Written`: JSON's own escapes alone), so an apostrophe or an angle bracket a
+tool printed reads as it printed it - the raw lines its entry carries beside it, each line once as the entry holds
+them (`ResultDigest.Handed`) - none where the digest holds a problem and the phase's log is one read away, the digest
+saying the lines no parser held itself, and the phase's last lines where it holds none, where there is no digest, and
+where no log of the phase is on this machine - a host's that could not be brought back - so a leg no parser read is
+never said by its line alone and no line it printed is out of reach - and a copy of the log its entry names - a host's
+its run brought back among them - put with the record's other copies (`ReasonStepRunner.RedLegsOf`,
+`AgentContinuation`), so a step that goes on starts from the first error with its log one read away. Red legs are read only from a step whose output the engine wrote of the legs it
+ran (`WorkflowStepTypes.StepType.AnswersLegs`), never from a model's answer: a path a model wrote there would have the
+record copy a file the agent's policy never let it read.
+
+CI is digested the same way (`Ci\CiDigest.cs`, the one owner of a CI digest), of the two things the forge keeps of a
+red check: its annotations, read from the check-runs API through `gh api` (`GhCiJobSource.ReadAnnotationsAsync`, page
+by page and held to the count the check run gives), and its job's kept log, every line numbered as the kept file
+numbers it, the forge's own decoration taken off each (`CiLog`: the byte order mark, the timestamp, a group marker's
+line and each line of a step's script the runner echoes in its cyan left blank so no line after it moves - the script
+is the workflow's text, and an `::error::` it echoes no error the job met - the marker the forge writes ahead of an
+annotation's line) and read by every
+form a CI log holds, its phases being unknown from the outside (`PhaseParsers.ForCi`). An annotation that names a file
+comes first, one finding with the log's line it was made of - a problem matcher's line the tool's form reads too, a
+workflow command's message the line under its marker. An annotation that names no file (the runner's `Process
+completed with exit code 1.`, a workflow's `::error::` with none) is a sentence with no place: read from the API it
+would become the first error ahead of the tool's own, so where a log is read it is not taken from the API - the log
+holds every one under its marker, and a marked line no form read is said among the lines no parser held, once; a
+check with no log is said by its annotations alone. Every path is placed against the job's workspace on its runner,
+`<work>/<repository>/<repository>` on every runner GitHub hosts or not, the repository named by the job's own address
+(`PlatformPaths.DirectoryEndingAsWritten`), never against this machine's checkout; a Go test's place, printed relative
+to its package's directory, which no file of the job's tells, is left as printed. A run check's failure is read for the
+error it threw (`RunnerRunService.ExceptionIn`, by `PhaseParsers.ForRun`: every runtime's stack form and the runner's matchers): the thrown error's whole record - type,
+message, stack, causes - is what an expected exception is matched against, both halves of a match of one exception:
+the one that reached the log with the run's message or its own - a line the unit printed only where no stack was read,
+for a line under a stack may be a cause's - or a cause under it, however deep, with that cause's own message - never a
+type from one exception of the chain and a message from another
+(`RunFailure.Exception`, `ExpectedExceptionMatcher`), so an excusal declared against a cause holds though the
+exception that reached the log wraps it, and excuses nothing else.
+
+Measured (`fixtures\results\`, `ResultFixturesTests`, `ResultParsersTests`): real output from every
+tool the parsers read - captured from the tool where it runs on a developer's machine, written from
+its documented form where it does not (tsc, GoogleTest, jest, vitest, Go, Rust, lldb, the CI log) -
+each digested by the one rule that digests a phase (`PhaseDigest.Of`, a results file through its
+files as a test phase's are), its lines read as a phase's log hands them on (`PhaseOutput.Of`, never a
+file reading that ends a line at a lone carriage return where a phase's log does not - which the
+linker's own lines of `msvc-link-externals` hold, its second error after the first's lone carriage
+return), through the parsers the phase chooses, and held two ways. Its
+`expect.json`, written by hand from the tool's own words and never by the code, says what a person
+reads off the output - the counts, the first error and its place, each diagnostic and failure, the
+first stack's frames and which of them are the project's, the causes - and is asserted first, and
+the tree the tool ran in: every project file the output names, below the root it names, and where the
+tool ran where it printed paths below a folder of its own (`tree`, `workingDirectory`), so each place is
+read against a file system holding exactly those files, as a run reads it against the tree's, the
+marks the same on every machine; its `digest.json`, the whole document, pins everything else against
+drift, and only it is rewritten with `DSSHARNESS_REGENERATE_RESULTS=1`. The bytes a model is handed are
+held too, as the one writer of every JSON a model reads writes them: for every fixture, a short log's
+among them, the digest costs no more than the last fifty lines of its log and the whole log beside
+them, and the total over every fixture is pinned exactly, so a change that grows or shrinks it is made
+on purpose.
+
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.
@@ -9917,8 +10862,8 @@ their own tell through `ProgramWait.Told`.
 
 A build's probes have none: the compiler asked its version, `ninja -t deps` and the dry run of
 `ninja -t cleandead` are each waited for to their end, told every five minutes while they last,
-and ended only by the build's own token, which its step's bound and a stop cancel (`BuildProbes`)
-- a compiler on a cold disk, or ninja reading the records of forty thousand objects, is slow, not
+and ended only by the build's own token, which its step's bound and a stop cancel (`BuildProbes`) -
+a compiler on a cold disk, or ninja reading the records of forty thousand objects, is slow, not
 hung.
 
 A mutation arm's run is the one whole-duration bound a phase gets, and it is not a guess: a
@@ -9928,11 +10873,20 @@ long it takes when nothing is wrong. So a mutated run may take `mutations.runTim
 times that run, never less than it
 and its start and exit again - what the unmutated run took beyond the time its report says its
 cases took, measured on this machine, the whole run where the report says nothing of their time
-(`PristineJudge.StartAndExit`) - and one stopped past that is `unattributed`, saying so and which
-of the two set its bound: a binary whose unmutated run is short is stopped at that run and its
-start and exit again, never said to have
-run past ten times it. A stall bound applies to it as
-to every phase. Each such run, and the unmutated one that bounds it, is timed on both clocks as
+(`PristineJudge.StartAndExit`) - nor than ten seconds (`PristineJudge.LeastBound`), and one stopped
+past that is `unattributed`, saying so and which of the three set its bound: a binary whose start
+and exit is most of its run, swept with a factor under two, is stopped at that run and its start
+and exit again, and one whose unmutated run took milliseconds at ten seconds - never said to have
+run past ten times it. The least is not measured, and cannot be: what a busy machine holds a
+program back by - its start and each step of its run waiting while the sweep's other workers build
+and whatever else the machine was given runs - is a delay of its own, as long for a run of a
+millisecond as for one of a minute, and one measurement of the unmutated run, taken under one
+load, says nothing of what another load holds the next run back by; ten times a run of a few
+milliseconds is stopped by that delay alone. It only ever waits longer: a run that ends is judged
+on all it did, and one that does not is stopped seconds later than the factor would. A stall bound applies to it as
+to every phase. Each such run, and the unmutated one that bounds it, is measured over the window
+its bound is held against - from the moment the sweep begins it to the moment its phase ends, what
+this tool took to start the binary and read its end counted with it - and timed on both clocks as
 every phase is, by the sweep itself: one that spanned a clock step or a host sleep is said on the
 leg's line, among why its timings are suspect, however it ended - stopped past its bound included,
 which no phase is left to say - with what each of the sweep's builds says of its own, a worker's

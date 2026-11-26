@@ -4,6 +4,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -86,6 +87,36 @@ public sealed class MachineSettingsTests
     }
 
     /// <summary>
+    /// A variable of the tool's own that names no directory refuses the settings file as one that cannot be read is, naming
+    /// the variable - a survey's answer placing no file and saying why - and the rule a leg is admitted by refuses a heavy
+    /// leg by it though no tree's config.json declares admission: read as a machine that declares nothing, every leg the
+    /// machine's own count holds back was admitted at once, and nothing named the variable. A process given no home names
+    /// no file, and declares nothing.
+    /// </summary>
+    [Fact]
+    public void AVariableNamingNoDirectory_RefusesTheSettingsFile_NamingIt_WhileAProcessGivenNoHomeDeclaresNothing()
+    {
+        var unnamed = HostDoubles.MachineSettingsUnderAnUnnamedState();
+        var homeless = new MachineSettingsFile(new PhysicalFileSystem(FilePermissionsFactory.Create()), () => throw new DirectoryNotFoundException("the process was given no home"));
+        var said = $"This machine's settings file could not be read: {UserState.Variable} names '{HostDoubles.UnnamedStateValue}', which is no fully qualified path. "
+            + "Until it can be, no heavy leg is admitted onto this machine by it, nor by any tree's config.json in its place; "
+            + $"name a fully qualified directory in {UserState.Variable}, or leave it unset.";
+
+        static AdmissionReading RuleBy(MachineSettingsFile file)
+            => AdmissionReading.Of(() => AdmissionSection.For(HostId.Local, here: null, () => file.Answer(path => path), dispatched: null, new HarnessConfig()));
+
+        var refused = Assert.Throws<ConfigException>(() => unnamed.Read());
+        var heavy = Assert.Throws<HarnessException>(() => RuleBy(unnamed).RuleInForce());
+
+        Assert.Equal(said, refused.Message);
+        Assert.Equal(new MachineSettingsAnswer(null, null, said), unnamed.Answer(path => path));
+        Assert.Equal((HarnessExit.ConfigInvalid, said), (heavy.ExitCode, heavy.Message));
+        Assert.Equal((null, (AdmissionSettings?)null), (homeless.Location, homeless.Read().Admission));
+        Assert.Equal(new MachineSettingsAnswer(null), homeless.Answer(path => path));
+        Assert.Null(RuleBy(homeless).RuleInForce());
+    }
+
+    /// <summary>
     /// Each field of a machine's rule is the settings file's where it declares it, else the machine's section's in
     /// config.json, else the defaults', else the built-in value - and the rule says where each came from: a worktree's
     /// config.json, committed before the machine's count was raised, says nothing the machine's own file says otherwise.
@@ -102,6 +133,9 @@ public sealed class MachineSettingsTests
             new AdmissionRule(3, 80, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 4L << 30)
             {
                 ReclaimIdleBuilds = true,
+                Processes = null,
+                Agents = AdmissionSettings.DefaultAgents,
+                AgeAfter = TimeSpan.FromMinutes(AdmissionSettings.DefaultAgeAfterMinutes),
             },
             inForce.Rule);
         Assert.Equal(
@@ -113,11 +147,15 @@ public sealed class MachineSettingsTests
                 new AdmissionField("maxWaitMinutes", "60", AdmissionSettings.BuiltIn),
                 new AdmissionField("minFreeGiB", "4", "config.json's hosts.local admission"),
                 new AdmissionField("reclaimIdleBuilds", "true", "the machine's settings file '/u/settings.json'"),
+                new AdmissionField("processes", "the machine's logical processors", AdmissionSettings.BuiltIn),
+                new AdmissionField("agents", AdmissionSettings.DefaultAgents.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
+                new AdmissionField("ageAfterMinutes", AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
             ],
             inForce.Fields);
         Assert.Equal(
             "heavyLegs 3, reclaimIdleBuilds true from the machine's settings file '/u/settings.json'; maxMemoryPercent 80 from config.json's "
-            + "defaults.admission; settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60 built in; minFreeGiB 4 from config.json's hosts.local admission",
+            + $"defaults.admission; settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, processes the machine's logical processors, agents {AdmissionSettings.DefaultAgents}, "
+            + $"ageAfterMinutes {AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)} built in; minFreeGiB 4 from config.json's hosts.local admission",
             inForce.Describe());
     }
 
@@ -141,6 +179,29 @@ public sealed class MachineSettingsTests
     }
 
     /// <summary>
+    /// The machine steps a machine runs at once are its own logical processors where no section declares a count - which
+    /// only that machine knows: an ssh host's rule, read on the machine that surveys it, says so rather than the surveying
+    /// machine's own count, and carries no count for the host to admit by; a count a section declares is that count.
+    /// </summary>
+    [Fact]
+    public void AnUndeclaredProcessCount_IsTheAdmittingMachinesOwn_NeverTheReadersCount()
+    {
+        var undeclared = AdmissionSettings.InForce(
+            AdmissionSection.SettingsFile(new AdmissionSettings { HeavyLegs = 4 }, "~/settings.json"),
+            AdmissionSection.Host(null, HostId.Ssh("vps")),
+            AdmissionSection.Defaults(null))!;
+        var declared = AdmissionSettings.InForce(
+            AdmissionSection.SettingsFile(new AdmissionSettings { HeavyLegs = 4 }, "~/settings.json"),
+            AdmissionSection.Host(new AdmissionSettings { Processes = 64 }, HostId.Ssh("vps")),
+            AdmissionSection.Defaults(new AdmissionSettings { Processes = 2 }))!;
+
+        Assert.Null(undeclared.Rule.Processes);
+        Assert.Equal(new AdmissionField("processes", "the machine's logical processors", "built in"), undeclared.Fields.Single(field => field.Key == "processes"));
+        Assert.Equal(64, declared.Rule.Processes);
+        Assert.Equal(new AdmissionField("processes", "64", "config.json's hosts.ssh 'vps' admission"), declared.Fields.Single(field => field.Key == "processes"));
+    }
+
+    /// <summary>
     /// A machine whose settings file declares its count takes every leg in line by it, whatever count the legs ahead were
     /// asked under: two legs of a worktree committed when the count was 2 hold no third leg back on a machine that declares
     /// 3. Each entry still carries its own command's count, which a build before this one weighs.
@@ -154,7 +215,7 @@ public sealed class MachineSettingsTests
 
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "stale-first", slots: 2), AdmissionKit.Holder(harness, "stale-second", slots: 2));
 
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
 
         using var admitted = await AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock(), settle: TimeSpan.Zero)
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 3, maxWaitMinutes: 1), []), TestContext.Current.CancellationToken);
@@ -179,13 +240,13 @@ public sealed class MachineSettingsTests
 
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first", slots: 1), AdmissionKit.Holder(harness, "second", slots: 1), AdmissionKit.Holder(harness, "third", slots: 1));
 
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
 
         using var refused = await AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock())
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 3, maxWaitMinutes: 1), said), TestContext.Current.CancellationToken);
 
         Assert.False(refused.Fact.Admitted);
-        Assert.StartsWith("waits for one of this machine's 3 heavy-leg slot(s), 3 leg(s) ahead; held by '/src/first'", said[0], StringComparison.Ordinal);
+        Assert.StartsWith("waits for one of this machine's 3 heavy-leg slot(s) as tenant 'local/src/mine', 3 leg(s) ahead; held by '/src/first'", said[0], StringComparison.Ordinal);
         Assert.Equal([true, true, true], slots.Line().Select(inLine => inLine.HoldsSlot));
     }
 
@@ -200,7 +261,7 @@ public sealed class MachineSettingsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         const string Unread = "This machine's settings file '/u/settings.json' could not be read: a key it does not know.";
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, temp.Combine("admission.json"), () => throw new ConfigException(Unread));
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, temp.Combine("admission.json"), () => throw new ConfigException(Unread));
         var holder = new LockEntry("local", "/src/tree", LockScope.TreeShared, new LockHolder(harness.Identity.CurrentMachine, harness.Identity.CurrentId, RunId.New().Value, DateTimeOffset.UtcNow, "test"), "debug");
         var wanted = new LockRequest { Host = "local", Tree = "/src/tree", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "delete-agent" };
 
@@ -226,7 +287,7 @@ public sealed class MachineSettingsTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var record = temp.Combine("admission.json");
         const string Unread = "This machine's settings file '/u/settings.json' could not be read: admission heavyLegs must be at least 1, found 0.";
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => throw new ConfigException(Unread));
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => throw new ConfigException(Unread));
         var admission = AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock());
         var rule = AdmissionKit.Rule(heavyLegs: 3, settleLeast: 0, settleMost: 0, maxWaitMinutes: 1);
         var begun = new AdmissionReading(null, new AdmissionSettings { HeavyLegs = 3 }, null);
@@ -301,7 +362,8 @@ public sealed class MachineSettingsTests
         Assert.Equal(
             [
                 "local: admission: heavyLegs 3 from the machine's settings file '/u/settings.json'; maxMemoryPercent 76, settleSeconds [15, 90], "
-                    + "pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission",
+                    + $"pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false, processes the machine's logical processors, agents {AdmissionSettings.DefaultAgents}, "
+                    + $"ageAfterMinutes {AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)} built in; minFreeGiB 4 from config.json's hosts.local admission",
                 $"ssh vps: admission: {unread}",
             ],
             text.Details);
@@ -313,7 +375,7 @@ public sealed class MachineSettingsTests
         Assert.Equal("/u/settings.json", hosts[0].GetProperty("settingsFile").GetString());
         Assert.Equal(("heavyLegs", "3", "the machine's settings file '/u/settings.json'"), fields[0]);
         Assert.Equal(("minFreeGiB", "4", "config.json's hosts.local admission"), fields[5]);
-        Assert.Equal(7, fields.Count);
+        Assert.Equal(10, fields.Count);
         Assert.False(hosts[0].TryGetProperty("admissionUnread", out _));
         Assert.Equal(unread, hosts[1].GetProperty("admissionUnread").GetString());
         Assert.False(hosts[1].TryGetProperty("admission", out _));

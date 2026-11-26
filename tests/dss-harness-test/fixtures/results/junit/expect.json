@@ -1,0 +1,17 @@
+{
+  "read": {
+    "file": true,
+    "tests": "ctest"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["check.c"],
+  "failed": 1,
+  "timedOut": 1,
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "failed folds_duplicates",
+    "crashed parses_input",
+    "timedOut waits_for_lock"
+  ]
+}

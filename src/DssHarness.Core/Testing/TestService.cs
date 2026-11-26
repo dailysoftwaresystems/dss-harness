@@ -331,30 +331,32 @@ public sealed class TestService(
         // whole by the rule a test preset beside it was read by, so both are the same directory.
         var working = TestInvocationResolver.StartDirectory(command.WorkingDirectory, request.TreeRoot);
 
-        var phase = await _phaseRunner
-            .RunAsync(
-                new PhaseRequest
-                {
-                    Leg = request.Leg,
-                    Phase = request.PhaseName,
+        // The run's own results directory, empty before the runner starts: whatever an earlier run of this phase left
+        // there is gone, so a results file read after it is this run's.
+        TestResults.MakeEmpty(_fileSystem, paths.ResultsDirectory!);
 
-                    // A runner named by a relative path is read from the directory it starts in, as
-                    // its arguments are: './unit_tests' with a workingDirectory of '{buildDir}' is
-                    // the build's own. Left to the start, it would be read against wherever this
-                    // process began, which for a leg on a worktree is the main checkout.
-                    FileName = ProcessRunner.Anchored(command.Program, working),
-                    Arguments = command.Arguments,
-                    LogFile = logFile,
-                    ProgramDirectories = request.ProgramDirectories,
-                    WorkingDirectory = working,
-                    Environment = TestInvocationResolver.EnvironmentFor(request.HostEnvironment, command.Environment),
-                    SuccessPattern = invocation.SuccessPattern,
-                    StallSeconds = config.Defaults.StallSeconds,
-                    TimingPatterns = TimingPatterns(config, request),
-                    ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
+        var asked = new PhaseRequest
+        {
+            Leg = request.Leg,
+            Phase = request.PhaseName,
+
+            // A runner named by a relative path is read from the directory it starts in, as
+            // its arguments are: './unit_tests' with a workingDirectory of '{buildDir}' is
+            // the build's own. Left to the start, it would be read against wherever this
+            // process began, which for a leg on a worktree is the main checkout.
+            FileName = ProcessRunner.Anchored(command.Program, working),
+            Arguments = command.Arguments,
+            LogFile = logFile,
+            ProgramDirectories = request.ProgramDirectories,
+            WorkingDirectory = working,
+            Environment = TestInvocationResolver.EnvironmentFor(request.HostEnvironment, command.Environment),
+            SuccessPattern = invocation.SuccessPattern,
+            StallSeconds = config.Defaults.StallSeconds,
+            TimingPatterns = TimingPatterns(config, request),
+            ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
+        };
+
+        var phase = await _phaseRunner.RunAsync(asked, cancellationToken).ConfigureAwait(false);
 
         var seen = await guards.CloseAsync(cancellationToken).ConfigureAwait(false);
         var contention = seen.Contention!;
@@ -380,6 +382,26 @@ public sealed class TestService(
                     cancellationToken)
                 .ConfigureAwait(false);
 
+        // The digest only where the tests' failure is the verdict, as a build's is: one a moving tree or a shared
+        // directory outranked was a run of a tree that never existed. What the invocation named as its structured
+        // results is read first, where the runner wrote it - nothing copied, its text masked as the phase's log is - for
+        // what a file holds is typed already; the phase's own log is read by the runner's parsers all the same, for a red
+        // run's console says what its files never got to - a crash, a host that died - and what it adds is said beside
+        // them, each finding once.
+        ResultDigest? digest = null;
+
+        if (reached.Verdict == LegVerdict.Failed)
+        {
+            var parsers = PhaseParsers.ForTests(config, command.Program, invocation.Matchers);
+
+            digest = PhaseDigest.Of(
+                phase.Output,
+                phase.ProgramExit,
+                parsers,
+                new DigestTree(request.TreeRoot, working, _fileSystem, config.Worktrees.Root),
+                into => TestResults.Read(_fileSystem, invocation.Results, paths, paths.ResultsDirectory!, parsers, into, asked.Mask, cancellationToken));
+        }
+
         var entry = new LegEntry
         {
             Leg = request.Leg,
@@ -391,6 +413,7 @@ public sealed class TestService(
             Emulated = request.Emulated,
             TestCount = CountFrom(counter, phase.Output),
             KeptOnFailure = kept,
+            Digest = digest,
 
             // What the count belongs to, decided here with the invocation that made it: the report
             // compares it only with the other legs of the same project and test set.
@@ -447,6 +470,7 @@ public sealed class TestService(
             Product = request.Product,
             ProductProblem = request.ProductProblem,
             Compilers = built ? request.Compilers : CMakeToolchainReader.BeforeTheBuild(request.Project),
+            ResultsDirectory = TestResults.DirectoryFor(request.RunDirectory, request.Leg, request.PhaseName),
         };
         IReadOnlyList<string> remote = request.InCopy ? invocation.RemoteExcludes ?? [] : [];
 

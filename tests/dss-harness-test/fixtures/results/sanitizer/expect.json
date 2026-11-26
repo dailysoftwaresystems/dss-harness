@@ -1,0 +1,22 @@
+{
+  "read": {
+    "tests": "ctest"
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["asan.c", "asan.cpp", "ubsan.c"],
+  "crashed": 2,
+  "errored": 1,
+  "first": null,
+  "failures": [
+    "crashed AddressSanitizer: heap-buffer-overflow on address 0x502000000018 at pc 0x5f0d4ef8f248 bp 0x7ffca7cabba0 sp 0x7ffca7cabb90",
+    "crashed AddressSanitizer: heap-buffer-overflow on address 0x502000000020 at pc 0x565b4aa296f6 bp 0x7ffc0b564240 sp 0x7ffc0b564230",
+    "errored UndefinedBehaviorSanitizer: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'"
+  ],
+  "stack": {
+    "frames": 5,
+    "inTree": [
+      "/home/runner/work/app/app/asan.c:5",
+      "/home/runner/work/app/app/asan.c:13"
+    ]
+  }
+}

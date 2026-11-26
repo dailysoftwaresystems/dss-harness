@@ -1,0 +1,16 @@
+{
+  "read": {
+    "run": true
+  },
+  "root": "/home/runner/work/app/app",
+  "tree": ["crash.c"],
+  "crashed": 1,
+  "first": null,
+  "failures": [
+    "crashed SIGSEGV: invalid address (fault address: 0x0)"
+  ],
+  "stack": {
+    "frames": 5,
+    "inTree": []
+  }
+}

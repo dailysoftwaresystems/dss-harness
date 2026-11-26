@@ -457,10 +457,12 @@ public sealed class RunnerRunService(
         {
             ContentionWarnings.Write(_output, CommandName, request.Leg, contention, config.Contention);
         }
-        var decided = await DecideAsync(request, state, values, cancellationToken).ConfigureAwait(false);
+        var decided = await DecideAsync(request, state, values, PhaseParsers.ForRun(config, request.Runner), config.Worktrees.Root, cancellationToken).ConfigureAwait(false);
 
         // What the guards saw is folded in the same way every other verb folds it, so a step whose
-        // tree moved reports the verdict a test leg would and not a sentence of its own.
+        // tree moved reports the verdict a test leg would and not a sentence of its own. A fold that
+        // changed the verdict drops the failing step's digest with it: something else decided the
+        // leg's verdict, and the entry says what did, not what the step printed.
         //
         // Into the outcome as well as the verdict, because the outcome is what a run check reads:
         // RunCheckGate tests Success and ResultCode and nothing else, so a check run whose own tree
@@ -474,6 +476,7 @@ public sealed class RunnerRunService(
             {
                 Verdict = folded,
                 Outcome = RunOutcome.Failed(Verdicts.ExitCodeFor(folded.Verdict), folded.Detail),
+                Digest = null,
             };
         var union = _runSegments.Load(request.RunDirectory, request.RunId, request.Leg).Union;
 
@@ -515,6 +518,11 @@ public sealed class RunnerRunService(
             // that went on past its failure, is the last only where nothing after it failed.
             LogTail = decided.Verdict.Verdict == LegVerdict.Passed ? [] : PhaseResult.TailOf(state.Phases),
             TailPhase = decided.Verdict.Verdict == LegVerdict.Passed ? null : PhaseResult.TailPhaseOf(state.Phases),
+
+            // What the failing step printed, digested, where the step's own failure is the leg's verdict - as a
+            // build's and a test's line carry theirs: an excused failure is the entry's own, and a fold that changed
+            // the verdict dropped it with what the verdict rested on.
+            Digest = decided.Verdict.Verdict == LegVerdict.Failed ? decided.Digest : null,
 
             // Named as sync --pull takes them, so a caller brings back what the leg kept without walking the
             // host's tree for it: every attempt of this run, since a resumed run keeps what an earlier one kept.
@@ -582,6 +590,17 @@ public sealed class RunnerRunService(
         var match = output.Lines().Select(line => ExceptionType.Match(line)).FirstOrDefault(found => found.Success);
         return match is null ? StepFailureType : match.Groups[1].Value;
     }
+
+    /// <summary>
+    /// The thrown error the failing step's digest holds, where its log printed a stack: its type, message, stack and
+    /// causes, held to the bounds every record is, read by the parsers chosen for the runner's steps - every runtime's
+    /// stack form and the matchers the runner reads - through the one owner of a phase's digest, the one read of the
+    /// step's log the entry's digest is read by too. Null where the log printed no stack, or could not be read back.
+    /// </summary>
+    /// <param name="digest">The failing step's digest (<see cref="PhaseDigest.Of"/>); null where nothing was read.</param>
+    private static Results.ExceptionRecord? ExceptionIn(ResultDigest? digest)
+        => digest?.Failures.FirstOrDefault(failure => failure.Exception is not null)
+            ?.Exception;
 
     /// <summary>
     /// The runner's steps, with every program it can start already vetted.
@@ -1133,8 +1152,9 @@ public sealed class RunnerRunService(
         }
 
         // Its output as its log keeps it, masked as each line was kept: read from there by whatever looks
-        // for an exception in it, never held.
-        state.Failure = new FailedStep(phase.Name, verdict, result.Output);
+        // for an exception in it, never held; the directory it ran in, which a relative path it printed is read from; and
+        // how its program ended, which its digest is read knowing.
+        state.Failure = new FailedStep(phase.Name, verdict, result.Output, result.WorkingDirectory, result.ProgramExit);
         state.Stopped = true;
     }
 
@@ -1162,11 +1182,18 @@ public sealed class RunnerRunService(
     /// The verdict and the outcome the leg reached, an expected exception applied only where its
     /// checks confirmed it.
     /// </summary>
-
+    /// <param name="request">The run.</param>
+    /// <param name="state">The run so far.</param>
+    /// <param name="values">What the run's lines are masked by.</param>
+    /// <param name="parsers">The parsers a failing step's output is digested by.</param>
+    /// <param name="worktreesRoot">The configured worktrees root, which with the rest of the tool's own state the digest's placing never reads a declaration from.</param>
+    /// <param name="cancellationToken">Stops the run checks.</param>
     private async Task<Decision> DecideAsync(
         RunnerRunRequest request,
         RunState state,
         ActionValues values,
+        IReadOnlyList<IResultParser> parsers,
+        string worktreesRoot,
         CancellationToken cancellationToken)
     {
         if (state.Failure is not { } failed)
@@ -1184,17 +1211,28 @@ public sealed class RunnerRunService(
                 null);
         }
 
+        // The failing step's own output digested once, through the one owner of a phase's digest: the thrown error the
+        // entry is matched against is read from it, and where the step's own failure is the leg's verdict the leg's
+        // entry carries it, as a build's and a test's carry theirs - its places read from the directory the step ran in,
+        // as theirs are from where their tools ran.
+        var digest = PhaseDigest.Of(failed.Output, failed.Exit, parsers, new DigestTree(request.TreeRoot, failed.WorkingDirectory, _fileSystem, worktreesRoot));
+
         var genuine = new Decision(
             failed.Verdict with { Detail = values.Redact(failed.Verdict.Detail) },
             RunOutcome.Failed(Verdicts.ExitCodeFor(failed.Verdict.Verdict), values.Redact(failed.Verdict.Detail)),
             null,
-            null);
+            null,
+            digest);
 
         var scope = RunnerScope.From(request.RunnerName, request.Runner, request.ResolvedLegs);
+
+        // The thrown error as the log printed it, where it printed a stack: its type, message, whole stack and causes,
+        // the record an entry is matched against - and the type name a first *Exception line gave, where it did not.
+        var thrown = ExceptionIn(digest);
         var entry = _expectedExceptionMatcher.Find(
             scope,
             request.Leg,
-            new RunFailure(FailureTypeIn(failed.Output), values.Redact(failed.Verdict.Detail), failed.Output));
+            new RunFailure(thrown?.Type ?? FailureTypeIn(failed.Output), values.Redact(failed.Verdict.Detail), failed.Output, thrown));
 
         if (entry is null)
         {
@@ -1862,15 +1900,22 @@ public sealed class RunnerRunService(
         return (program, arguments, working);
     }
 
-    /// <summary>The step whose failure ended the run, with what it reported.</summary>
-    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, PhaseOutput Output);
+    /// <summary>
+    /// The step whose failure ended the run, with what it reported, the directory it ran in
+    /// (<see cref="PhaseResult.WorkingDirectory"/>) and the code its program ended with (<see cref="PhaseResult.ProgramExit"/>).
+    /// </summary>
+    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, PhaseOutput Output, string? WorkingDirectory, int? Exit);
 
-    /// <summary>The verdict and outcome one attempt reached, with the entry and the gate behind it.</summary>
+    /// <summary>
+    /// The verdict and outcome one attempt reached, with the entry and the gate behind it and the failing step's digest
+    /// (<see cref="PhaseDigest.Of"/>), which the leg's entry carries where the step's own failure is its verdict.
+    /// </summary>
     private sealed record Decision(
         ReachedVerdict Verdict,
         RunOutcome Outcome,
         ExpectedException? Entry,
-        RunCheckGateResult? Gate);
+        RunCheckGateResult? Gate,
+        ResultDigest? Digest = null);
 
     /// <summary>Everything one attempt accumulates while its steps run.</summary>
     private sealed class RunState

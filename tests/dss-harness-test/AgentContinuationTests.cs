@@ -53,7 +53,7 @@ public sealed class AgentContinuationTests : IDisposable
             "iteration 1 of 2:",
             $"{AgentContinuation.HandoffHeading}:{nl}{nl}Done: the form.",
             AgentContinuation.CutOffMessage,
-            $"- leg 'windows', phase 'build': the ledger's line (the ledger and its logs: {_temp.Combine("logs")})",
+            "- leg 'windows', phase 'build': the ledger's line" + nl + "  {\"first\":{\"said\":\"msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context\"}}",
             "The steps so far, the newest first:",
             "- step 'items[2].implement' ended stopped by a pause.",
             "  Notes: what was done and why",
@@ -591,7 +591,7 @@ public sealed class AgentContinuationTests : IDisposable
                 "items[2].implement",
                 [new AgentContinuedStep("items[1].plan", "done", plan), new AgentContinuedStep("items[2].implement", "stopped by a pause", implement)],
                 ["src/one.cs", "src/two.cs"],
-                [new AgentRedLeg("windows", "build", "the ledger's line", _temp.Combine("logs"))],
+                [new AgentRedLeg("windows", "build", "the ledger's line", Digest: "{\"first\":{\"said\":\"msbuild CS0103 src/Program.cs(12,35): The name 'x' does not exist in the current context\"}}")],
                 CutOff: true),
             workDirectory);
     }

@@ -1639,7 +1639,7 @@ internal sealed class MutationLegRunner(
                 // control, once per runner per sweep - as the control itself is - and only where it reddened cases: the
                 // build has just run, so the tests a build discovers are there to list.
                 var asked = judged.Reds is { Count: > 0 }
-                    ? await _runner._ctests.AskAsync(Question(worker, buildDirectory, Path.Combine(buildDirectory, path), judged.Reds), cancellationToken).ConfigureAwait(false)
+                    ? await _runner._ctests.AskAsync(Question(worker, buildDirectory, Path.Combine(buildDirectory, path), judged.Reds, records), cancellationToken).ConfigureAwait(false)
                     : null;
                 var said = judged.Said(
                     asked is null ? null : asked.Match is { } match ? match.Said : $"what ctest registers for it could not be read: {asked.Unread}",
@@ -1667,9 +1667,10 @@ internal sealed class MutationLegRunner(
 
         /// <summary>
         /// What a red control asks about the binary it ran, in the worker whose build ran it: the pieces
-        /// <see cref="RunRequest"/> starts the binary with, which the asking starts as the leg's tests start.
+        /// <see cref="RunRequest"/> starts the binary with, which the asking starts as the leg's tests start - its own
+        /// results directory, which the invocation's args may name, made in the control's records.
         /// </summary>
-        private CtestQuestion Question(string worker, string buildDirectory, string program, IReadOnlyList<string> redCases)
+        private CtestQuestion Question(string worker, string buildDirectory, string program, IReadOnlyList<string> redCases, string records)
         {
             var invocation = _subject.Tests is { } settings ? TestInvocationResolver.InvocationFor(settings, _leg.Os) : null;
 
@@ -1682,6 +1683,7 @@ internal sealed class MutationLegRunner(
                 {
                     Identity = _leg.IdentityFor(_work.RunId.Value),
                     Compilers = _runner._toolchains.NamedFor(_subject.Project, buildDirectory),
+                    ResultsDirectory = Path.Combine(records, Testing.TestResults.DirectoryName),
                 },
                 _leg.InCopy ? invocation?.RemoteExcludes ?? [] : [],
                 worker,

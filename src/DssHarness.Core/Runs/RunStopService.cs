@@ -246,8 +246,8 @@ public sealed class RunStopService(
     /// </summary>
     private async Task<CommandOutcome> EndNowAsync(LogOwner owner, RunStopReport report, bool json, CancellationToken cancellationToken)
     {
-        // Ended, then waited for until it has gone, however long its system takes to take its tree down, and said every
-        // five minutes it lasts: only the caller's interrupt ends the wait, thrown as one.
+        // Ended with its tree, then the dispatcher alone waited for until it has gone, however long its system takes to end
+        // it, and said every five minutes it lasts: only the caller's interrupt ends the wait, thrown as one.
         var waited = await Waits.ForAsync(
                 token => _identity.EndWhereItStandsAsync(owner.Machine, owner.ProcessId, owner.ProcessStamp, Timeout.InfiniteTimeSpan, token),
                 new WaitWatch($"run {report.Run}'s dispatcher ({report.Dispatcher}) to go", told => _output?.Info(CommandName, told.Line()), Bound: null, _clock),

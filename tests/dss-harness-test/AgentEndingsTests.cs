@@ -131,6 +131,9 @@ public sealed class AgentEndingsTests
 
         Assert.Equal("done", AgentHandoffSignal.AnswerOf(JsonNode.Parse("""{"notes":"done","left":"x"}"""), "the text"));
         Assert.Equal("""{"left":"x"}""", AgentHandoffSignal.AnswerOf(JsonNode.Parse("""{"left":"x"}"""), "the text"));
+
+        // The whole answer is written as every JSON an agent reads is: JSON's own escapes alone.
+        Assert.Equal("""{"left":"keep <List<T>> & the 'café'"}""", AgentHandoffSignal.AnswerOf(JsonNode.Parse("""{"left":"keep <List<T>> & the 'café'"}"""), "the text"));
         Assert.Equal("the text", AgentHandoffSignal.AnswerOf(null, "the text"));
         Assert.Null(AgentHandoffSignal.AnswerOf(JsonNode.Parse("""{"notes":"  "}"""), "the text"));
         Assert.Null(AgentHandoffSignal.AnswerOf(null, " \n"));
