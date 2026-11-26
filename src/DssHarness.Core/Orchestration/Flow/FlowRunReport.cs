@@ -575,6 +575,21 @@ public static partial class FlowRunReport
             {
                 ["steps"] = served.Count,
                 ["packTokens"] = served.Sum(step => step.Graph?["pack"]?["tokens"]?.GetValue<int>() ?? 0),
+                ["pulled"] = new JsonObject
+                {
+                    ["map"] = new JsonObject
+                    {
+                        ["pages"] = served.Sum(step => step.Graph?["pulled"]?["map"]?["pages"]?.GetValue<int>() ?? 0),
+                        ["tokens"] = served.Sum(step => step.Graph?["pulled"]?["map"]?["tokens"]?.GetValue<int>() ?? 0),
+                    },
+                    ["pack"] = new JsonObject
+                    {
+                        ["pages"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["pages"]?.GetValue<int>() ?? 0),
+                        ["tokens"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["tokens"]?.GetValue<int>() ?? 0),
+                        ["nodes"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["nodes"]?.GetValue<int>() ?? 0),
+                        ["used"] = served.Sum(step => step.Graph?["pulled"]?["pack"]?["used"]?.GetValue<int>() ?? 0),
+                    },
+                },
                 ["calls"] = served.Sum(step => step.Graph?["calls"]?.GetValue<int>() ?? 0),
                 ["servedTokens"] = served.Sum(step => step.Graph?["servedTokens"]?.GetValue<int>() ?? 0),
                 ["bodies"] = served.Sum(step => step.Graph?["bodies"]?.GetValue<int>() ?? 0),

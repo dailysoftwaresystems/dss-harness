@@ -61,7 +61,7 @@ public enum GraphOp
 /// <param name="Denied">The policy's refusal, where it refused the call.</param>
 public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, string? Path = null, AgentPolicyAnswer.Denied? Denied = null)
 {
-    /// <summary>The nodes the call asked about, served and edited: what the step's working set is made of.</summary>
+    /// <summary>The nodes the call asked about, served and edited - what the step's working set is made of - and those a pack's page it gave listed, which it is not made of.</summary>
     public GraphToolFacts Facts { get; init; } = GraphToolFacts.None;
 
     /// <summary>
@@ -90,7 +90,7 @@ public sealed record GraphToolAnswer(string Text, GraphToolOutcome Outcome, stri
 /// <summary>
 /// The nodes one <c>graph</c> call used, each by its id: those it asked about by name - <c>node</c>, <c>related</c>,
 /// <c>around</c>, <c>impact</c> and <c>body</c> - those whose lines it served, and the one an <c>edit</c> wrote, with the
-/// lines it wrote.
+/// lines it wrote; and, apart from them, those a <c>pack</c> answer listed without serving them (<see cref="Listed"/>).
 /// </summary>
 /// <param name="Asked">The nodes it asked about, in the order it named them.</param>
 /// <param name="Served">The nodes a line of which a <c>body</c>'s answer gave, in order.</param>
@@ -101,6 +101,14 @@ public sealed record GraphToolFacts(IReadOnlyList<string> Asked, IReadOnlyList<s
 {
     /// <summary>A call that used no node.</summary>
     public static GraphToolFacts None { get; } = new([], [], []);
+
+    /// <summary>
+    /// The nodes the page of the context pack a <c>pack</c> answer gave lists, by id, each once, in the order it lists
+    /// them (<see cref="GraphTextPage.Nodes"/>): a line of each, never its lines - so no use of any, and the working set
+    /// counts none of them - kept so the step's figures say how many of the pages it pulled it then used
+    /// (<c>pulled.pack.used</c>); none for every other call.
+    /// </summary>
+    public IReadOnlyList<string> Listed { get; init; } = [];
 }
 
 /// <summary>The lines one <c>edit</c> wrote: what a node's new text is matched to the nodes it declares by, whatever they are called now.</summary>
@@ -569,8 +577,8 @@ public sealed partial class CodebaseGraphTool(
             GraphOp.Body => await BodyAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Sites => await SitesAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Edit => await OneEditAtATimeAsync(input, cancellationToken).ConfigureAwait(false),
-            GraphOp.Pack => TextPage(pack?.Invoke(), "pack", "context pack", Int(input, "page")!.Value),
-            GraphOp.Changes => TextPage(changes?.Invoke(), "changes", "codebase changes", Int(input, "page")!.Value),
+            GraphOp.Pack => TextPage(pack?.Invoke(), "pack", "context pack", Int(input, "page")!.Value, lists: true),
+            GraphOp.Changes => TextPage(changes?.Invoke(), "changes", "codebase changes", Int(input, "page")!.Value, lists: false),
             GraphOp.Map => MapPage(map?.Invoke(Int(input, "page")!.Value), Int(input, "page")!.Value),
             _ => WholeFile(input),
         };
@@ -578,10 +586,11 @@ public sealed partial class CodebaseGraphTool(
 
     /// <summary>
     /// <c>pack</c> and <c>changes</c>: page <paramref name="page"/> of the step's pack or of the changes its message began, as
-    /// it was laid whole when it was made, its first and last lines with it; a page past the last refused with how many there are, as any
-    /// answer's is, and a text the step was not given said.
+    /// it was laid whole when it was made, its first and last lines with it - a pack's page saying the nodes it lists
+    /// where <paramref name="lists"/> (<see cref="GraphToolFacts.Listed"/>); a page past the last refused with how many
+    /// there are, as any answer's is, and a text the step was not given said.
     /// </summary>
-    private static GraphToolAnswer TextPage(GraphTextPages? text, string asked, string what, int page)
+    private static GraphToolAnswer TextPage(GraphTextPages? text, string asked, string what, int page, bool lists)
     {
         if (text is null)
         {
@@ -590,7 +599,7 @@ public sealed partial class CodebaseGraphTool(
 
         if (text.Page(page) is { } given)
         {
-            return new GraphToolAnswer(given.Text, GraphToolOutcome.Answered);
+            return new GraphToolAnswer(given.Text, GraphToolOutcome.Answered) { Facts = lists ? GraphToolFacts.None with { Listed = given.Nodes } : GraphToolFacts.None };
         }
 
         return Usage(Paging.PastTheLastSaid(page, text.Count, asked, note: null));

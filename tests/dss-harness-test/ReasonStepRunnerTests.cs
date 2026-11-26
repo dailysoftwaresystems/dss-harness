@@ -2108,8 +2108,54 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(("tools", "base", WorkflowStep.GraphFromTask), (graph["mode"]!.GetValue<string>(), graph["view"]!.GetValue<string>(), graph["from"]!.GetValue<string>()));
         Assert.Equal(0, graph["mapTokens"]!.GetValue<int>());
         Assert.Equal("""{"seeds":0,"nodes":0,"tokens":0,"used":0}""", graph["pack"]!.ToJsonString());
-        Assert.Equal($$$"""{"map":{"pages":1,"tokens":{{{mapTokens}}}},"pack":{"pages":1,"tokens":{{{packTokens}}}}}""", graph["pulled"]!.ToJsonString());
+        Assert.Equal($$$"""{"map":{"pages":1,"tokens":{{{mapTokens}}}},"pack":{"pages":1,"tokens":{{{packTokens}}},"nodes":{{{pack.Facts.Listed.Count}}},"used":0}}""", graph["pulled"]!.ToJsonString());
         Assert.Equal((2, mapTokens + packTokens), (graph["calls"]!.GetValue<int>(), graph["servedTokens"]!.GetValue<int>()));
+    }
+
+    /// <summary>
+    /// A step with the tool that pulls its pack is told by its figures whether the pages were any use: the pack's line in
+    /// its graph.jsonl keeps the nodes page 1 listed, and its figures count them under <c>pulled.pack.nodes</c> and how many
+    /// of them it then used under <c>pulled.pack.used</c>, by the rule the pushed pack's <c>used</c> is counted by - here
+    /// the one of them it asked about, never the others the page only listed, which its working set holds none of; the
+    /// pushed pack's <c>used</c> stays 0, for nothing was pushed. Red with the page's nodes left off its line, or the
+    /// pulled pages' use left uncounted.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatPullsItsPack_CountsTheNodesItsPagesListed_AndHowManyOfThemItThenUsed()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        GraphToolAnswer? pack = null;
+        string? asked = null;
+
+        agents.Works = async step =>
+        {
+            var support = step.Graph!;
+            pack = await support.Tool!.RunAsync(new JsonObject { ["op"] = "pack", ["page"] = 1 }, support.Operations!, Token);
+            support.Recorded!(GraphCallLine.Of("pack", pack));
+
+            // The one node of the page the agent goes on to ask about by name: the Planner's method.
+            asked = pack.Facts.Listed.Single(id => string.Equals(support.Tool.Queries.Card(id).Name, "Plan", StringComparison.Ordinal));
+            var node = await support.Tool.RunAsync(new JsonObject { ["op"] = "node", ["symbol"] = support.Tool.Queries.Card(asked).Handle }, support.Operations!, Token);
+            support.Recorded!(GraphCallLine.Of("node", node));
+        };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(), prompt: "Plan the work on the Planner."), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        // The page lists more than the one node asked, so a count of them all is not the count used.
+        var listed = pack!.Facts.Listed;
+        Assert.True(listed.Count > 1, pack.Text);
+        Assert.Equal(listed, LinesOf(kit, "think").OfType<GraphCallLine>().First().Listed);
+
+        var set = kit.Harness.OrchestrationStore.ReadWorkingSet(kit.Layout.InstanceDirectory("think", "a9"))!;
+        Assert.Equal([(asked!, DssHarness.Core.Codebase.WorkingSetUses.Found)], set.Nodes.Select(node => (node.Id, Assert.Single(node.Uses))));
+
+        var graph = result.Graph!;
+        Assert.Equal("""{"seeds":0,"nodes":0,"tokens":0,"used":0}""", graph["pack"]!.ToJsonString());
+        Assert.Equal($$$"""{"pages":1,"tokens":{{{DssHarness.Core.Codebase.EstimatedTokens.Of(pack.Text)}}},"nodes":{{{listed.Count}}},"used":1}""", graph["pulled"]!["pack"]!.ToJsonString());
     }
 
     /// <summary>

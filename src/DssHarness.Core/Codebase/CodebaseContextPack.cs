@@ -419,7 +419,7 @@ public static partial class CodebaseContextPack
             // only the last, and no later ask lays anything again.
             var page = request.Tokens == 0 ? null : new GraphTextPages(Lines(uncompared, changed), request.Tokens, number => number == 1 ? first : $"codebase graph: context pack page {Number(number)}", Last, ByFile);
             var one = page?.Page(1);
-            List<string> nodes = [.. (one?.Lines ?? []).Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
+            var nodes = one?.Nodes ?? [];
             var near = new GraphNearness(
                 [.. nodes, .. request.Worked.Select(worked => worked.Id)],
                 request.Writes,
@@ -894,7 +894,7 @@ public static partial class CodebaseContextPack
         /// </summary>
         private string Last(GraphTextPageEnd end)
         {
-            var nodes = end.Lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal).Count();
+            var nodes = end.Nodes.Count;
             var of = $"context pack page {Number(end.Page)} of {Number(end.Pages)}";
             var where = end is { Last: true, Page: 1 } ? "nothing left out"
                 : end.Last ? $"{of} · the last"

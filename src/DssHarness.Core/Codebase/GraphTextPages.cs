@@ -8,7 +8,20 @@ namespace DssHarness.Core.Codebase;
 /// <param name="Caption">The line of the section it is of, said above its first line on each page that holds it; null for a section with none.</param>
 /// <param name="Text">The line, one line, as the text writes it.</param>
 /// <param name="Id">The node it lists; null for a line that lists none.</param>
-public sealed record GraphTextLine(string? Caption, string Text, string? Id = null);
+public sealed record GraphTextLine(string? Caption, string Text, string? Id = null)
+{
+    /// <summary>
+    /// The nodes <paramref name="lines"/> list, by id, each once, in the order they list them - a line that lists none
+    /// aside: what a page of a graph text lists, as its last line counts them, a pack's page 1 names them and the graph
+    /// tool's <c>pack</c> says them of each page it gives.
+    /// </summary>
+    /// <param name="lines">A page's lines, in order.</param>
+    public static IReadOnlyList<string> NodesOf(IEnumerable<GraphTextLine> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        return [.. lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
+    }
+}
 
 /// <summary>One page of a graph text given unasked (<see cref="GraphTextPages"/>).</summary>
 /// <param name="Page">The page, from 1.</param>
@@ -16,7 +29,11 @@ public sealed record GraphTextLine(string? Caption, string Text, string? Id = nu
 /// <param name="Lines">The lines it gives, a line given in pieces once, on the page its first piece is, in the order it gives them.</param>
 /// <param name="Tokens">Its estimated tokens (<see cref="EstimatedTokens"/>).</param>
 /// <param name="Last">Whether no page follows it.</param>
-public sealed record GraphTextPage(int Page, string Text, IReadOnlyList<GraphTextLine> Lines, int Tokens, bool Last);
+public sealed record GraphTextPage(int Page, string Text, IReadOnlyList<GraphTextLine> Lines, int Tokens, bool Last)
+{
+    /// <summary>The nodes it lists, by id, each once, in the order it gives them (<see cref="GraphTextLine.NodesOf"/>).</summary>
+    public IReadOnlyList<string> Nodes => GraphTextLine.NodesOf(Lines);
+}
 
 /// <summary>What a page's last line is made from: which page, the lines it gives, how many pages the text holds, and its tokens.</summary>
 /// <param name="Page">The page, from 1.</param>
@@ -27,6 +44,9 @@ public sealed record GraphTextPageEnd(int Page, IReadOnlyList<GraphTextLine> Lin
 {
     /// <summary>Whether no page follows it.</summary>
     public bool Last => Page == Pages;
+
+    /// <summary>The nodes the page lists, by id, each once (<see cref="GraphTextLine.NodesOf"/>).</summary>
+    public IReadOnlyList<string> Nodes => GraphTextLine.NodesOf(Lines);
 }
 
 /// <summary>

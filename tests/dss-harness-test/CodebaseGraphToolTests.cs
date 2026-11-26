@@ -957,6 +957,57 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
+    /// A <c>pack</c> answer's facts list the nodes of the page it gave - every line's node, each once, in the page's order -
+    /// and no node as asked, served or edited, for a line of a node is no use of it; its call line carries them, so the
+    /// step's figures can weigh the pages it pulled. A page past the last, a <c>changes</c> page and every other answer
+    /// list none, and their lines carry none. Red with the pack's answer given no facts, or its nodes said as asked.
+    /// </summary>
+    [Fact]
+    public async Task APacksAnswer_ListsThePagesNodes_AsNoUseOfThem_AndNoOtherAnswerLists()
+    {
+        using var tree = await TreeAsync();
+        var queries = await QueriesAsync(tree);
+        var made = CodebaseContextPack.Make(queries, new ContextPackRequest("`Demo.Geometry.Total` and `Demo.Geometry.Twice`", _ => true) { Tokens = 150 });
+        var told = new GraphTextPages([new GraphTextLine(null, "member Demo.Geometry.Total moved", made.Nodes[0])], 150, number => $"codebase changes page {number}", _ => null);
+        var tool = Tool(tree, queries, pack: () => made.Paged, changes: () => told);
+        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, pack: true, changes: true);
+
+        var first = await AskAsync(tool, """{"op":"pack","page":1}""", ops);
+        var second = await AskAsync(tool, """{"op":"pack","page":2}""", ops);
+        var past = await AskAsync(tool, $$"""{"op":"pack","page":{{made.Pages!.Value + 1}}}""", ops);
+        var changes = await AskAsync(tool, """{"op":"changes","page":1}""", ops);
+        var find = await AskAsync(tool, """{"op":"find","query":"Total"}""", ops);
+
+        // Each page's nodes, read off its own lines: a line that lists no node aside, a node listed once.
+        List<string> NodesOn(int page) => [.. made.Page(page)!.Lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
+
+        Assert.True(made.More, made.Text);
+        Assert.Equal(GraphToolOutcome.Answered, second.Outcome);
+        Assert.Equal(made.Nodes, first.Facts.Listed);
+        Assert.Equal(NodesOn(2), second.Facts.Listed);
+        Assert.NotEmpty(second.Facts.Listed);
+        Assert.All(second.Facts.Listed, id => Assert.Contains($"{queries.Card(id).Handle} ", second.Text, StringComparison.Ordinal));
+
+        // A pack lists each node once: no page lists one another page did.
+        Assert.Empty(first.Facts.Listed.Intersect(second.Facts.Listed, StringComparer.Ordinal));
+
+        // Listed is no use: nothing asked, served or edited, on the answer or its line.
+        Assert.Equal(GraphToolFacts.None with { Listed = second.Facts.Listed }, second.Facts);
+        var line = GraphCallLine.Of("pack", second);
+        Assert.Equal(second.Facts.Listed, line.Listed);
+        Assert.Empty(line.Asked);
+        Assert.Empty(line.Served);
+        Assert.Empty(line.Edited);
+
+        // None lists where no pack page was given: past the last, a changes page, any other answer.
+        Assert.Equal((GraphToolOutcome.Usage, GraphToolFacts.None), (past.Outcome, past.Facts));
+        Assert.Equal((GraphToolOutcome.Answered, GraphToolFacts.None), (changes.Outcome, changes.Facts));
+        Assert.Empty(find.Facts.Listed);
+        Assert.Null(GraphCallLine.Of("changes", changes).Listed);
+        Assert.Null(GraphCallLine.Of("find", find).Listed);
+    }
+
+    /// <summary>
     /// <c>map</c> gives a page of the repository map the run keeps, from where the store kept it, from page 1 - the page a
     /// step at map is pushed - each page after it the map's own; a page past the last refused with how many there are; a page the disk will not
     /// give back said with why; a run given no map said; and the operation is not given a step whose operations do not
