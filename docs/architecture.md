@@ -4766,7 +4766,10 @@ with the key's name alone; and, where its `writes` narrow its worktree, its `unt
 written once, as it first starts, and read by every later start: its head, then each path the worktree
 held untracked, one to a line), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
-in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
+in `events.jsonl`, each line handed to the system whole and in order as it is written and put on the disk once per
+pass of the engine's loop - as the pass ends, before the loop waits on anything, and as the session ends
+(`IFlowRecords.Flush`) - so an end of the engine's process loses no line and a power loss at most the last pass's,
+never one before them - each read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
 line is set aside, said. A resume reconciles `flow.json` against every step's own record, taking the

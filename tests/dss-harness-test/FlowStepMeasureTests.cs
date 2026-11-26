@@ -1434,6 +1434,9 @@ public sealed class FlowStepMeasureTests
         public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries) => records.AffectedTests(entries);
 
         /// <inheritdoc/>
+        public void Flush() => records.Flush();
+
+        /// <inheritdoc/>
         public string NameAgent(IReadOnlyCollection<string> recorded) => records.NameAgent(recorded);
     }
 

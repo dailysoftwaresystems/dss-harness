@@ -129,6 +129,79 @@ public sealed class FlowRecordsTests
         Assert.Equal("Running", events[1].To);
     }
 
+    /// <summary>
+    /// The event log's lines are the system's as each is written - a reader beside the writer sees every one, so an end of
+    /// the engine's process loses none - and on the disk at the flush the engine asks as a pass ends, all of them at once:
+    /// no line is put on the disk alone, a flush with nothing written since the last costs nothing, and the log's close
+    /// flushes what is left, as a session left by a failure closes it.
+    /// </summary>
+    [Fact]
+    public void EventsAreTheSystemsAsWritten_AndOnTheDiskAtTheFlushOrTheClose_AllAtOnce()
+    {
+        using var temp = new TempDirectory();
+        var files = new CountingAppends(Files());
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = FlowEventLog.Open(files, file))
+        {
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "NotStarted", "Running", 1);
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "Running", "Done", 1);
+
+            Assert.Equal((3, 0, 0), (files.Appended, files.AppendedFlushed, files.Flushed));
+            Assert.Equal([1, 2, 3], FlowEventLog.Read(Files(), file).Events.Select(read => read.Seq));
+
+            log.Flush();
+            log.Flush();
+
+            Assert.Equal((3, 0, 1), (files.Appended, files.AppendedFlushed, files.Flushed));
+
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionEnded, to: "Done");
+        }
+
+        Assert.Equal((4, 0, 2), (files.Appended, files.AppendedFlushed, files.Flushed));
+        Assert.Equal([1, 2, 3, 4], FlowEventLog.Read(Files(), file).Events.Select(read => read.Seq));
+    }
+
+    /// <summary>A disk whose files of lines count how each line is written - put on the disk with it, or handed to the system - and each flush.</summary>
+    private sealed class CountingAppends(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public int Appended;
+        public int AppendedFlushed;
+        public int Flushed;
+
+        public override IAppendFile OpenForAppend(string path) => new Counted(base.OpenForAppend(path), this);
+
+        private sealed class Counted(IAppendFile file, CountingAppends counts) : IAppendFile
+        {
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => file.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes)
+            {
+                counts.AppendedFlushed++;
+                file.AppendFlushed(bytes);
+            }
+
+            public void Append(ReadOnlySpan<byte> bytes)
+            {
+                counts.Appended++;
+                file.Append(bytes);
+            }
+
+            public void Flush()
+            {
+                counts.Flushed++;
+                file.Flush();
+            }
+
+            public void Dispose() => file.Dispose();
+        }
+    }
+
     /// <summary>A last line with no newline is the crash's own: the reader ignores it and says so, and the next writer takes it back.</summary>
     [Fact]
     public void ATornLastLineIsIgnoredAndSaid_AndTakenBackByTheNextWriter()

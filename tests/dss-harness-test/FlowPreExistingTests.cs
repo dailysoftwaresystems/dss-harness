@@ -127,6 +127,9 @@ public sealed class FlowPreExistingTests
 
         public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
             => inner?.AffectedTests(entries);
+
+        public void Flush()
+            => inner?.Flush();
     }
 
     /// <summary>Records that keep each detail the run's changes say, with the instance it is said of.</summary>

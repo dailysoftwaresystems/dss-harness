@@ -7,16 +7,18 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// A run's events, <c>events.jsonl</c>: opened once for append, each durable line flushed, a per-run
-/// <see cref="FlowEvent.Seq"/>. History, never truth - the state files are written before the event that tells of
-/// them, so a client woken by an event reads the files that tell of it already written.
+/// A run's events, <c>events.jsonl</c>: opened once for append, a per-run <see cref="FlowEvent.Seq"/>, each line handed
+/// to the system whole and in order as it is appended and put on the disk once per pass of the engine
+/// (<see cref="Flush"/>) and as the log closes - so an end of the engine's process loses none, and a power loss at most the
+/// last pass's lines, never a line before them. History, never truth - the state files are written before the event that
+/// tells of them, so a client woken by an event reads the files that tell of it already written.
 /// </summary>
 /// <remarks>
 /// The log is one <see cref="AppendLog"/>: its one in-process lock keeps two writers in this process from interleaving
 /// their lines, its claim keeps a second writer out, and its opening takes back the half of a torn line a killed engine
-/// left. The reader sets aside a last line with no newline, and says so - that line alone, whatever it holds, for a
-/// line is durable only once its newline is written; every whole line is an event numbered one after the one before
-/// it, and one that is not is refused by its line, never skipped.
+/// left, or a power loss left of the lines of the pass it cut off. The reader sets aside a last line with no newline,
+/// and says so - that line alone, whatever it holds, for a line is whole only once its newline is written; every whole
+/// line is an event numbered one after the one before it, and one that is not is refused by its line, never skipped.
 /// </remarks>
 public sealed class FlowEventLog : IDisposable
 {
@@ -50,7 +52,10 @@ public sealed class FlowEventLog : IDisposable
         return new FlowEventLog(AppendLog.Open(fileSystem, file), events.Count > 0 ? events[^1].Seq : 0);
     }
 
-    /// <summary>Appends one event whole, flushed before it answers, numbered from the run's own count.</summary>
+    /// <summary>
+    /// Appends one event whole, numbered from the run's own count: the system's before it answers, and on the disk at the
+    /// next <see cref="Flush"/>.
+    /// </summary>
     /// <param name="at">When the event happened.</param>
     /// <param name="kind">What changed: the event's kind is its name (<see cref="FlowEvent.KindOf"/>).</param>
     /// <param name="instance">The instance it tells of; null for the run's own.</param>
@@ -72,14 +77,21 @@ public sealed class FlowEventLog : IDisposable
                 throw new InvalidOperationException($"Refusing to append an event that does not read back: {problem}.");
             }
 
-            _log.Append(JsonSerializer.Serialize(written, JsonStateFile.LineOptions));
+            _log.Write(JsonSerializer.Serialize(written, JsonStateFile.LineOptions));
             _seq = written.Seq;
         }
 
         return written;
     }
 
-    /// <summary>Closes the log. Its last line is whole, and the next open begins after it.</summary>
+    /// <summary>
+    /// Puts every event appended since the last flush on the disk: the engine asks it as each of its passes ends and as
+    /// its session does (<see cref="IFlowRecords.Flush"/>). Nothing where nothing was appended.
+    /// </summary>
+    /// <exception cref="IOException">They could not be put on the disk.</exception>
+    public void Flush() => _log.Flush();
+
+    /// <summary>Closes the log, every event appended put on the disk first. Its last line is whole, and the next open begins after it.</summary>
     public void Dispose() => _log.Dispose();
 
     /// <summary>

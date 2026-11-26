@@ -3,7 +3,8 @@ namespace DssHarness.Core.FileSystem;
 /// <summary>
 /// One file of lines that only grows, open for its one writer (<see cref="IFileSystem.OpenForAppend"/>): what a writer
 /// needs to take back a torn last line when it opens the file, and to add a line that is on the disk before the next is
-/// taken. Readers stand beside it, sharing what it holds.
+/// taken - or, for a writer that puts its lines on the disk a batch at a time, a line the system holds at once and the
+/// disk at the batch's flush. Readers stand beside it, sharing what it holds.
 /// </summary>
 public interface IAppendFile : IDisposable
 {
@@ -31,6 +32,26 @@ public interface IAppendFile : IDisposable
     /// <param name="bytes">What is appended.</param>
     /// <exception cref="IOException">The bytes could not be written or put on the disk.</exception>
     void AppendFlushed(ReadOnlySpan<byte> bytes);
+
+    /// <summary>
+    /// Writes <paramref name="bytes"/> at the file's end, handed to the system before it returns - a reader sees them, and
+    /// an end of this process loses none of them - and on the disk at the next <see cref="Flush"/>. Where they could not be
+    /// written, what was written of them is taken back as far as the disk allows. A file that puts every write on the
+    /// disk as it takes it (<see cref="AppendFlushed"/>) needs no flush after it, which is what a file of no flush of its
+    /// own does.
+    /// </summary>
+    /// <param name="bytes">What is appended.</param>
+    /// <exception cref="IOException">The bytes could not be written.</exception>
+    void Append(ReadOnlySpan<byte> bytes) => AppendFlushed(bytes);
+
+    /// <summary>
+    /// Puts every byte written since the last flush on the disk. Nothing is taken back where it cannot: what was written is
+    /// the system's already, each line whole and in its order, and is counted written by its writer.
+    /// </summary>
+    /// <exception cref="IOException">What was written could not be put on the disk.</exception>
+    void Flush()
+    {
+    }
 }
 
 /// <summary>
@@ -150,6 +171,24 @@ internal sealed class PhysicalAppendFile : IAppendFile
             throw;
         }
     }
+
+    public void Append(ReadOnlySpan<byte> bytes)
+    {
+        var end = _file.Seek(0, SeekOrigin.End);
+
+        try
+        {
+            // The file has no buffer of its own: the write is the system's when it returns.
+            _file.Write(bytes);
+        }
+        catch (IOException)
+        {
+            TakeBack(end);
+            throw;
+        }
+    }
+
+    public void Flush() => _file.Flush(flushToDisk: true);
 
     public void Dispose()
     {

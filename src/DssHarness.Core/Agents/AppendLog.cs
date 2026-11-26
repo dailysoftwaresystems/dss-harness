@@ -4,8 +4,10 @@ using DssHarness.Core.FileSystem;
 namespace DssHarness.Core.Agents;
 
 /// <summary>
-/// One file of lines, appended: a line is written whole and on the disk before the next is taken, so a file whose writer
-/// was killed ends at its last whole line - and one opened again begins there, whatever a torn write left.
+/// One file of lines, appended: a line is written whole and on the disk before the next is taken (<see cref="Append"/>) -
+/// or, for a writer that puts its lines on the disk a batch at a time, written whole and handed to the system before the
+/// next is taken, and on the disk at the batch's <see cref="Flush"/> (<see cref="Write"/>) - so a file whose writer was
+/// killed ends at its last whole line, and one opened again begins there, whatever a torn write left.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,6 +28,9 @@ internal sealed class AppendLog : IDisposable
 
     private readonly IAppendFile _file;
     private readonly Lock _gate = new();
+
+    /// <summary>Whether a line was written since the last flush (<see cref="Write"/>), which the next flush puts on the disk.</summary>
+    private bool _unflushed;
 
     private AppendLog(IAppendFile file, string path)
     {
@@ -77,6 +82,56 @@ internal sealed class AppendLog : IDisposable
     /// </exception>
     public void Append(string line)
     {
+        var bytes = BytesOf(line);
+
+        lock (_gate)
+        {
+            _file.AppendFlushed(bytes);
+        }
+    }
+
+    /// <summary>
+    /// Appends one line, whole, handed to the system before any other line may be written - a reader sees it, and an end of
+    /// this process loses none of it - and on the disk at the next <see cref="Flush"/>, with every line written before it.
+    /// </summary>
+    /// <param name="line">The line, without its newline, and holding none.</param>
+    /// <exception cref="ArgumentOutOfRangeException">As <see cref="Append"/>; nothing was written.</exception>
+    public void Write(string line)
+    {
+        var bytes = BytesOf(line);
+
+        lock (_gate)
+        {
+            _file.Append(bytes);
+            _unflushed = true;
+        }
+    }
+
+    /// <summary>
+    /// Puts every line written since the last flush (<see cref="Write"/>) on the disk, at once; nothing where none was, so a
+    /// flush asked with nothing written costs nothing.
+    /// </summary>
+    /// <exception cref="IOException">They could not be put on the disk; they are written still, and the next flush tries again.</exception>
+    public void Flush()
+    {
+        lock (_gate)
+        {
+            if (!_unflushed)
+            {
+                return;
+            }
+
+            _file.Flush();
+            _unflushed = false;
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="line"/> as the bytes its writing appends, its newline last - refused, with nothing written, where it
+    /// holds a line break of its own.
+    /// </summary>
+    private byte[] BytesOf(string line)
+    {
         ArgumentNullException.ThrowIfNull(line);
 
         if (line.AsSpan().IndexOfAny('\n', '\r') is var at and >= 0)
@@ -86,12 +141,7 @@ internal sealed class AppendLog : IDisposable
                 $"A line of '{FilePath}' holds a line break at character {at}, and would be read back as two; nothing was written.");
         }
 
-        var bytes = Encoding.UTF8.GetBytes(line + "\n");
-
-        lock (_gate)
-        {
-            _file.AppendFlushed(bytes);
-        }
+        return Encoding.UTF8.GetBytes(line + "\n");
     }
 
     /// <summary>How many bytes the log holds, its last line whole.</summary>
@@ -174,8 +224,21 @@ internal sealed class AppendLog : IDisposable
         }
     }
 
-    /// <summary>Closes the log. Its last line is whole, and the next open begins after it.</summary>
-    public void Dispose() => _file.Dispose();
+    /// <summary>
+    /// Closes the log, every line written since the last flush put on the disk first. Its last line is whole, and the next
+    /// open begins after it.
+    /// </summary>
+    public void Dispose()
+    {
+        try
+        {
+            Flush();
+        }
+        finally
+        {
+            _file.Dispose();
+        }
+    }
 
     /// <summary>
     /// How many bytes of <paramref name="file"/> end at its last whole line, read backwards from its end a chunk at a
