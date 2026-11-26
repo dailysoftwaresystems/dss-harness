@@ -1993,10 +1993,50 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A session's end reads the process table once, before anything is signalled or held, and reads the system again
+    /// once it holds the session's group in place - the system's own listing of every process - never through the table,
+    /// on Linux and macOS: on macOS, while a child of a process stands stopped, that process's runtime spins over reaping
+    /// its children and holds the lock every start of a program takes, so a table read through <c>ps</c> with the group -
+    /// here this process's own child - held never began, the group stood held for good, and every start of every other
+    /// test of the suite waited behind it. The leader is this process's child, leading a session of its own and refusing to
+    /// be asked to end, so the group is held as the system is read again; it is ended.
+    /// </summary>
+    [Fact]
+    public async Task ASessionsEnd_ReadsTheTableOnceBeforeItHoldsAnything_AndTheSystemAgainInPlace()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a session is Linux's and macOS's; Windows ends a job, which needs no table.");
+
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        using var leader = Process.Start(TestHost.StartOf(Child("lead-then", "session", "ignore-term-and-sleep", "300000", ready)))!;
+
+        try
+        {
+            Assert.True(Until(() => getsid(leader.Id) == leader.Id && File.Exists(ready)), $"the process {leader.Id} never led a session of its own refusing to be asked to end");
+
+            var ends = new CountedEnds(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()));
+            var ending = await Containment.EndSessionAsync(leader.Id, ends.Table.ReadAsync, TimeSpan.Zero, _ => { }, TimeProvider.System, ends)
+                .WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.Equal([0], ends.HeldAtEachReading);
+            Assert.Equal([1], ends.HeldAtEachListing);
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its session's end");
+        }
+        finally
+        {
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
     /// A process group a sweep ends where the process table cannot be read is ended by its id, which needs no table, and
-    /// says what was not reached as a group's: where the table cannot be read at all, and where it reads once and not
-    /// again once the group was asked to end. One already ended, its table unread, is said as one that could not be told
-    /// to have nothing left - never taken for one that held nothing.
+    /// says what was not reached as a group's: where the table cannot be read at all, and where it reads but the system's
+    /// own listing of every process cannot be read again once the group was asked to end and held. One already ended, its
+    /// table unread, is said as one that could not be told to have nothing left - never taken for one that held nothing.
     /// </summary>
     [Theory]
     [InlineData("never")]
@@ -2019,11 +2059,16 @@ public sealed class ContainExecTests
             }
 
             var platform = new HostPlatform();
-            IProcessTable table = read == "once"
-                ? new ReadOnce(ProcessTableFactory.Create(platform, ContainingRunner()), UnreadableTable.Raising)
-                : UnreadableTable.Raising;
-
-            var ending = await new LeftSessions(platform, table).EndAsync(group.Id, group: true).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+            var ending = read == "once"
+                ? await Containment.EndSessionAsync(
+                    group.Id,
+                    ProcessTableFactory.Create(platform, ContainingRunner()).ReadAsync,
+                    TimeSpan.Zero,
+                    _ => { },
+                    TimeProvider.System,
+                    new Unlisted(),
+                    group: true).WaitAsync(LongBound, TestContext.Current.CancellationToken)
+                : await new LeftSessions(platform, UnreadableTable.Raising).EndAsync(group.Id, group: true).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             Assert.Equal(
                 new HeldEnding(
@@ -2032,8 +2077,8 @@ public sealed class ContainExecTests
                     {
                         "never" => UnreadableTable.Unreached("its group was ended", group: true),
                         "ended" => UnreadableTable.Unreached("its group had already ended", group: true),
-                        _ => "the process table could not be read again once the process group a child apart from the terminal led had been asked "
-                            + $"to end ({UnreadableTable.PsNotStarted}): its group was ended, and what of its tree had left the group was not reached",
+                        _ => "the system's table of every process could not be read again once the process group a child apart from the terminal led had been asked "
+                            + "to end: its group was ended, and what of its tree had left the group was not reached",
                     }),
                 ending);
             Assert.True(group.WaitForExit(LongBound), $"the group {group.Id} outlived its end");
@@ -2800,13 +2845,77 @@ public sealed class ContainExecTests
         }
     }
 
-    /// <summary>A process table read once from <paramref name="first"/>, and from <paramref name="then"/> ever after.</summary>
-    private sealed class ReadOnce(IProcessTable first, IProcessTable then) : IProcessTable
+    /// <summary>The machine's ends, but for the system's listing of every process, which cannot be read.</summary>
+    private sealed class Unlisted : ProcessEnds
     {
-        private int _reads;
+        public override IReadOnlyList<int>? Every() => null;
+    }
 
-        public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
-            => (Interlocked.Increment(ref _reads) == 1 ? first : then).ReadAsync(cancellationToken);
+    /// <summary>
+    /// The machine's ends, counting each process held, and saying how many had been held as each listing of every process
+    /// was asked - and as each reading of the process table <see cref="Table"/> reads was.
+    /// </summary>
+    private sealed class CountedEnds(IProcessTable inner) : ProcessEnds
+    {
+        private int _held;
+        private readonly List<int> _heldAtEachReading = [];
+        private readonly List<int> _heldAtEachListing = [];
+
+        /// <summary>How many processes had been held as each reading of <see cref="Table"/> was asked, in order.</summary>
+        public IReadOnlyList<int> HeldAtEachReading
+        {
+            get
+            {
+                lock (_heldAtEachReading)
+                {
+                    return [.. _heldAtEachReading];
+                }
+            }
+        }
+
+        /// <summary>How many processes had been held as each listing of every process was asked, in order.</summary>
+        public IReadOnlyList<int> HeldAtEachListing
+        {
+            get
+            {
+                lock (_heldAtEachReading)
+                {
+                    return [.. _heldAtEachListing];
+                }
+            }
+        }
+
+        /// <summary>The process table, as <c>inner</c> reads it.</summary>
+        public IProcessTable Table => new Counting(this, inner);
+
+        public override int Hold(int id)
+        {
+            Interlocked.Increment(ref _held);
+            return base.Hold(id);
+        }
+
+        public override IReadOnlyList<int>? Every()
+        {
+            lock (_heldAtEachReading)
+            {
+                _heldAtEachListing.Add(Volatile.Read(ref _held));
+            }
+
+            return base.Every();
+        }
+
+        private sealed class Counting(CountedEnds ends, IProcessTable inner) : IProcessTable
+        {
+            public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+            {
+                lock (ends._heldAtEachReading)
+                {
+                    ends._heldAtEachReading.Add(Volatile.Read(ref ends._held));
+                }
+
+                return inner.ReadAsync(cancellationToken);
+            }
+        }
     }
 
     private static int GetSidOfThisProcess() => getsid(0);

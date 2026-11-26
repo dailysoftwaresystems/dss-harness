@@ -275,6 +275,12 @@ its exit standing until it is one, one the harness may not signal - another user
 and the group for none once every member it is listed to hold is one, never by a signal alone, which
 macOS passes a process in its exit over for - told every five minutes, and killed at what is left of the child's time limit,
 or at once where a sweep ends what a killed run left, that run's bound having passed with it.
+What still stands is held still, the group as one, and the system read again before it is killed -
+in place, the system's own listing of every process, each member of the first reading known by its id
+and its start read as that reading was taken, never through a program: on macOS, for as long as a
+child of a process stands stopped, that process's runtime spins over reaping its children and holds
+the lock every start of a program takes, so a reading through `ps` there, with the group - which may
+hold the process's own child - held, never began, and every start of the process waited behind it.
 Nothing a session's end does acts on the process running it: a session, or a group, that holds that
 process, or whose leader it descends from, is refused before anything is signalled - the asking is
 taken for a cancel and gone on through, and the hold after it would stop that process where it

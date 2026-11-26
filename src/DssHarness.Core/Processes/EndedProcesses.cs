@@ -220,11 +220,11 @@ internal sealed class KeptProcess : IDisposable
 }
 
 /// <summary>
-/// How a process a stop keeps is held, ended, and seen to have gone, a group listed and ended, and Windows' list of every
-/// process and each process's order read: the machine's own (<see cref="Machine"/>) - or a test's, standing in for a
-/// process whose end is slow, a listing that misses a member, a process the system lists that no hold reaches yet, or a
-/// clock that stepped between a creator's creation and its child's, which no real process, listing or clock can be made
-/// to be on demand.
+/// How a process a stop keeps is held, ended, and seen to have gone, a group listed and ended, every process listed, and
+/// Windows' list of every process and each process's order read: the machine's own (<see cref="Machine"/>) - or a test's,
+/// standing in for a process whose end is slow, a listing that misses a member or that cannot be read, a process the
+/// system lists that no hold reaches yet, or a clock that stepped between a creator's creation and its child's, which no
+/// real process, listing or clock can be made to be on demand.
 /// </summary>
 internal class ProcessEnds
 {
@@ -249,6 +249,13 @@ internal class ProcessEnds
     /// </summary>
     /// <param name="group">The group's id.</param>
     public virtual IReadOnlyList<int>? Members(int group) => Containment.MembersOf(group);
+
+    /// <summary>
+    /// The id of every process the system lists, on Linux and macOS, read in place now (<see cref="Containment.EveryProcess"/>),
+    /// as a session's end reads the system again once it holds the group: with no program started; <see langword="null"/>
+    /// where the system would not list them.
+    /// </summary>
+    public virtual IReadOnlyList<int>? Every() => Containment.EveryProcess();
 
     /// <summary>
     /// Holds the process <paramref name="id"/> names still at once, on Linux and macOS (<see cref="Containment.HoldNow"/>):
