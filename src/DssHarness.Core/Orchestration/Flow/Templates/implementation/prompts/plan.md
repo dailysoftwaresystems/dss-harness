@@ -77,6 +77,16 @@ for that runner. The units are given to every leg the item is tested on, so each
 leg. A unit may name only tests that are there or that the item writes. One that a leg's own exclusions leave nothing
 of is refused before anything is built, and a person is asked.
 
+## What the recovery is fixing
+
+Every issue that was there before the run that the run has taken, each with its id, what became of it (listed, being
+fixed or fixed, alone or with the issue whose root cause it shares), its title and where; empty where none is:
+
+{run.preExisting}
+
+An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines; an item that
+needs it fixed builds after the fix, on the tree the fix leaves - the run holds it until the fix is done.
+
 ## How recommendations are made in this repository
 
 {recommendations}

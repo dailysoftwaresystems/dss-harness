@@ -54,6 +54,16 @@ planning the extension of what exists, not by a better reason for the new thing 
 do what the finding says. Whatever this revision adds, search for first, as before, and keep each item's lists of
 what it reuses, creates and replaces true of the plan as it now is.
 
+## What the recovery is fixing
+
+Every issue that was there before the run that the run has taken, each with its id, what became of it (listed, being
+fixed or fixed, alone or with the issue whose root cause it shares), its title and where; empty where none is:
+
+{run.preExisting}
+
+An issue the list says is being fixed is the recovery's: no work item fixes it or rewrites its lines; an item that
+needs it fixed builds after the fix, on the tree the fix leaves - the run holds it until the fix is done.
+
 ## Where a plan update is under way
 
 {update.cause}

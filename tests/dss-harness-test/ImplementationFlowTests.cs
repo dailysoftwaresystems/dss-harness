@@ -545,7 +545,25 @@ public sealed class ImplementationFlowTests
 
         /// <summary>Queues <paramref name="answers"/> for the definition <paramref name="definition"/>, in order.</summary>
         public void Queue(string definition, params AgentRunResult[] answers)
-            => _queued[definition] = new Queue<AgentRunResult>(answers);
+        {
+            lock (_asked)
+            {
+                _queued[definition] = new Queue<AgentRunResult>(answers);
+            }
+        }
+
+        /// <summary>
+        /// The next answer queued for <paramref name="step"/>'s definition, taken under the lock every request is kept
+        /// under: agents of two items side by side ask at once, and a queue taken from two threads hands one answer twice
+        /// and the other nothing. Null where none is queued.
+        /// </summary>
+        private AgentRunResult? Dequeued(AgentStepRequest step)
+        {
+            lock (_asked)
+            {
+                return _queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : null;
+            }
+        }
 
         /// <summary>
         /// What one agent answers, where a test sets it: asked of each request before the queue and the standard answer,
@@ -589,7 +607,7 @@ public sealed class ImplementationFlowTests
 
             var result = AsTheGateEnds(step, held is { } waiting
                 ? await HeldAnswerAsync(waiting, step, cancellationToken)
-                : Answer?.Invoke(step) ?? (_queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step)));
+                : Answer?.Invoke(step) ?? Dequeued(step) ?? Standard(step));
 
             if (Events is { } says)
             {
@@ -2136,6 +2154,7 @@ public sealed class ImplementationFlowTests
                             ["critical"] = false,
                             ["why"] = "a defect in code the run's change does not touch that blocks nothing",
                             ["duplicates"] = "",
+                            ["joins"] = "",
                             ["proof"] = new JsonObject
                             {
                                 ["kind"] = "read",

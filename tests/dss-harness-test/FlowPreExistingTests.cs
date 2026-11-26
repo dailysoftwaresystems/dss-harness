@@ -97,15 +97,51 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
-    /// The run's records as a test watches them: each write passed on where the run keeps records, and a signal once a
-    /// snapshot holds what the test waits for.
+    /// The run's records as a test watches them: each write passed on where the run keeps records, the last snapshot
+    /// kept, and a signal once a snapshot holds what the test waits for - the one it was made with, and each it asks
+    /// for later.
     /// </summary>
     private sealed class Watched(IFlowRecords? inner, Func<FlowSnapshot, bool> waitsFor) : IFlowRecords
     {
         private readonly TaskCompletionSource _seen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly List<(Func<FlowSnapshot, bool> Holds, TaskCompletionSource Seen)> _later = [];
+        private readonly Lock _gate = new();
+        private FlowSnapshot? _last;
 
         /// <summary>Completes once a snapshot written holds what the test waits for.</summary>
         public Task Seen => _seen.Task;
+
+        /// <summary>The last snapshot written; null before the first.</summary>
+        public FlowSnapshot? Last
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _last;
+                }
+            }
+        }
+
+        /// <summary>Completes once a snapshot written holds <paramref name="holds"/> - the last one already, or a later one.</summary>
+        public Task Until(Func<FlowSnapshot, bool> holds)
+        {
+            var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            lock (_gate)
+            {
+                if (_last is { } last && holds(last))
+                {
+                    _ = seen.TrySetResult();
+                }
+                else
+                {
+                    _later.Add((holds, seen));
+                }
+            }
+
+            return seen.Task;
+        }
 
         /// <inheritdoc/>
         public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
@@ -115,6 +151,17 @@ public sealed class FlowPreExistingTests
             if (waitsFor(snapshot))
             {
                 _ = _seen.TrySetResult();
+            }
+
+            lock (_gate)
+            {
+                _last = snapshot;
+
+                foreach (var met in _later.Where(wait => wait.Holds(snapshot)).ToList())
+                {
+                    _ = met.Seen.TrySetResult();
+                    _ = _later.Remove(met);
+                }
             }
         }
 
@@ -177,8 +224,8 @@ public sealed class FlowPreExistingTests
     private static FlowPreExistingReport Issue(string title, bool blocks = false)
         => new(title, "what it is", "src/Parser.cs", "read the file and saw it", blocks);
 
-    /// <summary>The triage's answer for one course.</summary>
-    private static FlowStepResult Course(string course, string title)
+    /// <summary>The triage's answer for one course, the issue where <paramref name="where"/> says - in the parser's file where it says nowhere.</summary>
+    private static FlowStepResult Course(string course, string title, params string[] where)
     {
         var answer = new JsonObject
         {
@@ -195,9 +242,377 @@ public sealed class FlowPreExistingTests
                 ["quote"] = "the broken thing",
             },
         };
-        answer["where"] = new JsonArray("src/Parser.cs");
+        answer["where"] = new JsonArray([.. (where.Length == 0 ? ["src/Parser.cs"] : where).Select(path => (JsonNode)path)]);
 
         return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer);
+    }
+
+    /// <summary>The triage's answer for <paramref name="course"/> that names, in <paramref name="field"/>, the issue <paramref name="id"/> - the one it repeats, or the one whose root cause it shares.</summary>
+    private static FlowStepResult Naming(string course, string title, string field, string id, params string[] where)
+    {
+        var answer = Course(course, title, where);
+        answer.Output![field] = id;
+
+        return answer;
+    }
+
+    /// <summary>The triage's answer that joins its issue - where <paramref name="where"/> says - to the one <paramref name="id"/> names, whose root cause it shares.</summary>
+    private static FlowStepResult Joins(string title, string id, params string[] where)
+        => Naming("join", title, "joins", id, where);
+
+    /// <summary>
+    /// A flow whose recovery diagnoses before it mends, the diagnosis reading the issues joined to the one it fixes and,
+    /// for an issue joined to a fix that was diagnosing, what that fix did; an always step asks what became of each issue.
+    /// </summary>
+    private const string OneCause = """
+        name: flow
+        recover:
+          onSuccess: failed-step
+          onFailure: pause
+          steps:
+            - name: diagnose
+              type: reason
+              prompt: diagnose.md
+              outputs: diagnosis.json
+            - name: mend
+              type: orient
+              dependsOn: [diagnose]
+        steps:
+          - name: think
+            type: reason
+            prompt: work.md
+            outputs: work.json
+            onPreExisting: triage
+          - name: tell
+            type: pause
+            always: true
+            question: 'what was there before: {run.preExisting}'
+            options: [ok, no]
+          - name: triage
+            type: reason
+            prompt: triage.md
+            outputs: pre-existing.json
+            raised: preExisting
+            onAddress: recover
+        """;
+
+    /// <summary>The prompts of <see cref="OneCause"/>, as its workflow's files hold them.</summary>
+    private static string OneCausePrompt(string named)
+        => named switch
+        {
+            "work.md" => "Do the work.",
+            "diagnose.md" => "joined: {source.joined}; after: {source.joinedTo}",
+            _ => "Triage it.",
+        };
+
+    /// <summary>
+    /// Two issues of one root cause take one visit of the recovery: the second's triage joins it to the first, whose
+    /// triage has not ended yet, and once that one sends its issue to fix, the visit's diagnosis is given the joined issue
+    /// with its id; the visit's end settles both, and {run.preExisting} and the run's counts say each fixed, the joined
+    /// one with the issue it joined.
+    /// </summary>
+    [Fact]
+    public async Task TwoIssuesOfOneRootCause_TakeOneVisit_WhichSettlesBoth_AndTheTallyNamesEach()
+    {
+        var definition = Parse(OneCause);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .OnAsync("triage", async run =>
+            {
+                if (run.Issue!.Title == "the second hole")
+                {
+                    return Joins(run.Issue.Title, "triage");
+                }
+
+                await joined.Task;
+                return Course("fix", run.Issue.Title);
+            })
+            .On("diagnose", run =>
+            {
+                lock (prompts)
+                {
+                    prompts[run.Instance] = FlowTemplate.Joined(run.Prompts!["prompt"]);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+        _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(["recover"], coordinator.Instances.Keys.Where(id => id.StartsWith("recover", StringComparison.Ordinal) && !id.Contains('.', StringComparison.Ordinal)));
+        Assert.Equal(
+            """joined: [{"id":"triage+2","title":"the second hole","description":"what it is","where":"src/Parser.cs","proof":"read the file and saw it"}]; after: """,
+            prompts["recover.diagnose"]);
+        // In the order the issues were taken: the join's triage ended first.
+        Assert.Equal(
+            "what was there before: triage+2: fixed with triage - the second hole (src/Parser.cs); triage: fixed - the first hole (src/Parser.cs)",
+            coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+        Assert.Equal(new WorkflowPreExisting(0, 2, 0, 0), watched.Last!.PreExisting);
+    }
+
+    /// <summary>
+    /// An issue joined to one whose triage then lists it - it ends without a fix - is triaged again on its own: a triage
+    /// of its own is raised for it, the run's records saying why, told the issues the run holds with the join left out,
+    /// and what that triage answers is what becomes of it.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueJoinedToOneThatEndsWithoutAFix_IsTriagedAgainOnItsOwn()
+    {
+        var definition = Parse(OneCause);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .OnAsync("triage", async run =>
+            {
+                lock (prompts)
+                {
+                    prompts[run.Instance] = FlowTemplate.Joined(run.Prompts!["prompt"]);
+                }
+
+                switch (run.Instance)
+                {
+                    case "triage+2":
+                        return Joins(run.Issue!.Title, "triage");
+                    case "triage":
+                        await joined.Task;
+                        return Course("list", run.Issue!.Title);
+                    default:
+                        return Course("list", run.Issue!.Title);
+                }
+            });
+        var said = new Said();
+        var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+        _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal([("think", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("triage+3", "the second hole")], runner.Started);
+        Assert.Contains(("triage+2", "the issue 'the second hole' is triaged again on its own: 'triage', whose root cause it joined, ended without a fix"), said.Details);
+        Assert.Equal(
+            "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it has taken already, yours left out, each with its id, what became of it, its title and where it is:\n\n"
+                + "- pe-1: listed - the first hole (src/Parser.cs)\n\n"
+                + "Where yours is one of these, the course is duplicate, and duplicates names its id. No issue taken before yours is being triaged or being fixed, so yours joins none.\n</pre-existing>\n",
+            prompts["triage+3"]);
+        Assert.Equal(
+            "what was there before: pe-1: listed - the first hole (src/Parser.cs); pe-2: listed - the second hole (src/Parser.cs)",
+            coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+        Assert.DoesNotContain("recover", coordinator.Instances.Keys);
+    }
+
+    /// <summary>
+    /// An issue joined to one whose visit is diagnosing already goes with no visit begun before it joined: it waits for
+    /// that visit to end, and then takes a visit of its own, its diagnosis told what that visit fixed - the issue it
+    /// joined, by its id, the visit and the remedy items it built - so the second fix starts from the tree the first left;
+    /// the first visit's diagnosis was given no joined issue, and each is fixed on its own.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueJoinedWhileTheVisitItJoinsIsDiagnosing_TakesAVisitOfItsOwnOnceThatOneEnds_ToldWhatItFixed()
+    {
+        var definition = Parse(OneCause);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var diagnosing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .OnAsync("triage", async run =>
+            {
+                if (run.Issue!.Title == "the first hole")
+                {
+                    return Course("fix", run.Issue.Title);
+                }
+
+                await diagnosing.Task;
+                return Joins(run.Issue.Title, "triage");
+            })
+            .OnAsync("diagnose", async run =>
+            {
+                lock (prompts)
+                {
+                    prompts[run.Instance] = FlowTemplate.Joined(run.Prompts!["prompt"]);
+                }
+
+                if (run.Instance == "recover.diagnose")
+                {
+                    diagnosing.TrySetResult();
+                    await joined.Task;
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var said = new Said();
+        var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+        _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(
+            [("think", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("recover.diagnose", null), ("recover.mend", null), ("recover+2.diagnose", null), ("recover+2.mend", null)],
+            runner.Started);
+        Assert.Equal("joined: []; after: ", prompts["recover.diagnose"]);
+        Assert.Equal(
+            """joined: []; after: {"id":"triage","title":"the first hole","where":"src/Parser.cs","visit":"recover","items":[]}""",
+            prompts["recover+2.diagnose"]);
+        Assert.Contains(("triage+2", "the issue 'the second hole' is given a visit of its own: 'triage', whose root cause it joined, was fixed by a visit whose diagnosis began before it joined"), said.Details);
+        Assert.Equal(
+            "what was there before: triage: fixed - the first hole (src/Parser.cs); triage+2: fixed - the second hole (src/Parser.cs)",
+            coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+    }
+
+    /// <summary>
+    /// A step an issue joined to another's fix stops runs again once that fix is done, sent back by the visit it went
+    /// with - though the issue it joined stops nothing, and its own reporter stays as it ended.
+    /// </summary>
+    [Fact]
+    public async Task AStepAJoinedIssueStops_RunsAgainOnceTheVisitItWentWithIsDone()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: first
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: second
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+                dependsOn: [first]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("first", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole")]))
+            .On("second", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the second hole", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("triage", async run =>
+            {
+                if (run.Issue!.Title == "the second hole")
+                {
+                    return Joins(run.Issue.Title, "triage");
+                }
+
+                await joined.Task;
+                return Course("fix", run.Issue.Title);
+            });
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+        _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("recover", coordinator.Instances["second"].LeftBy);
+        Assert.Equal(1, runner.Started.Count(started => started.Instance == "second+2"));
+        Assert.Null(coordinator.Instances["first"].LeftBy);
+        Assert.False(coordinator.Instances.ContainsKey("recover+2"));
+    }
+
+    /// <summary>
+    /// A triage names, as the issue its own repeats or the one whose root cause it shares, only an issue taken before its
+    /// own - so no two ever name each other and both vanish - and joins only an issue the run has taken: an answer that
+    /// names one taken after it, itself, or none the run holds fails the triage step, saying so.
+    /// </summary>
+    [Theory]
+    [InlineData("join", "joins", "triage+2", "its answer's joins names 'triage+2', which was not taken before its own issue: an issue names only one taken before it")]
+    [InlineData("duplicate", "duplicates", "triage+2", "its answer's duplicates names 'triage+2', which was not taken before its own issue: an issue names only one taken before it")]
+    [InlineData("join", "joins", "triage", "its answer's joins names 'triage', which was not taken before its own issue: an issue names only one taken before it")]
+    [InlineData("join", "joins", "pe-7", "its answer joins 'pe-7', which is no issue the run has taken: joins names the id of one being triaged or being fixed")]
+    [InlineData("join", "joins", "", "its answer joins no issue: joins names the id of the one whose root cause its own shares")]
+    public async Task ATriageNamingAnIssueItMayNot_FailsTheTriageStep(string course, string field, string named, string error)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+                onFailure: continue
+            """);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .On("triage", run => run.Instance == "triage" ? Naming(course, run.Issue!.Title, field, named) : Course("list", run.Issue!.Title));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var triage = coordinator.Instances["triage"];
+        Assert.Equal(FlowInstanceState.Failed, triage.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, triage.Exit);
+        Assert.Equal(error, triage.Error);
+    }
+
+    /// <summary>
+    /// A triage that began after the issue it would join had ended without a fix may not join it - it was never being
+    /// triaged or being fixed while this one looked - so an issue triaged again on its own never joins the same fix twice.
+    /// </summary>
+    [Fact]
+    public async Task AJoinToAnIssueThatEndedWithoutAFixBeforeItBegan_FailsTheTriageStep()
+    {
+        var definition = Parse("""
+            name: flow
+            maxReasoningAgents: 1
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+                onFailure: continue
+            """);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .On("triage", run => run.Instance == "triage" ? Course("list", run.Issue!.Title) : Joins(run.Issue!.Title, "triage"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var joining = coordinator.Instances["triage+2"];
+        Assert.Equal(FlowInstanceState.Failed, joining.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, joining.Exit);
+        Assert.Equal("its answer joins 'triage', which had ended without a fix before it began: an issue joins only one being triaged or being fixed", joining.Error);
     }
 
     /// <summary>Each issue a reason step's answer reports raises one instance of the triage step, which is never scheduled.</summary>
@@ -338,7 +753,7 @@ public sealed class FlowPreExistingTests
 
         // The listed one is in the run's words; the unproven one is never shown as a fact, only named as unproven.
         var asked = coordinator.OpenQuestions.Single(question => question.Kind == "pause");
-        Assert.Equal("what was there before: listed - a broken test (src/Parser.cs); unproven - a stale document", asked.Problem);
+        Assert.Equal("what was there before: pe-1: listed - a broken test (src/Parser.cs); triage+2: unproven - a stale document", asked.Problem);
     }
 
     /// <summary>An issue the triage answers fix for is given to the recovery, and where it blocks the reporting step that step runs again.</summary>
@@ -461,36 +876,14 @@ public sealed class FlowPreExistingTests
         Assert.False(coordinator.Instances.ContainsKey("think+2"));
     }
 
-    /// <summary>A fix asked while the recovery is already at work waits for that visit's end: the recovery never calls itself.</summary>
+    /// <summary>
+    /// Two issues triages sent to fix at once are the recovery's at once, each in a visit of its own beside the other:
+    /// neither waits for the other's visit to end, for only an issue a step of a visit reported waits for that visit.
+    /// </summary>
     [Fact]
-    public async Task AFixAskedWhileTheRecoveryWorks_WaitsForItsEnd()
+    public async Task IssuesSentToFixAtOnce_AreFixedSideBySide()
     {
-        var definition = Parse("""
-            name: flow
-            recover:
-              onSuccess: failed-step
-              onFailure: pause
-              steps:
-                - name: mend
-                  type: orient
-            steps:
-              - name: first
-                type: reason
-                prompt: work.md
-                outputs: work.json
-                onPreExisting: triage
-              - name: second
-                type: reason
-                prompt: work.md
-                outputs: work.json
-                onPreExisting: triage
-              - name: triage
-                type: reason
-                prompt: triage.md
-                outputs: pre-existing.json
-                raised: preExisting
-                onAddress: recover
-            """);
+        var definition = Parse(TwoReporters);
         var runner = new FakeRunner()
             .On("first", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole")]))
             .On("second", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the second hole")]))
@@ -505,15 +898,16 @@ public sealed class FlowPreExistingTests
         await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         await coordinator.SettledAsync(cancel);
 
-        // One recovery is at work on the first issue; the second's fix waits for its end, and no second visit is made
-        // while the first works.
+        // Both visits work while the first's mend is held: the second issue was taken the moment its triage ended.
         Assert.Equal(FlowInstanceState.Running, coordinator.Instances["recover"].State);
-        Assert.False(coordinator.Instances.ContainsKey("recover+2"));
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["recover+2"].State);
+        Assert.Equal(
+            [("first", null), ("second", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("recover.mend", null), ("recover+2.mend", null)],
+            runner.Started);
 
         _ = runner.Release("mend");
         var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
-        // Both issues were fixed, one recovery at a time, and the run ends done.
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(
             [("first", null), ("second", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("recover.mend", null), ("recover+2.mend", null)],
@@ -521,11 +915,535 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
-    /// A fix that waited for the recovery's end is counted once: being fixed when its triage ended, and fixed once the
-    /// recovery that took it ended - never counted again when the wait is over.
+    /// Visits side by side stay inside the run's own limits: every step of every visit counts against the pools the
+    /// scheduler applies to any step - here one reasoning agent at a time - so the second visit's diagnosis waits for
+    /// room, its record saying so, and never runs beside the first; both visits then finish.
     /// </summary>
     [Fact]
-    public async Task AFixThatWaitedForTheRecovery_IsCountedOnce()
+    public async Task VisitsSideBySide_CountAgainstTheRunsLimits()
+    {
+        var definition = Parse("""
+            name: flow
+            maxReasoningAgents: 1
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  prompt: diagnose.md
+                  outputs: diagnosis.json
+                - name: mend
+                  type: orient
+                  dependsOn: [diagnose]
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var diagnosing = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (running, most) = (0, 0);
+        var counting = new Lock();
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .OnAsync("diagnose", async run =>
+            {
+                lock (counting)
+                {
+                    most = Math.Max(most, ++running);
+                }
+
+                try
+                {
+                    return run.Instance == "recover.diagnose" ? await diagnosing.Task : FlowStepResult.Ended(passed: true, HarnessExit.Success);
+                }
+                finally
+                {
+                    lock (counting)
+                    {
+                        running--;
+                    }
+                }
+            });
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover.diagnose" && step.State == FlowInstanceState.Running)
+            && snapshot.Steps.Any(step => step.Instance == "recover+2.diagnose" && step.State == FlowInstanceState.NotStarted && step.WaitsOn.Count > 0));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // Both visits are made, side by side; the second's diagnosis waits for the one reasoning agent the run allows.
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["recover"].State);
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["recover+2"].State);
+        Assert.Equal([FlowWaits.ReasoningAgents], watched.Last!.Steps.Single(step => step.Instance == "recover+2.diagnose").WaitsOn);
+
+        _ = diagnosing.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(1, most);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["recover"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["recover+2"].State);
+        Assert.Equal(
+            [("think", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("recover.diagnose", null), ("recover+2.diagnose", null), ("recover.mend", null), ("recover+2.mend", null)],
+            runner.Started);
+    }
+
+    /// <summary>
+    /// An issue a step of a visit of the recovery reported waits for that visit to end before the recovery takes it, the
+    /// run's records saying so: the recovery never calls itself. Once the visit has ended, the issue's own visit is made.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueAStepOfARecoveryVisitReported_WaitsForThatVisitToEnd()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  prompt: diagnose.md
+                  outputs: diagnosis.json
+                  onPreExisting: triage
+                - name: mend
+                  type: orient
+                  dependsOn: [diagnose]
+            steps:
+              - name: broke
+                type: orient
+                onFailure: recover
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var mending = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("broke", asked => asked == 1 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it broke") : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("diagnose", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole the diagnosis met")])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .OnAsync("mend", run => run.Instance == "recover.mend" ? mending.Task : Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)));
+        var said = new Said();
+        var watched = new Watched(said, snapshot => snapshot.Steps.Any(step => step.Instance == "triage" && step.State == FlowInstanceState.Done)
+            && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The visit whose diagnosis reported the issue works on; the issue waits for it, and no visit of its own is made.
+        Assert.False(coordinator.Instances.ContainsKey("recover+2"));
+        Assert.Equal([("broke", null), ("recover.diagnose", null), ("triage", "a hole the diagnosis met"), ("recover.mend", null)], runner.Started);
+        Assert.Contains(said.Details, said => said.Instance == "triage"
+            && said.Detail == "the issue 'a hole the diagnosis met' waits for 'recover' to end, a step of which reported it: the recovery never calls itself");
+
+        _ = mending.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The visit ended done: the step it took runs again, and the issue's own visit is made and does its work.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Same(coordinator.Instances["triage"], coordinator.Instances["recover+2"].RaisedBy);
+        Assert.Equal(
+            [("broke+2", null), ("recover+2.diagnose", null), ("recover+2.mend", null)],
+            runner.Started.Skip(4).OrderBy(started => started.Instance, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The one issue sent to fix for two steps it stopped is fixed once at a time: the second fix waits for the visit at
+    /// work on it, the run's records saying so, and is diagnosed on the tree the first fix left - two visits side by side
+    /// would build the same lines twice. Each step runs again once its own fix is done.
+    /// </summary>
+    [Fact]
+    public async Task TheOneIssueSentToFixForTwoSteps_WaitsForTheVisitAtWorkOnIt()
+    {
+        var definition = Parse(TwoReporters);
+        FlowStepResult Blocked(int asked)
+            => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        var mending = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("first", Blocked)
+            .On("second", Blocked)
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .OnAsync("mend", run => run.Instance == "recover.mend" ? mending.Task : Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)));
+        var said = new Said();
+        var watched = new Watched(said, snapshot => BothTriaged(snapshot)
+            && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        Assert.False(coordinator.Instances.ContainsKey("recover+2"));
+        Assert.Contains(said.Details, said => said.Instance == "triage+2"
+            && said.Detail == "the issue 'a hole in the parser' waits for 'recover' to end, which fixes it already for another step it stopped");
+
+        _ = mending.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The first fix done, the second is taken; each step its fix was for runs again.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Same(coordinator.Instances["triage+2"], coordinator.Instances["recover+2"].RaisedBy);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["first+2"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["second+2"].State);
+    }
+
+    /// <summary>
+    /// A step two issues stop runs again once, after every visit for an issue that stops it has ended: never while one
+    /// of them still works, and never a second time when the second ends.
+    /// </summary>
+    [Fact]
+    public async Task AStepTwoIssuesStop_RunsAgainOnce_AfterBothFixesEnded()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var mending = new Dictionary<string, TaskCompletionSource<FlowStepResult>>(StringComparer.Ordinal)
+        {
+            ["recover.mend"] = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            ["recover+2.mend"] = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var runner = new FakeRunner()
+            .On("think", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole", blocks: true), Issue("the second hole", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .OnAsync("mend", run => mending[run.Instance].Task);
+        var watched = new Watched(null, snapshot => new[] { "recover.mend", "recover+2.mend" }.All(mend => snapshot.Steps.Any(step => step.Instance == mend && step.State == FlowInstanceState.Running)));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        _ = mending["recover.mend"].TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "recover" && step.State == FlowInstanceState.Done)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The first fix is done and the second still works: the step they stop is not sent back yet.
+        Assert.False(coordinator.Instances.ContainsKey("think+2"));
+        Assert.Null(coordinator.Instances["think"].LeftBy);
+
+        _ = mending["recover+2.mend"].TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // Both ended: the step ran again once, sent back by the visit that ended last, and no more.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [("think", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("recover.mend", null), ("recover+2.mend", null), ("think+2", null)],
+            runner.Started);
+        Assert.Equal("recover+2", coordinator.Instances["think"].LeftBy);
+        Assert.False(coordinator.Instances.ContainsKey("think+3"));
+    }
+
+    /// <summary>
+    /// A step two issues stop, the first fixed while the second is still being triaged, runs again once the second is
+    /// settled - here listed, so no visit is made for it: the fix done waits for every issue of the step to settle, and
+    /// the triage that settles the last sends the step back, once.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseOtherIssueIsSettledAfterAFix_RunsAgainOnceThatIssueIsSettled()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var triaging = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", asked => asked == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole", blocks: true), Issue("the second hole", blocks: true)])
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("triage", run => run.Issue!.Title == "the second hole" ? triaging.Task : Task.FromResult(Course("fix", run.Issue.Title)));
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover" && step.State == FlowInstanceState.Done));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The first issue is fixed, and the second is still being triaged: the step waits for it.
+        Assert.False(coordinator.Instances.ContainsKey("think+2"));
+
+        _ = triaging.TrySetResult(Course("list", "the second hole"));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal([("think", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("recover.mend", null), ("think+2", null)], runner.Started);
+        Assert.Equal("recover", coordinator.Instances["think"].LeftBy);
+        Assert.False(coordinator.Instances.ContainsKey("think+3"));
+    }
+
+    /// <summary>
+    /// A flow whose work items each own the paths their plan gives them, beside the recovery: the plan waits for the test
+    /// to let it go, the recovery's diagnosis gives a remedy item its check reads, its mend claims no tree - so an item's
+    /// making of its agent, which takes the main tree, waits for nothing of it - and the <c>amend</c> block the
+    /// definition is given names the items' three alternatives, which makes <c>items</c> the work-item group.
+    /// </summary>
+    private const string ItemsBesideAFix = """
+        name: flow
+        maxOpenAgents: 3
+        inputs:
+          - name: request
+            default: ''
+        recover:
+          onSuccess: failed-step
+          onFailure: pause
+          steps:
+            - name: diagnose
+              type: orient
+            - name: remedy-check
+              type: validate-plan
+              items: 'diagnose.items'
+              dependsOn: [diagnose]
+            - name: mend
+              type: ci-read
+              dependsOn: [remedy-check]
+        steps:
+          - name: think
+            type: reason
+            prompt: work.md
+            outputs: work.json
+            onPreExisting: triage
+          - name: plan
+            type: orient
+            dependsOn: [think]
+          - name: replan
+            type: reason
+            prompt: plan-update.md
+            outputs: plan.json
+          - name: items
+            dependsOn: [plan]
+            forEach: 'plan.items'
+            steps:
+              - name: make
+                type: create-agent
+                agent: builder
+              - name: build
+                type: reason
+                agent: builder
+                in: make
+                dependsOn: [make]
+                prompt: build.md
+                outputs: out.json
+              - name: rebuild
+                type: reason
+                agent: builder
+                in: make
+                prompt: rebuild.md
+                outputs: out.json
+              - name: withdraw
+                type: reason
+                agent: builder
+                in: make
+                prompt: withdraw.md
+                outputs: out.json
+          - name: triage
+            type: reason
+            prompt: triage.md
+            outputs: pre-existing.json
+            raised: preExisting
+            onAddress: recover
+        """;
+
+    /// <summary>A work item as a plan gives it: its name and the paths it owns.</summary>
+    private static JsonObject WorkItem(string name, params string[] owned)
+        => new() { ["name"] = name, ["ownedPaths"] = new JsonArray([.. owned.Select(path => (JsonNode)path)]) };
+
+    /// <summary>
+    /// An issue the recovery is fixing holds the files its triage's where names, and - once its diagnosis is checked - the
+    /// paths its remedy items own: a work item that owns any of them waits for the visit to end, its record saying which
+    /// fix holds which file, and starts after it, on the tree the fix left; an item that owns none starts at once, never
+    /// held behind the one that waits. A command the where names holds no file.
+    /// </summary>
+    [Fact]
+    public async Task AWorkItemOwningAFileAnIssueBeingFixedHolds_StartsOnceTheFixEnded_AndOneOwningNoneStartsAtOnce()
+    {
+        var definition = Parse(ItemsBesideAFix) with
+        {
+            Amend = new FlowAmend("request", 5, null, "replan", "plan", "replan.latest.scope", "items.build", "items.rebuild", "items.withdraw", null),
+        };
+        var planning = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mending = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remedies = new JsonArray(WorkItem("mend-the-c-part", "src/c/remedy.c"));
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]))
+            .On("triage", run => Course("fix", run.Issue!.Title, "src/a/main.c", "make -C src/b"))
+            .On("diagnose", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = remedies.DeepClone() }))
+            .On("remedy-check", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["ok"] = true, ["problems"] = new JsonArray(), ["items"] = remedies.DeepClone() }))
+            .OnAsync("plan", _ => planning.Task)
+            .OnAsync("mend", _ => mending.Task);
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // The plan stands once the fix is at work, its remedy checked: its items open beside the fix.
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        _ = planning.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+        {
+            ["items"] = new JsonArray(WorkItem("a", "src/a/**"), WorkItem("b", "src/b/**"), WorkItem("c", "src/c/**")),
+        }));
+        await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "items[1].build" && step.State == FlowInstanceState.Done)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The item that owns neither the file the triage named nor the remedy's went on at once and is built; the two that
+        // own one wait, each saying for what.
+        Assert.Equal(
+            [("think", null), ("plan", null), ("triage", "a hole in the parser"), ("recover.diagnose", null), ("recover.remedy-check", null), ("recover.mend", null), ("items[1].make", null), ("items[1].build", null)],
+            runner.Started);
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["items[0].make"].State);
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["items[2].make"].State);
+        var steps = watched.Last!.Steps;
+        Assert.Equal([FlowWaits.Fix("a hole in the parser", "recover", ["src/a/main.c"])], steps.Single(step => step.Instance == "items[0].make").WaitsOn);
+        Assert.Equal(["the fix of 'a hole in the parser' (recover), which holds src/c/remedy.c"], steps.Single(step => step.Instance == "items[2].make").WaitsOn);
+
+        _ = mending.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The fix done, the two held items start on the tree it left, and the run ends done.
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(
+            [("items[0].make", null), ("items[2].make", null), ("items[0].build", null), ("items[2].build", null)],
+            runner.Started.Skip(8));
+    }
+
+    /// <summary>
+    /// An issue joined to another's fix holds the files its own triage's where names while that fix works, as the issue
+    /// it joined holds its own: a work item that owns one waits for the visit it goes with, its record naming the joined
+    /// issue; one that owns neither issue's file starts at once.
+    /// </summary>
+    [Fact]
+    public async Task AWorkItemOwningAFileAJoinedIssueNames_WaitsForTheFixItWentWith()
+    {
+        var definition = Parse(ItemsBesideAFix) with
+        {
+            Amend = new FlowAmend("request", 5, null, "replan", "plan", "replan.latest.scope", "items.build", "items.rebuild", "items.withdraw", null),
+        };
+        var planning = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mending = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .OnAsync("triage", async run =>
+            {
+                if (run.Issue!.Title == "the second hole")
+                {
+                    return Joins(run.Issue.Title, "triage", "src/b/main.c");
+                }
+
+                await joined.Task;
+                return Course("fix", run.Issue.Title, "src/a/main.c");
+            })
+            .On("diagnose", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["items"] = new JsonArray() }))
+            .On("remedy-check", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["ok"] = true, ["problems"] = new JsonArray(), ["items"] = new JsonArray() }))
+            .OnAsync("plan", _ => planning.Task)
+            .OnAsync("mend", _ => mending.Task);
+        var watched = new Watched(null, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+        _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // The plan stands once the one fix of both issues is at work.
+        var session = coordinator.RunAsync(cancel);
+        await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        _ = planning.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+        {
+            ["items"] = new JsonArray(WorkItem("a", "src/a/**"), WorkItem("b", "src/b/**"), WorkItem("c", "src/c/**")),
+        }));
+        await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "items[2].build" && step.State == FlowInstanceState.Done)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["items[0].make"].State);
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["items[1].make"].State);
+        var steps = watched.Last!.Steps;
+        Assert.Equal([FlowWaits.Fix("the first hole", "recover", ["src/a/main.c"])], steps.Single(step => step.Instance == "items[0].make").WaitsOn);
+        Assert.Equal([FlowWaits.Fix("the second hole", "recover", ["src/b/main.c"])], steps.Single(step => step.Instance == "items[1].make").WaitsOn);
+        Assert.False(coordinator.Instances.ContainsKey("recover+2"));
+
+        _ = mending.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["items[1].build"].State);
+    }
+
+    /// <summary>An entry of a triage's where holds a file only where it is a path from the repository's root: never a command, a pattern, or a path outside the tree.</summary>
+    [Theory]
+    [InlineData("src/a/main.c", true)]
+    [InlineData("Makefile", true)]
+    [InlineData("src/", true)]
+    [InlineData("make -C src/b", false)]
+    [InlineData("src/*.c", false)]
+    [InlineData("/etc/passwd", false)]
+    [InlineData("../outside.c", false)]
+    [InlineData("", false)]
+    public void AnEntryOfWhere_HoldsAFile_OnlyWhereItIsAPathFromTheRoot(string entry, bool path)
+        => Assert.Equal(path, FlowIssueHold.IsPath(entry));
+
+    /// <summary>
+    /// Fixes side by side are each counted once, in the place their issue was taken: being fixed when its triage ended,
+    /// and fixed once the visit that took it ended - so {run.preExisting} says the issues in the order they were taken,
+    /// whichever visit ended first.
+    /// </summary>
+    [Fact]
+    public async Task FixesSideBySide_AreEachCountedOnce_InTheOrderTheirIssuesWereTaken()
     {
         var definition = Parse("""
             name: flow
@@ -558,25 +1476,31 @@ public sealed class FlowPreExistingTests
                 raised: preExisting
                 onAddress: recover
             """);
+        var mending = new Dictionary<string, TaskCompletionSource<FlowStepResult>>(StringComparer.Ordinal)
+        {
+            ["recover.mend"] = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            ["recover+2.mend"] = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
         var runner = new FakeRunner()
             .On("first", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole")]))
             .On("second", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the second hole")]))
-            .On("triage", run => Course("fix", run.Issue!.Title));
-        runner.Hold("mend");
-        var watched = new Watched(null, snapshot => BothTriaged(snapshot)
-            && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+            .On("triage", run => Course("fix", run.Issue!.Title))
+            .OnAsync("mend", run => mending[run.Instance].Task);
+        var watched = new Watched(null, snapshot => new[] { "recover.mend", "recover+2.mend" }.All(mend => snapshot.Steps.Any(step => step.Instance == mend && step.State == FlowInstanceState.Running)));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
         var cancel = TestContext.Current.CancellationToken;
 
+        // The second issue's visit ends first.
         var session = coordinator.RunAsync(cancel);
         await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
-        await coordinator.SettledAsync(cancel);
-        _ = runner.Release("mend");
+        _ = mending["recover+2.mend"].TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "recover+2" && step.State == FlowInstanceState.Done)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        _ = mending["recover.mend"].TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
         var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         Assert.Equal(
-            "what was there before: fixed - the first hole (src/Parser.cs); fixed - the second hole (src/Parser.cs)",
+            "what was there before: triage: fixed - the first hole (src/Parser.cs); triage+2: fixed - the second hole (src/Parser.cs)",
             coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
     }
 
@@ -632,7 +1556,7 @@ public sealed class FlowPreExistingTests
 
             // The always step reads the run's words once every triage has answered.
             var asked = coordinator.OpenQuestions.Single(question => question.Kind == "pause");
-            Assert.Equal("what was there before: listed - a broken test (src/Parser.cs); duplicate of pe-1 - the same broken test", asked.Problem);
+            Assert.Equal("what was there before: pe-1: listed - a broken test (src/Parser.cs); triage+2: duplicate of pe-1 - the same broken test", asked.Problem);
         }
 
         // The file holds the one listed issue, proven; the duplicate added nothing.
@@ -703,7 +1627,7 @@ public sealed class FlowPreExistingTests
             _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             var asked = coordinator.OpenQuestions.Single(question => question.Kind == "pause");
-            Assert.Equal("what was there before: next round - a broken test (src/Parser.cs)", asked.Problem);
+            Assert.Equal("what was there before: nx-1: next round - a broken test (src/Parser.cs)", asked.Problem);
         }
 
         // The run's next round holds the issue, sized, by its id; its list of listed issues holds none.
@@ -832,10 +1756,12 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
-    /// A step that reports issues is told, at the end of its prompt, every issue the run holds where it starts - what
-    /// became of each, its title and where it is, a duplicate left out for its issue is there under its own, and one
-    /// whose triage has not ended being triaged - so a repeat it would word its own way raises no triage to merge it;
-    /// a step the run holds none for, and the triage itself, which reports nothing, are given their prompts as filled.
+    /// A step that reports issues is told, at the end of its prompt, every issue the run holds where it starts - each
+    /// one's id, what became of it, its title and where it is, a duplicate left out for its issue is there under its own,
+    /// and one whose triage has not ended being triaged - so a repeat it would word its own way raises no triage to merge
+    /// it; a step the run holds none for is given its prompt as filled. A triage is told the same issues, its own left
+    /// out, with the ids of those it may join - each taken before its own, being triaged or being fixed - so it names the
+    /// one its issue repeats, or the one whose root cause it shares, by its id.
     /// </summary>
     [Fact]
     public async Task AStepThatReportsIssues_IsToldEveryIssueTheRunHoldsWhereItStarts()
@@ -872,6 +1798,7 @@ public sealed class FlowPreExistingTests
             """);
         var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
         var laterStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var twoTriaged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var watched = new Watched(null, BothTriaged);
         _ = watched.Seen.ContinueWith(_ => twoTriaged.TrySetResult(), TaskScheduler.Default);
@@ -909,8 +1836,10 @@ public sealed class FlowPreExistingTests
                     case "a broken test":
                         return Course("list", run.Issue.Title);
                     case "a stale document":
+                        await thirdStarted.Task;
                         return Course("duplicate", run.Issue.Title);
                     default:
+                        thirdStarted.TrySetResult();
                         await laterStarted.Task;
                         return Course("unproven", run.Issue.Title);
                 }
@@ -922,11 +1851,33 @@ public sealed class FlowPreExistingTests
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal("Do the work.", prompts["think"]);
         Assert.Equal(
-            "Do the work.\n\n<pre-existing>\nThe issues that were there before this run which its steps have reported already, each with what became of it, its title and where it is:\n\n"
-                + "- listed - a broken test (src/Parser.cs)\n- being triaged - a dead link (src/Parser.cs)\n\n"
+            "Do the work.\n\n<pre-existing>\nThe issues that were there before this run which its steps have reported already, each with its id, what became of it, its title and where it is:\n\n"
+                + "- pe-1: listed - a broken test (src/Parser.cs)\n- triage+3: being triaged - a dead link (src/Parser.cs)\n\n"
                 + "Report none of these again under preExisting, however you would word it, unless it stops your own work: a step of the run holds each one already.\n</pre-existing>\n",
             prompts["later"]);
-        Assert.All(prompts.Where(prompt => prompt.Key.StartsWith("triage", StringComparison.Ordinal)), prompt => Assert.Equal("Triage it.", prompt.Value));
+
+        // Two reasoning agents at a time: the first two triages start together, each told the two others being triaged,
+        // and the third once the first has listed its issue - told that, and the second still being triaged, which it
+        // may join, as it may not the listed one.
+        string Told(string held, string joins)
+            => "Triage it.\n\n<pre-existing>\nThe issues that were there before this run which it has taken already, yours left out, each with its id, what became of it, its title and where it is:\n\n"
+                + held
+                + "\nWhere yours is one of these, the course is duplicate, and duplicates names its id. "
+                + joins
+                + "\n</pre-existing>\n";
+        Assert.Equal(
+            Told("- triage+2: being triaged - a stale document (src/Parser.cs)\n- triage+3: being triaged - a dead link (src/Parser.cs)\n", "No issue taken before yours is being triaged or being fixed, so yours joins none."),
+            prompts["triage"]);
+        Assert.Equal(
+            Told(
+                "- triage: being triaged - a broken test (src/Parser.cs)\n- triage+3: being triaged - a dead link (src/Parser.cs)\n",
+                "Where yours is another issue whose root cause is that of one taken before it that is being triaged or being fixed - triage - the course is join, and joins names that one's id: its fix is that issue's, which settles both."),
+            prompts["triage+2"]);
+        Assert.Equal(
+            Told(
+                "- pe-1: listed - a broken test (src/Parser.cs)\n- triage+2: being triaged - a stale document (src/Parser.cs)\n",
+                "Where yours is another issue whose root cause is that of one taken before it that is being triaged or being fixed - triage+2 - the course is join, and joins names that one's id: its fix is that issue's, which settles both."),
+            prompts["triage+3"]);
     }
 
     /// <summary>
@@ -1434,9 +2385,9 @@ public sealed class FlowPreExistingTests
 
     /// <summary>A triage answer that says no course the engine takes - none at all, or one it does not know - fails the triage step, and the issue vanishes nowhere unsaid.</summary>
     [Theory]
-    [InlineData("""{"title": "a broken test"}""", "its answer says no course: it is one of fix, list, next, duplicate, unproven")]
-    [InlineData("""{"course": 7, "title": "a broken test"}""", "its answer says no course: it is one of fix, list, next, duplicate, unproven")]
-    [InlineData("""{"course": "later", "title": "a broken test"}""", "its answer's course 'later' is none of fix, list, next, duplicate, unproven")]
+    [InlineData("""{"title": "a broken test"}""", "its answer says no course: it is one of fix, list, next, duplicate, unproven, join")]
+    [InlineData("""{"course": 7, "title": "a broken test"}""", "its answer says no course: it is one of fix, list, next, duplicate, unproven, join")]
+    [InlineData("""{"course": "later", "title": "a broken test"}""", "its answer's course 'later' is none of fix, list, next, duplicate, unproven, join")]
     public async Task ATriageAnswerWithNoCourseTheEngineTakes_FailsTheTriageStep(string answer, string error)
     {
         var definition = Parse("""
@@ -1620,7 +2571,65 @@ public sealed class FlowPreExistingTests
             Assert.Equal(FlowRunStatus.Paused, done.Status);
 
             var asked = resumed.OpenQuestions.Single(question => question.Kind == "pause");
-            Assert.Equal("what was there before: listed - a broken test (src/Parser.cs); listed - a stale document (src/Parser.cs)", asked.Problem);
+            Assert.Equal("what was there before: pe-1: listed - a broken test (src/Parser.cs); pe-2: listed - a stale document (src/Parser.cs)", asked.Problem);
+        }
+    }
+
+    /// <summary>
+    /// A join is read again from the records at a resume: the issue joined to one whose visit a pause stopped goes with
+    /// that visit still, takes no visit of its own, and is fixed with it once the visit ends in the next session.
+    /// </summary>
+    [Fact]
+    public async Task AJoin_IsReadAgainAtAResume_AndSettledWithTheVisitItWentWith()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(OneCause);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole"), Issue("the second hole")]))
+            .OnAsync("triage", async run =>
+            {
+                if (run.Issue!.Title == "the second hole")
+                {
+                    return Joins(run.Issue.Title, "triage");
+                }
+
+                await joined.Task;
+                return Course("fix", run.Issue.Title);
+            });
+        first.Hold("mend");
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+        var cancel = TestContext.Current.CancellationToken;
+
+        FlowResumeState taken;
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var watched = new Watched(records, snapshot => snapshot.Steps.Any(step => step.Instance == "triage+2" && step.State == FlowInstanceState.Done));
+            _ = watched.Seen.ContinueWith(_ => joined.TrySetResult(), TaskScheduler.Default);
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched, workflowFile: (_, named) => OneCausePrompt(named));
+            var session = coordinator.RunAsync(cancel);
+
+            await watched.Until(snapshot => snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running)).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            coordinator.RequestPause("interrupt", all: true);
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Status);
+
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        }
+
+        using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var watched = new Watched(again, _ => false);
+            var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: watched, resume: taken, workflowFile: (_, named) => OneCausePrompt(named));
+            var done = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            // The always step asked as the resumed visit began; the run's counts, written as the visit ended, say both fixed.
+            Assert.Equal(FlowRunStatus.Paused, done.Status);
+            Assert.Equal(FlowInstanceState.Done, resumed.Instances["recover"].State);
+            Assert.False(resumed.Instances.ContainsKey("recover+2"));
+            Assert.Equal(new WorkflowPreExisting(0, 2, 0, 0), watched.Last!.PreExisting);
         }
     }
 
@@ -1816,7 +2825,7 @@ public sealed class FlowPreExistingTests
 
             var asked = resumed.OpenQuestions.Single(question => question.Kind == "pause");
             Assert.True(
-                asked.Problem == "what was there before: next round - a broken test (src/Parser.cs)",
+                asked.Problem == "what was there before: nx-1: next round - a broken test (src/Parser.cs)",
                 asked.Problem);
         }
     }
@@ -1909,7 +2918,7 @@ public sealed class FlowPreExistingTests
             var resumed = new FlowCoordinator(definition, new FakeRunner().On("later", FlowStepResult.Ended(passed: true, HarnessExit.Success)), new RunnerFacts(), clock, records: again, resume: taken);
             Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(TestContext.Current.CancellationToken)).Status);
 
-            Assert.Equal("what was there before: next round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+            Assert.Equal("what was there before: nx-1: next round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
         }
 
         var owed = Assert.Single(store.ReadNextRound(layout)!.Issues);
@@ -2064,7 +3073,7 @@ public sealed class FlowPreExistingTests
             var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
             Assert.Equal(FlowRunStatus.Paused, (await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Status);
 
-            Assert.Equal("what was there before: fixed in a later round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+            Assert.Equal("what was there before: nx-1: fixed in a later round - a broken test (src/Parser.cs)", resumed.OpenQuestions.Single(question => question.Kind == "pause").Problem);
         }
 
         Assert.Equal("rounds#2.items[0]", Assert.Single(store.ReadNextRound(layout)!.Issues).SettledBy);

@@ -709,7 +709,25 @@ and lists the rest, proven, with a title and a description, in the run's `pre-ex
 shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. The
 engine raises the triage for each issue a reasoning step's answer reports under `preExisting`, as the shipped schemas spell it, and keeps the list. A
 reasoning step that names one is told, at the end of its prompt, every issue the run holds where it starts -
-what became of each, its title and where it is - and reports one again only where it stops its own work.
+each one's id, what became of it, its title and where it is - and reports one again only where it stops its own work;
+the triage is told them too, its own left out, and names by its id the issue its own repeats or whose root cause it
+shares.
+
+An issue sent to fix is the recovery's at once, its fix beside any other at work - save one that a step of the
+recovery itself reported, which waits for that visit to end, and one a fix at work already mends for another step,
+which waits for that fix; a step two issues stop runs again once, after both are settled. While it is being fixed, the
+issue holds the files its triage names (never a command it names) and, once its diagnosis is checked, the files its
+remedy items own: a work item that has not begun and owns one of them starts once that fix is done, building on the
+tree it leaves, and `ask-orchestrator-status` says what it waits for; every other item goes on at once. The planner
+and the self-audit are told the same: no work item fixes an issue being fixed, or rewrites its lines.
+
+Issues of one root cause take one fix: a triage that finds its issue's cause is that of an issue taken before it,
+being triaged or being fixed, answers `join` with that issue's id, and its issue takes no visit of its own. It goes with
+that issue's fix - waiting for its triage where it is still triaged - and the visit's diagnosis is told every issue
+joined to it, its remedies settling all of them, `{run.preExisting}` saying each joined one `fixed with <id>`. One that
+joins while a visit of that fix is already diagnosing takes a visit of its own once that visit has fixed it, told what
+it fixed; and where the issue it joined ends without a fix, it is triaged again on its own. A triage that names an
+issue taken after its own is refused, so no two issues ever name each other.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at
