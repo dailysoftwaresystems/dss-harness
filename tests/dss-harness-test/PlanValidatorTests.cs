@@ -9,7 +9,7 @@ namespace DssHarness.Tests;
 /// class is the item's own to change and there in the tree where it exists; a site is marked home exactly where it is
 /// the home, and every other site, which must change, is the item's too, for patching some of a class's sites is never
 /// done; more than one site means consolidate, as one site that is not the home does; a class is searched by data it
-/// can name again, and its universe holds the axes the repository declares; and one home belongs to one item. And of
+/// can name again, and its universe counts the cells its axes that apply make; and one home belongs to one item. And of
 /// its tests (P-C9): an item names the units of the tests its change affects, or says why it affects none. Each rule
 /// is red with itself removed, held by the reverts this file's twin methods name.
 /// </summary>
@@ -87,7 +87,7 @@ public sealed class PlanValidatorTests : IDisposable
     }
 
     /// <summary>A class of the plan, sound as given: its home among the item's own paths, the home itself its one site.</summary>
-    private static JsonObject Class(string id = "C1", string home = "src/one/home.cs", bool exists = true, string action = "fix-at-home", JsonObject[]? sites = null, JsonObject[]? searches = null, JsonObject[]? axes = null)
+    private static JsonObject Class(string id = "C1", string home = "src/one/home.cs", bool exists = true, string action = "fix-at-home", JsonObject[]? sites = null, JsonObject[]? searches = null, JsonObject? universe = null)
         => new()
         {
             ["id"] = id,
@@ -95,7 +95,7 @@ public sealed class PlanValidatorTests : IDisposable
             ["home"] = new JsonObject { ["path"] = home, ["symbol"] = "Decides", ["exists"] = exists },
             ["sites"] = new JsonArray([.. sites ?? [Site(path: home)]]),
             ["searches"] = new JsonArray([.. searches ?? [Search()]]),
-            ["universe"] = new JsonObject { ["axes"] = new JsonArray([.. axes ?? [Axis()]]), ["cells"] = 2 },
+            ["universe"] = universe ?? Universes.Of(("kinds", ["weekly", "monthly"])),
             ["action"] = action,
             ["notCovered"] = "",
         };
@@ -107,10 +107,6 @@ public sealed class PlanValidatorTests : IDisposable
     /// <summary>A search that found the sites, by the data that decides.</summary>
     private static JsonObject Search(string query = "the diagnostic DX")
         => new() { ["data"] = "the diagnostic DX", ["via"] = "text", ["query"] = query, ["hits"] = 1 };
-
-    /// <summary>An axis of a universe, with the values the repository declares.</summary>
-    private static JsonObject Axis(string name = "kind", string[]? values = null)
-        => new() { ["name"] = name, ["values"] = new JsonArray([.. values ?? ["weekly", "monthly"]]), ["declaredIn"] = "closure.md" };
 
     /// <inheritdoc/>
     public void Dispose()
@@ -262,20 +258,40 @@ public sealed class PlanValidatorTests : IDisposable
             await CheckAsync(repository, unsearched, unqueried));
     }
 
-    /// <summary>P-C7: the universe of a class is the axes the repository declares, each with its values.</summary>
+    /// <summary>
+    /// P-C7: a universe counts the cells its axes that apply make - the product of the counts of their values, a further
+    /// axis's among them, and 1 where none applies - its count written as JSON writes a whole number; a count that is not
+    /// the product, or no count at all, is a problem naming the product and what makes it. Which axes a universe answers
+    /// is its schema's to hold, never the check's: a universe in which no axis applies is checked for its count alone.
+    /// </summary>
     [Fact]
-    public async Task AUniverseWithoutAxesOrAnAxisWithoutValues_IsAProblem()
+    public async Task AUniverseWhoseCellsAreNotTheProductOfItsAxesThatApply_IsAProblem()
     {
         var (_, repository) = await RepositoryAsync();
-        var unaxed = Item(classes: [Class(axes: [])]);
-        var empty = Item("two", "src/two/**", classes: [Class("C2", "src/two/home.cs", axes: [Axis("kind", [])])]);
+        var miscounted = Universes.Of(("formats", ["cs", "md"]), ("directions", ["in", "out", "both"]));
+        miscounted["cells"] = 4;
+        var further = Universes.Of(("formats", ["cs", "md"]), ("region", ["eu", "us", "asia"]));
+        further["cells"] = 2;
+        var none = Universes.Of();
+        none["cells"] = 2;
+        var uncounted = Universes.Of(("kinds", ["weekly", "monthly"]));
+        uncounted.Remove("cells");
+        var whole = Universes.Of(("kinds", ["weekly", "monthly"]), ("tiers", ["parse", "check", "emit"]));
+        whole["cells"] = JsonNode.Parse("6.0");
+        const string Rule = "a universe's cells are the product of the counts of the values of its axes that apply";
 
         Assert.Equal(
             [
-                "work item 'one''s C1 names no axis of its universe: the repository's closure text declares the axes a decision ranges over",
-                "work item 'two''s C2 holds no value for the axis 'kind': an axis holds what the repository declares for it",
+                $"work item 'one''s C1 counts 4 cells in its universe, and its axes that apply make 6 (formats 2 x directions 3): {Rule}",
+                $"work item 'two''s C2 counts 2 cells in its universe, and its axes that apply make 6 (formats 2 x region 3): {Rule}",
+                $"work item 'two''s C3 counts 2 cells in its universe, and no axis of it applies, which makes 1: {Rule}",
+                $"work item 'two''s C4 counts no cells in its universe, and its axes that apply make 2 (kinds 2): {Rule}",
             ],
-            await CheckAsync(repository, unaxed, empty));
+            await CheckAsync(
+                repository,
+                Item(classes: [Class(universe: miscounted)]),
+                Item("two", "src/two/**", classes: [Class("C2", "src/two/home.cs", universe: further), Class("C3", "src/two/home.cs", universe: none), Class("C4", "src/two/home.cs", universe: uncounted)]),
+                Item("three", "src/created/**", classes: [Class("C5", "src/created/home.cs", universe: whole), Class("C6", "src/created/home.cs", universe: Universes.Of())])));
     }
 
     /// <summary>

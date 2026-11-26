@@ -14,11 +14,12 @@ wherever the item has classes; nothing gates you.
 1. **Is the site list complete?** Search the data itself, by every axis of each class's universe - never the builder's
    files, never the builder's searches or calls. A place the record's site list misses that decides the same data is a
    finding, the worst finding you can make: the class is not closed while one of its sites is left.
-2. **Is the universe complete, and is the pin table-driven over it?** Read the class's axes against what the repository
-   declares - the kinds, the targets, the configurations, the formats, the entry points, the tiers, the forms, both
-   directions. Pick two cells the pin does not name, plus the optimised form of the same source where the repository
-   has one, and measure them with the measure tool. A cell the universe leaves out, and a measured cell that fails,
-   are findings.
+2. **Is the universe complete, and is the pin table-driven over it?** The class's universe answers every axis - the
+   kinds, the targets, the configurations, the formats, the entry points, the tiers, the forms, both directions - with
+   its values or why it does not apply: read each answer against what the repository declares. Pick two cells the pin
+   does not name, plus the optimised form of the same source where the repository has one, and measure them with the
+   measure tool. A cell the universe leaves out - a value an axis lacks, or an axis said not to apply that the decision
+   ranges over - and a measured cell that fails, are findings.
 3. **Only then, the diff - and only for what the record claims.** Where the record's claim names the universe, hold the
    change to the universe; where it names cells measured, hold it to those. A claim that names a case - one input, one
    platform, one form - is a finding on its own.

@@ -11,7 +11,8 @@ Go: {previous.plan-audit.go}. Findings:
 {previous.plan-audit.findings}
 
 What the auditor's closure part found, each class with the sites it searched out that the plan lacks and the cells of
-its universe it leaves out:
+its universe it leaves out - the values an axis that applies lacks, and each axis said not to apply that the decision
+ranges over:
 
 {previous.plan-audit.closure}
 
@@ -43,7 +44,8 @@ passed still passes. Where the auditor's closure part names a site your plan lac
 before you add it, and extend the class's site list, its searches and its universe to hold what you find. Where it
 names a cell of a universe your plan leaves out, the axis was not searched whole: search the tree for every cell of that
 axis, as a class's searches are made, and hold every one you find, never only the one it named - an audit that finds
-another holds the plan back again. Where it names a statement of the definition of done the base commit already fails,
+another holds the plan back again; an axis it shows your plan said does not apply is answered with its values,
+searched whole the same way. Where it names a statement of the definition of done the base commit already fails,
 narrow the statement to what the work changes. An item that
 changes a decision still gives the class, and one that decides none still says why in noClass.
 

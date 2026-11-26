@@ -6,8 +6,9 @@ them was built. Its problems:
 Settle each of them, and say again what puts the failure right. The items you give now are checked once more and then
 built as they stand, so give items the check passes: each named in lowercase letters, digits and single hyphens, with
 the paths it owns - no file under two items - and every path it reuses there in the tree; each that changes a decision
-gives its class - its invariant, its one home, its sites, its searches, its universe - and one that decides none says
-why in noClass; each names the tests its change affects, or says in noTests why it affects none.
+gives its class - its invariant, its one home, its sites, its searches, its universe, which answers every axis with its
+values or why it does not apply - and one that decides none says why in noClass; each names the tests its change
+affects, or says in noTests why it affects none.
 
 - **fix**: the work items, at most four, each sized to one builder's cycle, with the tests that show the failure is gone
   and its definition of done, of which the first statement is that `{source.step}` would now pass.

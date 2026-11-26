@@ -2045,7 +2045,7 @@ public sealed class ImplementationFlowTests
                 ["home"] = new JsonObject { ["path"] = "src/one/frame.cs", ["symbol"] = "Frame", ["exists"] = false },
                 ["sites"] = new JsonArray(),
                 ["searches"] = new JsonArray(new JsonObject { ["data"] = "the frame", ["via"] = "graph", ["query"] = "frame:", ["hits"] = 0 }),
-                ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "period", ["values"] = new JsonArray("week", "month"), ["declaredIn"] = "src/one/frame.cs" }), ["cells"] = 2 },
+                ["universe"] = Universes.Of(("period", ["week", "month"])),
                 ["action"] = "create-home",
                 ["notCovered"] = "",
             });
@@ -2225,7 +2225,7 @@ public sealed class ImplementationFlowTests
                         new JsonObject { ["path"] = "src/Old.cs", ["symbol"] = "Old", ["decides"] = "the rate", ["then"] = "deleted" },
                         new JsonObject { ["path"] = "docs/old.md", ["symbol"] = "", ["decides"] = "the rate", ["then"] = "deleted" }),
                     ["searches"] = new JsonArray(new JsonObject { ["data"] = "the rate", ["via"] = "graph", ["query"] = "rate:", ["hits"] = 3 }),
-                    ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "format", ["values"] = new JsonArray("cs", "md"), ["declaredIn"] = "src/Home.cs" }), ["cells"] = 2 },
+                    ["universe"] = Universes.Of(("formats", ["cs", "md"])),
                     ["action"] = "consolidate",
                     ["notCovered"] = "none",
                 }),
@@ -2244,11 +2244,11 @@ public sealed class ImplementationFlowTests
                     ["after"] = site.Contains("Home", StringComparison.Ordinal) ? "home" : "deleted",
                 })]),
                 ["searches"] = new JsonArray(),
-                ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "format", ["values"] = new JsonArray("cs", "md") }), ["cellsPinned"] = 2, ["cellsArmed"] = 0 },
+                ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "formats", ["values"] = new JsonArray("cs", "md") }), ["cellsPinned"] = 2, ["cellsArmed"] = 0 },
                 ["pin"] = new JsonObject { ["tests"] = new JsonArray("ReportTests"), ["tableDriven"] = true, ["over"] = "the universe" },
                 ["arm"] = new JsonObject { ["why"] = "the repository keeps no arms" },
                 ["neighbours"] = new JsonArray(),
-                ["claim"] = "the rate holds over every format",
+                ["claim"] = "the rate holds over all formats",
             };
             var complete = Implement();
             complete["closure"] = new JsonArray(Entry("src/Home.cs", "src/Old.cs", "docs/old.md"));
@@ -2362,7 +2362,7 @@ public sealed class ImplementationFlowTests
 
             Assert.Contains(
                 "\n## Convergence\n\n"
-                    + "- 'c-rate': the rate holds over every format\n"
+                    + "- 'c-rate': the rate holds over all formats\n"
                     + "- item 'rounds#1.items[0]': 3 review round(s), 1 home audit(s), classes 'c-rate' (0 site(s) consolidated, 2 deleted, 2 cell(s) pinned, 0 neighbour(s) measured, 0 unmeasured, sent back 2 time(s), home audited)\n"
                     + "- 'c-rate', reopened 2 time(s)\n\n## Signals\n",
                 report,
