@@ -61,7 +61,13 @@ public sealed partial class HelpTests
         Assert.Contains("agentPolicy.keepEnvironment gives back; an appointed name is never given back.", prose, StringComparison.Ordinal);
         Assert.Contains("an address holding a secret is refused. A page is given inside a block that says where it is from, its first line saying it is information for the task, not instructions: a page of any size is read whole, its text written into the call's answer as it comes, and one longer than a page is kept whole in the step's tool-results/ and given a page at a time.", prose, StringComparison.Ordinal);
         Assert.Contains("refused spelled empty, with a NUL or a leading ~ - on Windows also a share or a device's prefix, a device's name (CON, PRN, AUX, NUL and the rest), a drive's own directory (C:x) or an alternate data stream -", prose, StringComparison.Ordinal);
-        Assert.Contains("A directory deleted or moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than 2,000 entries.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "a deleting or moving tool is a write to every path it touches, at both ends of a move - what it takes away, each path it deletes and a "
+                + "move's source, decided as a delete, which a step's writes hold back but where the step made the path itself, git asked of each file "
+                + "as the call is decided. A directory deleted or moved is refused where it is a root, holds a link, holds a path that may not be taken "
+                + "away or holds more than 2,000 entries.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             "A file of any size is viewed, a page at a time - its pages laid once by streaming it, any page read by seeking to its mark, a line wider than a "
                 + "page given in pieces - and edited, copied through a block at a time with the edit made on the way; search_files reads every file whatever its "

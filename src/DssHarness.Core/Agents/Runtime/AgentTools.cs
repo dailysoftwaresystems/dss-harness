@@ -133,12 +133,12 @@ public static class AgentTools
                 "Deletes one file; a file that is not there is an error, so a wrong path is never taken for done.",
                 Schema(("path", "string", "The file.", true))),
             new(DeleteDirectory, AgentCapability.Write, true,
-                $"Deletes an empty directory, or with recursive: true everything in it. Refused for one of your roots, for a directory that is or holds a link, that holds a path you may not write, or that holds more than {MostDeletedEntries.ToString("N0", CultureInfo.InvariantCulture)} entries.",
+                $"Deletes an empty directory, or with recursive: true everything in it. Refused for one of your roots, for a directory that is or holds a link, that holds a path you may not delete, or that holds more than {MostDeletedEntries.ToString("N0", CultureInfo.InvariantCulture)} entries.",
                 Schema(
                     ("path", "string", "The directory.", true),
                     ("recursive", "boolean", "Whether what it holds is deleted with it.", false))),
             new(MovePath, AgentCapability.Write, true,
-                $"Moves a file or a directory inside your writable roots, the directories on the way made; both ends are writes. A file at the destination is replaced only with overwrite: true, and a directory there never is. A directory is refused where it is one of your roots, is or holds a link, holds a path you may not write, or holds more than {MostDeletedEntries.ToString("N0", CultureInfo.InvariantCulture)} entries. A file you viewed, moved alone or in its directory, is edited at its new place without a new view.",
+                $"Moves a file or a directory inside your writable roots, the directories on the way made; both ends are writes, and what leaves the source is taken away as a delete takes it. A file at the destination is replaced only with overwrite: true, and a directory there never is. A directory is refused where it is one of your roots, is or holds a link, holds a path you may not take away, or holds more than {MostDeletedEntries.ToString("N0", CultureInfo.InvariantCulture)} entries. A file you viewed, moved alone or in its directory, is edited at its new place without a new view.",
                 Schema(
                     ("from", "string", "The file or directory to move.", true),
                     ("to", "string", "Where it goes.", true),

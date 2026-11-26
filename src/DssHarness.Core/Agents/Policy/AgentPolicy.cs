@@ -442,6 +442,13 @@ public sealed partial class AgentPolicy
         _protectedPaths = [.. ProtectedPathRules.Select(pattern => (GlobPattern.Parse(pattern), pattern))];
         _workingRoot = Resolved(Whole(ground.WorkingDirectory));
 
+        // The record of the step's start names its paths relative to the worktree it was taken of, which is where the
+        // agent works: read against any other tree, its paths would name other places.
+        if (ground.StepStart is { } start && !PathContainment.AreSame(Resolved(Whole(start.Worktree)), _workingRoot, Refusals))
+        {
+            throw new ArgumentException($"the record of the step's start is of '{start.Worktree}', and the agent works in '{ground.WorkingDirectory}'", nameof(ground));
+        }
+
         // The reporter's root as it was given, and where it resolves: a path asked is asked by one of
         // its names, and lands where the other says.
         _reporterRoot = ground.ReporterRoot is { } root ? Whole(Plain(root, ground.WorkingDirectory)) : null;
@@ -610,7 +617,37 @@ public sealed partial class AgentPolicy
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        return Decide(path, WriteMatchers, WriteDecision);
+        return Decide(path, WriteMatchers, (asked, resolved) => WriteDecision(asked, resolved, untracked: null));
+    }
+
+    /// <summary>
+    /// What a refusal of a delete outside the step's <c>writes</c> says a step may take back there - the rule
+    /// <see cref="Delete"/> holds, said in the denial's own words so the agent reading it knows what it may delete.
+    /// </summary>
+    public const string OwnMakingSaid = "outside them a step takes back only what it made itself - a path of its worktree git does not track that was not there when the step's run began";
+
+    /// <summary>
+    /// Whether a path an agent would take away - a file deleted, a directory deleted with what it holds, the source of a
+    /// move - may be: as a write of it is (<see cref="Write"/>), save that the step's <c>writes</c> hold back no path the
+    /// step made itself - one of its worktree git does not track (<paramref name="untracked"/>) that its worktree did not
+    /// hold, nor hold anything beneath, as the step's run began (<see cref="AgentPolicyGround.StepStart"/>): what the step's
+    /// own commands made it may take back, as they may write anywhere in its worktree. Every other refusal of a write holds
+    /// a delete as it holds the write - the places no action reaches, git's own files, the tool's state and policy, the
+    /// protected paths, the writable roots and every <c>Write</c> rule - and so do the step's writes for a ground that holds
+    /// no record of the step's start, and for a path the record holds or git tracks or ignores. A write that would replace
+    /// such a path is no taking back: it leaves a path standing outside the writes, and stays narrowed.
+    /// </summary>
+    /// <param name="path">The path as the agent's tool asks it, relative to its working directory or absolute.</param>
+    /// <param name="untracked">
+    /// Whether git tracks nothing at the path as the caller asked git just before: a file git lists untracked - never one
+    /// it tracks or ignores - or a directory, every path of which the caller takes away and decides as a delete of its own,
+    /// for git records no directory and a directory holds only what the step made where each path in it is that.
+    /// </param>
+    public AgentPolicyAnswer Delete(string path, bool untracked)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        return Decide(path, WriteMatchers, (asked, resolved) => WriteDecision(asked, resolved, untracked));
     }
 
     /// <summary>
@@ -966,8 +1003,15 @@ public sealed partial class AgentPolicy
         return AgentPolicyAnswer.Allow;
     }
 
-    /// <summary>A write, decided: a place no action reaches never (<see cref="Unreached"/>), then the worktree rules, protected paths and the tool's own state, then the step's <c>writes</c>, the writable roots and the <c>Write</c> rules.</summary>
-    private AgentPolicyAnswer WriteDecision(string asked, string resolved)
+    /// <summary>
+    /// A write, decided: a place no action reaches never (<see cref="Unreached"/>), then the worktree rules, protected paths
+    /// and the tool's own state, then the step's <c>writes</c> - which a delete of what the step made itself passes
+    /// (<see cref="Delete"/>) - the writable roots and the <c>Write</c> rules.
+    /// </summary>
+    /// <param name="asked">The path as asked, spelled whole.</param>
+    /// <param name="resolved">Where it resolves.</param>
+    /// <param name="untracked">For a delete, whether git tracks nothing at the path (<see cref="Delete"/>); null for a write.</param>
+    private AgentPolicyAnswer WriteDecision(string asked, string resolved, bool? untracked)
     {
         if (Unreached(asked, resolved) is { } unreached)
         {
@@ -987,7 +1031,7 @@ public sealed partial class AgentPolicy
             return refused;
         }
 
-        if (OutsideStepWrites(asked, resolved) is { } outside)
+        if (OutsideStepWrites(asked, resolved, untracked) is { } outside)
         {
             return outside;
         }
@@ -1902,10 +1946,15 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// The step's <c>writes</c>, the one source that narrows: where a step has them, a write under
-    /// its worktree that matches none of their patterns is denied. What a command the agent ran
-    /// writes is not seen here, and is measured where it cannot be missed: at the fold.
+    /// its worktree that matches none of their patterns is denied - and so is a delete, but of what
+    /// the step made itself (<see cref="Delete"/>). What a command the agent ran writes is not seen
+    /// here, and is measured where it cannot be missed: at the fold; what it made, the step may take
+    /// back.
     /// </summary>
-    private AgentPolicyAnswer.Denied? OutsideStepWrites(string asked, string resolved)
+    /// <param name="asked">The path as asked, spelled whole.</param>
+    /// <param name="resolved">Where it resolves.</param>
+    /// <param name="untracked">For a delete, whether git tracks nothing at the path (<see cref="Delete"/>); null for a write.</param>
+    private AgentPolicyAnswer.Denied? OutsideStepWrites(string asked, string resolved, bool? untracked)
     {
         if (_writes.Count == 0)
         {
@@ -1916,13 +1965,27 @@ public sealed partial class AgentPolicy
         {
             // Beneath the worktree by any spelling its file system folds to it: the narrowing holds
             // for each, and a pattern allows only the spelling it names as the platform compares.
-            if (BeneathOf(_workingRoot, form, Refusals) is { } relative && !Covers(relative))
+            if (BeneathOf(_workingRoot, form, Refusals) is not { } relative || Covers(relative))
             {
-                return new AgentPolicyAnswer.Denied(
-                    "the step's writes",
-                    AgentPolicySource.Builtin,
-                    $"'{resolved}' is outside the paths this step may write: {string.Join(", ", _writes.Select(write => write.Text))}");
+                continue;
             }
+
+            var said = $"'{resolved}' is outside the paths this step may write: {string.Join(", ", _writes.Select(write => write.Text))}";
+
+            // A delete of what the step made itself passes, by every spelling of it: a path git does not track that the
+            // record of the step's start holds by none of them - which it holds in any case, so no spelling a file
+            // system folds to a path that was there makes it one the step made.
+            if (untracked is { } taken && _ground.StepStart is { } start)
+            {
+                if (taken && !start.Holds(relative))
+                {
+                    continue;
+                }
+
+                said += $"; {OwnMakingSaid} - and {(taken ? "this one, or a path in it, was there untracked when the step's run began" : "git tracks this one, or ignores it")}";
+            }
+
+            return new AgentPolicyAnswer.Denied("the step's writes", AgentPolicySource.Builtin, said);
         }
 
         return null;

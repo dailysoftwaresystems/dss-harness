@@ -39,7 +39,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="harnessOutput">Writes output the copies of a continuation record name, and says a write of a measure call's ledger the file system refused as its legs' run went.</param>
 /// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
-/// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
+/// <param name="gitClient">
+/// Asks git, for the paths an agent's worktree holds that no fold has taken, and for what it holds untracked as a step whose
+/// writes narrow it first starts (<see cref="AgentStepStart"/>).
+/// </param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
@@ -59,7 +62,7 @@ public sealed class ReasonStepRunner(
     Agents.Isolation.IAgentIsolation isolation,
     Application.Legs.ITestLegs tests,
     ChildSessions children,
-    Git.IGitClient? gitClient = null,
+    Git.IGitClient gitClient,
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
     TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
@@ -191,6 +194,28 @@ public sealed class ReasonStepRunner(
             launch.ClaudeDirectories(context.Config, context.Layout),
             launch.CredentialPlaces(context.Config),
             handed: handed);
+
+        // What the step's worktree held untracked as the step first started, where its writes narrow what it writes there:
+        // read from the step's directory where its first start wrote it, else taken now, before its agent is started - so a
+        // path its own commands made since, and only such a path, is one it may take back whatever its writes say.
+        try
+        {
+            ground = ground with
+            {
+                StepStart = await AgentStepStart.OfAsync(
+                    fileSystem,
+                    gitClient,
+                    ground,
+                    workspace.Worktree,
+                    StepDirectoryOf(layout, run.Instance, agent),
+                    platform.PathComparison,
+                    cancellationToken).ConfigureAwait(false),
+            };
+        }
+        catch (HarnessException untold)
+        {
+            return FlowStepResult.Ended(passed: false, untold.ExitCode, $"'{run.Instance}' does not start: what its worktree held untracked as the step began cannot be told, so nothing its commands make could be told apart: {untold.Message}");
+        }
 
         // The operating system's isolation the agent's commands run under, decided before anything of the step is handed
         // over: where agentPolicy.isolation is required and this machine has none, the step does not start, saying why and
@@ -1090,7 +1115,7 @@ public sealed class ReasonStepRunner(
 
         // The worktree as the repository holds it, resolved from the record's path under the worktrees root: the paths
         // it holds that no fold has taken are what a fold of the agent would weigh.
-        if (store.ReadAgent(layout, agent) is not { } record || record.WorktreePath(context.Layout) is not { } worktree || gitClient is null)
+        if (store.ReadAgent(layout, agent) is not { } record || record.WorktreePath(context.Layout) is not { } worktree)
         {
             return folded;
         }

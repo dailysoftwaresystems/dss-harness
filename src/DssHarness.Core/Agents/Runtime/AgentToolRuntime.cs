@@ -557,9 +557,9 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.ReplaceInFile => await ReplaceAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateDirectory => CreateDirectory(input),
-            AgentTools.DeleteFile => await DeleteFile(input).ConfigureAwait(false),
-            AgentTools.DeleteDirectory => await DeleteDirectory(input).ConfigureAwait(false),
-            AgentTools.MovePath => await MovePath(input).ConfigureAwait(false),
+            AgentTools.DeleteFile => await DeleteFile(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.DeleteDirectory => await DeleteDirectory(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.MovePath => await MovePath(input, cancellationToken).ConfigureAwait(false),
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebFetch => await FetchAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
@@ -709,6 +709,64 @@ public sealed partial class AgentToolRuntime : IDisposable
     private Decided WritePlace(string path) => Decide(_paths.Write(path), full => _policy.Write(full));
 
     /// <summary>
+    /// A place a tool takes away - a file or a directory deleted, the source of a move - decided: held to the writable roots
+    /// and through no link, as a write's is, then asked of the policy as a delete (<see cref="AgentPolicy.Delete"/>) with
+    /// what git says of it now - a file with whether git lists it untracked, a directory as one each path of which its tool
+    /// decides on its own (<see cref="HeldAsync"/>).
+    /// </summary>
+    /// <param name="path">The path as the agent gave it.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    private async Task<Decided> TakenPlaceAsync(string path, CancellationToken cancellationToken)
+    {
+        var confined = _paths.Write(path);
+
+        if (confined.Full is not { } full)
+        {
+            return new Decided(null, confined.Denied);
+        }
+
+        // Asked only of a ground that holds the record of its step's start: no other's deletes are told apart, and git and the
+        // disk are not asked for one.
+        var untracked = _run.Ground?.StepStart is not null
+            && (_host.FileSystem.KindOf(full) == PathKind.Directory || (await UntrackedAsync([full], cancellationToken).ConfigureAwait(false)).Count > 0);
+
+        return Decide(confined, decided => _policy.Delete(decided, untracked));
+    }
+
+    /// <summary>
+    /// Which of <paramref name="paths"/> git lists untracked in the step's worktree now - neither tracked nor ignored, each
+    /// by its own name - asked only where the step's ground holds the record of its start (<see cref="AgentPolicyGround.StepStart"/>),
+    /// whose worktree it is, for the policy to tell what the step made itself apart by: none where the ground holds none,
+    /// and none of a path outside that worktree, which the step's writes narrow nothing of.
+    /// </summary>
+    /// <param name="paths">The paths, absolute.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    private async Task<IReadOnlySet<string>> UntrackedAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken)
+    {
+        var comparer = StringComparer.FromComparison(_host.Platform.PathComparison);
+
+        if (_run.Ground?.StepStart is not { } start)
+        {
+            return new HashSet<string>(comparer);
+        }
+
+        var beneath = paths
+            .Select(path => (Full: path, Relative: AgentPolicy.Beneath(start.Worktree, path, _host.Platform.PathComparison)))
+            .Where(path => path.Relative is not null)
+            .ToList();
+
+        if (beneath.Count == 0)
+        {
+            return new HashSet<string>(comparer);
+        }
+
+        var listed = await _host.Git.ListWorkingFilesAsync(start.Worktree, [.. beneath.Select(path => path.Relative!)], cancellationToken).ConfigureAwait(false);
+        var untracked = listed.Where(file => file.Untracked && file.Name.IsUtf8).Select(file => file.Name.Text).ToHashSet(comparer);
+
+        return beneath.Where(path => untracked.Contains(path.Relative!)).Select(path => path.Full).ToHashSet(comparer);
+    }
+
+    /// <summary>
     /// The place an open file stands at, decided: held to the roots by their own names as the system gives an open file's
     /// (<see cref="ConfinedPaths.Opened"/>), then asked of the policy as a write where it is written, else as a read.
     /// </summary>
@@ -779,7 +837,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 /// </summary>
 /// <param name="fileSystem">Reads and writes the agent's files.</param>
 /// <param name="platform">The platform, whose paths and names compare its way.</param>
-/// <param name="git">Lists a work tree's files.</param>
+/// <param name="git">Lists a work tree's files, and says which of a step's worktree's files it does not track.</param>
 /// <param name="phases">Runs a command an agent runs as a phase, contained.</param>
 /// <param name="sessions">Where a contained command's session is recorded while it runs.</param>
 /// <param name="fetch">The harness's own fetch.</param>
@@ -804,6 +862,9 @@ public sealed class AgentToolHost(
 
     /// <summary>The platform, whose paths and names compare its way.</summary>
     internal IHostPlatform Platform { get; } = platform ?? throw new ArgumentNullException(nameof(platform));
+
+    /// <summary>Says which of a step's worktree's files git does not track, for a delete of what the step made itself.</summary>
+    internal IGitClient Git { get; } = git ?? throw new ArgumentNullException(nameof(git));
 
     /// <summary>Lists and searches a directory's files.</summary>
     internal AgentFiles Files { get; } = new(git ?? throw new ArgumentNullException(nameof(git)), fileSystem);

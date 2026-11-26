@@ -810,7 +810,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_worktree, "linking", "a.txt")));
 
         var guarded = await Call(runtime, AgentTools.DeleteDirectory, ("path", "guarded"), ("recursive", true));
-        Assert.StartsWith($"'{Path.Combine(_worktree, "guarded")}' holds '{Path.Combine(_worktree, "guarded", "keep.txt")}', which may not be written: ", guarded.Text, StringComparison.Ordinal);
+        Assert.StartsWith($"'{Path.Combine(_worktree, "guarded")}' holds '{Path.Combine(_worktree, "guarded", "keep.txt")}', which may not be taken away: ", guarded.Text, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(_worktree, "guarded", "other.txt")));
 
         var many = await Call(runtime, AgentTools.DeleteDirectory, ("path", "many"), ("recursive", true));
@@ -820,6 +820,68 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(
             [ConfinedPaths.RootsRule, ConfinedPaths.LinksRule, "Write(guarded/keep.txt)", AgentToolRuntime.MostEntriesRule],
             _events.All.OfType<PermissionDenied>().Select(denial => denial.Rule));
+    }
+
+    /// <summary>
+    /// A step whose writes narrow it takes back what its own commands made: a file a command wrote in its worktree - one
+    /// git does not track, that the worktree did not hold as the step's run began - is deleted outside its writes, and a
+    /// directory holding only such files with them, on an API client's call and on a call the engine's tool server serves
+    /// Claude Code alike, and moved away from where it was made; an untracked file that was there as the step began, and a
+    /// file git tracks, are refused, each refusal saying what may be taken back. A write over what the step made leaves a
+    /// path standing outside its writes, and stays narrowed. Without the rule a build check's outputs outside the step's
+    /// writes stop its item at the fold, asking a person to delete what the agent itself made.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseWritesNarrowIt_TakesBackWhatItsOwnCommandsMade_AndNothingElse()
+    {
+        await _harness.InitializeGitRepositoryAsync(_worktree, Token);
+        Write("Makefile", "all:\n");
+        Write("notes.txt", "kept\n");
+        await _harness.CommitAllAsync(_worktree, "the tracked files", Token);
+        Write("old.o", "there before the step");
+
+        var start = await AgentStepStart.OfAsync(
+            _harness.FileSystem,
+            _harness.GitClient,
+            PolicyGrounds.Of(_worktree, [_main], [_worktree], [], [], [], writes: ["Makefile"]),
+            _worktree,
+            _step,
+            _harness.Platform.PathComparison,
+            Token);
+
+        Assert.Equal(["old.o"], start!.Untracked);
+
+        var runtime = Open(writes: ["Makefile"], stepStart: start);
+        var (program, arguments) = OperatingSystem.IsWindows()
+            ? ("powershell", new[] { "-NoProfile", "-Command", "Set-Content -Path calc.o -Value made; Set-Content -Path str.o -Value made; New-Item -ItemType Directory -Path obj | Out-Null; Set-Content -Path obj/deps.o -Value made" })
+            : ("sh", new[] { "-c", "echo made > calc.o && echo made > str.o && mkdir obj && echo made > obj/deps.o" });
+
+        var made = await Call(runtime, AgentTools.RunCommand, ("program", program), ("args", arguments));
+        Assert.True(made.Ok, made.Text);
+
+        // A write over what the step made would leave it standing outside the step's writes: refused in a write's words.
+        var overwritten = await Call(runtime, AgentTools.CreateFile, ("path", "calc.o"), ("content", "x"), ("overwrite", true));
+        Assert.Equal($"'{Path.Combine(_worktree, "calc.o")}' is outside the paths this step may write: Makefile", overwritten.Text);
+
+        Assert.Equal("deleted 'calc.o'", (await Call(runtime, AgentTools.DeleteFile, ("path", "calc.o"))).Text);
+        Assert.Equal("deleted 'obj' and the 1 entry(ies) it held", (await runtime.ServeAsync(Request("call_2", AgentTools.DeleteDirectory, ("path", "obj"), ("recursive", true)), Token)).Text);
+        Assert.Equal("moved 'str.o' to 'Makefile'", (await Call(runtime, AgentTools.MovePath, ("from", "str.o"), ("to", "Makefile"), ("overwrite", true))).Text);
+        Assert.Equal(["Makefile", "README.md", "notes.txt", "old.o"], Directory.EnumerateFileSystemEntries(_worktree).Select(Path.GetFileName).Where(name => name != ".git").Order(StringComparer.Ordinal));
+        Assert.Equal("made", Read("Makefile").TrimEnd());
+
+        var before = await Call(runtime, AgentTools.DeleteFile, ("path", "old.o"));
+        Assert.Equal(
+            $"'{Path.Combine(_worktree, "old.o")}' is outside the paths this step may write: Makefile; {AgentPolicy.OwnMakingSaid} - and this one, or a path in it, was there untracked when the step's run began",
+            before.Text);
+
+        var tracked = await Call(runtime, AgentTools.DeleteFile, ("path", "notes.txt"));
+        Assert.Equal(
+            $"'{Path.Combine(_worktree, "notes.txt")}' is outside the paths this step may write: Makefile; {AgentPolicy.OwnMakingSaid} - and git tracks this one, or ignores it",
+            tracked.Text);
+
+        Assert.Equal("there before the step", Read("old.o"));
+        Assert.Equal("kept\n", Read("notes.txt"));
+        Assert.Equal(["the step's writes", "the step's writes", "the step's writes"], _events.All.OfType<PermissionDenied>().Select(denial => denial.Rule));
     }
 
     /// <summary>A file or a directory is moved, the directories on the way made; a file at the end is replaced only when asked, a directory never.</summary>
@@ -2728,7 +2790,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
         AgentGraphSupport? graph = null,
         AgentMeasureSupport? measure = null,
         Func<string, CancellationToken, Task<DssHarness.Core.Platform.MachineWideHold?>>? treeLock = null,
-        IReadOnlyList<string>? slots = null)
+        IReadOnlyList<string>? slots = null,
+        AgentStepStart? stepStart = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
@@ -2740,7 +2803,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             capabilities,
             webDomains,
             writes,
-            reporterRoot);
+            reporterRoot) with { StepStart = stepStart };
 
         if (sideTask)
         {

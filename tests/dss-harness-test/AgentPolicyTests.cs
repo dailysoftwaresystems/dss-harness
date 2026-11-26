@@ -2180,6 +2180,72 @@ public sealed class AgentPolicyTests
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Write(Path.Combine(ground.WorkDirectory, "out", "f.txt")));
     }
 
+    /// <summary>
+    /// A step's writes narrow its deletes as they narrow its writes, but for what the step made itself: a path of its
+    /// worktree git does not track that the record of the step's start holds by no spelling - a file, or a directory nothing
+    /// of the record lies in - is taken back; one the record holds, in any case or beneath it, and one git tracks or
+    /// ignores, is refused, the refusal saying what may be taken back. A write over the step's making stays narrowed, a
+    /// ground with no record narrows its deletes whole, every other refusal of a write holds a delete as it holds the write,
+    /// and a record of another tree than the agent's is refused where the policy is built.
+    /// </summary>
+    [Fact]
+    public void AStepsWritesNarrowItsDeletes_ButOfWhatItMadeItself()
+    {
+        using var ground = Ground();
+        var start = new AgentStepStart(ground.Worktree, ["old.o", "obj/kept/a.o"]);
+        var policy = ground.Policy(writes: ["Makefile"], stepStart: start);
+
+        string Outside(params string[] relative)
+            => $"'{Path.GetFullPath(Path.Combine([ground.Worktree, .. relative]))}' is outside the paths this step may write: Makefile";
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Delete("calc.o", untracked: true));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Delete("out/deps.o", untracked: true));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Delete("out", untracked: true));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Delete("Makefile", untracked: false));
+
+        const string WasThere = "this one, or a path in it, was there untracked when the step's run began";
+        const string Tracked = "git tracks this one, or ignores it";
+
+        foreach (var (path, untracked, why) in new[]
+        {
+            (new[] { "old.o" }, true, WasThere),
+            (new[] { "OLD.O" }, true, WasThere),
+            (new[] { "obj" }, true, WasThere),
+            (new[] { "obj", "kept" }, true, WasThere),
+            (new[] { "obj", "kept", "a.o" }, true, WasThere),
+            (new[] { "calc.o" }, false, Tracked),
+            (new[] { "src", "a.c" }, false, Tracked),
+        })
+        {
+            var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Delete(string.Join('/', path), untracked));
+
+            Assert.Equal(("the step's writes", AgentPolicySource.Builtin), (denied.Rule, denied.Source));
+            Assert.Equal($"{Outside(path)}; {AgentPolicy.OwnMakingSaid} - and {why}", denied.Reason);
+        }
+
+        // A write over what the step made would leave it standing outside the writes: narrowed, in a write's words.
+        Assert.Equal(Outside("calc.o"), Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write("calc.o")).Reason);
+
+        // With no record of the step's start nothing is told apart: a delete is narrowed as a write is, in its words.
+        Assert.Equal(Outside("calc.o"), Assert.IsType<AgentPolicyAnswer.Denied>(ground.Policy(writes: ["Makefile"]).Delete("calc.o", untracked: true)).Reason);
+
+        // Every other refusal of a write holds a delete of what the step made as it holds the write.
+        Assert.Equal(AgentPolicy.GitsOwnRule, Assert.IsType<AgentPolicyAnswer.Denied>(policy.Delete(".git/hooks/pre-commit", untracked: true)).Rule);
+        Assert.Equal("Write(.vscode/**)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Delete(".vscode/settings.json", untracked: true)).Rule);
+        Assert.Equal(
+            "Write(gen/**)",
+            Assert.IsType<AgentPolicyAnswer.Denied>(ground.Policy(restrictions: [new("Write(gen/**)", AgentPolicySource.Config)], writes: ["Makefile"], stepStart: start).Delete("gen/x.o", untracked: true)).Rule);
+        Assert.Equal("the writable roots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Delete(Path.Combine(ground.Main, "x.o"), untracked: true)).Rule);
+
+        // Outside the worktree the step's writes narrow nothing, a delete as a write.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Delete(Path.Combine(ground.WorkDirectory, "x.o"), untracked: false));
+
+        // A record of another tree would read its paths against the wrong one.
+        Assert.Equal(
+            $"the record of the step's start is of '{ground.Main}', and the agent works in '{ground.Worktree}' (Parameter 'ground')",
+            Assert.Throws<ArgumentException>(() => ground.Policy(writes: ["Makefile"], stepStart: new AgentStepStart(ground.Main, []))).Message);
+    }
+
     [Fact]
     public void TheReporterReadsItsOneRootAlone_AndNothingElse()
     {
@@ -3371,7 +3437,8 @@ public sealed class AgentPolicyTests
             string? home = null,
             string? worktree = null,
             string? workDirectory = null,
-            IReadOnlyList<HiddenPlace>? credentialPlaces = null)
+            IReadOnlyList<HiddenPlace>? credentialPlaces = null,
+            AgentStepStart? stepStart = null)
             => new(
                 new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
                 HostDoubles.Platform(platform, home: home),
@@ -3389,7 +3456,7 @@ public sealed class AgentPolicyTests
                     worktreeRules: worktreeRules,
                     protectedPaths: protectedPaths,
                     stateDirectories: stateDirectories,
-                    credentialPlaces: credentialPlaces));
+                    credentialPlaces: credentialPlaces) with { StepStart = stepStart });
 
         public void Dispose()
         {

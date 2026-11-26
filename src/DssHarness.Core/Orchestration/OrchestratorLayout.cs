@@ -29,6 +29,8 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/step.json            in either kind of step's directory: the step's own record
 /// &lt;step&gt;/output.json          the step's output, validated
 /// &lt;step&gt;/handoff.md           the handoff a stop cut the step off with, until its next attempt is given it
+/// &lt;step&gt;/policy.json          a reason step: the policy it started under, the agents' configuration as each start read it
+/// &lt;step&gt;/untracked-at-start.jsonl   a reason step whose writes narrow its worktree: the paths the worktree held untracked as the step first started, which tell its own making apart
 /// &lt;step&gt;/ledger.json          a leg step: its legs' ledger, as --json gives it
 /// &lt;step&gt;/logs/                a leg step in an agent's worktree: each red leg's phase log that did not pass; a ci-wait: each red job's log
 /// &lt;step&gt;/fold.json            a fold family step: what its dry run named and stood, its question, each consent given, how its apply ended
@@ -192,6 +194,14 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The step's policy as it started under it: the agents' configuration as resolved - agentPolicy, the web search it asks, what it runs on - read when the step starts, as its prompts are.</summary>
     public const string PolicyFileName = "policy.json";
+
+    /// <summary>
+    /// The name of the file a reason step whose <c>writes</c> narrow what it writes in its worktree keeps, in its directory,
+    /// the worktree's untracked paths in as the step first started: what tells the step's own making apart, which it may
+    /// delete whatever its writes say (<see cref="Agents.Policy.AgentStepStart"/>); written once, and read by every later
+    /// attempt, answer and resume of the step.
+    /// </summary>
+    public const string StepUntrackedFileName = "untracked-at-start.jsonl";
 
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";

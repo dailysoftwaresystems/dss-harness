@@ -80,7 +80,10 @@ public static partial class HelpTopics
             "ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its "
             + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
             + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
-            + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a "
+            + "that start after it and never one under way - and, where its writes narrow its worktree, the "
+            + $"{OrchestratorLayout.StepUntrackedFileName} its first start took (the paths the worktree held untracked then, which "
+            + "tell what the step's own commands made, and may take back, from what was there) - and, where the step has a "
+            + "codebase graph, its graph.jsonl (a "
             + $"line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the "
             + "seeds of the packs of the steps after it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",

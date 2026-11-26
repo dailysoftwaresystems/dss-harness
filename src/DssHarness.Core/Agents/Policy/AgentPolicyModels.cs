@@ -226,6 +226,15 @@ public sealed record AgentPolicyGround(
     /// </summary>
     public string? RunDirectory { get; init; }
 
+    /// <summary>
+    /// What the step's worktree held untracked as the step's run began (<see cref="AgentStepStart"/>), where its
+    /// <see cref="Writes"/> narrow what it may write there: a delete outside them takes back what the step made itself - a
+    /// path of the worktree git does not track that this record does not hold - and nothing else
+    /// (<see cref="AgentPolicy.Delete"/>). Null for every other ground, and for a step whose start was not recorded: the
+    /// step's writes, where it has them, narrow its deletes as they narrow its writes.
+    /// </summary>
+    public AgentStepStart? StepStart { get; init; }
+
     /// <summary>Every capability, in the order a definition names them.</summary>
     public static IReadOnlyList<AgentCapability> EveryCapability { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];
 

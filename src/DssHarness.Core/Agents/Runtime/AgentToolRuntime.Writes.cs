@@ -8,7 +8,9 @@ namespace DssHarness.Core.Agents.Runtime;
 /// <summary>
 /// The tools that write: a file created, a string replaced, lines inserted, a directory made, a file or a directory
 /// deleted, a path moved. Each is a write to every path it touches - each entry it deletes or moves, at both ends of a
-/// move - held to the writable roots and asked of the policy; the directories made on a path's way are part of the write
+/// move - held to the writable roots and asked of the policy, what it takes away (each entry it deletes, a move's source)
+/// asked as a delete, which a step's <c>writes</c> let by where the step made the path itself
+/// (<see cref="AgentPolicy.Delete"/>); the directories made on a path's way are part of the write
 /// to that path, decided with it and never asked apart. Each then acts relative to the directories it touches, held from
 /// the writable root it was decided in with no link on the way (<see cref="UnfollowedFiles"/>, <see cref="AgentFiles.Write(string, string, Action{Stream}, Func{string, AgentPolicyAnswer.Denied?})"/>):
 /// a link a command still running puts on the way after the decision reaches nothing, and the call is refused naming it.
@@ -258,11 +260,14 @@ public sealed partial class AgentToolRuntime
         return Anchored(path, () => UnfollowedFiles.CreateDirectory(_host.FileSystem, _paths.WritableRootOf(full), full)) ?? Answer.Done($"made '{Said(full)}'");
     }
 
-    /// <summary><c>delete_file</c>: one file deleted; one that is not there is an error.</summary>
-    private async Task<Answer> DeleteFile(JsonObject input)
+    /// <summary>
+    /// <c>delete_file</c>: one file deleted, decided as a delete - one the step made itself taken back whatever its
+    /// <c>writes</c> say (<see cref="TakenPlaceAsync"/>); one that is not there is an error.
+    /// </summary>
+    private async Task<Answer> DeleteFile(JsonObject input, CancellationToken cancellationToken)
     {
         var path = Text(input, "path")!;
-        var place = WritePlace(path);
+        var place = await TakenPlaceAsync(path, cancellationToken).ConfigureAwait(false);
 
         if (place.Denied is { } denied)
         {
@@ -292,12 +297,13 @@ public sealed partial class AgentToolRuntime
 
     /// <summary>
     /// <c>delete_directory</c>: an empty directory deleted, or with <c>recursive</c> everything in it - refused for a root,
-    /// for one that holds a link, that holds a path the agent may not write, or that holds more entries than the bound.
+    /// for one that holds a link, that holds a path the agent may not delete, or that holds more entries than the bound;
+    /// the directory and every path it holds decided as deletes (<see cref="TakenPlaceAsync"/>, <see cref="HeldAsync"/>).
     /// </summary>
-    private async Task<Answer> DeleteDirectory(JsonObject input)
+    private async Task<Answer> DeleteDirectory(JsonObject input, CancellationToken cancellationToken)
     {
         var path = Text(input, "path")!;
-        var place = WritePlace(path);
+        var place = await TakenPlaceAsync(path, cancellationToken).ConfigureAwait(false);
 
         if (place.Denied is { } denied)
         {
@@ -322,7 +328,7 @@ public sealed partial class AgentToolRuntime
                 $"'{full}' is one of this agent's roots, which no tool deletes"));
         }
 
-        var entries = Held(full);
+        var entries = await HeldAsync(full, cancellationToken).ConfigureAwait(false);
 
         if (entries.Refusal is { } refusal)
         {
@@ -375,13 +381,15 @@ public sealed partial class AgentToolRuntime
 
     /// <summary>
     /// <c>move_path</c>: a file or a directory moved inside the writable roots - every path it touches at both ends a
-    /// write - the directories on the way made; a file at the end replaced only with <c>overwrite</c>, a directory never.
+    /// write, what it takes away from the source decided as a delete (<see cref="TakenPlaceAsync"/>, <see cref="HeldAsync"/>),
+    /// so the step moves away what it made itself as it deletes it, and every path it lands at as a write - the directories
+    /// on the way made; a file at the end replaced only with <c>overwrite</c>, a directory never.
     /// </summary>
-    private async Task<Answer> MovePath(JsonObject input)
+    private async Task<Answer> MovePath(JsonObject input, CancellationToken cancellationToken)
     {
         var fromPath = Text(input, "from")!;
         var toPath = Text(input, "to")!;
-        var from = WritePlace(fromPath);
+        var from = await TakenPlaceAsync(fromPath, cancellationToken).ConfigureAwait(false);
 
         if (from.Denied is { } fromDenied)
         {
@@ -441,7 +449,7 @@ public sealed partial class AgentToolRuntime
                     $"'{source}' is one of this agent's roots, which no tool moves"));
             }
 
-            var held = Held(source);
+            var held = await HeldAsync(source, cancellationToken).ConfigureAwait(false);
 
             if (held.Refusal is { } refusal)
             {
@@ -538,10 +546,14 @@ public sealed partial class AgentToolRuntime
 
     /// <summary>
     /// What <paramref name="directory"/> holds, walked whole without following a link: every entry and every file, or the
-    /// refusal of the first that stops a tool acting on it - a link, a path the agent may not write, or more entries than
-    /// <see cref="AgentTools.MostDeletedEntries"/>.
+    /// refusal of the first that stops a tool taking it away - a link, a path the agent may not delete, or more entries than
+    /// <see cref="AgentTools.MostDeletedEntries"/>. Each entry is decided as a delete (<see cref="AgentPolicy.Delete"/>) as
+    /// it is met, as though git tracked nothing at it - the most a delete of it may be let by, so a refusal then stands
+    /// whatever git says - and, where the step's ground holds the record of its start, each file is decided again once the
+    /// walk is done, with whether git lists it untracked, asked of every file at once: a directory beneath holds only what
+    /// the step made where each file in it is that.
     /// </summary>
-    private Contents Held(string directory)
+    private async Task<Contents> HeldAsync(string directory, CancellationToken cancellationToken)
     {
         var files = _host.FileSystem;
         var entries = new List<string>();
@@ -578,14 +590,30 @@ public sealed partial class AgentToolRuntime
                         break;
                 }
 
-                if (_policy.Write(entry).Refusal() is { } denied)
+                if (_policy.Delete(entry, untracked: true).Refusal() is { } denied)
                 {
-                    return new Contents(entries, held, denied with { Reason = $"'{directory}' holds '{entry}', which may not be written: {denied.Reason}" });
+                    return new Contents(entries, held, Holding(directory, entry, denied));
+                }
+            }
+        }
+
+        if (_run.Ground?.StepStart is not null)
+        {
+            var untracked = await UntrackedAsync(held, cancellationToken).ConfigureAwait(false);
+
+            foreach (var file in held.Where(file => !untracked.Contains(file)))
+            {
+                if (_policy.Delete(file, untracked: false).Refusal() is { } denied)
+                {
+                    return new Contents(entries, held, Holding(directory, file, denied));
                 }
             }
         }
 
         return new Contents(entries, held, null);
+
+        static AgentPolicyAnswer.Denied Holding(string directory, string entry, AgentPolicyAnswer.Denied denied)
+            => denied with { Reason = $"'{directory}' holds '{entry}', which may not be taken away: {denied.Reason}" };
     }
 
     /// <summary>What a directory holds: every entry, every file, and the refusal of the first that stops a tool acting on it.</summary>

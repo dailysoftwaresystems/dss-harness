@@ -3017,7 +3017,22 @@ into a file is the inside of that program, unseen as help says. The rule a refus
 that decided: a rule the command certainly is before one it may be, and of the may-bes the
 person's own restrictions first, then the worktree rules, then the tool's own refusals. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
 as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
-refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
+refused on every client; a step's `writes` is the one source that narrows - a write, and a delete
+but of what the step made itself (`AgentPolicy.Delete`): a path of its worktree git does not track
+that the record of the step's start does not hold (`AgentPolicyGround.StepStart`,
+`Agents\Policy\AgentStepStart`). That record is the worktree's untracked files as git lists them
+(`IGitClient.ListWorkingFilesAsync`), taken by `ReasonStepRunner` before the step's agent first starts
+and kept in the step's directory (`OrchestratorLayout.StepUntrackedFileName`), so every later
+attempt, answer and resume reads the one its first start took; held without regard to case, a
+directory held where a path in it is, for it only ever keeps a path from being taken back. The tool
+runtime asks git, as each call is decided, which of the files a call takes away - a file deleted,
+every file of a directory deleted, a move's source - git lists untracked now (neither tracked nor
+ignored), and hands that to the policy, which decides alone; a directory passes where nothing of the
+record lies at or beneath it, each path it holds decided on its own. So what a step's commands made
+anywhere in its worktree - a build's outputs, which a fold under `foldOutside: fail` would otherwise
+stop on - the step may take back on every client, by the one runtime both reach; a path git tracks
+or ignores, one the record holds, and a write over the step's own making stay narrowed, and the
+refusal says what may be taken back (`AgentPolicy.OwnMakingSaid`). The reporter's reads
 are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
 no web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
 (`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
@@ -4611,7 +4626,9 @@ with each target and where it stands; a reason step's `policy.json`, written as 
 agents' configuration is read when each step starts, as its prompts are, so an edit of `config.json` -
 a side-task's among them - reaches the steps that start after it and never one under way, and each
 keeps the policy it started under - the ground as resolved, the web search it asks, what it runs on
-with the key's name alone), then `flow.json` (the
+with the key's name alone; and, where its `writes` narrow its worktree, its `untracked-at-start.jsonl`,
+written once, as it first starts, and read by every later start: its head, then each path the worktree
+held untracked, one to a line), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is

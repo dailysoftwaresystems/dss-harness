@@ -869,6 +869,51 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// A step whose writes narrow its worktree records, as it first starts and before its agent is started, what the
+    /// worktree holds untracked, and hands that record to its agent's ground; every later start of the step - another
+    /// attempt, an answer, a resume - reads the record its first start took, so a path its commands made since is one it may
+    /// take back. A step whose writes narrow nothing records nothing.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseWritesNarrowItsWorktree_RecordsWhatItHeldUntrackedAsItFirstStarted()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        var worktree = kit.Worktree("ag");
+        File.WriteAllText(Path.Combine(worktree, "before.o"), "there before the step");
+
+        var untracked = (await kit.Harness.GitClient.ListWorkingFilesAsync(worktree, Token)).Where(file => file.Untracked).Select(file => file.Name.Text).Order(StringComparer.Ordinal).ToList();
+        var run = Run(kit, agent: "ag");
+        run = run with { Step = run.Step with { Writes = new FlowList(["Makefile"], Expression: null) } };
+
+        Assert.True((await Runner(kit, agents).RunAsync(run, Token)).Passed);
+
+        // What the step's first attempt made is no part of what the worktree held as the step began.
+        File.WriteAllText(Path.Combine(worktree, "calc.o"), "made by the step's command");
+
+        Assert.True((await Runner(kit, agents).RunAsync(run with { Attempt = 2 }, Token)).Passed);
+
+        var record = Path.Combine(kit.Layout.InstanceDirectory("think", "ag"), OrchestratorLayout.StepUntrackedFileName);
+
+        Assert.Contains("before.o", untracked);
+        Assert.Equal([$"{{\"paths\":{untracked.Count}}}", .. untracked.Select(path => $"\"{path}\"")], File.ReadAllLines(record));
+        Assert.Equal(2, agents.Asked.Count);
+        Assert.All(agents.Asked, asked =>
+        {
+            Assert.Equal(worktree, asked.Ground!.StepStart!.Worktree);
+            Assert.Equal(untracked, asked.Ground.StepStart.Untracked);
+        });
+
+        // A step whose writes narrow nothing has no delete narrowed, and records nothing.
+        var open = Run(kit, agent: "ag") with { Instance = "open" };
+
+        Assert.True((await Runner(kit, agents).RunAsync(open, Token)).Passed);
+        Assert.Null(agents.Asked[^1].Ground!.StepStart);
+        Assert.False(File.Exists(Path.Combine(kit.Layout.InstanceDirectory("open", "ag"), OrchestratorLayout.StepUntrackedFileName)));
+    }
+
+    /// <summary>
     /// Where the configuration balances a provider's keys, the step's order runs each model's keys by least spent in
     /// the last seven days - the repository's key-spend record read where the step starts - a tie in the list's order.
     /// </summary>

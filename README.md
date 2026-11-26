@@ -381,7 +381,7 @@ is enforced by tests that read the built command line itself. The
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
 .orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
-.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its graph-pages/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the seeds of the packs of the steps after it
+.orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way - and, where its writes narrow its worktree, the untracked-at-start.jsonl its first start took (the paths the worktree held untracked then, which tell what the step's own commands made, and may take back, from what was there) - and, where the step has a codebase graph, its graph.jsonl (a line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its graph-pages/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the seeds of the packs of the steps after it
 .orchestrators/<o>/agents/<agent>/sessions/<id>/ ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included; every step's own record holds what its work measured (`measure` in `step.json` and `flow.json`: when it was ready, its waits by cause whole across sessions, its run time, its pause, and one entry per attempt - what served it, the price copied as its cost was counted, the tokens by kind, the dollars, the turns, the tools, the compactions, the pages past the first its graph calls asked for - with the advisor's spend beside them; the run's `spent` is the sum of its steps'), and an attempt a crash cut off has its measure completed at the resume from the step's stored stream
 .orchestrators/<o>/temp/<launch>/            ignored; every temporary directory a run's launch and its children keep, one directory a launch (its children's and Claude Code's own process's beside it), made with the launch, held for the run's life and never in the user's own places; taken away whole with the run's directory
@@ -1204,9 +1204,16 @@ writes Claude Code guards - `.git/**`, `.vscode/**`, `.husky/**` and the rest of
 `help agent-clients` prints and a test pins - refused on every client, so a role is not stopped
 on one where it passes on another; turning them off takes this tool's refusal away, and Claude
 Code's own guard stays Claude Code's. A step's `writes` is the one source that narrows: where a
-step has them, a write under its worktree that matches none of their patterns is denied; the
-reporter's reads are narrowed to the run's directory alone, with no command, no write and no web
-at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
+step has them, a write under its worktree that matches none of their patterns is denied, and so is
+a delete - but of what the step made itself, a path of its worktree git does not track that was
+not there when the step's run began, as its first start records the worktree's untracked paths
+(`untracked-at-start.jsonl` in its directory, which every later attempt, answer and resume reads):
+what its own commands made anywhere in its worktree - a build's outputs - it may take back, by
+`delete_file`, by `delete_directory` where all a directory holds is that, and from a move's
+source, while a path git tracks or ignores, or one that was there, stays narrowed, and so does a
+write over the step's own making, which leaves a path standing outside them; a refusal of such a
+delete says so. The reporter's reads are narrowed to the run's directory alone, with no command,
+no write and no web at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
 root in the POSIX form Claude Code matches (`//c/x` for `C:\x`), a `Write` rule as the `Edit` rule
 Claude Code holds its file tools' writes to, a read of each credential slot and Claude Code
@@ -1668,8 +1675,10 @@ acted on relative to its directory held from the writable root it was decided in
 way opened as itself, so a link put in place between the check and the act, or swapped in while it
 acts, reaches nothing and the call is refused naming it; a directory listed goes by its path, so a
 link put in place of one lists names, never a byte of a file); then the policy is asked of it, a deleting or moving tool a write to every path it
-touches, at both ends of a move. A directory deleted or moved is refused where it is a root, holds a link,
-holds a path that may not be written or holds more than 2,000 entries. A file of any size is
+touches, at both ends of a move - what it takes away, each path it deletes and a move's source,
+decided as a delete, which a step's `writes` hold back but where the step made the path itself,
+git asked of each file as the call is decided. A directory deleted or moved is refused where it is a root, holds a link,
+holds a path that may not be taken away or holds more than 2,000 entries. A file of any size is
 viewed, a page at a time - its pages laid once by streaming it, any page read by seeking to its
 mark, a line wider than a page given in pieces - and edited, copied through a block at a time with
 the edit made on the way; `search_files` reads every file whatever its size, a line at a time, its
