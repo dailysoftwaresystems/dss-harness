@@ -2488,7 +2488,7 @@ of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused,
 but not for a report met after its own fix was done), the run's records saying so, unless it stops the work of a
 step that triage will not run again, for only a triage's own reporter runs again once its fix is done;
 one met again after its fix - by an attempt begun after the fix ended, in the run's own order of
-attempts begun and instances ended that each step record keeps (`attemptBegan`, `endedIn`, and on a
+instances drawn, attempts begun and instances ended that each step record keeps (`drawnIn`, `attemptBegan`, `endedIn`, and on a
 triage `reportedIn`, the reporting attempt's; `MetAfter`) - is raised anew, its visits of
 the recovery counted against `maxVisits` by the issue, whichever triage sent it (`RecoveryOf`), and a
 configured answer to that bound counted there too, so a fix that never holds ends in `recoveryBound`;
@@ -4063,7 +4063,11 @@ the reserve to meet it a second time - and a grant of more recorded since goes o
 
 Every step instance's work is measured as it runs, on its own record (`FlowStepMeasure`, `step.json`'s and
 `flow.json`'s `measure`, one owner in `Orchestration\Flow\FlowStepMeasure.cs`), null until the run draws it: when it was
-ready (`readyAt`, the first walk - the admission's or a record's - that found nothing holding it but room; what held it
+ready (`readyAt`, the moment the pass of the engine's decisions that left nothing holding it but room began - its last
+dependency's end, its making, its group's opening, a hold let go: `FlowCoordinator.DrawFreed`, every step one pass
+frees ready at the one moment and drawn in the one place of the run's own order, the step record's `drawnIn`, so a
+group's member, made a round of the pass after its group, never ranks after a step the same pass freed beside it; what
+held it
 before, the steps it depends on or the run's own holds, is theirs and never its wait; a group, which runs nothing of
 its own, holds none), how long it waited and on what (`waited[]`, by the words a record's `waitsOn` holds - the
 reasoning limit, a claim, a person's answer, the machine its legs run on holding every one of them still to run in its
@@ -4353,8 +4357,9 @@ The planning of a plan update: where the run has begun the scope its plan update
 raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
 the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
 progress again), never drawn by the ordinary schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
-everything else (`AdmissionWalk`, which walks every other waiting step in the order it first became ready,
-`FlowStepMeasure.ReadyAt`, the fixed order breaking ties: a step blocked on a claim reserves it, so a fold or an
+everything else (`AdmissionWalk`, which walks every other waiting step in the order it first became ready - the pass
+that drew it, `FlowInstance.DrawnIn` in the run's own order, never a clock - the fixed order breaking ties among what
+one pass freed: a step blocked on a claim reserves it, so a fold or an
 agent's making waiting behind readers is never overtaken by a reader that became ready after it - a busy run's
 pre-existing triages once starved a recovery's remedy that way) - while the run is held (`FlowCoordinator.HoldOf`: nothing starts outside that
 scope, a held step reserving no claim, what is in flight untouched, no next iteration of a loop outside it, no

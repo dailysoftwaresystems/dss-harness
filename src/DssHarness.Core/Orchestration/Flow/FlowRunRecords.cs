@@ -666,7 +666,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.ReportedIn,
             step.Inputs?.DeepClone().AsObject(),
             step.Decided,
-            step.Measure);
+            step.Measure,
+            step.DrawnIn);
     }
 
     /// <summary>

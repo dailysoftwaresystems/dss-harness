@@ -11,13 +11,15 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// how long it waited and for what, how long it ran, and what each of its attempts used - the model that served it, the
 /// tokens of every kind, the dollars at the price of that moment, and the tools it called. Held on the instance's record
 /// (<see cref="FlowStepRecord.Measure"/>), one owner, kept across a resume, and null until the engine draws the instance:
-/// an instance the walk never found ready holds none. Every change of it is one of this record's own: an attempt's entry
+/// an instance no pass of the engine's found free holds none. Every change of it is one of this record's own: an attempt's entry
 /// opened as the attempt starts (<see cref="Running"/>), each turn charged into it (<see cref="Charged"/>), its ending
 /// (<see cref="Ended"/>), and every wait settled where its causes change (<see cref="Waiting"/>) - the totals and the
 /// run time summed from the entries at each.
 /// </summary>
 /// <param name="ReadyAt">
-/// When everything the instance depends on ended and it was free to be drawn; null where the engine never drew it.
+/// When everything the instance depends on ended and nothing of the run's held it, so it was free to be drawn: the
+/// moment the engine's pass that freed it began, every step one pass frees ready at the same moment; null where the
+/// engine never drew it.
 /// </param>
 /// <param name="Waited">
 /// How long it waited after it was ready, split by the engine's own causes (<see cref="FlowWaits"/> and the words a

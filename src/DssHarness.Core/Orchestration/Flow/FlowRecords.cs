@@ -210,8 +210,9 @@ public sealed record FlowEvent(
 /// what the tool served, and what the agent still read whole; null where the step was given no graph.
 /// </param>
 /// <param name="AttemptBegan">
-/// Where the latest attempt began in the run's own order of attempts begun and instances ended - one count for both,
-/// carried across sessions - so which came first is never a question of the clock; null where no attempt began yet.
+/// Where the latest attempt began in the run's own order of instances drawn, attempts begun and instances ended - one
+/// count for all three, carried across sessions - so which came first is never a question of the clock; null where no
+/// attempt began yet.
 /// </param>
 /// <param name="EndedIn">Where the instance ended in that order; null where it has not ended.</param>
 /// <param name="ReportedIn">
@@ -233,6 +234,11 @@ public sealed record FlowEvent(
 /// What the instance's work measured, written by the engine as it runs: when it was ready, how long it waited and for
 /// what, and what each of its attempts used - the model that served it, the tokens of every kind, the dollars at the
 /// price of that moment. Null until the engine draws the instance, and for a step that never ran.
+/// </param>
+/// <param name="DrawnIn">
+/// Where the pass that drew the instance stands in that same order: every step one pass of the engine frees takes the
+/// one count, so a resume ranks what waits by the pass that freed it as the session before did; null until the engine
+/// draws it, or where a record written before the order was kept says none.
 /// </param>
 public sealed record FlowStepRecord(
     string Instance,
@@ -286,7 +292,8 @@ public sealed record FlowStepRecord(
     long? ReportedIn = null,
     JsonObject? Inputs = null,
     FlowLoopDecision? Decided = null,
-    FlowStepMeasure? Measure = null)
+    FlowStepMeasure? Measure = null,
+    long? DrawnIn = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -1432,6 +1439,7 @@ public sealed record FlowSnapshot(
 /// <param name="Inputs">A use's scope's own record: what its with filled the used workflow's inputs with (<see cref="FlowStepRecord.Inputs"/>); null for every other.</param>
 /// <param name="Decided">An iteration's of a repeat that says decideAfter: the decision read at its deciding step (<see cref="FlowStepRecord.Decided"/>); null for every other.</param>
 /// <param name="Measure">What the instance's work measured (<see cref="FlowStepRecord.Measure"/>); null until the engine draws it.</param>
+/// <param name="DrawnIn">Where the pass that drew it stands in the run's own order (<see cref="FlowStepRecord.DrawnIn"/>); null until the engine draws it.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1484,4 +1492,5 @@ public sealed record FlowSnapshotStep(
     long? ReportedIn = null,
     JsonObject? Inputs = null,
     FlowLoopDecision? Decided = null,
-    FlowStepMeasure? Measure = null);
+    FlowStepMeasure? Measure = null,
+    long? DrawnIn = null);

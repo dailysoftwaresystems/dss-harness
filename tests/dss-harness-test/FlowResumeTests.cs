@@ -2700,6 +2700,63 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// Which of two waiting steps was drawn first is the run's own order, kept in each step's record (<c>drawnIn</c>): a
+    /// resume ranks them as the session before did, so an agent's making drawn before a reader declared ahead of it
+    /// still goes first, never overtaken because the new session found both waiting at once.
+    /// </summary>
+    [Fact]
+    public async Task TheOrderWaitingStepsWereDrawnIn_IsKeptAcrossAResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: second
+                type: orient
+              - name: late
+                type: orient
+                dependsOn: [second]
+              - name: quick
+                type: orient
+              - name: making
+                type: create-agent
+                agent: worker.md
+                dependsOn: [quick]
+            """);
+        var runner = new Runner().Hold("first").Hold("second");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var watched = new Watched(records);
+
+        using (records)
+        {
+            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token);
+            await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step is { Instance: "making", DrawnIn: not null })).WaitAsync(Bound, Token);
+            runner.Complete("second");
+            await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step is { Instance: "late", DrawnIn: not null })).WaitAsync(Bound, Token);
+
+            // The crash, the making and the reader drawn after it both waiting on the claim the first reader holds.
+        }
+
+        var making = harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("making"))!.DrawnIn;
+        var late = harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("late"))!.DrawnIn;
+
+        Assert.True(making < late, $"the making was drawn in {making}, the reader in {late}");
+
+        var next = new Runner();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(["first", "making", "late"], next.Started);
+        }
+    }
+
+    /// <summary>
     /// The issues a step reported while the run stopped are owed in its own record, and the issue a triage instance was
     /// raised for is in that instance's record: a resume by a new engine raises the owed triage, and one a crash cut off
     /// runs again with its issue.

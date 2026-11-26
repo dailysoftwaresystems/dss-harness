@@ -310,11 +310,18 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     public string? LeftBy { get; internal set; }
 
     /// <summary>
-    /// Where the instance's latest attempt began in the run's own order of attempts begun and instances ended (one count
-    /// for both, kept in the step's record and carried across sessions); 0 where none began, or a record written before
-    /// the order was kept says none.
+    /// Where the instance's latest attempt began in the run's own order of instances drawn, attempts begun and instances
+    /// ended (one count for all three, kept in the step's record and carried across sessions); 0 where none began, or a
+    /// record written before the order was kept says none.
     /// </summary>
     internal long AttemptBegan;
+
+    /// <summary>
+    /// Where the pass that drew the instance stands in the run's own order: every step one pass frees takes the one
+    /// count, so admission ranks steps by the pass that freed them (<see cref="FlowCoordinator"/>'s <c>AdmissionWalk</c>),
+    /// never by a clock; 0 where the instance was never drawn, or its record says none.
+    /// </summary>
+    internal long DrawnIn;
 
     /// <summary>Where the instance ended in the run's own order; 0 where it has not ended, or its record says none.</summary>
     internal long EndedIn;
@@ -558,12 +565,19 @@ public sealed class FlowCoordinator
     private bool _stopping;
 
     /// <summary>
-    /// The run's own order of attempts begun and instances ended, one count for both, so which came first is never a
-    /// question of the clock - two times a record keeps to the second may tie, and an attempt run again keeps its first
-    /// start time: each step's record keeps where its latest attempt began and where it ended, and a resume goes on from
-    /// the highest it reads back.
+    /// The run's own order of instances drawn, attempts begun and instances ended, one count for all three, so which came
+    /// first is never a question of the clock - two times a record keeps to the second may tie, a clock may give two
+    /// passes one moment, and an attempt run again keeps its first start time: each step's record keeps where it was
+    /// drawn, where its latest attempt began and where it ended, and a resume goes on from the highest it reads back.
     /// </summary>
     private long _order;
+
+    /// <summary>
+    /// The place in <see cref="_order"/> the pass under way draws in, with its moment: taken at the pass's first draw -
+    /// at a record's write or at its end (<see cref="DrawFreed"/>) - and given up as the pass ends, so every step one
+    /// pass frees is drawn in the one place at the one moment. Null where the pass under way has drawn nothing yet.
+    /// </summary>
+    private (long Place, DateTimeOffset At)? _drawing;
     private bool _alwaysPhase;
     private bool _inSession;
     private bool _answeredAtOnce;
@@ -1133,6 +1147,7 @@ public sealed class FlowCoordinator
         _stopApplied = false;
         _pause = null;
         _endedAt = null;
+        _drawing = null;
         _sessions++;
 
         // What the session's start writes is held until it is known the session goes on: a resume that can run nothing
@@ -3779,7 +3794,11 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Everything the coordinator decides between two events, until nothing more follows: instantiate what its dependencies freed, end what its members finished, carry failures to their policies, and a stopping run's reach.</summary>
+    /// <summary>
+    /// Everything the coordinator decides between two events, until nothing more follows: instantiate what its
+    /// dependencies freed, end what its members finished, carry failures to their policies, and a stopping run's reach -
+    /// and then draw what it all freed and the pass ends (<see cref="DrawFreed"/>).
+    /// </summary>
     private void Progress()
     {
         var changed = true;
@@ -3796,6 +3815,46 @@ public sealed class FlowCoordinator
             changed |= EndGroups();
             changed |= CarryTheStop();
             changed |= SettleUpdates();
+        }
+
+        DrawFreed();
+    }
+
+    /// <summary>
+    /// The end of a pass: every step not started that nothing holds now (<see cref="HoldOf"/>) and that no write of the
+    /// pass drew is drawn (<see cref="Draw"/>), and the pass gives up its place. A pass is the handling of one event and
+    /// everything decided from it until nothing more follows - its last dependency's end, its making, its group's opening,
+    /// a redirect made, a hold let go - and a member of a group is made by a later round of the same pass than its
+    /// group's opening, so every step one pass frees is drawn as one, and the fixed order alone ranks them: no step ranks
+    /// after another of the same pass for being made a round after it, nor before it for a record written between the
+    /// two.
+    /// </summary>
+    private void DrawFreed()
+    {
+        foreach (var instance in _created.Where(instance => instance is { State: FlowInstanceState.NotStarted, Step.IsGroup: false, DrawnIn: 0 } && HoldOf(instance).Count == 0))
+        {
+            Draw(instance);
+        }
+
+        _drawing = null;
+    }
+
+    /// <summary>
+    /// Draws <paramref name="instance"/>, which nothing holds and no pass drew before: it takes the place of the pass
+    /// under way in the run's own order (<see cref="FlowInstance.DrawnIn"/>) - the pass's first draw takes the place and
+    /// its moment - and its measure begins at that moment, where no record says an earlier one: a step a record written
+    /// before the order was kept says was drawn keeps its moment, and takes its place here. Before it, what it waits on is
+    /// the steps it depends on and the run's own holds: theirs, never its wait.
+    /// </summary>
+    /// <param name="instance">A step not started, never drawn, that nothing holds.</param>
+    private void Draw(FlowInstance instance)
+    {
+        var (place, at) = _drawing ??= (++_order, _clock.GetUtcNow());
+        instance.DrawnIn = place;
+
+        if (instance.Measure?.ReadyAt is null)
+        {
+            instance.Measure = instance.Measure is { } measure ? measure with { ReadyAt = at } : new FlowStepMeasure(ReadyAt: at);
         }
     }
 
@@ -6747,7 +6806,7 @@ public sealed class FlowCoordinator
     /// <param name="Instance">The step.</param>
     /// <param name="Claims">The claims it takes where it starts.</param>
     /// <param name="WaitsOn">What it waits on, in the words its record says them; empty where it starts.</param>
-    /// <param name="Ready">Whether everything the step depends on has ended, so what it waits on is room alone.</param>
+    /// <param name="Ready">Whether nothing holds the step (<see cref="HoldOf"/>), so what it waits on is room alone.</param>
     private readonly record struct Admission(FlowInstance Instance, IReadOnlyList<FlowClaim> Claims, IReadOnlyList<string> WaitsOn, bool Ready = false)
     {
         /// <summary>Whether the step starts now.</summary>
@@ -6756,8 +6815,9 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The one walk admission makes, deciding nothing it does not say: every step that has not started - the visit a plan
-    /// update raised first, then each in the order it first became ready, the earliest first (its measure's
-    /// <see cref="FlowStepMeasure.ReadyAt"/>, one not ready yet after every one that is), then declaration order, then
+    /// update raised first, then each in the order it first became ready, the earliest first (the pass that drew it,
+    /// <see cref="FlowInstance.DrawnIn"/> - every step one pass frees alike - and one not drawn yet after every one that
+    /// is), then declaration order, then
     /// instance id - held to what keeps the run from starting it (a hard stop, a pause under way, a stopping run, a
     /// pending redirect, an update's hold), to its dependencies, to the <c>alone</c> barrier, to the claims and to the
     /// limits, all-or-nothing, each step the walk admits counted as running for the ones after it. A step blocked on a
@@ -6772,7 +6832,7 @@ public sealed class FlowCoordinator
         var waiting = _created
             .Where(instance => instance.State is FlowInstanceState.NotStarted && !instance.Step.IsGroup)
             .OrderByDescending(instance => instance.RaisedByUpdate is not null)
-            .ThenBy(instance => instance.Measure?.ReadyAt ?? DateTimeOffset.MaxValue)
+            .ThenBy(instance => instance.DrawnIn == 0 ? long.MaxValue : instance.DrawnIn)
             .ThenBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
             .ThenBy(instance => instance.Id, StringComparer.Ordinal)
             .ToList();
@@ -6942,18 +7002,14 @@ public sealed class FlowCoordinator
         // An alone step the walk left waiting for quiet is the barrier from now until it starts.
         _barrier = walk.FirstOrDefault(decision => decision.Instance.Step.Alone == true && decision.WaitsOn is [FlowWaits.Quiet]).Instance;
 
-        // Everything a decision says is ready to draw depends on nothing more: the moment is written once, the first
-        // walk that found it so - the instance's measure begins there, none held before it - and the measure times every
-        // wait after it, the room the run alone gives. What it waited on before - the steps it depends on - is theirs:
-        // their run, never its wait. What the walk leaves waiting is settled here as well as at every write, so a wait
-        // whose cause the run's own pace changed - a claim given back, a counter freed - is split at the change and not
-        // folded whole into the cause it began on.
+        // What the pass drew (DrawFreed) has its measure, which times every wait after its ready moment: the room the
+        // run alone gives. What the walk leaves waiting is settled here as well as at every write, so a wait whose cause
+        // the run's own pace changed - a claim given back, a counter freed - is split at the change and not folded whole
+        // into the cause it began on.
         var now = _clock.GetUtcNow();
 
         foreach (var decision in walk)
         {
-            Draw(decision, now);
-
             if (!decision.Starts && decision.Instance.Measure is { ReadyAt: not null } drawn)
             {
                 decision.Instance.Measure = drawn.Waiting(decision.WaitsOn, now);
@@ -13006,35 +13062,21 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>One instance, as its records read it, what it waits on as the admission walk said it.</summary>
-    /// <summary>
-    /// Draws the instance <paramref name="decision"/> is of, where it says everything the instance depends on has ended
-    /// and the instance was not drawn before: its measure begins at <paramref name="now"/> - the first walk that found
-    /// it so, whether the admission's or a record's - and every wait after it is timed. Before it, what it waits on is
-    /// the steps it depends on: their run, never its wait.
-    /// </summary>
-    private static void Draw(Admission decision, DateTimeOffset now)
-    {
-        if (decision.Ready && decision.Instance.Measure?.ReadyAt is null)
-        {
-            decision.Instance.Measure = decision.Instance.Measure is { } measure
-                ? measure with { ReadyAt = now }
-                : new FlowStepMeasure(ReadyAt: now);
-        }
-    }
-
     private FlowSnapshotStep SnapshotStepOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)
     {
         // What the instance waits on is settled into its measure here, where every write of the run's records passes
         // with the causes in hand: the period that was open closes where the causes changed, and the new one opens
         // where there is one - so the measure's waits are the record's own words, timed to the moment of the write
-        // that says them, whole across a resume, for the open period is kept in the record too. An instance the run has
-        // not drawn holds no measure: what it waits on before it is ready is the steps it depends on, their time.
+        // that says them, whole across a resume, for the open period is kept in the record too. A step the walk finds
+        // nothing holds is drawn here, in the place of the pass under way, so the record that first says it waits on
+        // room alone says it was drawn (Draw); one the run has not drawn holds no measure: what it waits on before it is
+        // ready is the steps it depends on and the run's own holds, their time.
         var waitsOn = WaitsOnOf(instance, walk);
         var now = _clock.GetUtcNow();
 
-        if (walk.TryGetValue(instance, out var decided))
+        if (instance.DrawnIn == 0 && walk.TryGetValue(instance, out var decided) && decided.Ready)
         {
-            Draw(decided, now);
+            Draw(instance);
         }
 
         if (instance.Measure is { } measure)
@@ -13094,7 +13136,8 @@ public sealed class FlowCoordinator
             instance.ReportedIn == 0 ? null : instance.ReportedIn,
             OwnScopeOf(instance)?.UseInputs?.DeepClone().AsObject(),
             instance.ScopeOf?.Decision,
-            instance.Measure);
+            instance.Measure,
+            instance.DrawnIn == 0 ? null : instance.DrawnIn);
     }
 
     /// <summary>
@@ -14012,7 +14055,8 @@ public sealed class FlowCoordinator
             instance.AttemptBegan = record.AttemptBegan ?? 0;
             instance.EndedIn = record.EndedIn ?? 0;
             instance.ReportedIn = record.ReportedIn ?? 0;
-            _order = Math.Max(_order, Math.Max(instance.AttemptBegan, instance.EndedIn));
+            instance.DrawnIn = record.DrawnIn ?? 0;
+            _order = Math.Max(_order, Math.Max(instance.DrawnIn, Math.Max(instance.AttemptBegan, instance.EndedIn)));
             instance.Made = record.Made;
             instance.MadeModel = record.Model;
             instance.WorksIn = record.Agent;
