@@ -1858,9 +1858,10 @@ public sealed class ReasonStepRunnerTests
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
-        await GraphedTreeAsync(kit);
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(65)));
 
-        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed()), Token);
+        // The task names the hub, so its pack - seeded from what the run handed the prompt - holds the hub's methods.
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(), prompt: "Plan the work on the Hub."), Token);
 
         Assert.True(result.Passed, result.Error);
 
@@ -1877,7 +1878,7 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(support.Tool);
         Assert.True(support.Narrow);
 
-        // The run's map of this tree - its configuration's every member a declaration - goes on past its first page, so
+        // The run's map of this tree - a hub of 65 methods, and its configuration's every member a declaration - goes on past its first page, so
         // map is among the operations, as pack is for a pack that goes on past its message's page.
         Assert.True(DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(asked.Map!) > 1, asked.Map);
         Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
@@ -2472,7 +2473,7 @@ public sealed class ReasonStepRunnerTests
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
-        await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(30)));
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(65)));
         var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
         var operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: false, narrow: false);
 
@@ -2486,16 +2487,16 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("page 1 of 4 · 67 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
         Assert.Equal("page 2 of 4 · 67 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
 
-        // The 67 results are the hub's 30 methods named M and the 37 symbols holding an M in the files init seeds, in
-        // one order - the hub's first, by name - 20 to a page: the later page is that one result's next 20, its first
-        // 10 the hub's last 10 methods, and no line is on both.
-        string[] hub = [.. Enumerable.Range(0, 30).Select(at => $"M{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal)];
+        // The 67 results are the hub's 65 methods named M and the 2 symbols holding an M in the rest of the tree - the
+        // tool's own workflows never among them, for the graph lists none - in one order, the hub's first, by name, 20 to
+        // a page: the later page is that one result's next 20, the hub's next 20 methods, and no line is on both.
+        string[] hub = [.. Enumerable.Range(0, 65).Select(at => $"M{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal)];
         string[] LinesOf(string page) => [.. page.Split('\n').Skip(1).Where(line => line.Length > 0)];
         string[] MethodsOf(string page) => [.. LinesOf(page).Where(line => line.Contains(" void ", StringComparison.Ordinal)).Select(line => line[(line.IndexOf(" void ", StringComparison.Ordinal) + 6)..line.IndexOf("()", StringComparison.Ordinal)])];
 
         Assert.Equal((20, 20), (LinesOf(first.Text).Length, LinesOf(second.Text).Length));
         Assert.Equal(hub[..20], MethodsOf(first.Text));
-        Assert.Equal(hub[20..], MethodsOf(second.Text));
+        Assert.Equal(hub[20..40], MethodsOf(second.Text));
         Assert.Empty(LinesOf(first.Text).Intersect(LinesOf(second.Text), StringComparer.Ordinal));
         Assert.Single(Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("again", "a9"), OrchestratorLayout.StepPagesDirectoryName)));
     }
@@ -2510,7 +2511,7 @@ public sealed class ReasonStepRunnerTests
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
-        await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(30)));
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(65)));
         var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
         var operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: false, narrow: false);
         var findM = JsonNode.Parse("""{"op":"find","query":"M"}""")!.AsObject();
