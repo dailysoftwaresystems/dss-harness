@@ -807,8 +807,15 @@ compares paths, so the plan's spelling of a file and git's are one. A fold it ca
 the check. The record's problems are repaired by `close-class`, which goes on with the
 implementation, and a missing audit by `home-audit`, which reads the whole home and makes its
 invariants structural; each changes code, so each goes back through the item's tests - its
-verify, or reverify in the review loop - before the check runs again and anything is folded; a
-home touched often enough is named a hotspot in the check's answer. A lane folded by hand joins
+verify, or reverify in the review loop - before the check runs again and anything is folded; the
+record's problems reach the builder sooner: where the record reads the output of a reason step of
+the check's own scope - the builder's, or one that goes on with its work, through `latest`,
+`close-class` among them - the same rules hold that step's answer as it is given, over the agent's
+work as it then stands, and what they find goes back to the agent in its own conversation until it
+answers clean or gives again what it was sent back with, no `close-class` drawn for it; a missing
+home audit, and whatever only a later step's work shows - its tests, a fold - stay the check's, run
+after it as before, the record and the gate; a home touched often enough is named a hotspot in the
+check's answer. A lane folded by hand joins
 the same rule opt-in: `anchors.closure: "required"` has `fold-agent` refuse a row whose status
 moves to closed unless its directory holds `closure.json` naming a class at least, judged by the
 same rules, its searches and measurements read as given and its arms against the registry its
@@ -2087,7 +2094,11 @@ it as more than it compiles, the run's later requests carry no format, and a mes
 conversation says it in words, the system prompt untouched; the `glm` client, whose wire holds no answer to a schema, says it in words in a message
 of its own after the step's first, in every conversation the step begins, and asks an answer that read as no JSON again in JSON alone - no tool offered,
 `response_format` a JSON object. An answer that does not read is sent back in the same conversation,
-2 times at most, and the step is then `InvalidOutput`.
+2 times at most, and the step is then `InvalidOutput`. An answer that reads, but that a check the
+engine runs on it next finds wrong - a plan check over the items it gives, a class closure over its
+record, each by that check's own rules - is sent back in the same conversation with what the check
+found, no repair counted, for as long as each answer is new; one that gives again an output it was
+sent back with is taken as given, for the check to record what is still wrong.
 
 `web_search` is the harness's own search, made by dssharness itself over HTTP: it asks the sources
 `agentWebSearch` in `config.json` declares - search APIs that answer JSON, feeds, OpenSearch
@@ -2382,7 +2393,12 @@ home or deleted - the item's too, more than one site consolidated at the home, e
 name again, its universe counting the cells its axes that apply make - the product of the counts of their values, 1
 where none applies, the plan's schema holding in the step that answers it that it answers every axis - and one home
 belonging to one item, two classes of
-one item sharing one as they may; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
+one item sharing one as they may - and, where its `items` read the output of a reason step of its own scope (by the
+step's name, through `latest` of the work that step goes on with, or through `previous` in the iteration after), the
+same rules, with what it would be handed then, hold that step's answer as it is given, and what they find goes back to
+the agent in its own conversation until it answers clean or gives again what it was sent back with: a problem the
+planner can put right costs no planning iteration, and the check, run after it as before, records and gates what is
+still wrong; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
 `reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it
 names neither, the engine's own read-only agent, made before the step runs and deleted once no step can go on with its

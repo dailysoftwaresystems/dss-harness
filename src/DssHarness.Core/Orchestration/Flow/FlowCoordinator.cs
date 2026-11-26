@@ -2556,16 +2556,21 @@ public sealed class FlowCoordinator
             .Where(item => KindOf(item) != FlowUpdatePieceKinds.Removed && item.GroupInstance is not { State: FlowInstanceState.Skipped });
 
     /// <summary>
-    /// The names of the work items a <c>validate-plan</c> step checked on its visit before this one, where it made a
-    /// visit that ended with items; empty where it never did.
+    /// The names of the work items the <c>validate-plan</c> step <paramref name="check"/> checked on its visit before
+    /// <paramref name="self"/> in <paramref name="scope"/>, where it made a visit there that ended with items; empty where it
+    /// never did, and where it runs in a scope the run has not made yet.
     /// </summary>
-    /// <param name="check">The check about to start.</param>
-    private IReadOnlyList<string> ItemsCheckedBefore(FlowInstance check)
+    /// <param name="check">The check's declaration.</param>
+    /// <param name="scope">The scope the check runs in; null where the run has not made it yet.</param>
+    /// <param name="self">The check's own visit, which is none before it; null where it has none yet.</param>
+    private IReadOnlyList<string> ItemsCheckedBefore(WorkflowStep check, Scope? scope, FlowInstance? self)
     {
-        var before = _created
-            .Where(visit => ReferenceEquals(visit.Step, check.Step) && ReferenceEquals(visit.DeclaredScope, check.DeclaredScope) && visit != check)
-            .OrderByDescending(visit => visit.Visit)
-            .FirstOrDefault(visit => visit.Output?["items"] is JsonArray);
+        var before = scope is null
+            ? null
+            : _created
+                .Where(visit => ReferenceEquals(visit.Step, check) && ReferenceEquals(visit.DeclaredScope, scope) && visit != self)
+                .OrderByDescending(visit => visit.Visit)
+                .FirstOrDefault(visit => visit.Output?["items"] is JsonArray);
 
         return before is null
             ? []
@@ -2578,20 +2583,27 @@ public sealed class FlowCoordinator
     /// the round; null for every other check: the plan's, a plan update's, a recovery's.
     /// </summary>
     /// <param name="check">The check about to start.</param>
-    private string? RoundOpenedBy(FlowInstance check)
-        => check.DeclaredScope is { } scope
-            ? FlowUpdateGates.RoundOpenedBy(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check.Step)
+    private string? RoundOpenedBy(FlowInstance check) => RoundOpenedBy(check.Step, check.DeclaredScope);
+
+    /// <inheritdoc cref="RoundOpenedBy(FlowInstance)"/>
+    /// <param name="check">The check's declaration.</param>
+    /// <param name="scope">A scope the check is declared in: its own, or one of a step declared beside it.</param>
+    private string? RoundOpenedBy(WorkflowStep check, Scope? scope)
+        => scope is not null
+            ? FlowUpdateGates.RoundOpenedBy(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check)
             : null;
 
     /// <summary>
-    /// Whether <paramref name="check"/> checks the items a round of a work-item group opens with, read of the declarations
-    /// by the one owner of that rule (<see cref="FlowUpdateGates.ChecksTheItemsARoundOpensWith"/>): the check that opens
-    /// the round, and the plan's, which a plan update sends the run back to; never a recovery's.
+    /// Whether <paramref name="check"/>, declared in a scope like <paramref name="scope"/>, checks the items a round of a
+    /// work-item group opens with, read of the declarations by the one owner of that rule
+    /// (<see cref="FlowUpdateGates.ChecksTheItemsARoundOpensWith"/>): the check that opens the round, and the plan's, which
+    /// a plan update sends the run back to; never a recovery's.
     /// </summary>
-    /// <param name="check">The check about to start.</param>
-    private bool ChecksTheItemsARoundOpensWith(FlowInstance check)
-        => check.DeclaredScope is { } scope
-            && FlowUpdateGates.ChecksTheItemsARoundOpensWith(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check.Step);
+    /// <param name="check">The check's declaration.</param>
+    /// <param name="scope">A scope the check is declared in: its own, or one of a step declared beside it.</param>
+    private bool ChecksTheItemsARoundOpensWith(WorkflowStep check, Scope? scope)
+        => scope is not null
+            && FlowUpdateGates.ChecksTheItemsARoundOpensWith(_definition, scope.Parent is null ? null : scope.GroupPath, scope.Group, check);
 
     /// <summary>
     /// Whether <paramref name="check"/> opens a round of the group plan updates owe their work to - the group of
@@ -7361,6 +7373,11 @@ public sealed class FlowCoordinator
                 // it, so a wrong answer is asked again in the reviewer's conversation and never reaches the route.
                 Func<JsonNode, IReadOnlyList<string>>? holds = null;
 
+                // A reason step whose answer a check beside it judges - a plan check, a class closure - is handed that
+                // check, as the run stands now, so what it would find is put right in the agent's own conversation and
+                // never costs the work after the answer.
+                IReadOnlyList<FlowAnswerCheck> checks = [];
+
                 if (step.Type == "reason")
                 {
                     holds = HoldsOf(instance, out var unheld);
@@ -7370,11 +7387,13 @@ public sealed class FlowCoordinator
                         _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, unheld), null, Attempt: attempt));
                         return;
                     }
+
+                    checks = AnswerChecksOf(instance);
                 }
 
                 // The run's share of its dollars is reckoned here, as the run is built, under the grant that stands now.
                 instance.ShareGrant = _budgetGranted;
-                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text) with { Prompts = prompts.Count > 0 ? prompts : null, PromptValues = prompts.Count > 0 ? promptValues : null, AnswerHolds = holds }, token).ConfigureAwait(false);
+                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text) with { Prompts = prompts.Count > 0 ? prompts : null, PromptValues = prompts.Count > 0 ? promptValues : null, AnswerHolds = holds, AnswerChecks = checks }, token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
             }
@@ -10345,9 +10364,12 @@ public sealed class FlowCoordinator
     private static FlowInstance? CreateStepOf(FlowInstance instance, string made) => DeclaredOf(instance, made, "create-agent");
 
     /// <summary>The step of <paramref name="type"/> named <paramref name="name"/>, found in <paramref name="instance"/>'s own scope or one around it.</summary>
-    private static FlowInstance? DeclaredOf(FlowInstance instance, string name, string type)
+    private static FlowInstance? DeclaredOf(FlowInstance instance, string name, string type) => DeclaredIn(instance.DeclaredScope, name, type);
+
+    /// <summary>The step of <paramref name="type"/> named <paramref name="name"/>, found in <paramref name="scope"/> or one around it.</summary>
+    private static FlowInstance? DeclaredIn(Scope? scope, string name, string type)
     {
-        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+        for (var at = scope; at is not null; at = at.Parent)
         {
             if (at.Members.TryGetValue(name, out var found) && found.Step.Type == type)
             {
@@ -12509,26 +12531,14 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// What <paramref name="instance"/>'s step reads where it starts, into <paramref name="read"/> by key - a test step's
-    /// units are <see cref="UnitsAtStart"/>'s, read before its runner is asked: a <c>validate-plan</c> step's <c>items</c> and
-    /// <c>scope</c>, each where it gives it - a scope that reads nothing is no update, and is handed on as read; an anchor
-    /// balance's <c>rows</c> and an anchor citations check's <c>paths</c>, a fold's and a deletion's <c>within</c>,
-    /// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and
-    /// a rebase's <c>merge</c>, each where it gives an expression, as the list of names its expression yields - one that
-    /// may read nothing reads none where it does, or reads null, and one that yields anything but a list of names cannot
-    /// be read; an <c>orient</c> step's <c>base</c>, the flow's pull request's base filled as the run's start fills it,
-    /// where a pull-request step names one; a <c>ci-wait</c> step's <c>commit</c> where it names none, the commit the
-    /// run last pushed - the output of the push step that ended done last - where it pushed one; and a <c>commit</c>
-    /// step's <c>folds</c>, the instances of the steps that fold upstream of it (<see cref="Upstream"/>). Why one could not
-    /// be read, as the step's record keeps it; null where each was.
+    /// Each expression <paramref name="step"/> reads where it starts, under the key its runner reads it by: whether it may
+    /// read nothing (which reads as none), and what it yields - a list of names is read as one, so the runner is handed
+    /// names. The one table of them, read where the step starts (<see cref="ReadAtStart"/>) and where a reason step whose
+    /// answer it judges starts (<see cref="AnswerChecksOf"/>).
     /// </summary>
-    private string? ReadAtStart(FlowInstance instance, Dictionary<string, FlowValue> read)
-    {
-        var step = instance.Step;
-
-        // Each expression the step reads where it starts, under the key its runner reads it by: whether it may read nothing
-        // (which reads as none), and what it yields - a list of names is read as one here, so the runner is handed names.
-        IEnumerable<(string Key, string? Expression, bool MayReadNothing, StartRead Yields)> expressions = step.Type switch
+    /// <param name="step">The step's declaration.</param>
+    private static IEnumerable<(string Key, string? Expression, bool MayReadNothing, StartRead Yields)> StartReadsOf(WorkflowStep step)
+        => step.Type switch
         {
             "validate-plan" => [("items", step.Items, false, StartRead.Value), ("scope", step.Scope, true, StartRead.Value)],
             "reason" => [("writes", step.Writes?.Expression, false, StartRead.Names)],
@@ -12554,25 +12564,39 @@ public sealed class FlowCoordinator
             _ => [],
         };
 
-        foreach (var (key, expression, mayReadNothing, yields) in expressions)
+    /// <summary>
+    /// Reads each expression <paramref name="step"/> reads where it starts (<see cref="StartReadsOf"/>) in
+    /// <paramref name="scope"/>, as <paramref name="reader"/> reads, into <paramref name="read"/> by key - but those
+    /// <paramref name="skipped"/> names, which something else fills. Why one could not be read, naming
+    /// <paramref name="id"/>; null where each was.
+    /// </summary>
+    /// <param name="step">The step's declaration.</param>
+    /// <param name="scope">The scope its expressions are read in.</param>
+    /// <param name="reader">The instance that reads them: the step's own, or a reason step's beside it.</param>
+    /// <param name="id">The instance a refusal names.</param>
+    /// <param name="read">Where what it read goes, by key.</param>
+    /// <param name="skipped">The keys not read here.</param>
+    private string? ReadExpressions(WorkflowStep step, Scope scope, FlowInstance reader, string id, Dictionary<string, FlowValue> read, IReadOnlyCollection<string> skipped)
+    {
+        foreach (var (key, expression, mayReadNothing, yields) in StartReadsOf(step))
         {
-            if (expression is null)
+            if (expression is null || skipped.Contains(key, StringComparer.Ordinal))
             {
                 continue;
             }
 
-            var value = Evaluate(expression, instance.DeclaredScope!, out var problem, reader: instance, mayReadNothing: mayReadNothing);
+            var value = Evaluate(expression, scope, out var problem, reader: reader, mayReadNothing: mayReadNothing);
 
             if (problem is not null)
             {
-                return Unreadable(key, instance.Id, problem);
+                return Unreadable(key, id, problem);
             }
 
             if (yields == StartRead.Names)
             {
                 if (Names(value, expression, out var names) is { } unnamed)
                 {
-                    return Unreadable(key, instance.Id, unnamed);
+                    return Unreadable(key, id, unnamed);
                 }
 
                 if (key == "writes" && names.Count == 0)
@@ -12580,7 +12604,7 @@ public sealed class FlowCoordinator
                     // A written-out empty `writes` is refused by the definition's check, and an expression that yields
                     // one is refused here, at the step's start, by the same rule: an empty list would read as no
                     // narrowing, and a step that owns no path cannot write.
-                    return Unreadable(key, instance.Id, $"'{expression}' names no path");
+                    return Unreadable(key, id, $"'{expression}' names no path");
                 }
 
                 value = FlowValue.Of(new JsonArray([.. names.Select(name => (JsonNode?)name)]));
@@ -12589,12 +12613,22 @@ public sealed class FlowCoordinator
             read[key] = value;
         }
 
-        if (step.Type == "ci-wait" && step.Commit is null && LastPushed() is { } pushed)
-        {
-            read["commit"] = FlowValue.Of(pushed);
-        }
+        return null;
+    }
 
-        if (ChecksTheItemsARoundOpensWith(instance))
+    /// <summary>
+    /// What a <c>validate-plan</c> step is handed beside its <c>items</c> and <c>scope</c>, into <paramref name="read"/> by
+    /// key, as the run stands now: the one place the engine builds it, for the check where it starts and for the answer of a
+    /// reason step the check will read, held to it at the answer itself (<see cref="AnswerChecksOf"/>), alike.
+    /// </summary>
+    /// <param name="check">The check's declaration.</param>
+    /// <param name="declaredIn">A scope the check is declared in - its own, or that of a step declared beside it - which says the rounds it opens.</param>
+    /// <param name="runsIn">The scope the check runs in, whose visits of it before say what it checked there; null where the run has not made it yet.</param>
+    /// <param name="self">The check's own visit, which is none before it; null where it has none yet.</param>
+    /// <param name="read">Where what it is handed goes, by key.</param>
+    private void CheckReads(WorkflowStep check, Scope? declaredIn, Scope? runsIn, FlowInstance? self, Dictionary<string, FlowValue> read)
+    {
+        if (ChecksTheItemsARoundOpensWith(check, declaredIn))
         {
             // The issues the run owes its next round, live at the start, as run.nextRound reads them, so a check that
             // starts after one was taken reads it whatever moved meanwhile. Every check whose items a round opens with -
@@ -12607,13 +12641,13 @@ public sealed class FlowCoordinator
 
             read["settleable"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Id)]));
 
-            if (RoundOpenedBy(instance) is not null)
+            if (RoundOpenedBy(check, declaredIn) is not null)
             {
                 read["next"] = FlowValue.Of(new JsonArray([.. owed.Select(issue => (JsonNode?)issue.Value())]));
             }
         }
 
-        if (step.Type == "validate-plan" && _definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)
+        if (_definition.Amend is { } amend && FlowUpdateGates.ParentOf(amend.WhenAddScope) is { } groupPath)
         {
             // What the pieces of a plan update are checked with, and what they owe: the items of the round they join,
             // where the run has one - and the names of the work items the plan had, which a piece that changes or
@@ -12632,12 +12666,12 @@ public sealed class FlowCoordinator
                 .OfType<string>()
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            var known = carried.Concat(ItemsCheckedBefore(instance)).Distinct(StringComparer.Ordinal).ToList();
+            var known = carried.Concat(ItemsCheckedBefore(check, runsIn, self)).Distinct(StringComparer.Ordinal).ToList();
 
             read["known"] = FlowValue.Of(new JsonArray([.. known.Select(name => (JsonNode?)name)]));
             read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));
 
-            if (OpensTheUpdatedRound(instance, groupPath))
+            if (string.Equals(RoundOpenedBy(check, declaredIn), groupPath, StringComparison.Ordinal))
             {
                 read["owed"] = FlowValue.Of(new JsonArray([.. OwedItems()]));
 
@@ -12647,6 +12681,162 @@ public sealed class FlowCoordinator
                 // builds every item it opens with.
                 read["owedAlone"] = FlowValue.Of(PendingAddedRound() is not null);
             }
+        }
+    }
+
+    /// <summary>
+    /// The checks that will read the answer of the reason step <paramref name="instance"/> and judge it, for its agent to be
+    /// handed what they find in its own conversation (<see cref="FlowStepRun.AnswerChecks"/>): each step declared beside it
+    /// of a type that judges an answer (<see cref="WorkflowStepTypes.StepType.JudgesAnswer"/>) - a plan check, a class
+    /// closure - whose judged key reads its output: by its own name, through <c>latest</c> as the newest output of work it
+    /// goes on with (<see cref="ResumeChain.PathsOf"/>), or through <c>previous</c> in the iteration after. Each is run as
+    /// the engine would hand it the run as it stands now, save what it reads of the answer: every key it reads where it
+    /// starts (<see cref="StartReadsOf"/>) that reads this answer is filled from the answer's output, and every other is read
+    /// now, in this step's scope, by the one reading a step's start makes (<see cref="ReadExpressions"/>) - with a plan
+    /// check's own (<see cref="CheckReads"/>), every text the check hands on filled as its start fills it, and the agent a
+    /// check's <c>in</c> names. A check one of whose other keys or texts cannot be read now is left to its own moment, as
+    /// is every check declared in another scope, which reads the answer
+    /// only once that scope has ended, after whatever came between. None for a step that names no output, and for a run
+    /// held in memory alone, which has no repository a check could read.
+    /// </summary>
+    /// <param name="instance">The reason step about to start.</param>
+    private IReadOnlyList<FlowAnswerCheck> AnswerChecksOf(FlowInstance instance)
+    {
+        if (instance.Step is not { Type: "reason", Outputs: not null } step || instance.DeclaredScope is not { } scope || _place is null)
+        {
+            return [];
+        }
+
+        var chain = ResumeChain.PathsOf(_definition, instance.Path, step);
+        var beside = FlowScope.ScopeOf(instance.Path);
+        var checks = new List<FlowAnswerCheck>();
+
+        foreach (var (checkPath, check) in FlowScope.Declared(_definition))
+        {
+            if (WorkflowStepTypes.Find(check.Type ?? string.Empty)?.JudgesAnswer is not { } judged
+                || !string.Equals(FlowScope.ScopeOf(checkPath), beside, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // Each key the check reads where it starts that reads this answer, with the members of the output it reads -
+            // the judged one among them, or the check judges another step's answer, not this one.
+            var answered = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+            var later = false;
+
+            foreach (var (key, expression, _, _) in StartReadsOf(check))
+            {
+                if (expression is not null && AnsweredBy(expression, beside, instance.Path, chain) is { } at)
+                {
+                    answered[key] = at.Names;
+                    later |= key == judged && at.Later;
+                }
+            }
+
+            if (!answered.ContainsKey(judged))
+            {
+                continue;
+            }
+
+            var id = MemberId(scope, check);
+            var read = new Dictionary<string, FlowValue>(StringComparer.Ordinal);
+
+            // The check as it would run: its expressions read, and every text it hands on filled, as a step's start fills
+            // them - a class closure's base among them.
+            if (ReadExpressions(check, scope, instance, id, read, [.. answered.Keys]) is not null
+                || FlowStepTemplates.Fill(check, (string text, out string? problem) => Filled(instance, text, out problem), out _, out _) is not { } filled)
+            {
+                continue;
+            }
+
+            // A check that reads the answer in the iteration after runs in a scope not made yet, which holds no visit of it.
+            if (check.Type == "validate-plan")
+            {
+                CheckReads(check, scope, later ? null : scope, self: null, read);
+            }
+
+            checks.Add(new FlowAnswerCheck(
+                new FlowStepRun(filled, id, 1, instance.Item, instance.Index, instance.Iteration, [], FlowRunEvents.None, Place: _place, Read: read, WorksIn: AgentNamedIn(scope, check), Path: checkPath),
+                answered));
+        }
+
+        return checks;
+    }
+
+    /// <summary>
+    /// The agent the <c>in</c> or <c>of</c> of <paramref name="step"/>, declared in <paramref name="scope"/>, names as the run
+    /// stands now: the one its create-agent's newest visit, found in the scope or one around it, made once done; null where
+    /// it names none, or that visit has not made it.
+    /// </summary>
+    private static string? AgentNamedIn(Scope scope, WorkflowStep step)
+        => (step.In ?? step.Of) is { } named && DeclaredIn(scope, named, "create-agent") is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
+
+    /// <summary>
+    /// What <paramref name="expression"/>, read in the scope at <paramref name="scopePath"/>, reads of the answer of the
+    /// reason step declared at <paramref name="path"/>: the names that lead to it under the answer's output, and whether it
+    /// reads it in the iteration after (<c>previous</c>); null where it reads none of it. A read of the step's own output
+    /// by its name reads its answer; one through <c>latest</c> of any step of its chain (<paramref name="chain"/>) reads it
+    /// as the newest output of that work; a read of a fact the engine keeps of the step - its outcome, its code - reads
+    /// none of it.
+    /// </summary>
+    private (IReadOnlyList<string> Names, bool Later)? AnsweredBy(string expression, string? scopePath, string path, IReadOnlyList<string> chain)
+    {
+        foreach (var read in WorkflowExpressions.ReadsOf(expression))
+        {
+            var later = read.Root == "previous";
+            IReadOnlyList<string> names = later ? [.. read.Names.Skip(1)] : WorkflowExpressions.IsRoot(read.Root) ? [] : read.Names;
+
+            if (FlowScope.Read(names, _definition, scopePath, out _) is not { Step.Step.Type: "reason" } found)
+            {
+                continue;
+            }
+
+            if (found.After is ["latest", ..] && chain.Contains(found.Step.Path, StringComparer.Ordinal))
+            {
+                return ([.. found.After.Skip(1)], later);
+            }
+
+            if (string.Equals(found.Step.Path, path, StringComparison.Ordinal)
+                && !(found.After is [var fact, ..] && WorkflowExpressions.StepFacts.Contains(fact, StringComparer.Ordinal)))
+            {
+                return (found.After, later);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// What <paramref name="instance"/>'s step reads where it starts, into <paramref name="read"/> by key - a test step's
+    /// units are <see cref="UnitsAtStart"/>'s, read before its runner is asked: a <c>validate-plan</c> step's <c>items</c> and
+    /// <c>scope</c>, each where it gives it - a scope that reads nothing is no update, and is handed on as read; an anchor
+    /// balance's <c>rows</c> and an anchor citations check's <c>paths</c>, a fold's and a deletion's <c>within</c>,
+    /// <c>allow.new</c> and <c>allow.merge</c>, a refresh's <c>paths</c>, <c>except</c>, <c>stale</c> and <c>merge</c> and
+    /// a rebase's <c>merge</c>, each where it gives an expression, as the list of names its expression yields - one that
+    /// may read nothing reads none where it does, or reads null, and one that yields anything but a list of names cannot
+    /// be read; an <c>orient</c> step's <c>base</c>, the flow's pull request's base filled as the run's start fills it,
+    /// where a pull-request step names one; a <c>ci-wait</c> step's <c>commit</c> where it names none, the commit the
+    /// run last pushed - the output of the push step that ended done last - where it pushed one; and a <c>commit</c>
+    /// step's <c>folds</c>, the instances of the steps that fold upstream of it (<see cref="Upstream"/>). Why one could not
+    /// be read, as the step's record keeps it; null where each was.
+    /// </summary>
+    private string? ReadAtStart(FlowInstance instance, Dictionary<string, FlowValue> read)
+    {
+        var step = instance.Step;
+
+        if (ReadExpressions(step, instance.DeclaredScope!, instance, instance.Id, read, skipped: []) is { } unreadable)
+        {
+            return unreadable;
+        }
+
+        if (step.Type == "ci-wait" && step.Commit is null && LastPushed() is { } pushed)
+        {
+            read["commit"] = FlowValue.Of(pushed);
+        }
+
+        if (step.Type == "validate-plan")
+        {
+            CheckReads(step, instance.DeclaredScope, instance.DeclaredScope, instance, read);
         }
 
         if (step.Type == "commit")

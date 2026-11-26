@@ -713,6 +713,71 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// What the plan check finds of a reason step's answer at the answer itself is what its own run finds of the same read,
+    /// by the one check both make: two items of one name, an item that must not touch what it owns, an issue owed the next
+    /// round that no item settles, a piece that is no item of the plan - each problem word for word. An answer that gives no
+    /// item, and one whose items are no list, hold nothing at the answer: whether no item is a problem, and what a list that
+    /// is none is, are the check's own moment's to say.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerReadAhead_IsHeldToTheOneCheckThePlanCheckMakes()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        var forbidding = Item("two", "src/two/**");
+        forbidding["forbiddenPaths"] = new JsonArray("src/two/*.cs");
+
+        foreach (var read in new[]
+        {
+            new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("one"))) },
+            new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray(Item("one"), forbidding)) },
+            new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+                ["settleable"] = FlowValue.Of(new JsonArray("nx-1")),
+                ["next"] = FlowValue.Of(new JsonArray(new JsonObject { ["id"] = "nx-1", ["title"] = "the parser drops a field" })),
+            },
+            new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("two", "src/two/**")))),
+                ["known"] = FlowValue.Of(new JsonArray("one")),
+            },
+        })
+        {
+            var ran = await runner.RunAsync(Run(step, repository.Path, read), Token);
+            List<string> found = [.. ran.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+
+            Assert.NotEmpty(found);
+            Assert.Equal(found, await runner.AnswerProblemsAsync(Run(step, repository.Path, read), Token));
+        }
+
+        var none = new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of(new JsonArray()) };
+
+        Assert.Equal([PlanValidator.NoItems], (await runner.RunAsync(Run(step, repository.Path, none), Token)).Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>()));
+        Assert.Empty(await runner.AnswerProblemsAsync(Run(step, repository.Path, none), Token));
+        Assert.Empty(await runner.AnswerProblemsAsync(Run(step, repository.Path, new Dictionary<string, FlowValue> { ["items"] = FlowValue.Of("one") }), Token));
+
+        // The architecture names the owners of the judgement at the answer: the types that judge one, what the engine
+        // builds of each, and the one judgement each check's run makes.
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        foreach (var owner in new[]
+        {
+            "FlowCoordinator.AnswerChecksOf",
+            "FlowStepRunners.CorrectionsOf",
+            $"{nameof(WorkflowStepTypes)}.{nameof(WorkflowStepTypes.StepType)}.{nameof(WorkflowStepTypes.StepType.JudgesAnswer)}",
+            $"{nameof(FlowAnswerCheck)}.{nameof(FlowAnswerCheck.ReadOf)}",
+            $"{nameof(PlanCheckRunner)}.{nameof(PlanCheckRunner.AnswerProblemsAsync)}",
+            $"{nameof(ClassClosureStepRunner)}.{nameof(ClassClosureStepRunner.AnswerProblemsAsync)}",
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The plan check that opens a round holds its items to the issues the run owes its next round: each named in an
     /// item's <c>settles</c>, none left unsettled, an item may name only an issue the run owes, and the items that settle
     /// them come first in its output - what the run took from its own rounds is built before the work planned around it.

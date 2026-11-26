@@ -637,6 +637,34 @@ public sealed partial class HelpTests
                 + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two.",
             prose,
             StringComparison.Ordinal);
+
+        // A plan check's rules and a class closure's hold the answer they read within the step that gives it, the check
+        // after it the record and the gate: said alike by the help and the README.
+        var readme = Prose.Document("README.md");
+
+        Assert.Contains(
+            "fails, as a definition that does not hold does. Where its items read the output of a reason step of its own scope - by the "
+                + "step's name, through latest of the work that step goes on with, or through previous in the iteration after - the same rules, "
+                + "with what it would be handed then, hold that step's answer as it is given, and what they find goes back to the agent in its "
+                + "own conversation until it answers clean or gives again what it was sent back with: a problem the planner can put right "
+                + "costs no planning iteration, and the check, run after it as before, records and gates what is still wrong.",
+            prose,
+            StringComparison.Ordinal);
+
+        foreach (var said in new[]
+        {
+            "the same rules, with what it would be handed then, hold that step's answer as it is given, and what they find goes back to the "
+                + "agent in its own conversation until it answers clean or gives again what it was sent back with: a problem the planner can "
+                + "put right costs no planning iteration, and the check, run after it as before, records and gates what is still wrong",
+            "the same rules hold that step's answer as it is given, over the agent's work as it then stands, and what they find goes back to "
+                + "the agent in its own conversation until it answers clean or gives again what it was sent back with,",
+            "a missing home audit, and whatever only a later step's work shows - its tests, a fold - stay the check's, run after it as "
+                + "before, the record and the gate",
+        })
+        {
+            Assert.Contains(said, prose, StringComparison.Ordinal);
+            Assert.Contains(said, readme, StringComparison.Ordinal);
+        }
         Assert.Contains(
             "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
             prose,
@@ -787,6 +815,12 @@ public sealed partial class HelpTests
                 + "own code. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit "
                 + "makes - a home touched by other work, or a class the item's ledger says a review reopened a second time), and it answers "
                 + "passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "The record's problems reach the builder sooner: where the record reads the output of a reason step of the check's own "
+                + "scope - the builder's, or one that goes on with its work, through latest, close-class among them - the same rules hold that "
+                + "step's answer as it is given, over the agent's work as it then stands, and what they find goes back to the agent in its own "
+                + "conversation until it answers clean or gives again what it was sent back with, no close-class drawn for it; a missing home "
+                + "audit, and whatever only a later step's work shows - its tests, a fold - stay the check's, run after it as before, the "
+                + "record and the gate. "
                 + "route-findings routes the review's findings by the class of each, keeping the item's ledger (closure-ledger.json in its "
                 + "agent's directory) of the rounds that reopened each class, a round counted once by the routing that made it however often "
                 + "that routing runs: every introduced finding - a defect the diff made - goes back in rework as itself, the reopened findings "

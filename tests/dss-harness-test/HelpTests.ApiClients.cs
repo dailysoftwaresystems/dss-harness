@@ -232,6 +232,15 @@ public sealed partial class HelpTests
         Assert.Contains($"An answer that does not read is sent back in the same conversation, {repairs} times at most, and the step is then InvalidOutput.", prose, StringComparison.Ordinal);
         Assert.Contains($"An answer that does not read is sent back in the same conversation, {repairs} times at most, and the step is then `InvalidOutput`.", readme, StringComparison.Ordinal);
 
+        // An answer that reads is held last to the checks that read it next, by their own rules, with no repair counted.
+        const string corrected = "An answer that reads, but that a check the engine runs on it next finds wrong - a plan check over the items it "
+            + "gives, a class closure over its record, each by that check's own rules - is sent back in the same conversation with what the "
+            + "check found, no repair counted, for as long as each answer is new; one that gives again an output it was sent back with is "
+            + "taken as given, for the check to record what is still wrong.";
+
+        Assert.Contains(corrected, prose, StringComparison.Ordinal);
+        Assert.Contains(corrected, readme, StringComparison.Ordinal);
+
         foreach (var owner in new[]
         {
             nameof(DssHarness.Core.Agents.AgentEnvelope),
@@ -239,6 +248,11 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Agents.AgentQuestion),
             nameof(DssHarness.Core.Agents.StructuredOutputGate),
             $"{nameof(DssHarness.Core.Agents.AgentOutput)}.{nameof(DssHarness.Core.Agents.AgentOutput.AskRounds)}",
+            $"{nameof(DssHarness.Core.Agents.AgentOutput)}.{nameof(DssHarness.Core.Agents.AgentOutput.Corrections)}",
+            $"{nameof(DssHarness.Core.Orchestration.Flow.FlowStepRun)}.{nameof(DssHarness.Core.Orchestration.Flow.FlowStepRun.AnswerCorrections)}",
+            $"{nameof(DssHarness.Core.Agents.StructuredOutputGate)}.{nameof(DssHarness.Core.Agents.StructuredOutputGate.Correction)}",
+            nameof(DssHarness.Core.Agents.OutputCorrection),
+            nameof(DssHarness.Core.Orchestration.Flow.IFlowAnswerCheckRunner),
             $"{nameof(DssHarness.Core.Schemas.JsonSchemaSubset)}.{nameof(DssHarness.Core.Schemas.JsonSchemaSubset.Respelled)}",
             $"{nameof(DssHarness.Core.Schemas.JsonSchemaSubset)}.{nameof(DssHarness.Core.Schemas.JsonSchemaSubset.SchemasIn)}",
             $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.StepNotesFileName)}",

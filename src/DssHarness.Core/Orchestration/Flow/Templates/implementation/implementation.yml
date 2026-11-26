@@ -200,6 +200,9 @@ steps:
         prompt: prompts/plan.md
         resumePrompt: prompts/replan.md
         outputs: schemas/plan.schema.json
+      # The check's rules hold the items within the plan step itself, and within a plan
+      # update's: the planner is told each problem there and answers again, so a problem it
+      # can put right costs no audit and no iteration; the check is the record and the gate.
       - name: check
         type: validate-plan
         dependsOn: [plan]
@@ -275,13 +278,15 @@ steps:
         type: pause
         dependsOn: [item-check]
         when: '!item-check.ok'
-        # The planner was given the problems once; what is still wrong is built as it
-        # is, and a fold or a test that it breaks goes to the agents that put it right.
+        # The agent that gave the items - the planner, or a later round's self-audit - was
+        # told each problem the check finds within its own step, until it answered clean or
+        # said it could not put one right; what is still wrong is built as it is, and a fold
+        # or a test that it breaks goes to the agents that put it right.
         answers:
           pause: continue
         onFailure: recover
         question: |-
-          This round's work items still do not pass the plan check, after the planner was given the problems to settle and its plan was audited and approved: {item-check.problems}
+          This round's work items still do not pass the plan check, though the agent that gave them was told its problems within its own step: {item-check.problems}
           Answer continue to build them as they are, or abort.
         options: [continue]
       # A later round's items come from the last self-audit, and are audited before any is
@@ -508,10 +513,11 @@ recover:
   # fixed; never by a reasoning step's own failure, which is tried again,
   # on its fallback, and then asked. The remedy items built are the ones the plan's own check
   # read, after the last word on them: the diagnosis's, or the one it gives again on a
-  # person's answer (redirect), is checked (remedy-check); where the check finds problems, they
-  # go back to the diagnostician within the visit (remedy-revise), and what it gives again is
-  # checked again (remedy-recheck) - once, as a plan's problems go back to its planner once - and
-  # built as it stands. Once its steps are done, the step that gave it its
+  # person's answer (redirect), is checked (remedy-check) - and held to the same check within the
+  # diagnostician's step, which is told each problem it finds until it answers clean or says it
+  # cannot; where the check still finds problems, they go back to the diagnostician once more
+  # (remedy-revise), and what it gives again is checked again (remedy-recheck) and built as it
+  # stands. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings
   # it back here, to the diagnostician who saw the last attempt - until the step passes or

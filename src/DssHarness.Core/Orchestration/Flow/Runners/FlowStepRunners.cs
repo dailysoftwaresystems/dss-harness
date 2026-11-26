@@ -20,10 +20,32 @@ public interface IFlowStepTypeRunner
 }
 
 /// <summary>
+/// The runner of a step type whose steps judge a reason step's answer - a <c>validate-plan</c> step a plan's work items, a
+/// <c>class-closure</c> step a builder's closing record (<see cref="WorkflowStepTypes.StepType.JudgesAnswer"/>) - and so
+/// can say, at the answer itself, what such a step will find wrong with it: the agent is handed each problem in its own
+/// conversation, as a schema's is, and puts it right before anything after the answer is paid for
+/// (<see cref="FlowStepRun.AnswerChecks"/>). The step itself still runs at its own moment, records what it finds and gates
+/// as it always did.
+/// </summary>
+public interface IFlowAnswerCheckRunner
+{
+    /// <summary>
+    /// What a step of this type, run as <paramref name="check"/> is - its read holding what it reads of the answer - finds
+    /// wrong that the answer's agent can put right: the problems its own run would answer, by the one judgement that run
+    /// makes; none where it finds none, or where only its own moment can say.
+    /// </summary>
+    /// <param name="check">The check's run, as the engine would hand it the run as it stands, with what it reads of the answer.</param>
+    /// <param name="cancellationToken">Stops the check.</param>
+    Task<IReadOnlyList<string>> AnswerProblemsAsync(FlowStepRun check, CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// The runner a run's steps are given: each step to the runner of its type, and a step of a type no runner serves yet
 /// refused loudly as <see cref="NoStepRunner"/> refuses it - a run that says what it cannot do, never one that passes a
 /// step over. The view of the run's codebase graph of a step that reads it (<see cref="ReadsViewAtStart"/>) is synced
-/// where it starts, before its runner is asked.
+/// where it starts, before its runner is asked; and a reason step whose answer the flow's checks judge is handed, before
+/// its runner is asked, what those checks find wrong with an answer, each asked of the runner of its own type
+/// (<see cref="IFlowAnswerCheckRunner"/>).
 /// </summary>
 public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
 {
@@ -78,9 +100,60 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
             await _graph.AtStartAsync(run, cancellationToken).ConfigureAwait(false);
         }
 
+        // The checks that judge the step's answer, each asked by its own type's runner at the answer: the agent is handed
+        // what they find in its own conversation, and the check after the answer finds none of it.
+        if (run.AnswerChecks is [_, ..] checks && CorrectionsOf(checks, cancellationToken) is { } corrections)
+        {
+            run = run with { AnswerCorrections = corrections };
+        }
+
         return await (run.Step.Type is { } type && _byType.TryGetValue(type, out var runner)
             ? runner.RunAsync(run, cancellationToken)
             : _none.RunAsync(run, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What <paramref name="checks"/> find wrong with an answer's output: each check run, as at its own start, by the runner
+    /// of its type (<see cref="IFlowAnswerCheckRunner"/>), its read holding, under each key it reads of the answer, what the
+    /// output holds there (<see cref="FlowAnswerCheck.ReadOf"/>), and its view of the codebase graph synced first where its
+    /// type reads one where it starts - the tree as the answer leaves it - every problem any of them finds, in their order,
+    /// each said once. Null where no runner of their types judges answers.
+    /// </summary>
+    /// <param name="checks">The checks that judge the answer.</param>
+    /// <param name="cancellationToken">Stops the checks: the reason step's own.</param>
+    private Func<System.Text.Json.Nodes.JsonNode, Task<IReadOnlyList<string>>>? CorrectionsOf(IReadOnlyList<FlowAnswerCheck> checks, CancellationToken cancellationToken)
+    {
+        List<(FlowAnswerCheck Check, IFlowAnswerCheckRunner Runner)> judging =
+        [
+            .. checks
+                .Select(check => (Check: check, Runner: check.Run.Step.Type is { } type && _byType.TryGetValue(type, out var runner) ? runner as IFlowAnswerCheckRunner : null))
+                .Where(pair => pair.Runner is not null)
+                .Select(pair => (pair.Check, pair.Runner!)),
+        ];
+
+        if (judging.Count == 0)
+        {
+            return null;
+        }
+
+        return async output =>
+        {
+            var problems = new List<string>();
+
+            foreach (var (check, runner) in judging)
+            {
+                var run = check.Run with { Read = check.ReadOf(output) };
+
+                if (ReadsViewAtStart.Contains(run.Step.Type, StringComparer.Ordinal))
+                {
+                    await _graph.AtStartAsync(run, cancellationToken).ConfigureAwait(false);
+                }
+
+                problems.AddRange(await runner.AnswerProblemsAsync(run, cancellationToken).ConfigureAwait(false));
+            }
+
+            return [.. problems.Distinct(StringComparer.Ordinal)];
+        };
     }
 
     /// <inheritdoc/>

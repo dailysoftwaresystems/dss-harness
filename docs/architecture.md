@@ -3362,7 +3362,12 @@ recommendation among them - which `AgentRunResult.Problem` and the run's `questi
 output that reads against its schema held to the step's own rules where it has any (`AgentOutput.Holds`, each problem a
 path under `$.output`, sent back as a schema's is and counted with its repairs - the route's rules of a review's
 findings and the analyst's evidence alike, one hook), and the run's end - `Completed` or `Asked`, with `PersonAsked`, or
-a repair sent back, then `InvalidOutput`. Every JSON an agent reads or its call carries is written by one writer,
+a repair sent back, then `InvalidOutput`. An output that reads and holds is held last to the checks the engine says
+will read it next (`AgentOutput.Corrections`, from `FlowStepRun.AnswerCorrections`): each problem a check's own runner
+finds of it (`IFlowAnswerCheckRunner`, the one judgement the check's run makes) goes back in the same conversation in
+`StructuredOutputGate.Correction`'s words, an `OutputCorrection` event of the stream, no repair counted, for as long as
+each answer is new - one that gives again an output it was sent back with is the agent's word that it cannot put what is
+left right, and the run ends with it as given, for the check to record. Every JSON an agent reads or its call carries is written by one writer,
 `AgentEnvelope.Written`, JSON's own escapes alone and at any depth, so an apostrophe, an angle bracket, an ampersand
 or a letter past ASCII reads as it was written: the envelope, a value a problem quotes, a template's JSON value
 (`FlowValue.AsTemplateText`, `{run.closure}` among them), the engine's account of the work a piece starts from
@@ -3535,7 +3540,16 @@ answers every axis the closure text lists, by a member of its own (`kinds`, `tar
 `entryPoints`, `tiers`, `forms`, `directions`, and `further` for the repository's own), each its values and where they
 are declared or why it does not apply, is `plan.schema.json`'s to hold, so the structured-output check sends an omission
 back within the plan step and never costs an audit or another planning iteration; and one home belongs to one item - two classes of one item
-may share one, a place that decides more than one thing, which that item changes alone. The builder closes
+may share one, a place that decides more than one thing, which that item changes alone. What the check finds reaches
+the agent that gave the items within its own step: the engine holds the answer of every reason step whose output the
+`items` of a check of its scope reads - the plan and a plan update through `plan.latest`, a round's self-audit through
+`previous`, the diagnosis, its redirect and its revision through `diagnose.latest` - to that check at the answer
+(`FlowCoordinator.AnswerChecksOf`, over the types that judge an answer, `WorkflowStepTypes.StepType.JudgesAnswer`: each
+key read as the check's start reads it, `StartReadsOf` and `ReadExpressions`, with a plan check's own, `CheckReads`, and
+the judged one from the answer, `FlowAnswerCheck.ReadOf`), judged by `PlanCheckRunner.AnswerProblemsAsync`, the one
+`Checked` its run makes, so a problem the planner can put right costs no audit and no planning iteration; a check of
+another scope, and one whose other reads or texts cannot be read yet, holds the answer at its own moment alone, and the
+check runs after it as before, the record and the gate. The builder closes
 the class (part 01's B and C): the implementer's definition and the implement and remedy prompts hold the
 class-closure paragraph, every prompt that goes on with an item - mend, rework, reconcile, anchors, unblock, redo and
 undo - reads the item's classes and the record so far (`{input.item.classes}`, `{implement.latest.closure}`) under
@@ -3601,7 +3615,13 @@ weighing's own code: nothing it could not read is read as none (`ClassClosurePro
 reads as given). The record's problems (1) are repaired by `close-class` and a missing audit (2) by `home-audit`, reason
 steps that go on with the implementation and so change its code: each goes back through the item's tests - `then:
 item-blocked`, whose verify runs again, and `reverify` in the review loop's revise - before the check runs again and
-anything is folded. The same rules judge a manual lane's `closure.json` where `anchors.closure` says `required`
+anything is folded. The record's problems reach the builder sooner: the engine holds the answer of every reason step
+whose record a `class-closure` check of its scope reads - `implement` and each step that goes on with its work through
+`implement.latest`, `mend`, `close-class`, `rework` and `reclose-class` among them, a remedy's builder alike - to the
+same judgement at the answer (`ClassClosureStepRunner.AnswerProblemsAsync`, the one `JudgedAsync` its run makes, over
+the agent's tree, streams and dry-weighed fold as they stand then, the view synced first), so a problem the builder can
+see goes back within its step and no `close-class` is drawn for it; a missing home audit (2), which the run's history of
+the home asks for, and whatever only a later step's work shows - its tests, a fold - stay the check's. The same rules judge a manual lane's `closure.json` where `anchors.closure` says `required`
 (`AgentService.ClosureProblemsAsync`, a refusal of its own kind `RefusalKind.Closure` that no consent lifts, the searches
 and measurements read as given, a record naming no class refused, its arms against the registry its worktree holds); a
 run's own folds - its `fold` and `delete-agent` steps, the engine's own deleting of an agent and the check's weighing,
@@ -6124,7 +6144,9 @@ The engine syncs on its own, through `FlowGraphSyncs`, only where the run has a 
 holds: `FlowStepRunners` syncs the view of a step that reads it where it starts (`FlowStepRunners.ReadsViewAtStart`: a
 reason step, and a `class-closure` check, which reads what the worktree still declares) - its agent's, the one the step it
 goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), and a reader's own tree's once
-its runner readied the tree or found it as the attempt an answer goes on with left it, never at its start; `fold` and
+its runner readied the tree or found it as the attempt an answer goes on with left it, never at its start, and again
+where such a check judges a reason step's answer at the answer (`FlowStepRunners.CorrectionsOf`), for it reads the tree
+that answer leaves; `fold` and
 `delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
 (`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
 fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one

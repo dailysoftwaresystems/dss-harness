@@ -10,7 +10,8 @@ answer says of the cause before you build on it: the cause and the evidence are 
   noTests - and its definition of done, of which the first statement is that `{source.step}` would now pass. Each item
   that changes a decision gives its class - its one home, its sites, its searches, its universe, which answers every
   axis with its values or why it does not apply - and one that decides none says why in noClass. A machine check reads
-  the items before any is built, and gives you its problems to settle where it refuses them.
+  the items as you give them, before any is built, and tells you here what it refuses, to settle in the answer you give
+  again.
 - **retry**, where their answer means nothing needs changing - they lifted what stood in the way - and the step will
   pass as it is.
 - **person**, where their answer still leaves something only a person can give, or asks for what no course does, such

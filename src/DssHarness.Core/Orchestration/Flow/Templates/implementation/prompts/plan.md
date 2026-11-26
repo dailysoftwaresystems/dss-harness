@@ -162,6 +162,7 @@ every path an item reuses or replaces there in the tree, every item saying what 
 home and site a path inside the tree, each class's home among the item's own paths and there in the tree, a site marked
 home only where it is the home, every other site the item's too, more than one site consolidated at the home, each
 class searched by data its queries name again, each universe counting the cells its axes that apply make, one class id
-used once, and one home belonging to one item. An independent auditor then checks
+used once, and one home belonging to one item. It reads your answer as you give it: what it finds wrong is told you
+here, in this conversation, to put right in the answer you give again. An independent auditor then checks
 the plan against the code, searching for itself what you say does not exist - the classes above all. Then
 a person approves it, unless they approved it beforehand in what they gave this run.

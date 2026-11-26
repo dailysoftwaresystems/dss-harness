@@ -328,6 +328,74 @@ public sealed class StructuredOutputTests
     }
 
     /// <summary>
+    /// An output that reads, which a step that judges it finds wrong - a plan its check refuses - is handed back to be put
+    /// right in the same conversation, said by an <see cref="OutputCorrection"/>, and counted with no repair: an output with
+    /// no repair left to it is corrected all the same, and a corrected one completes the run. What the step finds is asked
+    /// only of an output that reads; one the schema refuses is repaired as ever, and the step is not asked of it.
+    /// </summary>
+    [Fact]
+    public async Task AnOutputAStepThatJudgesItFindsWrong_IsHandedBackToBePutRight_AndCountsNoRepair()
+    {
+        var asked = new List<JsonNode>();
+        var gate = new StructuredOutputGate(
+            new AgentOutput("o", Step, MaxRepairs: 1) { Corrections = output => { asked.Add(output.DeepClone()); return Task.FromResult<IReadOnlyList<string>>(output["findings"]![1]!["at"]!.GetValue<string>() == "b.cs" ? ["work item 'one' owns 'b.cs' and must not touch it"] : []); } },
+            new Masking());
+
+        // The schema refuses the first answer: repaired, its one repair spent, and the check not asked of it.
+        Assert.Null(await Checked(gate, Envelopes.Of(JsonNode.Parse("""{"severity":"high","findings":[{"at":"b.cs"}]}""")), "t"));
+        Assert.Empty(asked);
+
+        // The second reads and the check finds it wrong: handed back though no repair is left, said as a correction.
+        Assert.Null(await Checked(gate, Envelopes.Of(Output), "t"));
+        Assert.Equal(
+            [
+                StructuredOutputGate.Repair(["$.output.findings: holds 1 item and at least 2 are asked"]),
+                StructuredOutputGate.Correction(["work item 'one' owns 'b.cs' and must not touch it"]),
+            ],
+            _sentBack);
+        Assert.Equal(
+            "Your answer reads against its schema, and the check that reads it next finds this wrong with it:\n- work item 'one' owns 'b.cs' and must not touch it\nAnswer again, whole, with each put right. Where one cannot be put right in your answer, answer again with the output you gave, and say why in your notes: the check then records what is still wrong.",
+            _sentBack[1]);
+        var correction = Assert.IsType<OutputCorrection>(_events[1]);
+        Assert.Equal(1, correction.Round);
+        Assert.Equal(["work item 'one' owns 'b.cs' and must not touch it"], correction.Problems);
+
+        // The corrected answer completes the run, its output as given.
+        var ended = await Checked(gate, Envelopes.Of(JsonNode.Parse("""{"severity":"high","findings":[{"at":"a.cs"},{"at":"c.cs"}]}""")), "t");
+
+        Assert.Equal((AgentRunStatus.Completed, """{"severity":"high","findings":[{"at":"a.cs"},{"at":"c.cs"}]}"""), (ended!.Status, ended.StructuredOutput));
+        Assert.Equal(2, asked.Count);
+        Assert.Equal(2, _events.Count);
+    }
+
+    /// <summary>
+    /// An agent that cannot put an output right says so by answering an output it gave already: the run then completes
+    /// with that output as given, never invalid, for the step that judges it records what is still wrong - and the step is
+    /// not asked again of an output it was asked of. Every output handed back is kept, so an agent that goes back to an
+    /// earlier one, however it went round, ends the run there; a new wrong output is handed back again.
+    /// </summary>
+    [Fact]
+    public async Task AnOutputGivenAgainAfterItWasHandedBack_CompletesTheRunAsGiven()
+    {
+        var asked = 0;
+        var gate = new StructuredOutputGate(
+            new AgentOutput("o", Step) { Corrections = _ => { asked++; return Task.FromResult<IReadOnlyList<string>>(["two items own 'a.cs'"]); } },
+            new Masking());
+        var other = JsonNode.Parse("""{"severity":"low","findings":[{"at":"a.cs"},{"at":"b.cs"}]}""")!;
+
+        Assert.Null(await Checked(gate, Envelopes.Of(Output), "t"));
+        Assert.Null(await Checked(gate, Envelopes.Of(other), "t"));
+
+        // The first output again, its members in another order: the same output, and the agent's word that it cannot.
+        var ended = await Checked(gate, Envelopes.Of(JsonNode.Parse("""{"findings":[{"at":"a.cs"},{"at":"b.cs"}],"severity":"high"}""")), "t");
+
+        Assert.Equal((AgentRunStatus.Completed, """{"findings":[{"at":"a.cs"},{"at":"b.cs"}],"severity":"high"}"""), (ended!.Status, ended.StructuredOutput));
+        Assert.Equal(2, asked);
+        Assert.Equal([1, 2], _events.OfType<OutputCorrection>().Select(correction => correction.Round));
+        Assert.Equal([StructuredOutputGate.Correction(["two items own 'a.cs'"]), StructuredOutputGate.Correction(["two items own 'a.cs'"])], _sentBack);
+    }
+
+    /// <summary>
     /// The copy the Claude API is sent moves each array bound structured outputs do not take - a minItems above one, and
     /// every maxItems - into that array's description in words, keeping a minItems of one; every other word stays.
     /// </summary>

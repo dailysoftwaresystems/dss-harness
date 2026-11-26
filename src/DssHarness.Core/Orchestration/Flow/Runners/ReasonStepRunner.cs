@@ -941,10 +941,11 @@ public sealed class ReasonStepRunner(
     /// references share with the schema files beside it taken in (<see cref="Schemas.JsonSchemaSubset.Shared"/>), so
     /// the schema the client is sent and the schema the answer is held to are one and hold - the step's own name the
     /// name its output is read by, and - where the step may ask - the rounds it may ask in one attempt, less what its
-    /// answers already spent: after the last the agent is offered no questions and told so; and what a step of the flow
-    /// that reads its answer holds it to beyond the schema (<see cref="FlowStepRun.AnswerHolds"/>). A schema no answer could
-    /// be held to is refused (13) naming why: the definition's check said its problems when the run began, and this
-    /// says where they are again.
+    /// answers already spent: after the last the agent is offered no questions and told so; what a step of the flow
+    /// that reads its answer holds it to beyond the schema (<see cref="FlowStepRun.AnswerHolds"/>); and what the checks that
+    /// read its answer find wrong with it, for the agent to put right in its own conversation
+    /// (<see cref="FlowStepRun.AnswerCorrections"/>). A schema no answer could be held to is refused (13) naming why: the
+    /// definition's check said its problems when the run began, and this says where they are again.
     /// </summary>
     /// <param name="files">Reads the files the workflow names.</param>
     /// <param name="layout">The repository's layout.</param>
@@ -960,6 +961,7 @@ public sealed class ReasonStepRunner(
                 AskRounds: step.Ask == true ? Math.Max(0, (step.AskRounds ?? 2) - run.Answers.Count(given => given.Kind == "ask" && given.Attempt == run.Attempt)) : null)
             {
                 Holds = run.AnswerHolds,
+                Corrections = run.AnswerCorrections,
             }
             : null;
 
