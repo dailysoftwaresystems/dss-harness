@@ -244,7 +244,7 @@ public static partial class HelpTopics
             + "range and hash, removed - and, where its step pushes its pack, the nodes of its own pack the conversation was not given, every one, told in pages of the step's pack's size, page 1 in the message and each later page by "
             + $"graph's {CodebaseGraphTool.NameOf(GraphOp.Changes)} with page, a page never too small to hold its first and last lines and a line; never a map or a "
             + "pack again whole, for a conversation's prefix is never changed, and no earlier message, tool result, map or "
-            + "pack is ever sent changed; a step that pushes no pack, whose conversation holds no codebase part, is told none. A launch the walk of the step's order moves to another client or provider begins a "
+            + "pack is ever sent changed; a step that pushes no pack, whose conversation holds no declaration of the codebase, is told none. A launch the walk of the step's order moves to another client or provider begins a "
             + "conversation of its own, and is given what its step pushes, as Claude Code, whose every launch begins one, "
             + "is. Each launch's first message is a line of the step's graph.jsonl - what of the graph it was pushed and what "
             + "that cost, or why it was given no pack - and the step's figures are its last launch's, with the pages of the map and the pack its tool was asked for counted apart.");

@@ -6302,7 +6302,7 @@ launch that begins a conversation of its own, after a pushed map (`AgentPromptPa
 the sentence for a step that left no output in its place, which a step that pushes no pack is told by its tool instead; a launch that goes on with a
 stored conversation is told the changes instead (`CodebaseConversationChanges`: what moved of the declarations it was told,
 and, where its step pushes its pack, the nodes of it the conversation was not given - none at all where the step pushes no
-pack and the conversation holds no codebase part), the one decision `AgentPromptParts.CodebaseOf`'s, made as each
+pack and the conversation holds no declaration of the codebase: `CodebaseConversationChanges.HoldsAny`), the one decision `AgentPromptParts.CodebaseOf`'s, made as each
 launch's first message is written, so a fallback to another client or provider begins with what its step pushes. A
 graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it.
 The run's repository map (`CodebaseRepositoryMap`, `FlowStepGraph.MapOfAsync`) is made once for each ground of reads

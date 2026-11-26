@@ -2087,7 +2087,7 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(support);
         Assert.NotNull(support.Tool);
         Assert.True(support.Narrow);
-        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Around, GraphOp.Impact, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
 
         // The map and the pack are one page each, so each is offered from page 1, never for pages past a pushed one.
         var kept = File.ReadAllText(kit.Layout.GraphMapFile);
@@ -3068,9 +3068,10 @@ public sealed class ReasonStepRunnerTests
     /// <summary>
     /// A step that pushes no pack - its graph tools, its graphPromptTokens unsaid - is never pushed its pack by the back
     /// door of the changes a conversation it goes on with is told: where that conversation holds a pack an earlier launch
-    /// was pushed, it is told what moved of it and nothing of its own pack added; where it holds no codebase part, it is
-    /// told nothing at all, and its line says it asks the tool for its pack. Red with the step's own pack's nodes told as
-    /// added to a conversation of a step that pushes none.
+    /// was pushed, it is told what moved of it and nothing of its own pack added; where it holds no codebase part, or only
+    /// one that names no declaration, it is told nothing at all, and its line says it asks the tool for its pack. Red with
+    /// the step's own pack's nodes told as added to a conversation of a step that pushes none, and with a part that names
+    /// no declaration told as changes.
     /// </summary>
     [Fact]
     public async Task AnAnswerOfAStepThatPushesNoPack_IsToldWhatMovedOfWhatItsConversationHeld_AndNothingOfItsOwnPack()
@@ -3108,6 +3109,16 @@ public sealed class ReasonStepRunnerTests
         var moved = Assert.IsType<DssHarness.Core.Codebase.GraphResolve.Found>((await CodebaseGraphQueriesOf(kit.Harness.CodebaseGraph, kit.Layout)).Resolve("Plan")).Card;
         Assert.Equal($"1 declaration the conversation held: 1 moved or changed, 0 removed\n{DssHarness.Core.Codebase.GraphLines.Of(moved)}", agents.Asked[1].CodebaseChanges);
         Assert.Equal(string.Empty, agents.Asked[1].Codebase);
+
+        // A conversation whose one codebase part names no declaration - what a launch is given where the run's graph was
+        // never built - holds nothing that can have moved: it is told nothing either.
+        await StoredLaunchesAsync(kit, "plain", (false, AgentPromptParts.FirstMessage(launch with { Codebase = "the run's graph was never built" }, newConversation: true)));
+
+        var plain = await runner.RunAsync(Graphing(kit, Graphed(), instance: "plain", made: false, prompt: "Plan the work on the Planner.") with { Answers = [answered] }, Token);
+
+        Assert.True(plain.Passed, plain.Error);
+        Assert.NotNull(agents.Asked[2].Conversation);
+        Assert.Null(agents.Asked[2].CodebaseChanges);
     }
 
     /// <summary>

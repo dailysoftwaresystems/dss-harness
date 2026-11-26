@@ -460,7 +460,8 @@ public sealed class FlowStepGraph
     /// again whole: their page 1, every one told, page by page, the graph tool's <c>changes</c> given where they go on
     /// past it. Made against the pack as it was made, so a pack that held nothing still tells the conversation what moved
     /// of what it was told; null where no pack was made, its view was not read, or the step pushes no pack and the
-    /// conversation holds no codebase part - nothing it was told can have moved, and nothing is pushed of its own. Kept, so
+    /// conversation holds no declaration of the codebase (<see cref="CodebaseConversationChanges.HoldsAny"/>) - nothing it
+    /// was told can have moved, and nothing is pushed of its own. Kept, so
     /// the line of the launch told them says what they cost.
     /// </summary>
     /// <param name="told">The codebase parts the conversation holds, in the order it was given them: its pack, then each delta after it.</param>
@@ -469,7 +470,7 @@ public sealed class FlowStepGraph
         ArgumentNullException.ThrowIfNull(told);
 
         var asks = support?.Tool is not null;
-        var pages = view is null || made is null || (!Pushes && told.Count == 0) ? null : CodebaseConversationChanges.Pages(view, Pushes ? made : null, told, Tokens, asks);
+        var pages = view is null || made is null || (!Pushes && !CodebaseConversationChanges.HoldsAny(told)) ? null : CodebaseConversationChanges.Pages(view, Pushes ? made : null, told, Tokens, asks);
 
         changes = pages?.Page(1)!.Text;
         this.told = pages?.Page(1) is { Last: false } ? pages : null;

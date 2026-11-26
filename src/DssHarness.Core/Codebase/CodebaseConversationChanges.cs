@@ -134,6 +134,19 @@ public static class CodebaseConversationChanges
     private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
+    /// Whether the codebase parts a conversation holds name any declaration it still stands told of - none where it holds
+    /// no part, or only parts that name none (the sentence of a graph never built, a page of nothing): a step that pushes
+    /// no pack is told no changes of such a conversation, for nothing it was told can have moved.
+    /// </summary>
+    /// <param name="told">The codebase parts the conversation holds, in the order it was given them.</param>
+    public static bool HoldsAny(IReadOnlyList<string> told)
+    {
+        ArgumentNullException.ThrowIfNull(told);
+
+        return Known(told).Count > 0;
+    }
+
+    /// <summary>
     /// The declarations a conversation holds, folded from every codebase part it was told, in order: a node line puts the
     /// declaration it names where the line says - a pack's naming it first, a delta's moving it - and a delta's
     /// <see cref="RemovedPrefix"/> line takes it out. Every other line - a pack's first and last, a declaration a pack
