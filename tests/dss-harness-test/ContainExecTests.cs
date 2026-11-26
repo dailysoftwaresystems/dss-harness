@@ -2199,8 +2199,9 @@ public sealed class ContainExecTests
     /// <summary>
     /// A session's end reads the system again once all it killed has gone, and ends what still stands in the session, on
     /// Linux and macOS: a process stops only once a call it is inside has returned, so a child whose creation was under way
-    /// as its parent was held joins the listing only after the last round. Here the leader's child leads a group of its own
-    /// with a child of its own in it; the process table is read as before either started, and every listing read before
+    /// as its parent was held joins the listing only after the last round. Here the leader, refusing to be asked to end - so
+    /// its group stands to be held and killed as one - has a child leading a group of its own with a child of its own in
+    /// it; the process table is read as before either started, and every listing read before
     /// the kill lacks the grandchild - as such a child would be - so the child is held and killed, and the grandchild,
     /// handed on to another parent, is found in the session and ended once the rest has gone.
     /// </summary>
@@ -2213,7 +2214,7 @@ public sealed class ContainExecTests
         using var temp = new TempDirectory();
         var ready = temp.Combine("ready");
         var start = TestHost.StartOf(Child(
-            "lead-then", "session", "spawn-holder", "sleep", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
+            "lead-then", "session", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
         var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
 
         start.RedirectStandardOutput = true;
