@@ -64,16 +64,23 @@ public static class FlowClaims
     /// The claims <paramref name="step"/> holds while it runs: each string its type's table carries, read for the tree
     /// it names - the main tree, or the tree of the agent the step's <c>in</c> or <c>of</c> names - and the forge's
     /// remote for a push and a pull request. A <c>run</c> step whose runner writes the tree holds <em>write</em> on it
-    /// and not run; a string the cases do not name holds nothing.
+    /// and not run. A reason step holds read on the main tree and write on the tree of the agent it works in, whatever
+    /// its access - the agent its <c>in</c> names, the engine's own read-only one it was given, or the one of the step whose
+    /// work it goes on with - since its start brings an agent that only reads to the main checkout's HEAD and its work
+    /// writes the tree; a reading step that begins work of its own holds nothing of a tree until its agent is named, for
+    /// that agent is its own. A string the cases do not name holds nothing.
     /// </summary>
     /// <param name="step">The step as it was declared.</param>
     /// <param name="runners">What the engine asks of the runners a workflow names.</param>
     /// <param name="agent">
-    /// The agent the step's <c>in</c> or <c>of</c> names, as the run resolved it: the one that step's instance of the
-    /// create-agent made, so each item of a <c>forEach</c> claims its own agent's tree and never a sibling's. Null where
-    /// the step names none, or the run has made none for it yet - the name the step wrote is then the tree, which is
-    /// one tree for every instance that names it. For a step of <c>others</c>, the target whose turn it is: its tree
-    /// alone is the step's, never the main tree for it, and none where no target is left.
+    /// The agent the step works in or acts on, as the run resolved it: the one that step's instance of the create-agent
+    /// its <c>in</c> or <c>of</c> names made, so each item of a <c>forEach</c> claims its own agent's tree and never a
+    /// sibling's; for a reason step, the engine's own read-only agent it was given, or the agent of the step whose work it
+    /// goes on with - where that is a reading step that goes on with its own work, whose every visit works in one agent,
+    /// that agent named by the declaration, made yet or not. Null where the step names none, or the run has made or named
+    /// none for it yet - the name the step wrote is then the tree, which is one tree for every instance that names it. For
+    /// a step of <c>others</c>, the target whose turn it is: its tree alone is the step's, never the main tree for it, and
+    /// none where no target is left.
     /// </param>
     public static IReadOnlyList<FlowClaim> Of(WorkflowStep step, IFlowRunnerFacts runners, string? agent = null)
     {
@@ -111,8 +118,12 @@ public static class FlowClaims
                 case "write the agent's tree" or "write its target" when tree is not null:
                     claims.Add(new(tree, FlowClaimKind.Write));
                     break;
-                case "write the agent's tree where its access is write" when step.Access == "write" && tree is not null:
-                    claims.Add(new(tree, FlowClaimKind.Write));
+                case "write the tree of the agent it works in" when (agent ?? step.In) is { } worksIn:
+                    // Whatever its access: a writer's work is in that tree, and the start of a step that works as an agent
+                    // that only reads brings the agent's tree to the main checkout's HEAD - whatever another step wrote
+                    // there discarded - and its work writes it as its scratch. So no two steps ever work in one agent's
+                    // tree at once: two that go on with one reading step's work wait for each other.
+                    claims.Add(new(worksIn, FlowClaimKind.Write));
                     break;
                 case "the remote resource":
                     // A push and a pull request hold the forge's remote between them, one at a time: a claim of its

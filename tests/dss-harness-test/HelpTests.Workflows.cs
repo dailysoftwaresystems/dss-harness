@@ -309,6 +309,85 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The help, the command's own help, the README and the architecture say what a run's own file input is: a file
+    /// inside the repository by its path from the root, committed or not, refused with no run started where it names none,
+    /// copied into the run's inputs as it starts, and read there - its copy's path - by every step of every session and
+    /// every agent of the run, whatever became of the file since; the orchestrators topic and the layout name the place.
+    /// </summary>
+    [Fact]
+    public async Task TheHelpAndTheDocuments_SayARunsFileInputIsCopiedAsItStarts_AndReadThereByEveryStepAndAgent()
+    {
+        Assert.Contains(
+            "A workflow declares inputs - the values a run is started with, each with a kind, a default and the options it takes, "
+                + "an input of the kind file naming a file inside the repository by its path from the root, committed or not, which "
+                + $"the run copies into its own {HarnessLayout.OrchestratorInputsDirectoryName}/ as it starts (one that names none is refused, {HarnessExit.Refused}, no run started): every step of "
+                + "every session reads that copy for it - {input.<name>} the copy's path - whatever became of the file since, and "
+                + "every agent of the run reads it, wherever its own tree was cut from;",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/ the file one of the run's own file inputs named, copied as the run starts - committed or "
+                + "not - and kept for its life: what every step of every session reads for that input, whatever became of the file "
+                + "since, and every agent of the run reads; taken away with the run's directory",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a file input names a file inside the repository by its path from the root, which the run copies as it starts.",
+            Prose.Words((await CliRunner.RunAsync([FlowService.RunCommand, "--help"], TestContext.Current.CancellationToken)).StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an input of the kind `file` names a file inside the repository by its path from the root - committed or not, refused "
+                + $"({HarnessExit.Refused}) with nothing made where it names none - which the run copies into its own `{HarnessLayout.OrchestratorInputsDirectoryName}/` as it starts: every "
+                + "step of every session reads that copy for the input, whatever became of the file since, and every agent of the run reads it.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "opens the file each of the run's own inputs of the kind `file` names where its value, given or its default, is not "
+                + "empty - a path from the main checkout's root, never absolute, with no `..` and in none of the tool's credential "
+                + $"slots, read from the main checkout as it stands, committed or not; anything else refused ({HarnessExit.Refused}), naming the "
+                + $"input and the path, no run started (`{nameof(FlowInputs)}.{nameof(FlowInputs.OpenFiles)}`) - makes the run's directory and copies each file "
+                + $"into it, `{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/<the file's name>` (`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.InputCopy)}`), before it makes the run's "
+                + "record, its status and its owner",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What a step reads for such an input - `{input.<name>}` in every prompt and every expression, and a pull request's "
+                + $"base - is the copy's full path (`{nameof(FlowInputs)}.{nameof(FlowInputs.AsRead)}`, the one owner of what a step reads for an input, "
+                + "which every session hands the engine), so every step of every session, a resume's included, reads the file the run "
+                + "was started with, whatever the person did to it since; the run's records keep the value as it was given. Every "
+                + $"agent of the run reads the run's `{HarnessLayout.OrchestratorInputsDirectoryName}/` as a root of its own (`{nameof(DssHarness.Core.Agents.Policy.AgentStepGround)}`)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README and the architecture say what a reason step holds of the tree of the agent it works in - write, whatever
+    /// its access, since the start of a step that works as an agent that only reads resets that tree and its work writes it
+    /// - and that of two steps that go on with one step's work, two visits of one that goes on with its own among them, the
+    /// second starts once the first has ended; the step types' table says it in the claim it carries.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAReasonStepHoldsWriteOnTheTreeOfTheAgentItWorksIn_WhateverItsAccess()
+    {
+        Assert.Equal(["read main", "write the tree of the agent it works in"], WorkflowStepTypes.Find("reason")!.ClaimsOf);
+        Assert.Contains(
+            "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in "
+                + "whatever its access - of two that go on with one step's work, two visits of one that goes on with its own among "
+                + "them, the second starts once the first has ended:",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A reason step holds write on the tree of the agent it works in whatever its access "
+                + $"(`{nameof(FlowClaims)}.{nameof(FlowClaims.Of)}`, read through the step whose work it goes on with, `{nameof(FlowCoordinator)}.WorkingOf`): the start of a step "
+                + "that works as an agent that only reads resets that tree and its work writes it, so of two steps that go on with one "
+                + "reading step's work the second starts once the first has ended - two visits of one that goes on with its own, which "
+                + "work in the agent its first visit made, claiming that agent by the declaration before either is given it "
+                + $"(`{nameof(FlowCoordinator)}.ClaimedAgentOf`) - and no step's start discards another's scratch under it",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows topic carries its worked examples - the two ways a step is raised by another step's ending, and
     /// the loops a repository can build its own work around - each printed as a whole workflow and each holding as it
     /// is printed, read by the same reader that reads a workflow's own file and checked by the same check.
@@ -447,6 +526,8 @@ public sealed partial class HelpTests
                 + "step can go on with its work, its tree removed and nothing folded: a tree of its own, made as every agent's is, which the start of every step that works as it - each attempt of its first, and of each that goes on "
                 + "with its work - brings to the main checkout's HEAD then, whatever it wrote there before discarded, so the step reads exactly what the main checkout committed, starts in it, and may write it and its work directory, "
                 + "never folded; an answer that goes on with an attempt finds the tree as the attempt left it; "
+                + "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in whatever its access - "
+                + "of two that go on with one step's work, two visits of one that goes on with its own among them, the second starts once the first has ended; "
                 + "the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
                 + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
                 + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "

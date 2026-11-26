@@ -863,6 +863,59 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// A file a run's own file input named, never committed, is in no agent's tree - a worktree is cut from the commit the
+    /// run started on, and the tree of an agent that only reads is brought to the main checkout's HEAD, untracked files
+    /// cleaned - and reaches both alike as the copy the run made of it as it started, which is what a step reads for the
+    /// input: each step's ground reads the run's inputs, where the copy is, and writes none of it.
+    /// </summary>
+    [Fact]
+    public async Task AnUncommittedFileARunsFileInputNamed_IsReadAsItsCopy_ByAFoldedAgentAndByOneThatOnlyReads()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        await kit.CreateReadingAgentAsync("reader");
+
+        // The person's plan, written after the agents' trees were made and never committed; the run copies it at its start.
+        OrchestrationKit.Write(kit.Main, Path.Combine("notes", "plan.md"), "the plan, never committed\n");
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\ninputs:\n  - name: plan\n    kind: file\nsteps:\n  - name: orient\n    type: orient\n");
+        var given = new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = "notes/plan.md" };
+
+        using (var files = FlowInputs.OpenFiles(kit.Harness.FileSystem, definition, FlowInputs.Resolve(definition, given), kit.Main))
+        {
+            files.Keep(kit.Harness.FileSystem, kit.Layout);
+        }
+
+        var copy = FlowInputs.AsRead(definition, given, kit.Layout)["plan"];
+
+        Assert.Equal(kit.Layout.InputCopy("plan", "notes/plan.md"), copy);
+
+        foreach (var agent in new[] { "ag", "reader" })
+        {
+            Assert.True((await Runner(kit, agents).RunAsync(Run(kit, prompt: $"Read the plan at {copy}.", agent: agent), Token)).Passed);
+        }
+
+        Assert.Equal(2, agents.Asked.Count);
+
+        foreach (var asked in agents.Asked)
+        {
+            // The person's file is not in the tree the agent works in: the copy is all it has of it.
+            Assert.False(File.Exists(Path.Combine(asked.Workspace.Worktree!, "notes", "plan.md")), $"{asked.Agent}'s tree holds no uncommitted file of the main checkout's");
+            Assert.Contains(kit.Layout.InputsDirectory, asked.Ground!.ReadRoots);
+
+            var paths = new ConfinedPaths(kit.Harness.FileSystem, kit.Harness.Platform, asked.Ground);
+            var policy = new DssHarness.Core.Agents.Policy.AgentPolicy(kit.Harness.FileSystem, kit.Harness.Platform, asked.Ground);
+
+            Assert.Null(paths.Read(copy).Denied);
+            Assert.Equal(DssHarness.Core.Agents.Policy.AgentPolicyAnswer.Allow, policy.Read(copy));
+            Assert.Equal(ConfinedPaths.RootsRule, paths.Write(copy).Denied?.Rule);
+            Assert.Equal("the writable roots", Assert.IsType<DssHarness.Core.Agents.Policy.AgentPolicyAnswer.Denied>(policy.Write(copy)).Rule);
+        }
+
+        Assert.Equal("the plan, never committed\n", File.ReadAllText(copy));
+    }
+
+    /// <summary>
     /// A step that works as an agent that only reads starts in a tree of its own, as one with a worktree starts in its
     /// worktree, the tree at the main checkout's HEAD: a path relative to where it starts - its tools', its commands',
     /// those its prompt writes from the repository's root - names what the repository committed. It may write that tree and

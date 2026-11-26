@@ -541,6 +541,34 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public string ArtifactsDirectory => Path.Combine(Directory, Repository.HarnessLayout.OrchestratorArtifactsDirectoryName);
 
     /// <summary>
+    /// Where the run keeps the files its own inputs of the kind <c>file</c> were given (<see cref="HarnessLayout.OrchestratorInputsDirectoryName"/>):
+    /// made with the run, each file copied there as the run starts and kept for its life, and taken away with the run's
+    /// directory. The one owner of the shape: what a step reads for such an input is the copy's path here
+    /// (<see cref="InputCopy"/>), and every agent of the run reads this directory (<see cref="InputsDirectoryOf"/>).
+    /// </summary>
+    public string InputsDirectory => InputsDirectoryOf(Directory);
+
+    /// <summary>Where the run at <paramref name="runDirectory"/> keeps the files its own inputs of the kind <c>file</c> were given (<see cref="InputsDirectory"/>).</summary>
+    /// <param name="runDirectory">The run's own directory.</param>
+    public static string InputsDirectoryOf(string runDirectory)
+        => Path.Combine(runDirectory, Repository.HarnessLayout.OrchestratorInputsDirectoryName);
+
+    /// <summary>
+    /// The copy the run keeps of the file its input <paramref name="input"/> was given as <paramref name="given"/>:
+    /// <c>inputs/&lt;input&gt;/&lt;the file's own name&gt;</c>, a directory an input, so a step reads it by the name the person
+    /// gave it.
+    /// </summary>
+    /// <param name="input">The input's name: a word of letters, digits and dashes, as every declared name is.</param>
+    /// <param name="given">The path the input was given, relative to the repository's root.</param>
+    public string InputCopy(string input, string given)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(input);
+        ArgumentException.ThrowIfNullOrWhiteSpace(given);
+
+        return Path.Combine(InputsDirectory, input, Path.GetFileName(Path.TrimEndingDirectorySeparator(given)));
+    }
+
+    /// <summary>
     /// The run's state in one file: every step instance and what runs next. Shaped for a resume; written after the
     /// changed step's own files and before every other record of a change - the run's status, its issues and the event.
     /// </summary>

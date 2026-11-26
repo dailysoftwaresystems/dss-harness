@@ -1400,6 +1400,127 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(["first", "second", "quick", "making", "late"], runner.Started);
     }
 
+    /// <summary>
+    /// Two steps that work in one agent that only reads never run together, however both are ready at once: the start of
+    /// each brings the agent's tree to the main checkout's HEAD and its work writes the tree as its scratch, so each holds
+    /// write on that tree whatever its access - of two that go on with one reading step's work, the second starts only once
+    /// the first has ended - while a reading step that begins work of its own, in a tree of its own, runs beside them.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsInOneAgentThatOnlyReads_NeverRunTogether_TheSecondStartingOnceTheFirstEnds()
+    {
+        var definition = Parse("""
+            name: flow
+            maxReasoningAgents: 4
+            steps:
+              - name: think
+                type: reason
+                prompt: think.md
+                outputs: think.json
+              - name: again
+                type: reason
+                resume: think
+                prompt: think.md
+                outputs: think.json
+                dependsOn: [think]
+              - name: more
+                type: reason
+                resume: think
+                prompt: think.md
+                outputs: think.json
+                dependsOn: [think]
+              - name: apart
+                type: reason
+                prompt: think.md
+                outputs: think.json
+                dependsOn: [think]
+            """);
+        var runner = new FakeRunner();
+        var again = runner.Hold("again");
+        var more = runner.Hold("more");
+        var apart = runner.Hold("apart");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var token = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(token);
+        await runner.StartedAsync("again").WaitAsync(TimeSpan.FromSeconds(30), token);
+        await runner.StartedAsync("apart").WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        // Both that go on with think's work are ready, in think's agent: the first works in its tree, and the second waits
+        // on the claim, though the run's reasoning slots have room - the step with an agent of its own started beside it.
+        Assert.Equal(coordinator.Instances["think"].Made, coordinator.Instances["again"].WorksIn);
+        Assert.NotEqual(coordinator.Instances["think"].Made, coordinator.Instances["apart"].Made);
+        Assert.NotNull(coordinator.Instances["more"].Measure?.ReadyAt);
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["more"].State);
+        Assert.Equal(["think", "again", "apart"], runner.Started);
+
+        again.Done();
+        await runner.StartedAsync("more").WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        // The second began once the first had ended, never beside it.
+        Assert.True(
+            coordinator.Instances["more"].AttemptBegan > coordinator.Instances["again"].EndedIn,
+            $"'more' began at {coordinator.Instances["more"].AttemptBegan}, before 'again' ended at {coordinator.Instances["again"].EndedIn}");
+        Assert.Equal(coordinator.Instances["think"].Made, coordinator.Instances["more"].WorksIn);
+
+        more.Done();
+        apart.Done();
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        Assert.Equal(["think", "again", "apart", "more"], runner.Started);
+    }
+
+    /// <summary>
+    /// Two visits of a reading step that goes on with its own work never run together, though both are ready in one pass
+    /// and neither has been given its agent yet: every visit of the declaration works in the one agent the first made, so
+    /// each claims that agent's tree by the declaration - the second item's visit starts once the first's has ended, in the
+    /// agent they share.
+    /// </summary>
+    [Fact]
+    public async Task TwoVisitsOfAReadingStepThatGoesOnWithItsOwnWork_NeverRunTogether_InTheOneAgentTheyShare()
+    {
+        var definition = Parse("""
+            name: flow
+            maxReasoningAgents: 4
+            steps:
+              - name: plan
+                type: orient
+              - name: items
+                forEach: plan.list
+                dependsOn: [plan]
+                steps:
+                  - name: think
+                    type: reason
+                    resume: think
+                    prompt: think.md
+                    outputs: think.json
+            """);
+        var runner = new FakeRunner().On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"list": ["a", "b"]}""")));
+        var think = runner.Hold("think");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var token = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(token);
+        await runner.StartedAsync("items[0].think").WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        // Both items' visits were drawn in one pass, and the second waits on the claim, though the run's reasoning slots
+        // have room.
+        Assert.NotNull(coordinator.Instances["items[1].think"].Measure?.ReadyAt);
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["items[1].think"].State);
+        Assert.Equal(["plan", "items[0].think"], runner.Started);
+
+        think.Done();
+        await runner.StartedAsync("items[1].think").WaitAsync(TimeSpan.FromSeconds(30), token);
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        var first = coordinator.Instances["items[0].think"];
+        var second = coordinator.Instances["items[1].think"];
+
+        Assert.Equal(["plan", "items[0].think", "items[1].think"], runner.Started);
+        Assert.Equal(first.Made, second.Made);
+        Assert.True(second.AttemptBegan > first.EndedIn, $"'items[1].think' began at {second.AttemptBegan}, before 'items[0].think' ended at {first.EndedIn}");
+    }
+
     /// <summary>A run step whose runner writes the tree claims write on it, and not run: a reader, which shares the tree with a runner, waits behind it.</summary>
     [Fact]
     public async Task ARunStepWhoseRunnerWritesTheTree_ClaimsWriteOnItsTree()

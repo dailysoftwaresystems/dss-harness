@@ -40,7 +40,8 @@ public sealed class FlowSessionsTests
     /// <summary>
     /// A run starts with one more than the highest r&lt;N&gt;, its record written, its first status - every step of the
     /// definition NotStarted, the run Running - its owner: this process, claimed before the section is left - and its
-    /// temp and artifacts directories, which hold its launches' temporary directories and its artifacts for its life.
+    /// temp, artifacts and inputs directories, which hold its launches' temporary directories, its artifacts and the copies
+    /// of the files its own file inputs named for its life.
     /// </summary>
     [Fact]
     public async Task ARunStartsWithTheNextName_ItsRecordItsFirstStatusAndItsOwner()
@@ -57,6 +58,7 @@ public sealed class FlowSessionsTests
         Assert.Equal(Environment.ProcessId, harness.OrchestrationStore.ReadOwner(run)!.ProcessId);
         Assert.True(harness.FileSystem.DirectoryExists(run.TempDirectory), $"{run.TempDirectory} is where the run's launches keep their temporary directories");
         Assert.True(harness.FileSystem.DirectoryExists(run.ArtifactsDirectory), $"{run.ArtifactsDirectory} is where the run keeps its artifacts");
+        Assert.True(harness.FileSystem.DirectoryExists(run.InputsDirectory), $"{run.InputsDirectory} is where the run keeps its file inputs' copies");
 
         var record = harness.OrchestrationStore.ReadOrchestrator(run);
 
@@ -135,6 +137,99 @@ public sealed class FlowSessionsTests
         Assert.Equal("run 'r1' is too deep", raised.Message);
         Assert.False(Directory.Exists(OrchestratorLayout.Of(layout, "r1").Directory));
         Assert.False(File.Exists(OrchestratorLayout.Of(layout, "r1").OwnerFile));
+    }
+
+    /// <summary>A workflow whose run takes a plan as a file, a spec as a file it may leave empty, and a request in words.</summary>
+    private static WorkflowDefinition WithFiles()
+        => Parse("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+              - name: spec
+                kind: file
+                default: ''
+              - name: request
+            steps:
+              - name: one
+                type: orient
+            """);
+
+    /// <summary>
+    /// A run's own file input is held at the start to a file inside the repository - one nothing ever committed, in a
+    /// directory that is no repository at all - and its bytes are copied into the run's inputs, under the input's name and
+    /// the file's own, before the run's record is written: the context keeps the values as they were given, and what the
+    /// run's steps read for the input is the copy's full path. A file input left empty copies nothing and reads empty.
+    /// </summary>
+    [Fact]
+    public async Task ARunsFileInput_IsCopiedIntoTheRunAsItStarts_ItsValueKeptAsGiven_AndItsStepsReadTheCopy()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var definition = WithFiles();
+        var given = new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = "notes/plan.md", ["request"] = "build it" };
+
+        temp.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+
+        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, inputs: given, cancellationToken: Token);
+        var copy = Path.Combine(run.Directory, HarnessLayout.OrchestratorInputsDirectoryName, "plan", "plan.md");
+
+        Assert.Equal(Path.Combine(run.Directory, "inputs"), run.InputsDirectory);
+        Assert.Equal(copy, run.InputCopy("plan", "notes/plan.md"));
+        Assert.Equal([copy], Directory.GetFiles(run.InputsDirectory, "*", SearchOption.AllDirectories));
+        Assert.Equal("the plan as it was given\n", File.ReadAllText(copy));
+        Assert.Equal(given, context.Inputs);
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = copy, ["spec"] = string.Empty, ["request"] = "build it" },
+            FlowInputs.AsRead(definition, context.Inputs, run));
+    }
+
+    /// <summary>
+    /// A run's own file input that names no file inside the repository refuses the start, naming the input and the path
+    /// and saying that no run was started, and nothing of the run is made - its directory, its record, its owner: a path
+    /// that is not there, one that is a directory, an absolute one even of a file that is there, one that climbs out by
+    /// '..', and one in a credential slot of the tool, which no agent of a run reads and so no copy may hand one.
+    /// </summary>
+    [Fact]
+    public async Task AFileInputThatNamesNoFileInsideTheRepository_RefusesTheStart_NothingOfTheRunMade()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var secrets = Path.Combine(temp.Path, ".harness-config", "runner", ".secrets");
+
+        temp.WriteFile(Path.Combine("notes", "kept.md"), "a file beside\n");
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".secrets", "key"), "the secret\n");
+        var absolute = outside.WriteFile("plan.md", "a plan outside\n");
+
+        foreach (var (value, why) in new[]
+        {
+            ("notes/plan.md", $"and '{Path.Combine(temp.Path, "notes", "plan.md")}' is not there"),
+            ("notes", $"and '{Path.Combine(temp.Path, "notes")}' is a directory"),
+            (absolute, "an absolute path"),
+            ("../plan.md", "which climbs out by '..'"),
+            (".harness-config/runner/.secrets/key", $"which is in '{secrets}', a credential slot of this tool, which no agent reads"),
+        })
+        {
+            var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(
+                layout,
+                WithFiles(),
+                () => ChildSweep.None,
+                FlowService.RunCommand,
+                inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = value },
+                cancellationToken: Token));
+
+            Assert.Equal(HarnessExit.Refused, raised.ExitCode);
+            Assert.Equal(
+                $"input 'plan' is '{value}', {why}; a file input names a file inside the repository by its path from the repository's root ('{temp.Path}'), and the run keeps a copy of it from its start. No run was started.",
+                raised.Message);
+            Assert.False(Directory.Exists(OrchestratorLayout.Of(layout, "r1").Directory), $"'{value}' made nothing of the run");
+            Assert.False(File.Exists(OrchestratorLayout.Of(layout, "r1").OwnerFile));
+        }
     }
 
     /// <summary>A session is refused while another run of the repository is unfinished over a live owner, and the refusal names the run and the ways on with it.</summary>

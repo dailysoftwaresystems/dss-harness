@@ -103,6 +103,10 @@ public static partial class HelpTopics
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorArtifactsDirectoryName}/",
             "ignored; the run's artifacts, made with the run and kept for its life: read and copied wherever they "
             + "are asked for while it runs, and taken away with the run's directory"),
+        ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/",
+            "ignored; the file one of the run's own file inputs named, copied as the run starts and kept for its life: "
+            + "what every step of every session reads for that input, whatever became of the file since, and every agent "
+            + "of the run reads; taken away with the run's directory"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/.../<instance>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}",
             "ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
             + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what "

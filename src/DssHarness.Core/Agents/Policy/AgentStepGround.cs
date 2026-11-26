@@ -19,11 +19,13 @@ public static class AgentStepGround
     /// An agent that only reads (<see cref="AgentWorkspace.OnlyReads"/>) writes its tree whatever its definition says - the
     /// tree is its own scratch, the main checkout's HEAD as its step started, where it builds and tests, and nothing of it is
     /// ever folded - and reads the main checkout besides, whose run records and logs it is pointed at; one whose record an
-    /// older tool wrote with no tree reads the main checkout alone. The tool's own state under each tree it touches - its
-    /// worktree, and always the main checkout, whose run records and other worktrees a command reaches from the worktree -
-    /// git's own files beneath both under the worktree rules, and every credential slot of the main checkout
-    /// (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the user keeps
-    /// credentials in, no action of the agent's reaches.
+    /// older tool wrote with no tree reads the main checkout alone. Every agent reads the run's inputs
+    /// (<see cref="OrchestratorLayout.InputsDirectoryOf"/>), the copies of the files the run's own file inputs named as it
+    /// started, which its steps read for those inputs, wherever its own tree was cut from. The tool's own state under each
+    /// tree it touches - its worktree, and always the main checkout, whose run records and other worktrees a command reaches
+    /// from the worktree - git's own files beneath both under the worktree rules, and every credential slot of the main
+    /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the
+    /// user keeps credentials in, no action of the agent's reaches.
     /// </summary>
     /// <param name="config">The configuration, whose <c>agentPolicy</c> restricts and whose state paths are guarded.</param>
     /// <param name="definition">The agent definition the step works by, where there is one; null where it names none.</param>
@@ -98,6 +100,11 @@ public static class AgentStepGround
         {
             reads.Add(handed);
         }
+
+        // The files the run's own file inputs named, copied as the run started: every agent of the run reads them, one whose
+        // work is folded as well as one that only reads, whichever commit its tree was cut from - a root it reads and never
+        // writes, in the run's directory beside what it is handed.
+        reads.Add(OrchestratorLayout.InputsDirectoryOf(workspace.RunDirectory));
 
         // A worktree is written only where the agent writes: a definition's `writes: false`, and a run that only reads,
         // leave it to be read, and the work directory is all the agent writes. The tree of an agent that only reads is its

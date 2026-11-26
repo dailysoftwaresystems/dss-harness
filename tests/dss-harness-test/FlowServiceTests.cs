@@ -3009,6 +3009,108 @@ public sealed class FlowServiceTests
         Assert.True(File.Exists(run.ReportFile));
     }
 
+    /// <summary>
+    /// A file a run's own file input names - one the person never committed - is copied into the run as it starts, and
+    /// every step reads that copy for the input, in every session: the first session's reason step and, after the person
+    /// changed the file while the run worked and deleted it once the run was stopped, the resume's - each prompt filled
+    /// with the copy's full path, and the copy holding what the file held as the run started. The run's records keep the
+    /// value as the person gave it.
+    /// </summary>
+    [Fact]
+    public async Task AFileInput_IsReadByEveryStepOfEverySession_AsTheCopyTheRunMadeAsItStarted()
+    {
+        var (repository, service, runner) = await AmendedAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: read
+                type: reason
+                agent: planner
+                prompt: read.md
+                outputs: update.json
+              - name: hold
+                type: orient
+                dependsOn: [read]
+              - name: again
+                type: reason
+                agent: planner
+                prompt: read.md
+                outputs: update.json
+                dependsOn: [hold]
+            """);
+        using var disposed = repository;
+        var original = repository.Tree.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/read.md", "Read the plan at {input.plan}.\n");
+        runner.Holds("hold", new TaskCompletionSource().Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: ["plan=notes/plan.md"], json: false, cancellationToken: Token);
+
+        await runner.WaitStartedAsync("hold");
+
+        // The person changes the file while the run works: the copy the run made as it started is what its steps read.
+        File.WriteAllText(original, "the plan as it was changed since\n");
+        Assert.Equal(HarnessExit.Success, (await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Cancelled, (await driving.WaitAsync(Bound, Token)).ExitCode);
+
+        // And deletes it before the run is gone on with: the resume reads the same copy.
+        File.Delete(original);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(resumed.ExitCode == HarnessExit.Success, $"{resumed.Message} {string.Join(" | ", resumed.Details ?? [])}");
+
+        var run = RunOf(repository);
+        var copy = Path.Combine(run.Directory, DssHarness.Core.Repository.HarnessLayout.OrchestratorInputsDirectoryName, "plan", "plan.md");
+        var reasoned = runner.Asked.Where(asked => asked.Step.Type == "reason").ToList();
+
+        Assert.Equal(["read", "again"], reasoned.Select(asked => asked.Step.Name));
+        Assert.All(reasoned, asked => Assert.Equal($"Read the plan at {copy}.\n", FlowTemplate.Joined(asked.Prompts!["prompt"])));
+        Assert.Equal("the plan as it was given\n", File.ReadAllText(copy));
+        Assert.Equal("notes/plan.md", repository.Harness.OrchestrationStore.ReadFlow(run)!.Inputs["plan"]);
+    }
+
+    /// <summary>
+    /// A start whose own file input names no file inside the repository - one that is not there, one that climbs out by
+    /// '..' - is refused (13) by the command, naming the input and the path and saying no run was started, and nothing of
+    /// the run is made.
+    /// </summary>
+    [Fact]
+    public async Task AStartWhoseFileInputNamesNoFileInsideTheRepository_IsRefused_NothingOfTheRunMade()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: one
+                type: orient
+            """);
+        using var disposed = repository;
+        using var outside = new TempDirectory();
+
+        outside.WriteFile("plan.md", "a plan outside the repository\n");
+
+        foreach (var (value, why) in new[]
+        {
+            ("notes/plan.md", $"and '{Path.Combine(repository.Path, "notes", "plan.md")}' is not there"),
+            ($"../{Path.GetFileName(outside.Path)}/plan.md", "which climbs out by '..'"),
+        })
+        {
+            var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: [$"plan={value}"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(
+                (HarnessExit.Refused, $"input 'plan' is '{value}', {why}; a file input names a file inside the repository by its path from the repository's root ('{repository.Path}'), and the run keeps a copy of it from its start. No run was started."),
+                (refused.ExitCode, refused.Message));
+            Assert.False(Directory.Exists(RunOf(repository).Directory), $"'{value}' made nothing of the run");
+        }
+
+        Assert.Empty(runner.Started);
+    }
+
     /// <summary><c>--now</c> is refused for an engine on another machine: nothing here can end its process, and a process of this machine that carries its id is never ended for it.</summary>
     [Fact]
     public async Task StopNow_RefusesAnEngineOnAnotherMachine()

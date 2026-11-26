@@ -92,7 +92,12 @@ public static partial class HelpTopics
         builder.AppendLine("for the folder alone would name a workflow it has not got; --from vendors a remote one.");
         builder.AppendLine();
         builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
-        builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
+        builder.AppendLine("default and the options it takes, an input of the kind file naming a file inside the");
+        builder.AppendLine("repository by its path from the root, committed or not, which the run copies into its");
+        builder.AppendLine($"own {HarnessLayout.OrchestratorInputsDirectoryName}/ as it starts (one that names none is refused, {HarnessExit.Refused}, no run started):");
+        builder.AppendLine("every step of every session reads that copy for it - {input.<name>} the copy's path -");
+        builder.AppendLine("whatever became of the file since, and every agent of the run reads it, wherever its");
+        builder.AppendLine("own tree was cut from; params - its own knobs, defaulted in the file and read");
         builder.AppendLine("as param.<name>; and outputs - what the whole workflow produces, each from a step of");
         builder.AppendLine("the flow. Its steps are of the types below, or groups holding steps of their own: a");
         builder.AppendLine("group runs its steps once for each work item a forEach yields, again and again until a");
@@ -373,7 +378,9 @@ public static partial class HelpTopics
             + "step that works as it - each attempt of its first, and of each that goes on with its work - brings to the main "
             + "checkout's HEAD then, whatever it wrote there before discarded, so the step reads exactly what the main checkout "
             + "committed, starts in it, and may write it and its work directory, never folded; an answer that goes on with an "
-            + "attempt finds the tree as the attempt left it; the step's model resolved with its agent definition below its own and its order built "
+            + "attempt finds the tree as the attempt left it; no two steps work in one agent's tree at once, for a reason step holds "
+            + "write on the tree of the agent it works in whatever its access - of two that go on with one step's work, two visits "
+            + "of one that goes on with its own among them, the second starts once the first has ended; the step's model resolved with its agent definition below its own and its order built "
             + "as entries of a model and one of its provider's keys, each entry's credential read from the slot "
             + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an "
             + "expression read there too - the names it yielded narrowing what it may write as a written-out list does - "

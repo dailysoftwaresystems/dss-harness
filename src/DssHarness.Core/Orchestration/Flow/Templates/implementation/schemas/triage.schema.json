@@ -69,7 +69,7 @@
         },
         "file": {
           "type": "string",
-          "description": "The path of the file that holds the plan, inside the repository; empty where it is not in a file."
+          "description": "The path of the file that holds the plan: one inside the repository that the request names, or the run's plan input, as the prompt gives its path; empty where it is not in a file."
         },
         "text": {
           "type": "string",
