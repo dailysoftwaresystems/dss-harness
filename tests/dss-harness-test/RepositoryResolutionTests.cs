@@ -71,6 +71,80 @@ public sealed class RepositoryLocatorTests
     }
 }
 
+/// <summary>
+/// The mark of an agent's repository is read from its own configuration file by git, and git is asked only where that file
+/// may hold the mark's section: every location of a main checkout asks it, so a file whose values merely spell the
+/// section's name - a user's address, a remote's name, a path naming the tool - is never a program started for nothing.
+/// </summary>
+public sealed class AgentRepositoryMarkTests
+{
+    private readonly IGitClient _git = Substitute.For<IGitClient>();
+
+    /// <summary>A repository whose own configuration file holds <paramref name="configuration"/>, under a directory of its own.</summary>
+    private static string RepositoryHolding(TempDirectory temp, string configuration)
+    {
+        Directory.CreateDirectory(Path.Combine(temp.Path, ".git"));
+        File.WriteAllText(Path.Combine(temp.Path, ".git", "config"), configuration);
+
+        return temp.Path;
+    }
+
+    private static PhysicalFileSystem Files() => new(FilePermissionsFactory.Create());
+
+    /// <summary>git asked for the mark's section, answering as it answers <paramref name="output"/> with <paramref name="exitCode"/>.</summary>
+    private void Answers(int exitCode, string output)
+        => _git.RunAsync(Arg.Any<string>(), Arg.Is<IReadOnlyList<string>>(arguments => arguments.Contains("--get-regexp")), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new GitCommandResult(exitCode, output, string.Empty)));
+
+    [Theory]
+    [InlineData("[user]\n\temail = harness@test.invalid\n\tname = Harness Test\n")]
+    [InlineData("[remote \"origin\"]\n\turl = https://example.invalid/acme/dss-harness.git\n")]
+    [InlineData("[core]\n\texcludesFile = /work/.harness-config/excludes\n# [harnessed] is no section of the mark's\n[harnesses]\n\tkey = value\n")]
+    public async Task AConfigurationWhoseValuesOnlySpellTheSectionsName_HoldsNoMark_AndGitIsNeverAsked(string configuration)
+    {
+        using var temp = new TempDirectory();
+        var repository = RepositoryHolding(temp, configuration);
+        Answers(1, string.Empty);
+
+        var mark = await AgentRepositoryMark.ReadAsync(_git, Files(), repository, TestContext.Current.CancellationToken);
+
+        Assert.Null(mark);
+        await _git.DidNotReceive().RunAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("[harness]\n\tmainCheckout = \"/work/main\"\n\tagent = \"o1/a1\"\n")]
+    [InlineData("[core]\n\tbare = false\n  [HARNESS]\n\tmainCheckout = \"/work/main\"\n\tagent = \"o1/a1\"\n")]
+    [InlineData("[core] [Harness]\n\tmainCheckout = \"/work/main\"\n\tagent = \"o1/a1\"\n")]
+    public async Task AConfigurationThatMayOpenTheSection_InAnyCaseAndWhereverAHeaderStands_IsReadByGit(string configuration)
+    {
+        using var temp = new TempDirectory();
+        var repository = RepositoryHolding(temp, configuration);
+        Answers(0, $"{AgentRepositoryMark.MainCheckoutKey}\n/work/main\0{AgentRepositoryMark.AgentKey}\no1/a1\0");
+
+        var mark = await AgentRepositoryMark.ReadAsync(_git, Files(), repository, TestContext.Current.CancellationToken);
+
+        Assert.Equal(new AgentRepositoryMark("/work/main", "o1/a1"), mark);
+        await _git.Received(1).RunAsync(repository, Arg.Is<IReadOnlyList<string>>(arguments => arguments.Contains("--get-regexp")), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("[harness]", true)]
+    [InlineData("[harness \"sub\"]", true)]
+    [InlineData("[harness.sub]", true)]
+    [InlineData("[HarNess]", true)]
+    [InlineData("x = [harness", true)]
+    [InlineData("[harness!", true)]
+    [InlineData("[harnesses]", false)]
+    [InlineData("[harness-x]", false)]
+    [InlineData("[harness2]", false)]
+    [InlineData("harness = 1", false)]
+    [InlineData("[ harness]", false)]
+    [InlineData("", false)]
+    public void AHeaderMayOpenTheSection_OnlyWhereTheBracketIsFollowedAtOnceByItsName_AndByNoCharacterANameGoesOnWith(string text, bool may)
+        => Assert.Equal(may, GitConfigText.MayOpenSection(text, AgentRepositoryMark.SectionName));
+}
+
 public sealed class HarnessContextLoaderTests
 {
     private static readonly string Main = Path.Combine(TestHost.TemporaryRoot, "loader", "repo");

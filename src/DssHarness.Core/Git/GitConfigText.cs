@@ -28,6 +28,35 @@ internal static class GitConfigText
         return text.ToString();
     }
 
+    /// <summary>
+    /// Whether <paramref name="text"/>, a git configuration file's, may hold a header opening the section
+    /// <paramref name="name"/> or one of its subsections - <c>[name]</c>, <c>[name "sub"]</c>, <c>[name.sub]</c> - as git's
+    /// parser reads a header: <c>[</c> followed at once by the name, in any case, and by no character a section's name goes
+    /// on with (a letter, a digit or <c>-</c>). A file holding no such spelling holds no key of the section, whatever its
+    /// values, comments and other sections spell; one that holds it - a value or a comment spelling it among them - may.
+    /// </summary>
+    /// <param name="text">The configuration file's text.</param>
+    /// <param name="name">The section's name: letters, digits and <c>-</c>.</param>
+    public static bool MayOpenSection(string text, string name)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var opening = "[" + name;
+
+        for (var at = text.IndexOf(opening, StringComparison.OrdinalIgnoreCase); at >= 0; at = text.IndexOf(opening, at + 1, StringComparison.OrdinalIgnoreCase))
+        {
+            var after = at + opening.Length;
+
+            if (after == text.Length || !(char.IsAsciiLetterOrDigit(text[after]) || text[after] == '-'))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary><paramref name="value"/> as a git configuration file holds it: in double quotes, escaped where git's parser reads an escape.</summary>
     /// <param name="value">The value.</param>
     public static string Quoted(string value)

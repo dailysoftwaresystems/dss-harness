@@ -55,9 +55,10 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             return null;
         }
 
-        // A file that never spells the section's name holds none of its keys, and git, which would read every main
-        // checkout's configuration at every command, is not asked. One that cannot be read here is left to git to say.
-        if (SpellsSection(fileSystem, configuration) == false)
+        // A file that holds no header opening the section holds none of its keys, and git, which would read every main
+        // checkout's configuration at every command, is not asked - whatever its values spell: a user's address, a
+        // remote's name or a path naming the tool. One that cannot be read here is left to git to say.
+        if (OpensSection(fileSystem, configuration) == false)
         {
             return null;
         }
@@ -201,12 +202,15 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             .Any(borrowed => PathContainment.AreSame(Path.GetFullPath(borrowed), Path.GetFullPath(objects), platform.PathComparison));
     }
 
-    /// <summary>Whether the configuration file spells the mark's section's name anywhere; null where it cannot be read here.</summary>
-    private static bool? SpellsSection(IFileSystem fileSystem, string configuration)
+    /// <summary>
+    /// Whether the configuration file may hold a header opening the mark's section (<see cref="GitConfigText.MayOpenSection"/>);
+    /// null where it cannot be read here.
+    /// </summary>
+    private static bool? OpensSection(IFileSystem fileSystem, string configuration)
     {
         try
         {
-            return fileSystem.ReadAllText(configuration).Contains(SectionName, StringComparison.OrdinalIgnoreCase);
+            return GitConfigText.MayOpenSection(fileSystem.ReadAllText(configuration), SectionName);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
