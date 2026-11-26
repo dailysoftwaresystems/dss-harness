@@ -654,9 +654,11 @@ command runs.
 
 git's messages are matched in two places only: telling "not a repository" apart from
 "git could not look", and "not a gitdir" apart from the same when a directory among a
-worktree's submodule repositories is examined. Those read-only queries run with
-`LC_ALL=C`, so a translated git still answers in the words being matched. Every other git
-command, including those that run the user's hooks, keeps the user's locale.
+worktree's submodule repositories is examined. Every git the tool starts runs with
+`LC_ALL=C`, set at the one place a git of the tool's starts (`GitOwnSettings`), never by a
+caller: a translated git still answers in the words being matched, and every message of
+git's a person is shown is in English. The hooks a commit or a push runs inherit it, as
+they inherit every variable git runs with.
 
 ### Reading config.json
 

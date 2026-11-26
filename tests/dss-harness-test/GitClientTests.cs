@@ -2943,19 +2943,32 @@ public sealed class GitClientProtocolTests
         Assert.All(indexed, request => Assert.Equal(["-c", "core.ignoreStat=false"], request.Arguments.Take(2)));
     }
 
+    /// <summary>
+    /// Every git the tool starts runs untranslated, under <c>LC_ALL=C</c>, set where git starts and never by a caller: a
+    /// question whose answer is matched by its words, a command that changes the repository, one that runs the
+    /// repository's hooks - which inherit it - one that reaches a remote, and the question that names the variables every
+    /// other git is started without. A git that answered in the person's language would answer a reading made in English
+    /// with words it does not match, and a person would be shown git's messages in two languages.
+    /// </summary>
     [Fact]
-    public async Task RepositoryQueries_RunUntranslated_WhileOtherCommandsKeepTheUsersLocale()
+    public async Task EveryGitTheToolStarts_RunsUntranslated()
     {
-        // The queries are matched against git's English messages. Everything else, hooks
-        // included, must keep the user's locale.
         var (git, requests) = Scripted(Exited(0, "/repo\n"));
         var cancellationToken = TestContext.Current.CancellationToken;
 
         await git.GetRepositoryRootAsync("/repo", cancellationToken);
         await git.RunAsync("/repo", ["commit", "-m", "x"], cancellationToken: cancellationToken);
+        await git.RunWithHooksAsync("/repo", ["commit", "-m", "y"], TimeSpan.FromMinutes(1), isolation: null, values: null, cancellationToken);
+        await git.RunRemoteAsync("/repo", ["ls-remote", "origin"], values: null, standardInput: null, cancellationToken);
 
-        Assert.Equal("C", requests[0].Environment["LC_ALL"]);
-        Assert.False(requests[1].Environment.ContainsKey("LC_ALL"));
+        Assert.Equal(["C", "C", "C", "C"], requests.Select(request => request.Environment[GitOwnSettings.LocaleVariable]));
+
+        var asked = new List<ProcessRequest>();
+        var runner = Substitute.For<IProcessRunner>();
+        runner.RunAsync(Arg.Do<ProcessRequest>(asked.Add), Arg.Any<CancellationToken>()).Returns(Exited(0, "GIT_DIR\n"));
+
+        Assert.Equal(["GIT_DIR"], await new GitLocalVariables(runner).NamesAsync(_ => { }, cancellationToken));
+        Assert.Equal(("C", GitLocalVariables.QueryArguments), (Assert.Single(asked).Environment[GitOwnSettings.LocaleVariable], asked[0].Arguments));
     }
 
     /// <summary>
