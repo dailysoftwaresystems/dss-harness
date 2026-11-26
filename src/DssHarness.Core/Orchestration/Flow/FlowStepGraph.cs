@@ -304,7 +304,7 @@ public sealed class FlowStepGraph
             // pack and map wherever there is a page of them the first message does not hold - every page of a pack not
             // pushed, from page 1, and every page of the map, which is pushed to no step with the tool; changes once the
             // step is told changes that go on past its message's (ChangesSince).
-            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { } held && (!served.Pushes || held.More), map: mapPages > 0);
+            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { } held && (!served.Pushes || held.More), mapPages: mapPages);
             var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
             var tool = new CodebaseGraphTool(
                 queries,

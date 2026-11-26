@@ -234,8 +234,11 @@ public static partial class HelpTopics
             + "each of its agent's writes - by the paths a file tool of the runtime's wrote - and whole "
             + "after each of its commands, the graph tool answering from what each sync leaves. The graph tool is offered "
             + "among its agent's own with every operation, edit among them, on every client - what it reads and what an edit writes asked of the side-task's own "
-            + "policy, and no narrowing of its reads; the repository map is given with its first message, made once from the base as "
-            + "it stands when it opens, and a context pack is made from each message the person types. --no-graph turns all "
+            + "policy, and no narrowing of its reads. Pull, not push, as for a step with the tool: nothing of the graph is pushed "
+            + "into its messages - each reaches the agent as the person typed it, on every client, a line posted to a Claude Code "
+            + "launch held open for a chat among them - and the repository map, made once from the base as it stands when it "
+            + $"opens, and the context pack made from each message the person types are asked of the tool's {CodebaseGraphTool.NameOf(GraphOp.Map)} "
+            + $"and {CodebaseGraphTool.NameOf(GraphOp.Pack)}, from page 1, the last message's pack breaking {CodebaseGraphTool.NameOf(GraphOp.Find)}'s ties by its nearness. --no-graph turns all "
             + "of it off for one side-task; a graph that cannot be made takes nothing away from the conversation, and the "
             + "side-task says once that it runs without its graph, and why - as the chat's first line, or beside a one "
             + "shot's records - its graph.jsonl naming why no pack is given.");

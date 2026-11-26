@@ -441,31 +441,46 @@ public sealed class SideTaskServiceTests
 
     /// <summary>
     /// A side-task has its own codebase graph, under its records: opened - synced whole - before its first message is
-    /// sent, its repository map made once from the base as it stands and given with that message alone, a context pack
-    /// made from each message, and its agent given the graph tool among its own.
+    /// sent, its repository map made once from the base as it stands, and its agent given the graph tool among its own.
+    /// Pull, not push: the message reaches the agent exactly as typed, and the tool, under the operations its agent was
+    /// offered, answers pack's page 1 with the context pack made from that message and map's page 1 with the kept map's,
+    /// for none of either was pushed.
     /// </summary>
     [Fact]
-    public async Task ASideTask_HasItsOwnGraph_ItsMapWithItsFirstMessage_APackWithEach_AndTheToolForItsAgent()
+    public async Task ASideTask_HasItsOwnGraph_ItsMessageAsTyped_ItsPackAndItsMapAskedOfTheTool()
     {
-        var (harness, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
+        const string Message = "where does `Greeter` say hello";
+        var (_, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
         OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter\n{\n    public string Hello() => \"hi\";\n}\n");
 
-        var outcome = await service.RunAsync(
-            new SideTaskCall(temp.Path, Prompt: "where does Greeter say hello", Model: "glm-5.3", Json: false),
-            Token);
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: Message, Model: "glm-5.3", Json: false), Token);
 
         Assert.Equal(0, outcome.ExitCode);
         var task = Assert.Single(Directory.EnumerateDirectories(temp.Path, ".side-tasks", SearchOption.AllDirectories));
         Assert.Single(Directory.EnumerateFiles(task, "graph.json", SearchOption.AllDirectories));
-        var map = Assert.Single(Directory.EnumerateFiles(task, "map.md", SearchOption.AllDirectories));
+        var kept = File.ReadAllText(Assert.Single(Directory.EnumerateFiles(task, "map.md", SearchOption.AllDirectories)));
+        var run = Assert.Single(stored.Runs);
+        var support = Assert.IsType<AgentGraphSupport>(run.Graph);
+        var made = PackOf(support.Tool!.Queries, Message);
 
-        Assert.Contains("Greeter", File.ReadAllText(map), StringComparison.Ordinal);
-        Assert.Contains("<codebase>", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
-        Assert.EndsWith("where does Greeter say hello", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
-        Assert.NotNull(stored.Runs[0].Graph);
+        Assert.Contains("Greeter", kept, StringComparison.Ordinal);
+        Assert.Equal(Message, run.UserPrompt);
 
-        // Its parts are written by the one writer of a first message's parts, in their form, the map's first.
-        Assert.StartsWith(AgentPromptParts.MapPart(File.ReadAllText(map)) + $"<{AgentPromptParts.CodebaseTag}>{Environment.NewLine}", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
+        // The message names the class: its pack is no empty page, so the tool's answer is the pack made from it.
+        Assert.Contains("Greeter.cs", made.Text, StringComparison.Ordinal);
+        Assert.Equal((GraphToolOutcome.Answered, made.Text), await FirstPageAsync(support, "pack"));
+        Assert.Equal((GraphToolOutcome.Answered, kept), await FirstPageAsync(support, "map"));
+    }
+
+    /// <summary>The context pack a side-task makes of <paramref name="message"/> over <paramref name="view"/>: what its tool's pack gives, from page 1.</summary>
+    private static DssHarness.Core.Codebase.ContextPack PackOf(DssHarness.Core.Codebase.CodebaseGraphQueries view, string message)
+        => DssHarness.Core.Codebase.CodebaseContextPack.Make(view, new DssHarness.Core.Codebase.ContextPackRequest(message, _ => true));
+
+    /// <summary>Page 1 of <paramref name="op"/> as a side-task's graph tool answers it, under the operations its agent was offered: how it ended, and its text.</summary>
+    private static async Task<(GraphToolOutcome Outcome, string Text)> FirstPageAsync(AgentGraphSupport support, string op)
+    {
+        var answer = await support.Tool!.RunAsync(new JsonObject { ["op"] = op, ["page"] = 1 }, support.Operations!, Token);
+        return (answer.Outcome, answer.Text);
     }
 
     /// <summary>
@@ -490,7 +505,7 @@ public sealed class SideTaskServiceTests
 
         // The message names the namespace of the one the ids put last: its pack holds that one, and not the other.
         var named = widgets[^1].Path;
-        _ = graph.Front($"look under {widgets[^1].Qualified.Split('.')[0]}", first: true);
+        graph.MakePack($"look under {widgets[^1].Qualified.Split('.')[0]}");
         var support = graph.Support(SideTaskPolicy.Ground(repository, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!;
         var found = await support.Tool!.RunAsync(new JsonObject { ["op"] = "find", ["query"] = "Widget", ["kind"] = "type" }, CodebaseGraphTool.Operations(write: true, narrow: false), Token);
         var near = found.Text.IndexOf($"| {named}:", StringComparison.Ordinal);
@@ -516,7 +531,7 @@ public sealed class SideTaskServiceTests
         await graph.OpenAsync(Token);
 
         // The tool is made once, after the first message, and the chat goes on with it.
-        _ = graph.Front("look under One", first: true);
+        graph.MakePack("look under One");
         var tool = graph.Support(SideTaskPolicy.Ground(repository, new HarnessConfig { Worktrees = new WorktreeSettings() }, [], []))!.Tool!;
 
         async Task<string> FirstWidgetAsync()
@@ -531,18 +546,18 @@ public sealed class SideTaskServiceTests
 
         Assert.Equal("One", await FirstWidgetAsync());
 
-        _ = graph.Front("now look under Two", first: false);
+        graph.MakePack("now look under Two");
 
         Assert.Equal("Two", await FirstWidgetAsync());
 
-        _ = graph.Front("and back under One", first: false);
+        graph.MakePack("and back under One");
 
         Assert.Equal("One", await FirstWidgetAsync());
     }
 
     /// <summary>
-    /// A side-task given --no-graph has none of it: no graph under its records, no map and no pack at its message's
-    /// head, no tool for its agent - the person's message as it was typed.
+    /// A side-task given --no-graph has none of it: no graph under its records - and so no map and no pack - and no tool
+    /// for its agent, the person's message as it was typed.
     /// </summary>
     [Fact]
     public async Task ASideTaskGivenNoGraph_HasNone_ItsMessageAsTyped()
@@ -563,47 +578,59 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// The chat's later messages carry the pack and not the map: the map is a cache of the base as the side-task opened,
-    /// read as it is, while the pack is made from each message the person types.
+    /// A chat over a client that stores its conversations - the API clients - sends each of the person's messages as
+    /// typed, the first as every later one, nothing of the graph at its head; each still makes its context pack, so the
+    /// tool its last turn was given pages the last message's.
     /// </summary>
     [Fact]
-    public async Task AChatsLaterMessages_CarryThePackAndNotTheMap()
+    public async Task AChatsMessages_GoAsTyped_TheToolPagingTheLastMessagesPack()
     {
-        var (harness, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
+        var (_, temp, service, stored, _) = await RepoAsync(graphs: RealGraph);
+        using var tree = temp;
         OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
-        var typed = new Typed(["hello", "and again"], until: "the answer");
+        var typed = new Typed(["hello", "where is `Greeter`"], until: "the answer");
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "glm-5.3", Chat: typed.Chat()), Token);
 
-        Assert.Equal(0, outcome.ExitCode);
-        Assert.StartsWith("<repository-map>", stored.Runs[0].UserPrompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("<repository-map>", stored.Runs[1].UserPrompt, StringComparison.Ordinal);
-        Assert.Contains("<codebase>", stored.Runs[1].UserPrompt, StringComparison.Ordinal);
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(["hello", "where is `Greeter`"], stored.Runs.Select(run => run.UserPrompt));
+
+        var support = Assert.IsType<AgentGraphSupport>(stored.Runs[1].Graph);
+        var made = PackOf(support.Tool!.Queries, "where is `Greeter`");
+
+        Assert.Contains("Greeter.cs", made.Text, StringComparison.Ordinal);
+        Assert.Equal((GraphToolOutcome.Answered, made.Text), await FirstPageAsync(support, "pack"));
     }
 
     /// <summary>
-    /// A chat over a client that holds one launch open - Claude Code - gives each later message the pack as the chat over
-    /// a client that stores its conversations does: the map with the first message alone, the pack made from each message
-    /// at its head as it is posted to the launch, never the line bare.
+    /// A chat over a client that holds one launch open - Claude Code - gives the agent each message as the chat over a
+    /// client that stores its conversations does: its first as the launch's prompt and each later line as it is posted
+    /// to the launch, both as typed; and each posted line makes its context pack before it goes, so the one tool held for
+    /// the whole chat pages the last line's.
     /// </summary>
     [Fact]
-    public async Task AChatOnALaunchHeldOpen_GivesEachLaterMessageItsPack_AndTheMapWithTheFirstAlone()
+    public async Task AChatOnALaunchHeldOpen_PostsEachLaterLineAsTyped_TheToolPagingItsPack()
     {
         var (_, temp, service, _, rendered) = await RepoAsync(graphs: RealGraph);
         using var tree = temp;
         OrchestrationKit.Write(temp.Path, "Greeter.cs", "public class Greeter { }\n");
-        var typed = new Typed(["hello", "and again"]);
+        var typed = new Typed(["hello", "where is `Greeter`"]);
 
         var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Model: "claude-sonnet-5-5", Name: "held", Chat: typed.Chat()), Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
-        Assert.StartsWith("<repository-map>", Assert.Single(rendered.Runs).UserPrompt, StringComparison.Ordinal);
+        var launch = Assert.Single(rendered.Runs);
+        Assert.Equal("hello", launch.UserPrompt);
 
         // What each turn of the launch took, said by its first twenty characters: the first message its prompt, the later
         // one as it was posted.
-        Assert.Equal(2, typed.Said.Count);
-        Assert.StartsWith($"about: <repository-map>{Environment.NewLine}", typed.Said[0], StringComparison.Ordinal);
-        Assert.StartsWith($"about: <codebase>{Environment.NewLine}", typed.Said[1], StringComparison.Ordinal);
+        Assert.Equal(["about: hello", "about: where is `Greeter`"], typed.Said);
+
+        var support = Assert.IsType<AgentGraphSupport>(launch.Graph);
+        var made = PackOf(support.Tool!.Queries, "where is `Greeter`");
+
+        Assert.Contains("Greeter.cs", made.Text, StringComparison.Ordinal);
+        Assert.Equal((GraphToolOutcome.Answered, made.Text), await FirstPageAsync(support, "pack"));
     }
 
     /// <summary>
@@ -684,17 +711,15 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// A side-task's graph's paths are the graph records' own - the directory and the map - named by the one layout every
-    /// graph's records take, so neither can drift from the other.
+    /// A side-task's graph's directory is the graph records' own, named by the one layout every graph's records take - its
+    /// map kept there as a run's is - so the two cannot drift.
     /// </summary>
     [Fact]
     public void ASideTasksGraphPaths_AreTheOneGraphLayoutsOwn()
     {
         var layout = new SideTaskLayout(Path.Combine(Path.GetTempPath(), ".side-tasks"), "named");
 
-        Assert.Equal(
-            (layout.AsGraph.GraphDirectory, layout.AsGraph.GraphMapFile),
-            (layout.GraphDirectory, layout.MapFile));
+        Assert.Equal(layout.AsGraph.GraphDirectory, layout.GraphDirectory);
         Assert.Equal(Path.Combine(layout.Directory, DssHarness.Core.Orchestration.OrchestratorLayout.GraphDirectoryName), layout.GraphDirectory);
     }
 
