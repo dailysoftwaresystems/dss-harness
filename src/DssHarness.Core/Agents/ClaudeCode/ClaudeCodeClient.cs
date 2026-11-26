@@ -1774,8 +1774,9 @@ public sealed class ClaudeCodeClient(
 
             _leaving = true;
 
-            // The person's own interrupt, still unanswered, cuts the turn already; otherwise the launch asks its own.
-            if (_chatInterruptId is null)
+            // The person's own interrupt cuts the turn already - unanswered yet, or answered with the cut turn's result still
+            // to come; otherwise the launch asks its own. A turn cut is never interrupted again.
+            if (!_chatCut)
             {
                 AskToLeave();
             }
@@ -1820,7 +1821,9 @@ public sealed class ClaudeCodeClient(
         /// </summary>
         private Task<LaunchOutcome?> OnTurnInterruptedAsync()
         {
-            if ((!_inTurn && _pending.Count == 0) || _chatInterruptId is not null || _leaving)
+            // A turn cut already - by an interrupt unanswered yet, or answered with its result still to come - is never
+            // interrupted again.
+            if ((!_inTurn && _pending.Count == 0) || _chatCut || _leaving)
             {
                 return Task.FromResult<LaunchOutcome?>(null);
             }

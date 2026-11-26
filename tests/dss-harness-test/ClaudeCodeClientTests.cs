@@ -3566,6 +3566,46 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// The person leaving once their own interrupt was answered - the cut turn's result still to come - asks no second
+    /// interrupt: the turn is cut already, and the launch reads on to its result and ends at it. Told the message waiting
+    /// behind the turn was dropped, which the interrupt's answer says, the person leaves inside that very window.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonLeavingOnceTheirInterruptWasAnswered_AsksNoSecondInterrupt()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["hang"] = true, ["slowInterrupt"] = 1000 }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+            else if (@event is TurnStarted { Turn: 2 })
+            {
+                // A message waits behind the turn under way, and the person presses Ctrl+C.
+                run.Messages.Post("and then?");
+                run.Interrupt!.Interrupt();
+            }
+            else if (@event is MessagesDropped)
+            {
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal((AgentRunStatus.Completed, true), (result.Status, result.EndedWithItsLastTurn));
+        Assert.Single(sink.Of<MessagesDropped>());
+        Assert.Equal(
+            ["chat-interrupt"],
+            Control(kit)
+                .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
+                .Select(line => line["request_id"]!.GetValue<string>()));
+    }
+
+    /// <summary>
     /// A launch whose program is gone in the middle of a turn ended anywhere but at its last turn's own end: the turn
     /// before it, which ended at its own result, keeps its own ending.
     /// </summary>
