@@ -77,6 +77,46 @@ public sealed partial class AgentToolRuntimeTests
     }
 
     /// <summary>
+    /// A search whose hits fall in several files whose declarations moved since the view was read - edits no sync followed -
+    /// has the graph check those files again in one check, never one a file, each of which would cost a whole view, and
+    /// still gives every hit under its declaration as the files stand now, file by file in the listing's order, a file that
+    /// did not move among them. Red with each moved file checked again at its first hit.
+    /// </summary>
+    [Fact]
+    public async Task ASearchMeetingSeveralMovedFiles_ChecksThemAgainInOneCheck_AndGivesEachHitAsTheFilesStandNow()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        var checks = new List<IReadOnlyList<string>>();
+        var tool = CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree), checks: checks);
+        var graphed = Narrowing(tree, tool, []);
+
+        foreach (var file in new[] { "Geometry.cs", "Shapes.cs" })
+        {
+            var full = Path.Combine(tree.Tree, "src", file);
+            File.WriteAllText(full, "// formatted\n" + File.ReadAllText(full));
+        }
+
+        var found = await Call(graphed, AgentTools.SearchFiles, ("pattern", "return"), ("path", "src"));
+
+        string Hit(string file, int line) => $"src/{file}:{line.ToString(CultureInfo.InvariantCulture)}: {File.ReadAllLines(Path.Combine(tree.Tree, "src", file))[line - 1]}";
+        string Head(string qualified) => GraphLines.Of(Declared(tool.Queries, qualified));
+
+        Assert.Equal([["src/Geometry.cs", "src/Shapes.cs"]], checks);
+        Assert.True(found.Ok, found.Text);
+        Assert.Equal(
+            string.Join('\n', [
+                Head("Demo.Geometry.Total"), "  " + Hit("Geometry.cs", 14),
+                Head("Demo.Geometry.Twice"), "  " + Hit("Geometry.cs", 19),
+                Head("Demo.Circle.Area"), "  " + Hit("Shapes.cs", 15),
+                Head("Demo.Circle.Diameter"), "  " + Hit("Shapes.cs", 20),
+                Head("Demo.Generated.Square.Area"), "  " + Hit("Shapes.g.cs", 8)]),
+            found.Text);
+
+        // The heads are the lines the files hold now: each declaration one line down.
+        Assert.Equal((18, 21), (Declared(tool.Queries, "Demo.Circle.Diameter").Start, Declared(tool.Queries, "Demo.Circle.Diameter").End));
+    }
+
+    /// <summary>
     /// In a step that has a graph, a range of a file the graph parsed is headed by the declarations its lines meet - those
     /// that hold them among them, each named as the graph names a node - before the lines a step with no graph is given;
     /// a range that meets none, and a range of a file the graph does not parse, is given as it is.
@@ -387,6 +427,10 @@ public sealed partial class AgentToolRuntimeTests
             StringComparison.Ordinal);
         Assert.Contains(
             $"A range of `view_file` (`{nameof(AgentToolRuntime)}.RangeAsync`) is headed (`{nameof(AgentToolRuntime)}.{nameof(AgentToolRuntime.RangeDeclarations)}`) by the declarations the lines it gives meet (`{nameof(GraphFileDeclarations)}.{nameof(GraphFileDeclarations.Meeting)}`)",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"declarations at its first hit, as its lines confirm them alone (`{nameof(CodebaseGraphTool)}.{nameof(CodebaseGraphTool.ConfirmedDeclarationsAsync)}`) - hits come file by file, each file's in order - and where a file's moved, writes nothing more and only finds the rest: every moved file of the call is checked again in one check (`{nameof(CodebaseGraphTool)}.{nameof(CodebaseGraphTool.ReadAgainAsync)}`)",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains($"`{nameof(AgentTools)}.{nameof(AgentTools.InAGraphStep)}` says so in the two tools' own descriptions where the step's graph was built.", architecture, StringComparison.Ordinal);

@@ -185,7 +185,8 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// </summary>
 /// <remarks>
 /// It answers from the view it was handed, and reads a body or an edit's file fresh itself, so a node that moved since is
-/// told by its hash. Where it is handed <c>reExtract</c>, a moved node is extracted again before its body is served, and
+/// told by its hash. Where it is handed <c>reExtract</c>, the files of the moved nodes an answer serves are checked again
+/// before it is served - every one of a call's in one check (<see cref="ExtractedAgainAsync"/>), never a check a file - and
 /// an edit's file after it is written, and the tool answers from the view that gives from then on; after a write or a
 /// command of another tool's, the sync that follows it hands the tool the view it left (<see cref="RefreshAsync"/>,
 /// <see cref="AfterWrites.SyncGraphAsync"/>). A path it is given is the file the view holds by the tree's own rule of
@@ -201,7 +202,10 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// </param>
 /// <param name="mayRead">Whether the step's policy lets a file be read, by its path relative to the tree: a node of a file it does not is left out, and counted.</param>
 /// <param name="mayWrite">The step's policy on writing a file, by its path relative to the tree; null where <c>edit</c> is not given.</param>
-/// <param name="reExtract">Checks a file again by its path relative to the tree and answers the view it leaves; null where nothing may be synced (the verb).</param>
+/// <param name="reExtract">
+/// Checks files again by their paths relative to the tree - every one given in one check, so what a call checks again costs
+/// the files it names and one view - and answers the view it leaves; null where nothing may be synced (the verb).
+/// </param>
 /// <param name="near">
 /// How near each node is to the work the tool serves, which breaks a tie in <c>find</c> - read at each <c>find</c>, so a tool
 /// held for a whole chat follows its last message (a step's or a message's context pack gives it); null where there is
@@ -230,7 +234,7 @@ public sealed partial class CodebaseGraphTool(
     ConfinedPaths paths,
     Func<string, bool> mayRead,
     Func<string, AgentPolicyAnswer>? mayWrite = null,
-    Func<string, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null,
+    Func<IReadOnlyList<string>, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null,
     Func<GraphNearness?>? near = null,
     GraphPageStore? pages = null,
     Execution.ILineMask? mask = null,
@@ -1127,14 +1131,54 @@ public sealed partial class CodebaseGraphTool(
                 return lines;
             }
 
+            // Each symbol named once, resolved on the view the answer begins on.
+            var cards = new List<(string Symbol, GraphCard? Card, bool Gone)>();
+
             foreach (var symbol in symbols)
             {
-                if (!named.Add(symbol))
+                if (named.Add(symbol))
                 {
-                    continue;
+                    cards.Add((symbol, Resolved(on, symbol), Gone: false));
+                }
+            }
+
+            // The files of the declarations whose lines moved since the view was read are checked again before any is
+            // served, where the tool may check them - every one of them in one check, so the answer pays for those files and
+            // one view - and each declaration of theirs is served as it is now, from the view that check left, which the
+            // answer goes on from and ends on; one it no longer declares in its file is said so.
+            if (reExtract is not null)
+            {
+                var moved = new List<string>();
+                var movedSet = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var (_, card, _) in cards)
+                {
+                    if (card is { Hash: { } was } && !movedSet.Contains(card.Path)
+                        && (await LinesOfAsync(card.Path, token).ConfigureAwait(false)).Lines is { } now && Hash(now, card) != was)
+                    {
+                        movedSet.Add(card.Path);
+                        moved.Add(card.Path);
+                    }
                 }
 
-                if (Resolved(on, symbol) is not { } card)
+                if (moved.Count > 0)
+                {
+                    on = await ExtractedAgainAsync(moved, token).ConfigureAwait(false);
+
+                    foreach (var path in moved)
+                    {
+                        files.Remove(path);
+                    }
+
+                    cards = [.. cards.Select(one => one.Card is { } card && movedSet.Contains(card.Path)
+                        ? on.Part(card.Id, card.Path) is { } found ? (one.Symbol, found, false) : (one.Symbol, card, true)
+                        : one)];
+                }
+            }
+
+            foreach (var (symbol, resolved, gone) in cards)
+            {
+                if (resolved is not { } card)
                 {
                     // A symbol that names no one node is said inside the answer, as its own lines are: a body is one
                     // stream. The lines a text search adds for it are the fallback's own section, at its own size a page.
@@ -1156,26 +1200,14 @@ public sealed partial class CodebaseGraphTool(
 
                 asked.Add(card.Id);
 
+                if (gone)
+                {
+                    entries.Add(new($"'{ReportText.Printable(card.Qualified)}' is no longer declared in '{ReportText.Printable(card.Path)}'", Lines: 0));
+                    continue;
+                }
+
                 var (lines, digest, why) = await LinesOfAsync(card.Path, token).ConfigureAwait(false);
                 var hash = lines is null || card.Hash is null ? null : Hash(lines, card);
-
-                // A declaration whose lines moved since the view was read is extracted again, where the tool may check its
-                // file, and served as it is now: the answer goes on from the view that check left, and ends on it.
-                if (hash is not null && hash != card.Hash && reExtract is not null)
-                {
-                    on = await ExtractedAgainAsync(card.Path, token).ConfigureAwait(false);
-                    files.Remove(card.Path);
-
-                    if (on.Part(card.Id, card.Path) is not { } found)
-                    {
-                        entries.Add(new($"'{ReportText.Printable(card.Qualified)}' is no longer declared in '{ReportText.Printable(card.Path)}'", Lines: 0));
-                        continue;
-                    }
-
-                    card = found;
-                    (lines, digest, why) = await LinesOfAsync(card.Path, token).ConfigureAwait(false);
-                    hash = lines is null ? null : Hash(lines, card);
-                }
 
                 if (lines is null)
                 {
@@ -1765,7 +1797,7 @@ public sealed partial class CodebaseGraphTool(
         // The node may only have moved since the view was read: its file is checked again, and the hash compared where it stands now.
         if (!Same(now, hash))
         {
-            if ((await ExtractedAgainAsync(card.Path, cancellationToken).ConfigureAwait(false)).Part(card.Id, card.Path) is not { } found)
+            if ((await ExtractedAgainAsync([card.Path], cancellationToken).ConfigureAwait(false)).Part(card.Id, card.Path) is not { } found)
             {
                 return Said($"'{ReportText.Printable(card.Qualified)}' is no longer declared in '{ReportText.Printable(card.Path)}': find it again");
             }
@@ -1799,7 +1831,7 @@ public sealed partial class CodebaseGraphTool(
             return new GraphToolAnswer(landed.Reason, GraphToolOutcome.Refused, card.Path, landed);
         }
 
-        var after = await ExtractedAgainAsync(card.Path, cancellationToken).ConfigureAwait(false);
+        var after = await ExtractedAgainAsync([card.Path], cancellationToken).ConfigureAwait(false);
         var written = card.End - card.Start + 1 + moved;
         var shift = moved == 0 ? "no later declaration moved" : $"the file's later declarations moved {ReportText.Counted(Math.Abs(moved), "line")} {(moved > 0 ? "down" : "up")}";
         var held = (after.OutlineFile(card.Path) ?? []).Where(one => one.Start >= card.Start && one.Start < card.Start + written).Select(one => "  " + GraphLines.Of(one)).ToList();
@@ -1833,16 +1865,18 @@ public sealed partial class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// The view after the file at <paramref name="path"/> is checked again, which the tool answers from from then on: one
-    /// check at a time, so a view a later check left is never put back by an earlier one.
+    /// The view after the files at <paramref name="paths"/> are checked again, which the tool answers from from then on -
+    /// the one owner of a check the tool makes again, every file a call checks again given it in one check, so a call pays
+    /// for the files it checks and one view, never a view a file: one check at a time, so a view a later check left is never
+    /// put back by an earlier one.
     /// </summary>
-    private async Task<CodebaseGraphQueries> ExtractedAgainAsync(string path, CancellationToken cancellationToken)
+    private async Task<CodebaseGraphQueries> ExtractedAgainAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken)
     {
         await _extracting.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            return _queries = await reExtract!(path, cancellationToken).ConfigureAwait(false);
+            return _queries = await reExtract!(paths, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

@@ -6241,7 +6241,10 @@ answer ends with (`AgentSearch.LeftOut`), through the read rule the tool is hand
 node, edge and hit of a file it refuses; a path or a `path:line`
 is searched for by no word. `body` reads a node's lines fresh - a type's members' bodies left out unless `full`, each
 member's signature line kept - and where its hash moved since the view was read, has the file checked again before
-serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`); `edit`,
+serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`) - every
+moved file of the call in one check, never a check a file (`CodebaseGraphTool.ExtractedAgainAsync`, the one owner of a
+check the tool makes again, which hands the check every file it names), so a call pays for the files it checks and one
+view however many it meets; `edit`,
 one at a time, writes a node's lines through `EditedText.ReplaceLines` only where the hash given is its hash now
 (optimistic concurrency) - a node spread over files in the part that hash names - after the write rule the tool is
 handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
@@ -6384,7 +6387,11 @@ as a body's is and each declaration's hash checked against the lines it spans no
 moved, where the tool may check it, the tool answering from the view that leaves - and a declaration whose lines the file
 still does not hold as the graph read them (an extraction that could not be made) left out and counted, so no span or hash
 given stands for lines the file does not hold. `search_files` (`AgentToolRuntime.SearchAsync`) reads a file's
-declarations at its first hit - hits come file by file, each file's in order - and writes each hit inside one under that
+declarations at its first hit, as its lines confirm them alone (`CodebaseGraphTool.ConfirmedDeclarationsAsync`) - hits
+come file by file, each file's in order - and where a file's moved, writes nothing more and only finds the rest: every
+moved file of the call is checked again in one check (`CodebaseGraphTool.ReadAgainAsync`), the answer begun again and the
+files that held a hit searched again, so a search pays for the files that moved and one view, never a view a file, and
+its hits still stand under the declarations as the files stand now, in the listing's order. It writes each hit inside one under that
 declaration's line, as `GraphLines.Of` names a node, the innermost a type, a member or a section that holds the hit's line
 (`GraphFileDeclarations.Holding`, by `CodebaseGraphQueries.AtLine`; a namespace or a project heads no hit), its hits and
 their context lines indented beneath it, the separator between two of its hits indented with them and the line said again

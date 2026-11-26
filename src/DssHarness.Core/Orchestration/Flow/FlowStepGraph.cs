@@ -328,7 +328,7 @@ public sealed class FlowStepGraph
                 ConfinedPaths.Within(fileSystem, platform, tree),
                 path => Readable(path) && !PathPatterns.Matches(never, path, platform.PathComparison),
                 path => policy.Write(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar))),
-                async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
+                async (paths, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, paths, token).ConfigureAwait(false)).Read),
                 near: () => served.made?.Near,
                 pages: PagesOf(fileSystem, layout, run, directory, ground),
                 mask: mask,

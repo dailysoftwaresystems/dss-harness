@@ -125,7 +125,7 @@ public sealed partial class AgentToolRuntime
         {
             return start is null && end is null
                 ? await PageOfAsync(kept, page ?? 1, note, cancellationToken).ConfigureAwait(false)
-                : await RangeAsync(callId, full, kept, start ?? 1, end, note, await DeclarationsAsync(full, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
+                : await RangeAsync(callId, full, kept, start ?? 1, end, note, await DeclarationsAsync(full, again: true, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
         }
         catch (AgentReadRefusedException moved)
         {
@@ -175,15 +175,19 @@ public sealed partial class AgentToolRuntime
 
     /// <summary>
     /// The declarations of the file at <paramref name="full"/> as it stands now, where the run is given a graph that holds
-    /// it as a file it parsed (<see cref="CodebaseGraphTool.DeclarationsAsync"/>) - what a range of it is named by and a
-    /// search's hits in it are shown under; null where the run has no graph, the file is outside the tree it works in, or
-    /// the graph parsed no such file.
+    /// it as a file it parsed (<see cref="CodebaseGraphTool.DeclarationsAsync"/>) - what a range of it is named by - the file
+    /// checked again by the graph where any moved, or, for a search that checks every moved file of its call together, those
+    /// its lines confirm alone (<paramref name="again"/> false, <see cref="CodebaseGraphTool.ConfirmedDeclarationsAsync"/>);
+    /// null where the run has no graph, the file is outside the tree it works in, or the graph parsed no such file.
     /// </summary>
     /// <param name="full">The file, absolute.</param>
+    /// <param name="again">Whether a file whose declarations moved is checked again by the graph here, on its own.</param>
     /// <param name="cancellationToken">Stops the reading of the file.</param>
-    private async Task<GraphFileDeclarations?> DeclarationsAsync(string full, CancellationToken cancellationToken)
+    private async Task<GraphFileDeclarations?> DeclarationsAsync(string full, bool again, CancellationToken cancellationToken)
         => _run.Graph is { Tool: { } tool } && GraphPathOf(full) is { } relative
-            ? await tool.DeclarationsAsync(relative, cancellationToken).ConfigureAwait(false)
+            ? again
+                ? await tool.DeclarationsAsync(relative, cancellationToken).ConfigureAwait(false)
+                : await tool.ConfirmedDeclarationsAsync(relative, cancellationToken).ConfigureAwait(false)
             : null;
 
     /// <summary>The file at <paramref name="full"/> as the run's graph names it - relative to the tree the run works in, with forward separators - where it is beneath it; null else.</summary>
@@ -491,7 +495,9 @@ public sealed partial class AgentToolRuntime
     /// written under that declaration's line, as the graph names a node, as the file stands now
     /// (<see cref="CodebaseGraphTool.DeclarationsAsync"/>), so the agent knows the declaration and the lines to read next
     /// without a view; a line each, paged as every line of the answer is, a page that begins among a declaration's lines
-    /// giving its line again first (<see cref="ResultLines.HeadAsync"/>).
+    /// giving its line again first (<see cref="ResultLines.HeadAsync"/>). Every file of the call whose declarations moved
+    /// since the graph read it is checked again in one check before any hit is written under them
+    /// (<see cref="CodebaseGraphTool.ReadAgainAsync"/>), so a call pays for those files and one view, however many it meets.
     /// </summary>
     private async Task<Answer> SearchAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
@@ -538,9 +544,6 @@ public sealed partial class AgentToolRuntime
             return Answer.NotRun($"there is no directory at '{Said(directory)}'");
         }
 
-        await using var lines = _records.Lines(callId);
-        var any = false;
-
         // Where the run has a graph, each hit inside a declaration of a file it parsed is shown under that declaration -
         // the innermost that holds the hit's line, as the file stands now - its line said as the graph names a node, the
         // declaration's hits and their context indented beneath it; a hit outside every declaration is shown as it is. Hits
@@ -548,22 +551,16 @@ public sealed partial class AgentToolRuntime
         // its hits are written, and a declaration is said again only where a hit outside it came between. The declaration's
         // line heads a block of the answer and the lines beneath it are the block's (ResultLines.HeadAsync), so a page of
         // the answer that begins among them gives the declaration's line again first.
-        string? file = null;
+        var tool = _run.Graph?.Tool;
+        var lines = _records.Lines(callId);
         GraphFileDeclarations? declarations = null;
         string? under = null;
+        var any = false;
 
-        async ValueTask Found(AgentSearchHit hit, CancellationToken token)
+        // A hit written into the answer, under the declaration of its file's that holds its line, where one does.
+        async ValueTask WrittenAsync(AgentSearchHit hit, CancellationToken token)
         {
-            var full = Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar));
-            var said = Said(full);
-
-            if (_run.Graph is { Tool: not null } && !string.Equals(file, hit.Path, StringComparison.Ordinal))
-            {
-                file = hit.Path;
-                declarations = await DeclarationsAsync(full, token).ConfigureAwait(false);
-                under = null;
-            }
-
+            var said = Said(Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar)));
             var card = declarations?.Holding(hit.Line);
             var opens = card is not null && !string.Equals(card.Id, under, StringComparison.Ordinal);
 
@@ -597,19 +594,80 @@ public sealed partial class AgentToolRuntime
             }
         }
 
-        var search = await _host.Files.SearchAsync(directory, pattern, glob, _host.Platform.PathComparison, context, MayRead, Found, cancellationToken).ConfigureAwait(false);
+        // The files that held a hit, in the order met, and those of them whose declarations moved since the graph read them
+        // - an edit no sync followed. From the first such file the search writes nothing and only finds the rest: each is
+        // checked again by the graph, all of them in one check, before any hit is written under their declarations.
+        var held = new List<string>();
+        var moved = new List<string>();
 
-        if (search.Found == 0)
+        async ValueTask Found(AgentSearchHit hit, CancellationToken token)
         {
-            await lines.LineAsync($"no line matches, in {ReportText.Counted(search.Searched, "file")} read", cancellationToken).ConfigureAwait(false);
+            if (held.Count == 0 || !string.Equals(held[^1], hit.Path, StringComparison.Ordinal))
+            {
+                held.Add(hit.Path);
+                declarations = tool is null ? null : await DeclarationsAsync(Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar)), again: false, token).ConfigureAwait(false);
+                under = null;
+
+                if (declarations is { Moved: > 0 } && tool!.ChecksAgain)
+                {
+                    moved.Add(declarations.Path);
+                }
+            }
+
+            if (moved.Count == 0)
+            {
+                await WrittenAsync(hit, token).ConfigureAwait(false);
+            }
         }
 
-        foreach (var note in search.LeftOut(SaidIn(directory)))
+        try
         {
-            await lines.LineAsync(note, cancellationToken).ConfigureAwait(false);
-        }
+            var search = await _host.Files.SearchAsync(directory, pattern, glob, _host.Platform.PathComparison, context, MayRead, Found, cancellationToken).ConfigureAwait(false);
 
-        return await EndedAsync(callId, lines, ok: true, cancellationToken).ConfigureAwait(false);
+            if (moved.Count > 0)
+            {
+                // The moved files checked again together, the answer begun again, and the files that held a hit searched
+                // again for it - every hit written under its declarations as the files stand now; one that moved again since
+                // is given those its lines still confirm.
+                _ = await tool!.ReadAgainAsync(moved, cancellationToken).ConfigureAwait(false);
+                await lines.DisposeAsync().ConfigureAwait(false);
+
+                lines = _records.Lines(callId);
+                var again = held.ToHashSet(StringComparer.Ordinal);
+                string? file = null;
+                any = false;
+
+                async ValueTask FoundAgain(AgentSearchHit hit, CancellationToken token)
+                {
+                    if (!string.Equals(file, hit.Path, StringComparison.Ordinal))
+                    {
+                        file = hit.Path;
+                        declarations = await DeclarationsAsync(Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar)), again: false, token).ConfigureAwait(false);
+                        under = null;
+                    }
+
+                    await WrittenAsync(hit, token).ConfigureAwait(false);
+                }
+
+                _ = await _host.Files.SearchAsync(directory, pattern.IsMatch, again.Contains, context, MayRead, FoundAgain, read: null, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (search.Found == 0)
+            {
+                await lines.LineAsync($"no line matches, in {ReportText.Counted(search.Searched, "file")} read", cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var note in search.LeftOut(SaidIn(directory)))
+            {
+                await lines.LineAsync(note, cancellationToken).ConfigureAwait(false);
+            }
+
+            return await EndedAsync(callId, lines, ok: true, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await lines.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>

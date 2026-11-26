@@ -36,7 +36,10 @@ public sealed class GraphFileDeclarations
     /// </summary>
     public IReadOnlyList<GraphCard> Cards { get; }
 
-    /// <summary>How many of the file's declarations were left out: their lines changed since the graph read the file, and it could not read it again.</summary>
+    /// <summary>
+    /// How many of the file's declarations were left out: their lines changed since the graph read the file, and the view
+    /// they were read from does not hold them as they are - one the graph has not checked again yet, or could not.
+    /// </summary>
     public int Moved { get; }
 
     /// <summary>
@@ -69,16 +72,36 @@ public sealed partial class CodebaseGraphTool
 {
     /// <summary>
     /// The declarations of the file at <paramref name="path"/> as the file stands now, where the view holds it as one it
-    /// parsed and the step's reads reach it: the file read fresh, as a body's is, and each declaration's hash checked against
-    /// the lines it spans now - the file extracted again where one moved, where the tool may check it, and answered from the
-    /// view that leaves, as a moved body is; a declaration whose lines the file still does not hold as the graph read them
-    /// left out and counted, so no span or hash given stands for lines the file does not hold. An extraction that cannot be
-    /// made says nothing: the declarations are those the lines confirm. Null where the view holds no parsed file there, the
-    /// step's reads do not reach it, or it does not read now.
+    /// parsed and the step's reads reach it: those the file's lines confirm (<see cref="ConfirmedDeclarationsAsync"/>), and,
+    /// where any moved and the tool may check the file again, the file checked again - the one file the call names, in one
+    /// check (<see cref="ReadAgainAsync"/>) - and answered from the view that leaves, as a moved body is; a declaration whose
+    /// lines the file still does not hold as the graph read them left out and counted, so no span or hash given stands for
+    /// lines the file does not hold. A check that cannot be made says nothing: the declarations are those the lines confirm.
+    /// Null where the view holds no parsed file there, the step's reads do not reach it, or it does not read now.
     /// </summary>
     /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
     /// <param name="cancellationToken">Stops the reading and the extraction.</param>
     public async Task<GraphFileDeclarations?> DeclarationsAsync(string path, CancellationToken cancellationToken)
+    {
+        var declarations = await ConfirmedDeclarationsAsync(path, cancellationToken).ConfigureAwait(false);
+
+        return declarations is { Moved: > 0 } && await ReadAgainAsync([declarations.Path], cancellationToken).ConfigureAwait(false)
+            ? await ConfirmedDeclarationsAsync(path, cancellationToken).ConfigureAwait(false)
+            : declarations;
+    }
+
+    /// <summary>
+    /// The declarations of the file at <paramref name="path"/> as the view holds them, where it holds the file as one it
+    /// parsed and the step's reads reach it, each checked against the file as it stands now - the file read fresh, as a
+    /// body's is, and each declaration's hash checked against the lines it spans now - and never checked again by the graph:
+    /// a declaration whose lines the file no longer holds as the graph read them is left out and counted
+    /// (<see cref="GraphFileDeclarations.Moved"/>), for a caller that checks every moved file of its call together
+    /// (<see cref="ReadAgainAsync"/>) - a search, which meets them file by file. Null where the view holds no parsed file
+    /// there, the step's reads do not reach it, or it does not read now.
+    /// </summary>
+    /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    public async Task<GraphFileDeclarations?> ConfirmedDeclarationsAsync(string path, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -97,41 +120,41 @@ public sealed partial class CodebaseGraphTool
         }
 
         var cards = view.OutlineFile(held) ?? [];
-
-        if (reExtract is not null && cards.Any(card => !Confirmed(lines, card)))
-        {
-            CodebaseGraphQueries? again = null;
-
-            try
-            {
-                again = await ExtractedAgainAsync(held, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
-            {
-                // The view stands as it was: its declarations are those the lines confirm.
-            }
-
-            if (again is not null)
-            {
-                if (!again.Parsed(held))
-                {
-                    return null;
-                }
-
-                view = again;
-                (lines, _, _) = await ReadLinesAsync(held, cancellationToken).ConfigureAwait(false);
-
-                if (lines is null)
-                {
-                    return null;
-                }
-
-                cards = view.OutlineFile(held) ?? [];
-            }
-        }
-
         var confirmed = cards.Where(card => Confirmed(lines, card)).ToList();
         return new GraphFileDeclarations(view, held, confirmed, cards.Count - confirmed.Count);
+    }
+
+    /// <summary>Whether the tool may have the graph check a file again (<see cref="ReadAgainAsync"/>): false where nothing may be synced (the verb).</summary>
+    public bool ChecksAgain => reExtract is not null;
+
+    /// <summary>
+    /// The files at <paramref name="paths"/> - relative to the tree as the view holds them - checked again by the graph,
+    /// every one in one check (<see cref="ExtractedAgainAsync"/>), and the tool answering from the view that leaves from
+    /// then on: what a call that met files whose declarations moved makes once, whatever it met, so a call pays for those
+    /// files and one view. False where the tool may not check a file again, none is given, or the check could not be made -
+    /// the view stands as it was, and the declarations a caller gives are those the lines confirm.
+    /// </summary>
+    /// <param name="paths">The files, as the view holds them.</param>
+    /// <param name="cancellationToken">Stops the check.</param>
+    public async Task<bool> ReadAgainAsync(IReadOnlyCollection<string> paths, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        if (reExtract is null || paths.Count == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = await ExtractedAgainAsync([.. paths.Distinct(StringComparer.Ordinal)], cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        {
+            // The view stands as it was: its declarations are those the lines confirm.
+            return false;
+        }
     }
 
     /// <summary>

@@ -186,7 +186,7 @@ public sealed class SideTaskGraph
             ConfinedPaths.Within(files, platform, view.Tree),
             path => policy.Read(Full(path)).Refusal() is null && !PathPatterns.Matches(never, path, platform.PathComparison),
             path => policy.Write(Full(path)),
-            async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
+            async (paths, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, paths, cancellationToken).ConfigureAwait(false)).Read),
             () => near,
             pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads),
             mask: mask,
