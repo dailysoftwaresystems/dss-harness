@@ -623,7 +623,7 @@ public sealed class FlowRunReportTests
                 [
                     steps[0] with
                     {
-                        Graph = JsonNode.Parse("""{"mode":"tools","from":"base","view":"base","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"calls":3,"servedTokens":1200,"bodies":1,"textHits":4,"edits":{"made":1,"refused":0},"wholeFileReads":{"count":1,"tokens":90},"deniedReads":0,"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
+                        Graph = JsonNode.Parse("""{"mode":"tools","from":"base","view":"base","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"pulled":{"map":{"pages":1,"tokens":300},"pack":{"pages":1,"tokens":500}},"calls":3,"servedTokens":1200,"bodies":1,"textHits":4,"edits":{"made":1,"refused":0},"wholeFileReads":{"count":1,"tokens":90},"deniedReads":0,"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
                         Measure = steps[0].Measure! with { Ran = 10 },
                     },
                     steps[1],

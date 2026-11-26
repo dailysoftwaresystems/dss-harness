@@ -18,15 +18,18 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// A reason step's serving of the run's codebase graph: the view the engine syncs at the step's start - the agent's it
 /// works in, the base for one that reads - read whole, every call of the graph service made through a request of that
-/// view (<see cref="FlowGraphSyncs.RequestOf"/>); its context pack made at its start and given as the
-/// <c>&lt;codebase&gt;</c> part of the first message of each launch that begins a conversation of its own, after the
-/// run's repository map - made once for each ground of reads the run's steps share, from the base as it stands when the
-/// first graphed reason step of that ground is given its prompt, and read as it is by every one after; the changes of the
-/// codebase told in their place to a conversation gone on with; the one tool <c>graph</c> offered with the operations and
-/// the narrowing of reads its step says; each launch's first message, each call and each escape of the narrowing recorded
+/// view (<see cref="FlowGraphSyncs.RequestOf"/>); its context pack made at its start and the run's repository map of its
+/// ground of reads - made once for each ground the run's steps share, from the base as it stands when the first graphed
+/// reason step of that ground is given its prompt, and read as it is by every one after. Pull, not push: a step at
+/// <c>tools</c> is pushed neither - the one tool <c>graph</c>, offered with the operations and the narrowing of reads its
+/// step says, serves the map's and the pack's pages from page 1 when asked - unless its <c>graphPromptTokens</c> says a
+/// size, which pushes page 1 of its pack; a step at <c>map</c>, which has no tool, is pushed both, the map ahead of the
+/// pack, as the <c>&lt;repository-map&gt;</c> and <c>&lt;codebase&gt;</c> parts of the first message of each launch
+/// that begins a conversation of its own (<see cref="WorkflowStep.GraphPromptTokensOf"/>). The changes of the codebase are
+/// told to a conversation gone on with; each launch's first message, each call and each escape of the narrowing recorded
 /// in its <c>graph.jsonl</c>; and its working set written and its figures gathered when it ends. Where the run's graph was
-/// never built - every graphify step upstream failed, was skipped or was passed over - the pack is the sentence for a
-/// step that left no output, and the tool answers the same. A graph never fails its step: one that cannot be served is
+/// never built - every graphify step upstream failed, was skipped or was passed over - a pushed pack is the sentence for
+/// a step that left no output, and the tool answers the same. A graph never fails its step: one that cannot be served is
 /// said, and the step goes on without it.
 /// </summary>
 public sealed class FlowStepGraph
@@ -42,6 +45,12 @@ public sealed class FlowStepGraph
 
     /// <summary>Why a launch was given no pack, where its step asked for none.</summary>
     public const string NoPackAsked = "the step asked for no pack: its graphPromptTokens is 0";
+
+    /// <summary>
+    /// Why a launch was given no pack, where its step has the graph tool and says no size to push: its pack is asked of the
+    /// tool's <c>pack</c>, from page 1.
+    /// </summary>
+    public const string NoPackPushed = "the step's graph is tools and its graphPromptTokens pushes no pack: it asks the graph tool's pack for its pages";
 
     /// <summary>Why a launch was given no pack, where the pack its step asked for held nothing.</summary>
     public const string NoPackHeld = "the step's pack held nothing its view could give";
@@ -68,13 +77,16 @@ public sealed class FlowStepGraph
     private GraphTextPages? told;
     private AgentCodebaseGiven? given;
 
-    private FlowStepGraph(string mode, string from, string viewName, int tokens, string? map, int mapPages, ContextPack? made, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
+    private FlowStepGraph(string mode, string from, string viewName, int tokens, bool pushes, string? map, int mapPages, ContextPack? made, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
     {
         Mode = mode;
         From = from;
         View = viewName;
         Tokens = tokens;
-        Map = map;
+        Pushes = pushes;
+
+        // The map is pushed to a step at map alone: one at tools asks the tool's map for its pages.
+        Map = mode == "map" ? map : null;
         MapPages = mapPages;
         this.made = made;
         Pack = made is { Text.Length: > 0 } ? made : null;
@@ -209,18 +221,24 @@ public sealed class FlowStepGraph
 
         // The pack's own keys are the step's, its chain's root's where it says none: a step that goes on with another's
         // work shapes its own pack (V53), while the mode and the narrowing of reads are its conversation's, begun where
-        // the chain began.
+        // the chain began. Pushed is page 1's size in the first message, by the mode where neither says one; a step at
+        // tools that pushes none still has its pack made - the tool's pack serves it from page 1, and find breaks its ties
+        // by its nearness - at the size a pushed pack has where nothing says one.
         var from = run.Step.GraphFrom ?? root.GraphFrom ?? WorkflowStep.GraphFromTask;
-        var tokens = run.Step.GraphPromptTokens ?? root.GraphPromptTokens ?? WorkflowStep.DefaultGraphPromptTokens;
+        var pushed = WorkflowStep.GraphPromptTokensOf(mode, run.Step.GraphPromptTokens ?? root.GraphPromptTokens);
+        var asking = mode == "tools" ? git : null;
+        var serves = asking is not null;
+        var tokens = pushed > 0 ? pushed : serves ? WorkflowStep.DefaultGraphPromptTokens : 0;
         var narrowed = (root.GraphReads ?? WorkflowStep.GraphReadsNarrow) == WorkflowStep.GraphReadsNarrow;
 
         if (read is null)
         {
             var missing = MissingOutputOf(store, layout, place.Definition, run.Instance);
 
-            return new FlowStepGraph(mode, from, worktree?.Agent ?? CodebaseGraphService.BaseView, tokens, map: null, mapPages: 0, made: null, missing, noPack: null, store, output, directory, run.Instance)
+            // The sentence stands where the pack would: pushed where the pack is, and the tool's answer to every call.
+            return new FlowStepGraph(mode, from, worktree?.Agent ?? CodebaseGraphService.BaseView, tokens, pushed > 0, map: null, mapPages: 0, made: null, missing, noPack: null, store, output, directory, run.Instance)
             {
-                section = missing,
+                section = pushed > 0 ? missing : string.Empty,
                 support = mode == "tools" ? new AgentGraphSupport(Tool: null) { Gone = missing } : null,
             };
         }
@@ -265,7 +283,7 @@ public sealed class FlowStepGraph
                 {
                     From = from == WorkflowStep.GraphFromChanges ? ContextPackFrom.Changes : ContextPackFrom.Task,
                     Tokens = tokens,
-                    Asks = mode == "tools" && git is not null,
+                    Asks = serves,
                     Writes = policy.StepWrites,
                     Worked = worked,
                     Closure = ClosureOf(run),
@@ -273,21 +291,24 @@ public sealed class FlowStepGraph
                     ChangesUnread = changesUnread,
                 })
             : null;
-        var served = new FlowStepGraph(mode, from, read.View, tokens, map, mapPages, pack, missing: null, tokens == 0 ? NoPackAsked : pack is not { Text.Length: > 0 } ? NoPackHeld : null, store, output, directory, run.Instance)
+        var noPack = tokens == 0 ? NoPackAsked : pushed == 0 ? NoPackPushed : pack is not { Text.Length: > 0 } ? NoPackHeld : null;
+        var served = new FlowStepGraph(mode, from, read.View, tokens, pushed > 0, map, mapPages, pack, missing: null, noPack, store, output, directory, run.Instance)
         {
             view = queries,
         };
 
-        served.section = served.Pack?.Text ?? string.Empty;
+        served.section = served.Pushes ? served.Pack?.Text ?? string.Empty : string.Empty;
 
-        if (mode == "tools" && git is not null)
+        if (asking is not null)
         {
-            // pack where the step's pack goes on past its first message's page; changes once the step is told changes that go on past its message's (ChangesSince); map where the run's map of its ground goes on past its first page.
-            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { More: true }, map: mapPages > 1);
+            // pack and map wherever there is a page of them the first message does not hold - every page of a pack not
+            // pushed, from page 1, and every page of the map, which is pushed to no step with the tool; changes once the
+            // step is told changes that go on past its message's (ChangesSince).
+            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { } held && (!served.Pushes || held.More), map: mapPages > 0);
             var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
             var tool = new CodebaseGraphTool(
                 queries,
-                new AgentFiles(git, fileSystem),
+                new AgentFiles(asking, fileSystem),
                 fileSystem,
                 ConfinedPaths.Within(fileSystem, platform, tree),
                 path => Readable(path) && !PathPatterns.Matches(never, path, platform.PathComparison),
@@ -385,28 +406,37 @@ public sealed class FlowStepGraph
     /// <summary>The view the step is served: <c>base</c>, or the agent's name.</summary>
     public string View { get; }
 
-    /// <summary>The pack's cap, in estimated tokens.</summary>
+    /// <summary>The size of a page of the pack, in estimated tokens - and of the changes a conversation gone on with is told; 0 where no pack is made.</summary>
     public int Tokens { get; }
 
     /// <summary>
-    /// The run's repository map of the step's ground of reads, the <c>&lt;repository-map&gt;</c> part ahead of the
-    /// <c>&lt;codebase&gt;</c> part of the first message of each launch that begins a conversation of its own: made once
-    /// from the base as it stood when the first graphed reason step of that ground was given its prompt, holding no
-    /// declaration of a file the step may not read, and read as it is by every step of that ground after - its first
-    /// page, whole as the map's pages are kept with it; null where the workflow's <c>mapTokens</c> is 0, the run's graph
-    /// was never built, or the map could not be made or read.
+    /// Whether page 1 of the step's pack - or, where the run's graph was never built, the sentence in its place - is pushed
+    /// into the first message of each launch that begins a conversation of its own: its <c>graphPromptTokens</c> with its
+    /// default resolved by its mode (<see cref="WorkflowStep.GraphPromptTokensOf"/>) above 0.
+    /// </summary>
+    public bool Pushes { get; }
+
+    /// <summary>
+    /// The run's repository map of the step's ground of reads, pushed as the <c>&lt;repository-map&gt;</c> part ahead of
+    /// the <c>&lt;codebase&gt;</c> part of the first message of each launch that begins a conversation of its own, where
+    /// the step's graph is <c>map</c>: made once from the base as it stood when the first graphed reason step of that
+    /// ground was given its prompt, holding no declaration of a file the step may not read, and read as it is by every
+    /// step of that ground after - its first page, whole as the map's pages are kept with it; null where the step's graph
+    /// is <c>tools</c> - its tool's <c>map</c> serves every page, from page 1 (<see cref="MapPages"/>) - the workflow's
+    /// <c>mapTokens</c> is 0, the run's graph was never built, or the map could not be made or read.
     /// </summary>
     public string? Map { get; }
 
-    /// <summary>How many pages the run's repository map of the step's ground of reads holds; 0 where there is no map.</summary>
+    /// <summary>How many pages the run's repository map of the step's ground of reads holds, pushed or not; 0 where there is no map.</summary>
     public int MapPages { get; }
 
-    /// <summary>The map's estimated tokens; 0 where there is none.</summary>
+    /// <summary>The pushed map's estimated tokens; 0 where none is pushed.</summary>
     public int MapTokens => Map is null ? 0 : EstimatedTokens.Of(Map);
 
     /// <summary>
-    /// The pack the step is given in a conversation of its own; null where none was asked for, or the pack made held
-    /// nothing - its first line past its cap.
+    /// The step's pack: its page 1 pushed into a conversation of its own where <see cref="Pushes"/> says, and its pages
+    /// served by the tool's <c>pack</c>; null where none was made, or the pack made held nothing - its first line past
+    /// its cap.
     /// </summary>
     public ContextPack? Pack { get; }
 
@@ -418,24 +448,28 @@ public sealed class FlowStepGraph
 
     /// <summary>
     /// The step's codebase section, the <c>&lt;codebase&gt;</c> part's text (<see cref="AgentPromptParts"/> writes its
-    /// tags): its context pack, or the sentence for a graph the run never built; empty where it was given no pack.
+    /// tags): its context pack, or the sentence for a graph the run never built, where the step pushes its pack; empty
+    /// where it pushes none, or was given no pack.
     /// </summary>
     public string Section => section;
 
     /// <summary>
     /// The changes the conversation the step goes on with is told of the codebase: the declarations its view changed
-    /// since what that conversation was told of them - its pack and every delta after it - and the nodes of its own pack
-    /// the conversation was not given - in the one new user message, never a map or a pack again whole: their page 1, every
-    /// one told, page by page, the graph tool's <c>changes</c> given where they go on past it. Made against the pack
-    /// as it was made, so a pack that held nothing still tells the conversation what moved of what it was told; null only
-    /// where the step asked for no pack or its view was not read. Kept, so the line of the launch told them says what
-    /// they cost.
+    /// since what that conversation was told of them - its pack and every delta after it - and, where the step pushes its
+    /// pack, the nodes of its own pack the conversation was not given - in the one new user message, never a map or a pack
+    /// again whole: their page 1, every one told, page by page, the graph tool's <c>changes</c> given where they go on
+    /// past it. Made against the pack as it was made, so a pack that held nothing still tells the conversation what moved
+    /// of what it was told; null where no pack was made, its view was not read, or the step pushes no pack and the
+    /// conversation holds no codebase part - nothing it was told can have moved, and nothing is pushed of its own. Kept, so
+    /// the line of the launch told them says what they cost.
     /// </summary>
     /// <param name="told">The codebase parts the conversation holds, in the order it was given them: its pack, then each delta after it.</param>
     public string? ChangesSince(IReadOnlyList<string> told)
     {
+        ArgumentNullException.ThrowIfNull(told);
+
         var asks = support?.Tool is not null;
-        var pages = view is null || made is null ? null : CodebaseConversationChanges.Pages(view, made, told, Tokens, asks);
+        var pages = view is null || made is null || (!Pushes && told.Count == 0) ? null : CodebaseConversationChanges.Pages(view, Pushes ? made : null, told, Tokens, asks);
 
         changes = pages?.Page(1)!.Text;
         this.told = pages?.Page(1) is { Last: false } ? pages : null;
@@ -472,8 +506,9 @@ public sealed class FlowStepGraph
 
     /// <summary>
     /// The line of a launch's first message that held <paramref name="given"/> of the graph: what the map and the pack it
-    /// was given cost, or the changes it was told in their place, or why it was given no pack - the graph never built, a
-    /// step that asked for none or whose pack held nothing, a compaction's record.
+    /// was pushed cost, or the changes it was told in their place, or why it was given no pack - the graph never built, a
+    /// step that asked for none, one at tools that pushes none and asks the tool for its pages, one whose pack held
+    /// nothing, a compaction's record.
     /// </summary>
     /// <param name="given">What of the graph the launch's first message holds.</param>
     public GraphPromptLine PromptLineOf(AgentCodebaseGiven given)
@@ -498,10 +533,11 @@ public sealed class FlowStepGraph
 
     /// <summary>
     /// What the step's graph gave and what it saved, said as its <c>step.json</c> holds it: its mode, its view, what the map
-    /// and the pack - or the changes in their place - its last launch was given cost, how many of the pack's nodes the step
-    /// then used, what the tool served, and what the agent still read whole, counted from its <c>graph.jsonl</c> and its
-    /// stored stream. Its working set is written beside its output first (<c>working-set.json</c>), the seeds of the packs
-    /// of the steps after it.
+    /// and the pack - or the changes in their place - its last launch was pushed cost, how many of the pushed pack's nodes
+    /// the step then used, what the tool served - the pages of the map and the pack it was asked for among it, counted
+    /// apart under <c>pulled</c> - and what the agent still read whole, counted from its <c>graph.jsonl</c> and its stored
+    /// stream. A pack made and not pushed counts 0 under <c>pack</c>, for its first message held none of it. Its working
+    /// set is written beside its output first (<c>working-set.json</c>), the seeds of the packs of the steps after it.
     /// </summary>
     /// <param name="graph">The one graph service every graph is read and written by, for the view as it stands at the step's end.</param>
     /// <param name="fileSystem">The file system the files the step wrote are read on, as it left them.</param>
@@ -566,6 +602,14 @@ public sealed class FlowStepGraph
         var prompted = PromptLineOf(given ?? AgentCodebaseGiven.None);
         var used = prompted.Nodes == 0 || Pack is null ? 0 : working.Nodes.Count(node => !node.Gone && Pack.Nodes.Contains(node.Id, StringComparer.Ordinal));
 
+        // The pages of the map and the pack the tool was asked for and gave: a call each, its answer's tokens - among the
+        // served tokens, as every call's are.
+        JsonObject Pulled(GraphOp op)
+        {
+            var answered = calls.Where(line => line.Op == CodebaseGraphTool.NameOf(op) && line.Outcome == GraphToolOutcome.Answered).ToList();
+            return new JsonObject { ["pages"] = answered.Count, ["tokens"] = answered.Sum(line => line.Tokens) };
+        }
+
         return new JsonObject
         {
             ["mode"] = Mode,
@@ -580,6 +624,11 @@ public sealed class FlowStepGraph
                 ["used"] = used,
             },
             ["changesTokens"] = prompted.ChangesTokens,
+            ["pulled"] = new JsonObject
+            {
+                ["map"] = Pulled(GraphOp.Map),
+                ["pack"] = Pulled(GraphOp.Pack),
+            },
             ["calls"] = calls.Count,
             ["servedTokens"] = calls.Sum(line => line.Tokens),
             ["bodies"] = calls.Count(line => line.Op == CodebaseGraphTool.NameOf(GraphOp.Body) && line.Served.Count > 0),

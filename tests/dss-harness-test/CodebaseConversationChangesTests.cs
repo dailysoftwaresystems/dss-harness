@@ -82,6 +82,26 @@ public sealed class CodebaseConversationChangesTests
     }
 
     /// <summary>
+    /// A step that pushes no pack - it asks the graph tool's pack for its pages - is told what moved of what its
+    /// conversation holds and nothing of its own pack: no node of it added, and no word of it in the first line. Red with
+    /// the first line counting the nodes of a pack the step pushes none of.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatPushesNoPack_IsToldWhatMoved_AndNothingOfItsOwnPack()
+    {
+        using var tree = await TreeAsync(("src/A.cs", Bodied("1")), ("src/C.cs", C));
+        var before = await QueriesAsync(tree);
+        var one = Card(before, "One");
+
+        tree.Write("src/A.cs", Bodied("2"));
+        var after = new CodebaseGraphQueries((await tree.CheckAsync(null, null, "src/A.cs")).Read);
+
+        Assert.Equal(
+            ["1 declaration the conversation held: 1 moved or changed, 0 removed", GraphLines.Of(Card(after, "One"))],
+            CodebaseConversationChanges.Make(after, pack: null, [GraphLines.Of(one)], CodebaseContextPack.DefaultTokens).Split('\n'));
+    }
+
+    /// <summary>
     /// A file deleted takes every declaration the conversation held of it: each is named removed with the line the
     /// conversation holds, for the view no longer holds the file at all.
     /// </summary>

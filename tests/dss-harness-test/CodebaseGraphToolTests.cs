@@ -908,8 +908,9 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// <c>pack</c> gives a page of the step's context pack as the pack laid it, whole, when it was made - page 1 the first
-    /// message's - a page past the last refused with how many there are; <c>changes</c> gives a page of
+    /// <c>pack</c> gives a page of the step's context pack as the pack laid it, whole, when it was made - page 1 the page a
+    /// step that pushes its pack holds in its first message - a page past the last refused with how many there are, and
+    /// the description says it gives the pack from page 1; <c>changes</c> gives a page of
     /// the codebase changes the step was told, and says where it was told none; each needs its page, and neither is given
     /// a step whose operations do not hold it.
     /// </summary>
@@ -939,13 +940,13 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal((GraphToolOutcome.Usage, "this step was given no codebase changes to page"), (untold.Outcome, untold.Text));
         Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
         Assert.StartsWith("op 'pack' is not one this step may use: find, node, related, outline, body", ungiven.Text, StringComparison.Ordinal);
-        Assert.Contains("pack - a page of the context pack your first message began", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
+        Assert.Contains("pack - a page of your task's context pack - the part of the graph your task and the work before it reach - best first, from page 1 (where your first message holds a codebase part, that is page 1), its last line saying how to ask for the next", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
         Assert.Contains("\"pack\"", CodebaseGraphTool.Schema(ops), StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// <c>map</c> gives a page of the repository map the run keeps, from where the store kept it: page 1 the message's,
-    /// each page after it the map's own; a page past the last refused with how many there are; a page the disk will not
+    /// <c>map</c> gives a page of the repository map the run keeps, from where the store kept it, from page 1 - the page a
+    /// step at map is pushed - each page after it the map's own; a page past the last refused with how many there are; a page the disk will not
     /// give back said with why; a run given no map said; and the operation is not given a step whose operations do not
     /// hold it.
     /// </summary>
@@ -981,7 +982,7 @@ public sealed partial class CodebaseGraphToolTests
         Assert.StartsWith($"the repository map's page {pages.Count} could not be read: ", lost.Text, StringComparison.Ordinal);
         Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
         Assert.StartsWith("op 'map' is not one this step may use: find, node, related, outline, body", ungiven.Text, StringComparison.Ordinal);
-        Assert.Contains("map - a page of the repository map your first message began", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
+        Assert.Contains("map - a page of the repository map - the tree at a glance: its projects and top directories, then its most central declarations - from page 1, its last line saying where the rest is", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
         Assert.Contains("\"map\"", CodebaseGraphTool.Schema(ops), StringComparison.Ordinal);
     }
 

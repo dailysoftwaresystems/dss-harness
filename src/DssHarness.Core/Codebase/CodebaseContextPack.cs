@@ -53,8 +53,8 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
     public ContextPackFrom From { get; init; } = ContextPackFrom.Task;
 
     /// <summary>
-    /// The estimated tokens of a page of the pack (<see cref="EstimatedTokens"/>): page 1 is what the step's first message
-    /// holds, and every later page is the pack going on, at the same size; 0 gives no pack.
+    /// The estimated tokens of a page of the pack (<see cref="EstimatedTokens"/>): page 1 is what the first message of a
+    /// step that pushes its pack holds, and every later page is the pack going on, at the same size; 0 gives no pack.
     /// </summary>
     public int Tokens { get; init; } = CodebaseContextPack.DefaultTokens;
 
@@ -93,8 +93,9 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
 }
 
 /// <summary>
-/// A step's context pack: its page 1 - the text given at the head of its first message - what it was made of, and the
-/// pages after it, laid once whole from the same walk as the pack was (<see cref="Page"/>).
+/// A step's context pack: its page 1 - the text pushed at the head of its first message where its step pushes its pack,
+/// and the first page the graph tool's <c>pack</c> serves where it does not - what it was made of, and the pages after
+/// it, laid once whole from the same walk as the pack was (<see cref="Page"/>).
 /// </summary>
 /// <param name="Text">Page 1, line by line: its first line, the nodes, its last line; empty where the pack's page size is 0, or too small to hold its first and last lines.</param>
 /// <param name="Seeds">The nodes it was seeded from, each once, with why: what the step's records say it started from.</param>
@@ -154,8 +155,8 @@ public static class EstimatedTokens
 /// <summary>
 /// The context pack (value 370) and change-first (value 371): the part of the graph a step's work touches, made at its
 /// start from the view and what the step says alone - so the same step on the same tree is given the same pack - and
-/// given in pages of the step's tokens, best first, page 1 in its first message and every later page asked of the graph
-/// tool. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a qualified name, a handle, a
+/// given in pages of the step's tokens, best first, page 1 pushed into its first message where its step pushes it and
+/// every other page asked of the graph tool. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a qualified name, a handle, a
 /// <c>path:line</c>), every site and home of the classes of the work item its prompt reads the classes of
 /// (<see cref="ContextPackRequest.Closure"/>, each site's declaration at the weight of a named symbol, its file's at a
 /// named file's where it names none the file carries), the working sets it is given, the declarations of the files its
@@ -169,7 +170,10 @@ public static class EstimatedTokens
 /// </summary>
 public static partial class CodebaseContextPack
 {
-    /// <summary>The size of a page where a step says none: <c>graphPromptTokens</c>' default.</summary>
+    /// <summary>
+    /// The size of a page where a step says none: <c>graphPromptTokens</c>' default for a step at <c>map</c>, and the
+    /// size of the pages a step at <c>tools</c> that pushes none asks of the graph tool's <c>pack</c>.
+    /// </summary>
     public const int DefaultTokens = 3000;
 
     /// <summary>The weight of a node the prompt names exactly, or a working set carries.</summary>

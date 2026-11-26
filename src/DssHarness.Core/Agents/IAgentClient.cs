@@ -561,7 +561,8 @@ public sealed record AgentStepRequest(
     /// <summary>
     /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
     /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
-    /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
+    /// step's context pack, or the sentence for a graph the run never built, where its step pushes its pack; null or empty
+    /// where the run was pushed none - a step whose graph is tools asks the graph tool's pack for its pages.
     /// </summary>
     public string? Codebase { get; init; }
 
@@ -570,7 +571,8 @@ public sealed record AgentStepRequest(
     /// user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
     /// own, made once for each ground of reads the run's steps share, from the base as it stood when the first graphed
     /// reason step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that
-    /// caches a prefix reads it from the cache; null where the run was given none.
+    /// caches a prefix reads it from the cache - pushed to a step whose graph is map; null where the run was pushed none -
+    /// a step whose graph is tools asks the graph tool's map for its pages.
     /// </summary>
     public string? Map { get; init; }
 
@@ -828,7 +830,8 @@ public sealed record AgentRun(
     /// <summary>
     /// The run's codebase section, the <c>&lt;codebase&gt;</c> part of the first user message of each launch that begins a
     /// conversation of its own, after the repository map where there is one (<see cref="AgentPromptParts"/>): a reason
-    /// step's context pack, or the sentence for a graph the run never built; null where the run was given none.
+    /// step's context pack, or the sentence for a graph the run never built, where its step pushes its pack; null or empty
+    /// where the run was pushed none - a step whose graph is tools asks the graph tool's pack for its pages.
     /// </summary>
     public string? Codebase { get; init; }
 
@@ -837,8 +840,8 @@ public sealed record AgentRun(
     /// first user message of each launch that begins a conversation of its own (<see cref="AgentPromptParts"/>): the run's
     /// own, made once for each ground of reads the run's steps share, from the base as it stood when the first graphed
     /// reason step of that ground was given its prompt - the same bytes for every step that reads alike, so a client that
-    /// caches a prefix reads it
-    /// from the cache; null where the run was given none.
+    /// caches a prefix reads it from the cache - pushed to a step whose graph is map; null where the run was pushed none -
+    /// a step whose graph is tools asks the graph tool's map for its pages.
     /// </summary>
     public string? Map { get; init; }
 
@@ -989,7 +992,7 @@ public sealed record AgentGraphSupport(
     /// <summary>The tool's name, as the runtime offers it and an agent calls it.</summary>
     public const string ToolName = "graph";
 
-    /// <summary>Why no graph was built, where none was - every call of the tool answers it, and the run's codebase section says it; null where one was.</summary>
+    /// <summary>Why no graph was built, where none was - every call of the tool answers it, and the run's codebase section says it where its step pushes its pack; null where one was.</summary>
     public string? Gone { get; init; }
 }
 

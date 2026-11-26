@@ -121,7 +121,7 @@ public static partial class HelpTopics
             + Client + ".cacheTtl "
             + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} "
             + "where nothing is said) - on the system text, covering the tools and it, the same for every step of that "
-            + "agent with the same tools; on the run's repository map, the first block of the conversation's first user "
+            + "agent with the same tools; on the run's repository map, where a step is pushed one (graph: map), the first block of the conversation's first user "
             + "message, covering the tools, the system text and the map, the same for every such step of the run that reads alike; and the "
             + "top-level mark, which moves with the conversation's last block - so a step's second request on reads the "
             + "map from the cache, and so does the first request of the run's next step of the same agent - and a budget "

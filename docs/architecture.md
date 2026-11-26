@@ -2430,9 +2430,10 @@ beside the baseline's tests and the CI read (`onFailure: continue`, for a run go
 every reason step after it is served from the graph as the twenty-run measurement of 2026-11-11 set
 each type's value, its steps saying the graph keys only where a type is served otherwise than by
 default (`graph: off` on the request triage, whose work is text the map does not light, and on the scribe's;
-`graph: tools` with `graphPromptTokens: 0` on the plan audit and the item audit - the tool and no pack: the measurement ran
+`graph: tools` on the plan audit and the item audit - the tool: the measurement ran
 them with `graph: off` before the graph's `sites` was built, when their work was text the map does not light, and a class's
-sites, which they now search, are what `sites` answers, beside their own text search, while a pack still lights none of it;
+sites, which they now search, are what `sites` answers, beside their own text search - no step saying `graphPromptTokens`,
+for a step with the tool is pushed no map and no pack (`WorkflowStep.GraphPromptTokensOf`);
 `graph: map` on the prioritiser and a review's scope; `graphFrom: changes`
 on the reviewers, the self-audit, the diagnosis and the steps that verify and fix - a step that goes
 on with another's work starting its own pack where it says; the implementer, the planner and the
@@ -6214,7 +6215,7 @@ pages of the step's tokens
 (`GraphTextPages`, `EstimatedTokens`), best first, a page's task lines by file, generated code
 last in each section, the pages laid whole when the pack is made - every line laid before any page
 is written, so every page knows the total and the count of nodes the read rule left out of the whole
-walk: page 1 is given, and its last line says nothing is left out or which page of how many and how to
+walk: page 1 is pushed where the step pushes its pack and served first by graph's `pack` where it does not, and its last line says nothing is left out or which page of how many and how to
 ask graph's `pack` with page for the next, the total exact on every page and the last saying it
 is; a step whose graph is not tools is told, in the same place, that the rest is on the pages
 after it, which a step whose graph is tools asks the graph for; a
@@ -6252,12 +6253,25 @@ a check of a file the tool makes again and the view it is served are the worktre
 pack's own keys are its step's, the chain's root's where it says none, so a step that goes on with another's work
 starts its pack where it says; a `graphFrom` naming a step is found as the definition's check finds it
 (`FlowScope.Resolve` from the step's scope) and read from that step's instance in the step's own work item and
-iteration, never another's beside it. It is given its pack as the `<codebase>` part of the first user message of each
-launch that begins a conversation of its own, after the run's map (`AgentPromptParts.CodebaseTag`, before
+iteration, never another's beside it. Pull, not push: what of the graph a step's first message holds is
+`WorkflowStep.GraphPromptTokensOf`'s one rule (`FlowStepGraph.Pushes`). A step at `tools` is pushed no map and no pack -
+measured against `graph: off` on the same requests, the ~1,500-token map and ~2,600-token pack at the head of every graphed
+step's first message were all but unused (0 to 2% of a pack's nodes touched by a step's work in the triages, the reviews
+and fixes and the diagnosis, 10% in the planner, 35% only in the implementer on three samples, no `map` ever asked) and
+added 60% to 98% to those steps' input - and its tool offers `map` and `pack` from page 1 wherever there is a map or a pack
+to serve (`CodebaseGraphTool.Operations`); its pack is still made at its start, at `WorkflowStep.DefaultGraphPromptTokens`
+a page, for the tool serves it and `find` breaks its ties by its `Near`, and the map is made where it always was, so its
+bytes are what the base held when the first graphed step of its ground began. A step at `tools` that says
+`graphPromptTokens` above 0 is pushed page 1 of its pack at that size, the map never. A step at `map`, whose agent cannot
+read through the tool, is pushed both - its pack at its `graphPromptTokens`, `WorkflowStep.DefaultGraphPromptTokens` where
+it says none, none at 0. A pushed pack is the `<codebase>` part of the first user message of each
+launch that begins a conversation of its own, after a pushed map (`AgentPromptParts.CodebaseTag`, before
 `<run-context>`; `AgentPromptParts.Part` the one writer of a part's form) - or, where the run's graph was never built,
-the sentence for a step that left no output in its place - and the tool its `Near`; a launch that goes on with a
-stored conversation is told the changes instead, the one decision `AgentPromptParts.CodebaseOf`'s, made as each
-launch's first message is written, so a fallback to another client or provider begins with the map and the pack. A
+the sentence for a step that left no output in its place, which a step that pushes no pack is told by its tool instead; a launch that goes on with a
+stored conversation is told the changes instead (`CodebaseConversationChanges`: what moved of the declarations it was told,
+and, where its step pushes its pack, the nodes of it the conversation was not given - none at all where the step pushes no
+pack and the conversation holds no codebase part), the one decision `AgentPromptParts.CodebaseOf`'s, made as each
+launch's first message is written, so a fallback to another client or provider begins with what its step pushes. A
 graph that cannot be served - its records, its map, a line of it - is said, and the step goes on without it.
 The run's repository map (`CodebaseRepositoryMap`, `FlowStepGraph.MapOfAsync`) is made once for each ground of reads
 the run's steps share, from the base as it stands when the first graphed reason step of that ground is given its
@@ -6272,9 +6286,9 @@ written by `OrchestrationStore.MapOnce` in the map's own cross-process section, 
 are. A kept map's count is read from its first page's own last line (`CodebaseRepositoryMap.PagesOf`), the line every
 step of the ground is told, so a step is offered every page it is told there is, whatever became of the map's other records; a
 page is read back by the one reader beside the writer (`OrchestrationStore.MapPage`), for a run's steps and a
-side-task alike, a page the disk will not give back said with why. Every step of the ground reads
-the same first page - the prefix a client caches never moves - and a step given the tool asks the rest of it as
-`graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
+side-task alike, a page the disk will not give back said with why. Every step of the ground pushed the map
+reads the same first page - the prefix a client caches never moves - and a step given the tool asks every page of it,
+from page 1, as `graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
 it: it says the rest is on the pages after it, which a step whose graph is tools asks the graph for, never how this
 step asks for it, for the map is one file every step of the ground reads and no step's kind is written into it. Its reads
 narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on every client - Claude
@@ -6309,11 +6323,14 @@ into `ContextPackRequest.Worked` (`CodebaseWorkingSet.Seeds`: each node once, ed
 gone). A reason step that has a graph writes both files as it ends (`FlowStepGraph.Ended`: the working set made from
 the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`
 holds a line for each launch's first message, written as the message is and before any line of that launch's calls
-(`GraphPromptLine`: the map's tokens and the pack's seeds, nodes, tokens and what was left out, or the tokens of the
-changes a conversation gone on with was told in their place, or why no pack was given), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
+(`GraphPromptLine`: the pushed map's tokens and the pushed pack's seeds, nodes, tokens and what was left out, or the tokens of the
+changes a conversation gone on with was told in their place, or why no pack was given - `FlowStepGraph.NoPackPushed` for
+a step at `tools` that pushes none), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
 one for each escape of its narrowing and each whole read the narrowing refused (`GraphEscapeLine`, `GraphDeniedLine`),
 and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used, `changesTokens` (the
-three its last launch was given), calls, served tokens, bodies, text hits, edits made and refused, whole-file reads
+three its last launch was pushed: a pack made and not pushed counts 0, for its first message held none of it), `pulled`
+(the pages of the `map` and of the `pack` its tool was asked for and gave, each `pages` and `tokens`, counted from its
+`graph.jsonl`'s answered calls and among the served tokens), calls, served tokens, bodies, text hits, edits made and refused, whole-file reads
 counted from the stored stream on every client's form as the working set reads its calls
 (`CodebaseWorkingSet.WholeFileReads`), denied reads and escapes -
 are held in its `step.json` under `graph` and summed for the run's report (`FlowReports`).

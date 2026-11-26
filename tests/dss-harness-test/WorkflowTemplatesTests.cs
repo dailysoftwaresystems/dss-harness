@@ -128,9 +128,11 @@ public sealed class WorkflowTemplatesTests
     /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
     /// the request triage, whose work is text the map does not light, asks none (measured costlier with no quality
     /// gained); the plan audit and the item audit - the plan audit's agent on a later round's items - are given the tool
-    /// and no pack (<c>graphPromptTokens: 0</c>): measured with none before the graph's <c>sites</c> was built, they search a
-    /// class's sites, which <c>sites</c> answers, beside their own text search, and a pack lights none of a plan's text
-    /// (spec 02, "Who may call it"); the prioritiser and a review's scope keep the map (the scope's whole overhead
+    /// (<c>graph: tools</c>): measured with none before the graph's <c>sites</c> was built, they search a class's sites,
+    /// which <c>sites</c> answers, beside their own text search (spec 02, "Who may call it"); no step says
+    /// <c>graphPromptTokens</c>, for a step with the tool is pushed no pack and no map by default - the measurement of the
+    /// graph arm against <c>graph: off</c> found what was pushed all but unused - and a step at <c>map</c> is pushed both at
+    /// their default sizes; the prioritiser and a review's scope keep the map (the scope's whole overhead
     /// is a fifth of a cent beside the review rounds it steers; the prioritiser is unmeasured, serving only a run with
     /// no request); the scribes ask none as before. The planner, which resumes itself and so may say a graph key of its
     /// own, keeps its default, the tool, as it was: the measurement found it costlier with the graph and did not move
@@ -216,7 +218,7 @@ public sealed class WorkflowTemplatesTests
             ("triage-pre-existing-issue", null, null),
         };
 
-        var seen = new List<(string Path, string? Graph, string? From)>();
+        var seen = new List<(string Path, string? Graph, string? From, int? Tokens)>();
 
         Walk(definition.Steps, parent: null);
         Walk(definition.Recover!.Steps, parent: "recover");
@@ -235,9 +237,12 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".correctness", StringComparison.Ordinal)));
         Assert.Equal(2, seen.Count(row => row.Path.EndsWith(".review-scope", StringComparison.Ordinal)));
 
-        // The audits are given the tool and no pack: their sites searches are what it answers, and a pack lights no plan.
-        Assert.Equal(0, StepAt(definition.Steps, "planning", "plan-audit").GraphPromptTokens);
-        Assert.Equal(0, StepAt(definition.Steps, "rounds", "item-audit").GraphPromptTokens);
+        // No step of the flow says graphPromptTokens: a step with the tool is pushed no pack by default and asks the tool
+        // for one where it needs it - the audits among them, whose sites searches are what it answers - and a step at map
+        // is pushed its pack at the default size.
+        Assert.DoesNotContain(seen, row => row.Tokens is not null);
+        Assert.Equal(0, WorkflowStep.GraphPromptTokensOf("tools", StepAt(definition.Steps, "planning", "plan-audit").GraphPromptTokens));
+        Assert.Equal(0, WorkflowStep.GraphPromptTokensOf("tools", StepAt(definition.Steps, "rounds", "item-audit").GraphPromptTokens));
 
         return;
 
@@ -247,7 +252,7 @@ public sealed class WorkflowTemplatesTests
             {
                 if (step.Type == "reason")
                 {
-                    seen.Add((parent is null ? step.Name : $"{parent}.{step.Name}", step.Graph, step.GraphFrom));
+                    seen.Add((parent is null ? step.Name : $"{parent}.{step.Name}", step.Graph, step.GraphFrom, step.GraphPromptTokens));
                 }
 
                 Walk(step.Steps, parent is null ? step.Name : $"{parent}.{step.Name}");

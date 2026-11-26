@@ -301,10 +301,12 @@ public sealed class ReasonStepRunner(
         // at the head of its prompt, and is spent once the prompt holds it.
         filled = WithHandoff(run.Handoff, filled);
 
-        // The step's serving of the run's codebase graph: its pack made from what the run handed the prompt and given as
-        // the <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
-        // offered where its step says tools, its view the one the engine syncs at the step's start. A step whose mode is
-        // off is served nothing, and one whose graph cannot be served goes on without it. The pack is seeded from the
+        // The step's serving of the run's codebase graph: its pack made from what the run handed the prompt, the graph tool
+        // offered where its step says tools - which asks the tool's map and pack for their pages, pushed neither unless its
+        // graphPromptTokens says a size for its pack - and a step at map, which has no tool, pushed the map and the pack as
+        // the <repository-map> and <codebase> parts of the first message of each launch that begins a conversation of its
+        // own; its view the one the engine syncs at the step's start. A step whose mode is off is served nothing, and one
+        // whose graph cannot be served goes on without it. The pack is seeded from the
         // values the prompt was filled with - the request, the work item, the upstream outputs it reads - with the
         // handoff, or from the words an answer sends, never from the template's own words: every run of the workflow is
         // given those alike, and a graph of a repository that holds a workflow's text would match them first.
@@ -409,9 +411,9 @@ public sealed class ReasonStepRunner(
 
             // The step's codebase graph, all of it carried: whether a launch's conversation is handed is decided entry by
             // entry, so a launch that goes on with the stored conversation is told what changed and one that begins its own
-            // - another client's, another provider's - is given the map ahead of the pack (AgentPromptParts.CodebaseOf),
-            // each launch's line written as it is given its first message; the graph tool offered with the operations and
-            // the narrowing of reads its step says.
+            // - another client's, another provider's - is pushed what its step pushes, the map ahead of the pack
+            // (AgentPromptParts.CodebaseOf), each launch's line written as it is given its first message; the graph tool
+            // offered with the operations and the narrowing of reads its step says.
             Codebase = stepGraph?.Section,
             CodebaseChanges = codebaseChanges,
             Map = stepGraph?.Map,

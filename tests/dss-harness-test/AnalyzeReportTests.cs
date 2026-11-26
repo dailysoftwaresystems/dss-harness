@@ -636,6 +636,8 @@ public sealed class AnalyzeReportTests
                 "steps[].graph.pack.seeds: 1 pack seed / 2 pack seeds",
                 "steps[].graph.pack.nodes: 1 pack node / 2 pack nodes",
                 "steps[].graph.pack.used: 1 pack node used / 2 pack nodes used",
+                "steps[].graph.pulled.map.pages: 1 map page pulled / 2 map pages pulled",
+                "steps[].graph.pulled.pack.pages: 1 pack page pulled / 2 pack pages pulled",
                 "steps[].graph.calls: 1 graph call / 2 graph calls",
                 "steps[].graph.bodies: 1 body served / 2 bodies served",
                 "steps[].graph.textHits: 1 text hit / 2 text hits",
