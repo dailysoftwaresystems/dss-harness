@@ -102,7 +102,9 @@ The work of this run: {update.work}
     its coverage lines say what it searched by text alone - and your own text search beside it over the whole tree,
     across every tier, format, target and file kind and not only what the graph does not answer, never the plan's
     searches; compare what you find with the plan's site list; hold the universe of each class against the
-    repository's closure text above; and check that a class with one site has searches that prove the home is the only
+    repository's closure text above - an axis that leaves out a cell searched whole by you too, every cell of it the
+    universe leaves out named in the one finding, so the revision closes the axis at once and no later audit finds
+    more of it; and check that a class with one site has searches that prove the home is the only
     one.
 
 ## What to return

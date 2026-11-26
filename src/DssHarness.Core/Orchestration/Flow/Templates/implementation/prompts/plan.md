@@ -91,7 +91,10 @@ For every defect the plan fixes and every behaviour it changes, write the class 
    the names and for what reads and calls them, and text search for what the graph does not see, each such text
    search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.
-5. Write the universe from the axes the repository declares, and the count of their product.
+5. Write the universe from the axes the repository declares, and the count of their product: each axis whole, from a
+   search of the tree for every cell of its kind - for the legs and the references, every file of every service that
+   builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's searches
+   are. An axis written from the cells you happened on leaves one out, and an auditor holds the plan back for it.
 6. Where more than one site decides, the action is consolidate: the home decides, every other site reads it, and the
    item owns every path that changes. Patching some of a class's sites is never done; a class with one site names the
    home itself, and its searches prove it is the only one. The site at the home's path and symbol is marked home, and
@@ -123,7 +126,9 @@ and says why in noClass.
    statements a check can answer one by one - each behaviour, the test that pins it, and what is true of the tree
    when the builder reports, a statement that compares with the tree before the work naming the run's base commit,
    `{orient.startCommit}`, never a branch: a builder works in a repository of its own that holds no branch, so
-   `main` names nothing there; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
+   `main` names nothing there; a statement the base commit would already fail for what the work does not touch - a
+   lint, a limit or a count over a whole file or the tree - checked there first, and narrowed to what the work changes
+   where the base fails it; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
    path and for what; what it creates, with why nothing that exists serves and where you searched; and what it
    replaces because the request asked, by path, with what becomes of the old one.
 

@@ -29,7 +29,11 @@ Act on every problem, every finding and everything the person asked for; where t
 disagree, the person's words hold. Where you think a finding is wrong, keep that point and say in the summary which
 finding and what you read that shows it wrong. Change what has to change and leave the rest, so that what already
 passed still passes. Where the auditor's closure part names a site your plan lacks, search the data for it yourself
-before you add it, and extend the class's site list, its searches and its universe to hold what you find; an item that
+before you add it, and extend the class's site list, its searches and its universe to hold what you find. Where it
+names a cell of a universe your plan leaves out, the axis was not searched whole: search the tree for every cell of that
+axis, as a class's searches are made, and hold every one you find, never only the one it named - an audit that finds
+another holds the plan back again. Where it names a statement of the definition of done the base commit already fails,
+narrow the statement to what the work changes. An item that
 changes a decision still gives the class, and one that decides none still says why in noClass.
 
 A finding that the plan builds what the repository already has, or writes a rule a second time, is settled by

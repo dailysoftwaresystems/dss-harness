@@ -1261,6 +1261,35 @@ public sealed class WorkflowTemplatesTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The planner writes each axis of a universe whole, from a search of the tree for every cell of its kind, and a
+    /// definition of done the base commit would fail for what the work leaves alone narrowed to what it changes; the
+    /// auditor names every cell an axis leaves out in one finding, and the replan closes the axis whole - so a plan
+    /// converges, never held back round after round for the next cell of the same axis.
+    /// </summary>
+    [Fact]
+    public void ThePlannerAndItsAuditor_CloseAnAxisWhole_AndNarrowADefinitionOfDoneTheBaseFails()
+    {
+        var plan = Read("prompts/plan.md").ReplaceLineEndings("\n");
+
+        Assert.Contains(
+            "and the count of their product: each axis whole, from a\n   search of the tree for every cell of its kind - for the legs and the references, every file of every service that\n   builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's searches\n   are.",
+            plan,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a statement the base commit would already fail for what the work does not touch - a\n   lint, a limit or a count over a whole file or the tree - checked there first, and narrowed to what the work changes\n   where the base fails it;",
+            plan,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an axis that leaves out a cell searched whole by you too, every cell of it the\n    universe leaves out named in the one finding,",
+            Read("prompts/plan-audit.md").ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the axis was not searched whole: search the tree for every cell of that\naxis, as a class's searches are made, and hold every one you find, never only the one it named",
+            Read("prompts/replan.md").ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+    }
+
     private static string Read(string below)
     {
         var assembly = typeof(WorkflowTemplates).Assembly;
