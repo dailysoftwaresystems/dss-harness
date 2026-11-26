@@ -70,6 +70,114 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic, the README and the architecture say the output logs as the code has them: the three commands
+    /// that take the option, where the zip is named, what it holds and leaves out, the refusals and their code, and the
+    /// types and members the architecture names.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_TheReadme_AndTheArchitecture_SayTheOutputLogs()
+    {
+        var result = HelpText.Of("orchestrators");
+        var prose = Prose.Words(result.StandardOutput);
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Equal([FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand], FlowOutputLogs.Commands);
+        Assert.Contains($"  {ToolPackage.Command} {FlowService.RunCommand} <workflow> [--run <name>] [--input <k=v>]... [--json]{Environment.NewLine}      [--output-logs <file>]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  {ToolPackage.Command} {FlowService.ResumeCommand} <run> [--json] [--output-logs <file>]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("      [--again] [--json] [--output-logs <file>]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "Output logs. run-orchestrator, resume-orchestrator and answer-orchestrator given --output-logs <file> write one zip at <file> - read "
+                + "from the directory the shell stands in - holding everything needed to understand the run and to put right what it met; given "
+                + "none, they write none, and no configuration key asks for it.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("the last line naming them (outputLogs: <file>) and records.outputLogs in --json.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "A path that is a directory, inside .orchestrators/, or in a directory that cannot be made is refused (13) before anything runs, nothing started.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("The zip holds run/ - the run's whole directory, its folders kept - config.json, the configuration the run was read with, and manifest.json,", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "the run's temp/; the caches of its codebase graph made again from the tree (graph/graph.json, graph/symbols.jsonl, graph/extracts, "
+                + "graph/views); and each agent's worktree, which is outside the run.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A zip that could not be written is said in its place and named nowhere, and the command's code stands - save a defect of this "
+                + "tool's, which ends it as one does (70). A command line the parser refuses writes none, for no command began.",
+            prose,
+            StringComparison.Ordinal);
+
+        foreach (var row in new[]
+        {
+            "| `run-orchestrator <workflow> [--run <name>] [--input k=v]... [--json] [--output-logs <file>]` |",
+            "| `resume-orchestrator <run> [--json] [--output-logs <file>]` |",
+            "| `answer-orchestrator <run> <answer> [--question <id>] [--text <text> \\| --text-file <file>] [--again] [--json] [--output-logs <file>]` |",
+        })
+        {
+            Assert.Contains(row, readme, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            $"Given `{FlowOutputLogs.Option} <file>` - and only then: no configuration key asks for it - each of the three writes one zip at `<file>`, read "
+                + "from the directory the shell stands in,",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"`{FlowOutputLogs.RunFolder}/`, the run's whole directory with its folders kept; `{FlowOutputLogs.ConfigName}`, the configuration the run "
+                + $"was read with; and `{FlowOutputLogs.ManifestName}`, the place to start reading",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"it is named in the text (`{FlowOutputLogs.Record}: <file>`) and in `--json` (`{FlowReports.RecordsMember}.{FlowOutputLogs.Record}`).", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A path that is a directory, inside `{HarnessLayout.OrchestratorsDirectoryName}/`, or in a directory that cannot be made is refused ({HarnessExit.Refused}) before anything runs.",
+            readme,
+            StringComparison.Ordinal);
+
+        Assert.Contains($"A session's output logs are one Core service, `{nameof(FlowOutputLogs)}`,", architecture, StringComparison.Ordinal);
+
+        foreach (var named in new[]
+        {
+            $"`{nameof(DssHarness.Core.Application.SessionOptions)}.{nameof(DssHarness.Core.Application.SessionOptions.OutputLogs)}`, an `{nameof(DssHarness.Core.Application.OutputLogsRequest)}`",
+            $"(`{nameof(DssHarness.Core.Application.CommandSession)}`)",
+            $"`{nameof(IFileSystem)}.{nameof(IFileSystem.WriteAtomic)}`",
+            $"(`{nameof(FlowRunReached)}`)",
+            $"`{nameof(CapturedHarnessOutput)}`",
+            $"`{nameof(OutputCapture)}`",
+            $"(`{nameof(IFileSystem)}.{nameof(IFileSystem.Hold)}`, `{nameof(HeldDirectory)}`)",
+            $"(`{nameof(FlowOutputLogs)}.{nameof(FlowOutputLogs.GraphCaches)}`)",
+            $"(`{nameof(ReasonLaunch)}.{nameof(ReasonLaunch.Mask)}`)",
+            $"`{nameof(ActionValues)}.{nameof(ActionValues.ReadByteForByte)}`",
+            $"(`{nameof(ILineMask)}.{nameof(ILineMask.Cut)}`)",
+            $"(`{nameof(DssHarness.Core.Application.IDocumentFacts)}`)",
+            $"(`{FlowOutputLogs.Record}: <file>`) and `{FlowReports.RecordsMember}.{FlowOutputLogs.Record}`",
+        })
+        {
+            Assert.Contains(named, architecture, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Each of the three commands that take the option says it in its own help.</summary>
+    [Theory]
+    [InlineData(FlowService.RunCommand)]
+    [InlineData(FlowService.ResumeCommand)]
+    [InlineData(FlowService.AnswerCommand)]
+    public async Task EachCommandThatTakesTheOutputLogs_SaysItInItsOwnHelp(string command)
+    {
+        var result = await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains(
+            "--output-logs <file> Write one zip at <file> holding everything needed to understand the run and to put right what it met: the "
+                + "run's whole directory, the configuration it was read with and manifest.json - what was run, how it ended and why, its open "
+                + "questions and this command's own output - rewritten whole at every end, refused or not, and named in the text and in --json. "
+                + "Read relative to the directory the shell stands in.",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Each command's own description says what it does to the copies a tree keeps, and list-orchestrator's --json the
     /// listing it prints - never the outcome of an --apply it does not have.
     /// </summary>

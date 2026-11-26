@@ -112,6 +112,38 @@ public sealed class ActionValues : ILineMask
         return new ActionValues(values, secrets);
     }
 
+    /// <summary>
+    /// These values as the mask of a text read byte for byte - one character a byte, as Latin-1 reads it, which keeps every
+    /// byte of a file of any encoding, or of none, as it was: each secret masked as itself, and as its UTF-8 bytes read so,
+    /// where the two differ, so a secret written in a file in UTF-8 is masked there whatever its characters, and one whose
+    /// text is ASCII reads the same either way. No secret leaves this type to be made so.
+    /// </summary>
+    public ActionValues ReadByteForByte()
+    {
+        var secrets = new Dictionary<string, string>(_secrets, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, value) in _secrets)
+        {
+            var read = System.Text.Encoding.Latin1.GetString(System.Text.Encoding.UTF8.GetBytes(value));
+
+            if (string.Equals(read, value, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var key = $"{name}#bytes";
+
+            for (var another = 2; secrets.ContainsKey(key); another++)
+            {
+                key = $"{name}#bytes{another.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            }
+
+            secrets[key] = read;
+        }
+
+        return new ActionValues(_values, secrets);
+    }
+
     /// <summary>No values at all, for a repository that declares none.</summary>
     public static ActionValues Empty { get; } = new(
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),

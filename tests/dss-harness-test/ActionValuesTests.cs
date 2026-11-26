@@ -44,6 +44,25 @@ public sealed class ActionValuesTests
         Assert.Equal(20, ActionValues.Empty.Cut("xxxxxxxxxxxxxxxxxxxx"));
     }
 
+    /// <summary>
+    /// Read byte for byte - Latin-1, one character a byte - a secret is masked as itself and as its UTF-8 bytes read so,
+    /// whatever its characters; a secret of ASCII reads the same either way and is masked once, under its own name.
+    /// </summary>
+    [Fact]
+    public void ReadByteForByte_MasksEachSecretAsItselfAndAsItsUtf8Bytes()
+    {
+        var values = new ActionValues(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["WIDE"] = "clé-ünï", ["PLAIN"] = "TOPSECRET" });
+        var bytes = System.Text.Encoding.Latin1.GetString(System.Text.Encoding.UTF8.GetBytes("clé-ünï"));
+
+        var read = values.ReadByteForByte();
+
+        Assert.Equal($"a {bytes} b", values.Redact($"a {bytes} b"));
+        Assert.Equal("a *** b *** c *** d", read.Redact($"a {bytes} b clé-ünï c TOPSECRET d"));
+        Assert.Equal(["PLAIN", "WIDE", "WIDE#bytes"], read.SecretNames.Order(StringComparer.Ordinal));
+    }
+
     [Fact]
     public async Task ReadAsync_MergesEveryFileInADirectory()
     {

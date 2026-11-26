@@ -5144,6 +5144,36 @@ and a cancellation of the session's token is the second, never a cut-off. A step
 runner serves yet is given to `NoStepRunner`, `FlowStepRunners`' fallback: it fails, saying no
 runner serves its type (its code 14).
 
+A session's output logs are one Core service, `FlowOutputLogs`, which any front end asks for through
+the session it begins (`SessionOptions.OutputLogs`, an `OutputLogsRequest`: the path and the command line
+as typed) - the command line by `--output-logs <file>` on `run-orchestrator`, `resume-orchestrator` and
+`answer-orchestrator` alone, with no configuration key and no default: no flag, no zip. The lifecycle
+every command shares (`CommandSession`) holds the path before anything is weighed - whole, read from
+the directory the process stands in; a directory, a path inside `.orchestrators/` (where every run
+keeps its own records, and a start names its run only as it starts) or one whose directory cannot be
+made is refused with 13, nothing started - and at every end - the body's answer, a directory refused,
+a failure it caught - writes the zip before it says how the command ended: the events it ends with are
+kept as they will be written, so the zip holds its output as it ends, and then published, the zip named
+as every record of a run is, the last line naming them (`outputLogs: <file>`) and
+`records.outputLogs` in every document (`IDocumentFacts`). The zip is written whole through
+`IFileSystem.WriteAtomic` - a file beside the target, then renamed over it - so a resumed run's zip
+holds the whole run and a crash never leaves half a zip; one that cannot be written is said in its
+place and named nowhere, the code standing as a run's log stands where it could not take a line, a
+defect of the tool's ending the command with 70 as at its end. Which run the command reached is told
+by `FlowService` as soon as the run's record is there (`FlowRunReached`), so a start without `--run`
+that ended by a defect still has its run in the zip. The command's output is kept beside its console
+by `CapturedHarnessOutput`, which hands every member to the console and to `OutputCapture`, the
+console's own renderer writing into memory, under one lock: the lines in the order the terminal got
+them, the `--json` document apart. The run's directory is walked from it held (`IFileSystem.Hold`,
+`HeldDirectory`), one directory held for each level, so no link or junction is ever followed; links,
+key stores and dotenv files at any depth (the tool's slots' names, `.env.*` and `*.env`) and the shared
+copy of one a seed names, the run's `temp/`, the graph's caches (`FlowOutputLogs.GraphCaches`) and each
+agent's worktree are left out, each listed in `manifest.json` with why. Every byte is held to the mask
+the run's records are held to (`ReasonLaunch.Mask`), read byte for byte - Latin-1, which keeps every
+byte - by `ActionValues.ReadByteForByte`, which masks each secret's UTF-8 bytes read so beside the
+secret itself, a piece at a time cut where no secret parts (`ILineMask.Cut`); the manifest's strings
+are masked as text. A command line the parser refuses writes none: no command began.
+
 ### The codebase graph
 
 A run's `graphify-codebase` step keeps a map of the repository under the run's `graph/` (`Core.Codebase`): every file the

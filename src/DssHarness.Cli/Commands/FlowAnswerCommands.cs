@@ -48,6 +48,7 @@ internal static class AnswerOrchestratorCommand
         command.Options.Add(TextOption);
         command.Options.Add(TextFileOption);
         command.Options.Add(OrchestrationArguments.Json);
+        OutputLogsOption.AddTo(command);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(
@@ -68,7 +69,8 @@ internal static class AnswerOrchestratorCommand
                     token),
                 cancellationToken),
             beginsRun: run => true,
-            FlowCommands.Answer);
+            FlowCommands.Answer,
+            outputLogs: true);
 
         return command;
     }

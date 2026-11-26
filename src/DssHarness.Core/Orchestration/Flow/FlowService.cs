@@ -164,6 +164,7 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 /// <param name="updates">Finds the Claude Code the advisor's and the reporter's orders start, never changing it; null where nothing starts one.</param>
+/// <param name="reached">Told the run the command reached, as soon as its record is there for it; null where nothing reads it.</param>
 public sealed class FlowService(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
@@ -184,7 +185,8 @@ public sealed class FlowService(
     Agents.Isolation.IAgentIsolation isolation,
     TimeProvider? clock = null,
     FlowTimings? timings = null,
-    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null) : IFlowService
+    Agents.ClaudeCode.ClaudeCodeUpdateService? updates = null,
+    FlowRunReached? reached = null) : IFlowService
 {
     /// <summary>The command that starts a run.</summary>
     public const string RunCommand = "run-orchestrator";
@@ -369,6 +371,9 @@ public sealed class FlowService(
                 ? refused with { Data = [FlowReports.Document(FlowRunResult.Empty(ex.ExitCode, ex.Message) with { Named = lists })], Quiet = true }
                 : refused;
         }
+
+        // The run is made: whatever ends the command from here, it ended over this run.
+        reached?.Reach(context.Layout, layout);
 
         // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently. The remote
         // workflows the check resolved are kept with the run's frozen definition as the session begins - every file as
@@ -1576,6 +1581,8 @@ public sealed class FlowService(
             return (CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(run)), context, layout);
         }
 
+        // The run is there: whatever ends the command from here, it ended over this run.
+        reached?.Reach(context.Layout, layout);
         await _children.SweepAsync(layout, command).ConfigureAwait(false);
         return (null, context, layout);
     }
