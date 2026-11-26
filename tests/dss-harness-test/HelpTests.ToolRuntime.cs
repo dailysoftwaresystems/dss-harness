@@ -74,7 +74,7 @@ public sealed partial class HelpTests
                 + "size, a line at a time, its pattern matched in time linear in each line, so one that needs backtracking - a backreference, a lookaround, an "
                 + "atomic group - is refused, naming what it holds. Every file find_files matches and every line search_files matches is given, with as many lines "
                 + "of context as are asked - each file beneath the directory searched decided as its own read, so one that holds a credential slot (the main "
-                + "checkout a read-only agent starts in holds the tool's own) is searched with the slot's files left out and counted, never read; its "
+                + "checkout holds the tool's own) is searched with the slot's files left out and counted, never read; its "
                 + "max_results is refused, naming page.",
             prose,
             StringComparison.Ordinal);
@@ -138,7 +138,9 @@ public sealed partial class HelpTests
                 + "than a page given in pieces - and edited, copied through a block at a time with the edit made on the way; `search_files` reads every "
                 + "file whatever its size, a line at a time, its pattern matched in time linear in each line, so one that needs backtracking - a "
                 + "backreference, a lookaround, an atomic group - is refused, naming what it holds. Every file `find_files` matches and every line "
-                + "`search_files` matches is given, with as many lines of context as are asked; its `max_results` is refused, naming `page`.",
+                + "`search_files` matches is given, with as many lines of context as are asked - each file beneath the directory searched decided as its own "
+                + "read, so one that holds a credential slot (the main checkout holds the tool's own) is searched with the slot's files left out and "
+                + "counted, never read; its `max_results` is refused, naming `page`.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -1686,7 +1686,7 @@ pattern matched in time linear in each line, so one that needs backtracking - a 
 lookaround, an atomic group - is refused, naming what it holds. Every file `find_files` matches and
 every line `search_files` matches is given, with as many lines of context as are asked - each file
 beneath the directory searched decided as its own read, so one that holds a credential slot (the main
-checkout a read-only agent starts in holds the tool's own) is searched with the slot's files left out
+checkout holds the tool's own) is searched with the slot's files left out
 and counted, never read; its `max_results` is refused, naming `page`. A replace or an insert needs
 its file viewed first, by its content - one that changed since is refused, nothing written - and an
 edit keeps the file's encoding, its line endings and whether it ends with a newline. A command is
