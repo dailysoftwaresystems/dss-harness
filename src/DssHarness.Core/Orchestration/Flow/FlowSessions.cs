@@ -77,8 +77,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
     /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
     /// process. Before anything of the run is made, each of the run's own inputs of the kind <c>file</c> that is not empty
-    /// is held to a file inside the repository an agent may read, decided as an agent's read of it is, and opened
-    /// (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
+    /// is held to a file inside the repository an agent may read, decided as an agent's read of it is on
+    /// <paramref name="inputGround"/>, and opened (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
     /// made each is copied into the run's inputs (<see cref="OrchestratorLayout.InputsDirectory"/>) before its record is
     /// written; the context keeps the values as they were given. Once the test for another unfinished run - the last look
     /// at a live owner - has passed, and before anything of the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
@@ -90,6 +90,10 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <param name="definition">The workflow, as it was read.</param>
     /// <param name="sweep">Sweeps every run of the repository, as <c>list-orchestrator</c> does, inside the section.</param>
     /// <param name="command">The command starting the run, which a refusal says to run from outside.</param>
+    /// <param name="inputGround">
+    /// The ground every file input of the run is decided on: an agent's read of the main checkout, as the configuration the
+    /// run starts under makes it (<see cref="Agents.Policy.AgentStepGround.OfFileInputs"/>).
+    /// </param>
     /// <param name="wantedName">The name <c>--run</c> gave, or null for the next r&lt;N&gt;.</param>
     /// <param name="inputs">The values the run is started with, by input name.</param>
     /// <param name="startCommit">The commit the run starts from; null where it starts beside the tree's history.</param>
@@ -110,6 +114,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         WorkflowDefinition definition,
         Func<ChildSweep> sweep,
         string command,
+        Agents.Policy.AgentPolicyGround inputGround,
         string? wantedName = null,
         IReadOnlyDictionary<string, string>? inputs = null,
         string? startCommit = null,
@@ -121,6 +126,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(sweep);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(inputGround);
 
         var differing = await DifferingAsync(layout, leavingOut: null, cancellationToken).ConfigureAwait(false);
 
@@ -145,7 +151,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             // The files the run's own file inputs name, opened before anything of the run is made, each decided as an agent's
             // read of it is - every agent of the run reads the copy: one that names no file inside the repository an agent
             // may read refuses the start, and the bytes the run keeps are those of the very file decided, read as opened.
-            using var files = FlowInputs.OpenFiles(_fileSystem, _platform, definition, FlowInputs.Resolve(definition, inputs), layout.MainCheckoutRoot);
+            using var files = FlowInputs.OpenFiles(_fileSystem, _platform, definition, FlowInputs.Resolve(definition, inputs), inputGround);
 
             // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
             // life, its artifacts, kept for the run's life and copied wherever asked, and its inputs, where each file a

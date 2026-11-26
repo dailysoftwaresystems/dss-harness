@@ -3175,6 +3175,52 @@ public sealed class FlowServiceTests
         Assert.Empty(runner.Started);
     }
 
+    /// <summary>
+    /// A start's file input is decided as an agent's read of it is, on the ground the configuration gives every agent: a
+    /// file inside the repository that a place agentPolicy.hiddenPlaces names holds, or that a Read restriction of the
+    /// configuration's refuses, is refused (13) as an agent's read of it would be, naming the input and the path and saying
+    /// no run was started - nothing of the run made and nothing copied, for every agent of the run would read the copy.
+    /// </summary>
+    [Fact]
+    public async Task AStartWhoseFileInputAnAgentsReadIsRefused_IsRefused_ByAHiddenPlaceOrARestrictionOfTheConfiguration()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: one
+                type: orient
+            """);
+        using var disposed = repository;
+        var keys = Path.Combine(repository.Path, "deploy", "keys");
+        // The configuration the repository was made with, its agents kept from a place inside it and from a path's reads.
+        repository.Harness.WriteConfig(repository.Path, new HarnessConfig
+        {
+            Workflows = [Workflow],
+            AgentPolicy = new AgentPolicyConfig { HiddenPlaces = [$"{keys}{Path.DirectorySeparatorChar}"], Restrictions = ["Read(private/**)"] },
+        });
+        repository.Tree.WriteFile(Path.Combine("deploy", "keys", "id.txt"), "a key kept out of every agent's reach\n");
+        repository.Tree.WriteFile(Path.Combine("private", "plan.md"), "a plan no agent may read\n");
+
+        foreach (var (value, why) in new[]
+        {
+            ("deploy/keys/id.txt", $"'{Path.Combine(keys, "id.txt")}' lies in a place the user keeps credentials in: no file tool of an agent reads or writes one"),
+            ("private/plan.md", $"'{Path.Combine(repository.Path, "private", "plan.md")}' is denied by Read(private/**), a restriction of agentPolicy.restrictions"),
+        })
+        {
+            var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: [$"plan={value}"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(
+                (HarnessExit.Refused, $"input 'plan' is '{value}', which is refused as an agent's read of it would be: {why}; a file input names a file inside the repository that an agent may read, by its path from the repository's root ('{repository.Path}') or an absolute one inside it, and the run keeps a copy of it from its start. No run was started."),
+                (refused.ExitCode, refused.Message));
+            Assert.False(Directory.Exists(RunOf(repository).Directory), $"'{value}' made nothing of the run");
+        }
+
+        Assert.Empty(runner.Started);
+    }
+
     /// <summary><c>--now</c> is refused for an engine on another machine: nothing here can end its process, and a process of this machine that carries its id is never ended for it.</summary>
     [Fact]
     public async Task StopNow_RefusesAnEngineOnAnotherMachine()
@@ -4728,7 +4774,7 @@ public sealed class FlowServiceTests
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
-        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
+        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, FlowSessionsTests.InputGround(layout), cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {

@@ -882,7 +882,7 @@ public sealed class ReasonStepRunnerTests
         var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\ninputs:\n  - name: plan\n    kind: file\nsteps:\n  - name: orient\n    type: orient\n");
         var given = new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = "notes/plan.md" };
 
-        using (var files = FlowInputs.OpenFiles(kit.Harness.FileSystem, kit.Harness.Platform, definition, FlowInputs.Resolve(definition, given), kit.Main))
+        using (var files = FlowInputs.OpenFiles(kit.Harness.FileSystem, kit.Harness.Platform, definition, FlowInputs.Resolve(definition, given), FlowSessionsTests.InputGround(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main))))
         {
             files.Keep(kit.Harness.FileSystem, kit.Layout);
         }

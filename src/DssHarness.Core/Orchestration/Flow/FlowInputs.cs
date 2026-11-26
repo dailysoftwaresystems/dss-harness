@@ -180,11 +180,13 @@ public static class FlowInputs
     /// Opens the files a run of <paramref name="definition"/> keeps of its own inputs of the kind <c>file</c>, before
     /// anything of the run is made: each such input whose value is not empty names a file inside the repository - by its
     /// path from the main checkout's root, or an absolute one inside it - read from the main checkout as it stands,
-    /// committed or not. Every agent of the run reads the copy, so each is decided as an agent's read of it over the main
-    /// checkout alone would be (<see cref="ReadGround"/>): held to the main checkout by where it leads, every link on its
-    /// way followed - the file's own and a directory's above it (<see cref="ConfinedPaths"/>) - then kept from every
-    /// credential slot of the tool, which no agent reads (<see cref="AgentPolicy"/>), and read through the file as it was
-    /// opened, where it stands decided again before a byte passes (<see cref="AgentFiles.OpenDecided(IFileSystem, string, Func{string, AgentPolicyAnswer.Denied?})"/>),
+    /// committed or not. Every agent of the run reads the copy, so each is decided as an agent's read of it is, on the ground
+    /// the one builder of an agent's ground builds for it (<see cref="AgentStepGround.OfFileInputs"/>): held to the main
+    /// checkout by where it leads, every link on its way followed - the file's own and a directory's above it
+    /// (<see cref="ConfinedPaths"/>) - then kept from every place no agent's read reaches - every credential slot of the
+    /// tool, every Claude Code directory and every place the user keeps credentials in, <c>agentPolicy.hiddenPlaces</c> among
+    /// them - and from every read the configuration's restrictions refuse (<see cref="AgentPolicy"/>), and read through the
+    /// file as it was opened, where it stands decided again before a byte passes (<see cref="AgentFiles.OpenDecided(IFileSystem, string, Func{string, AgentPolicyAnswer.Denied?})"/>),
     /// so the bytes the run keeps (<see cref="FlowInputFiles.Keep"/>) are those of the very file decided, whatever link
     /// was put on its way since. Anything else is refused (13), naming the input and the path and saying that no run was
     /// started, and what was opened before it is closed. A used workflow's file input is no part of this: it names a file
@@ -194,16 +196,16 @@ public static class FlowInputs
     /// <param name="platform">The platform, whose spellings of a path are refused as an agent's are.</param>
     /// <param name="definition">The workflow the run runs.</param>
     /// <param name="values">The values the run takes, by input name (<see cref="Resolve"/>).</param>
-    /// <param name="mainCheckout">The main checkout's root, which each path is read from.</param>
+    /// <param name="ground">The ground each is decided on (<see cref="AgentStepGround.OfFileInputs"/>), whose working directory is the main checkout's root each path is read from.</param>
     /// <returns>Each file opened, by input, in the order the workflow declares them; the caller keeps and closes them.</returns>
     /// <exception cref="HarnessException">An input names no file inside the repository that an agent may read (<see cref="HarnessExit.Refused"/>).</exception>
-    public static FlowInputFiles OpenFiles(IFileSystem fileSystem, IHostPlatform platform, WorkflowDefinition definition, IReadOnlyDictionary<string, string> values, string mainCheckout)
+    public static FlowInputFiles OpenFiles(IFileSystem fileSystem, IHostPlatform platform, WorkflowDefinition definition, IReadOnlyDictionary<string, string> values, AgentPolicyGround ground)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(platform);
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(values);
-        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+        ArgumentNullException.ThrowIfNull(ground);
 
         var opened = new FlowInputFiles();
         var files = Files(definition, values).ToList();
@@ -214,7 +216,7 @@ public static class FlowInputs
         }
 
         // One ground for both deciders, read once: the paths held to its one root, and the policy asked inside it.
-        var ground = ReadGround(mainCheckout);
+        var mainCheckout = ground.WorkingDirectory;
         var paths = new ConfinedPaths(fileSystem, platform, ground);
         var policy = new AgentPolicy(fileSystem, platform, ground);
 
@@ -247,31 +249,6 @@ public static class FlowInputs
     /// <summary>The run's own inputs of the kind <c>file</c> whose value in <paramref name="values"/> is not empty, in the order the workflow declares them.</summary>
     private static IEnumerable<FlowInput> Files(WorkflowDefinition definition, IReadOnlyDictionary<string, string> values)
         => definition.Inputs.Where(input => input.Kind == FlowInput.FileKind && values.TryGetValue(input.Name, out var value) && value.Length > 0);
-
-    /// <summary>
-    /// The ground a run's own file input is decided on (<see cref="OpenFiles"/>): an agent's that reads the main checkout
-    /// alone - its working directory and its one root, nothing written - with every credential slot of it
-    /// (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>) a place no read of an agent's reaches, as on every agent's
-    /// ground, and no restriction, protected path or worktree rule, which narrow what an agent does and not what a file
-    /// input may be.
-    /// </summary>
-    /// <param name="mainCheckout">The main checkout's root.</param>
-    private static AgentPolicyGround ReadGround(string mainCheckout)
-        => new(
-            WorkingDirectory: mainCheckout,
-            ReadRoots: [],
-            WritableRoots: [],
-            SlotDirectories: HarnessLayout.SecretSlotDirectoriesUnder(mainCheckout),
-            ClaudeCodeDirectories: [],
-            CredentialPlaces: [],
-            Restrictions: [],
-            Capabilities: [AgentCapability.Read],
-            WebDomains: null,
-            Writes: null,
-            ReporterRoot: null,
-            WorktreeRules: false,
-            ProtectedPaths: false,
-            StateDirectories: []);
 
     /// <summary>
     /// The file <paramref name="given"/> names inside the main checkout, decided as an agent's read of it is and opened;

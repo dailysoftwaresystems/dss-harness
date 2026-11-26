@@ -328,6 +328,16 @@ public sealed class FlowService(
         FlowRunContext runContext;
         IReadOnlyDictionary<string, IReadOnlyList<string>>? named = null;
 
+        // Every agent of the run reads a file input's copy, so each is decided as an agent's read of it is: on the ground
+        // the one builder of an agent's ground builds for it, under this configuration and this machine's places no agent
+        // reaches.
+        var launch = new ReasonLaunch(_fileSystem, _platform, keyStore, updates, isolation);
+        var inputGround = Agents.Policy.AgentStepGround.OfFileInputs(
+            context.Config,
+            context.Layout.MainCheckoutRoot,
+            launch.ClaudeDirectories(context.Config, context.Layout),
+            launch.CredentialPlaces(context.Config));
+
         try
         {
             (layout, runContext) = await _sessions.CreateAsync(
@@ -335,6 +345,7 @@ public sealed class FlowService(
                 workflow,
                 EveryRun(context, RunCommand),
                 RunCommand,
+                inputGround,
                 run,
                 given,
                 checkout.Head,

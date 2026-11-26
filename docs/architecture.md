@@ -4691,9 +4691,13 @@ to the path budget of its agents' worktrees - what each worktree's own check cou
 (`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - opens the file each of
 the run's own inputs of the kind `file` names where its value, given or its default, is not empty - a path from the
 main checkout's root or an absolute one inside it, read from the main checkout as it stands, committed or not, and
-decided as an agent's read of it over the main checkout alone would be, since every agent of the run reads the copy:
-held to the main checkout by where it leads, every link on its way followed - the file's own and a directory's above
-it (`ConfinedPaths`) - kept from every credential slot of the tool (`AgentPolicy`), and read through the file as it
+decided as an agent's read of it is, since every agent of the run reads the copy - on the ground the one builder of an
+agent's ground builds for it (`AgentStepGround.OfFileInputs`: an agent's read of the main checkout under the
+configuration the run starts under, never a ground built by hand beside it): held to the main checkout by where it
+leads, every link on its way followed - the file's own and a directory's above it (`ConfinedPaths`) - kept from every
+place no agent's read reaches - every credential slot of the tool, every Claude Code directory and every place the user
+keeps credentials in, `agentPolicy.hiddenPlaces` among them - and from every read `agentPolicy.restrictions` refuse
+(`AgentPolicy`), and read through the file as it
 was opened, where it stands decided again before a byte passes (`AgentFiles.OpenDecided`), so a link put on its way
 since reaches nothing; anything else refused (13), naming the input and the path, no run started
 (`FlowInputs.OpenFiles`) - makes the run's directory and copies each file into it, `inputs/<input>/<the file's name>`

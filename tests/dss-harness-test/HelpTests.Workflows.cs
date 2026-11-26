@@ -311,8 +311,9 @@ public sealed partial class HelpTests
     /// <summary>
     /// The help, the command's own help, the README and the architecture say what a run's own file input is: a file
     /// inside the repository by its path from the root or an absolute one inside it, committed or not, decided as an
-    /// agent's read of it is - refused with no run started where it names none, or where it or a link on its way leads out
-    /// of the repository or into a credential slot, and read through the file as it was opened - copied into the run's
+    /// agent's read of it is - refused with no run started where it names none, where it or a link on its way leads out
+    /// of the repository, into a credential slot, a place the user keeps credentials in or a Claude Code directory, or where
+    /// the configuration's restrictions refuse its read, and read through the file as it was opened - copied into the run's
     /// inputs as it starts, and read there - its copy's path - by every step of every session and every agent of the run,
     /// whatever became of the file since; the orchestrators topic and the layout name the place.
     /// </summary>
@@ -322,8 +323,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "and an input of the kind file naming a file inside the repository by its path from the root or an absolute one "
                 + $"inside it, committed or not, which the run copies into its own {HarnessLayout.OrchestratorInputsDirectoryName}/<input>/ as it starts, decided as an agent's "
-                + "read of it is (one that names none, or that leads out of the repository or into a credential slot - by its own "
-                + $"path or a link on its way - is refused, {HarnessExit.Refused}, no run started) and read through the file as it was opened, so a link put on its way "
+                + "read of it is (one that names none, or that leads out of the repository, into a credential slot, a place the user "
+                + "keeps credentials in - agentPolicy.hiddenPlaces among them - or a Claude Code directory, by its own path or a link on "
+                + $"its way, or whose read agentPolicy.restrictions refuse, is refused, {HarnessExit.Refused}, no run started) and read through the file as it was opened, so a link put on its way "
                 + "since reaches nothing: every step of every session reads that copy for it - {input.<name>} the copy's path - "
                 + "whatever became of the file since, and every agent of the run reads it, wherever its own tree was cut from;",
             Prose.Words(HelpText.Of("workflows").StandardOutput),
@@ -342,7 +344,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "an input of the kind `file` names a file inside the repository by its path from the root, or an absolute one inside "
                 + $"it - committed or not, decided as an agent's read of it is: refused ({HarnessExit.Refused}) with nothing made where it names none, "
-                + "where it or a link on its way leads out of the repository or into a credential slot, and read through the file "
+                + "where it or a link on its way leads out of the repository, into a credential slot, a place the user keeps credentials "
+                + "in (`agentPolicy.hiddenPlaces` among them) or a Claude Code directory, or where `agentPolicy.restrictions` refuse its "
+                + "read, and read through the file "
                 + $"as it was opened - which the run copies into its own `{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/` as it starts",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
@@ -354,9 +358,14 @@ public sealed partial class HelpTests
         Assert.Contains(
             "opens the file each of the run's own inputs of the kind `file` names where its value, given or its default, is not "
                 + "empty - a path from the main checkout's root or an absolute one inside it, read from the main checkout as it "
-                + "stands, committed or not, and decided as an agent's read of it over the main checkout alone would be, since every "
-                + "agent of the run reads the copy: held to the main checkout by where it leads, every link on its way followed - "
-                + $"the file's own and a directory's above it (`{nameof(DssHarness.Core.Agents.Runtime.ConfinedPaths)}`) - kept from every credential slot of the tool "
+                + "stands, committed or not, and decided as an agent's read of it is, since every agent of the run reads the copy - on "
+                + "the ground the one builder of an agent's ground builds for it "
+                + $"(`{nameof(DssHarness.Core.Agents.Policy.AgentStepGround)}.{nameof(DssHarness.Core.Agents.Policy.AgentStepGround.OfFileInputs)}`: an agent's read of the main checkout "
+                + "under the configuration the run starts under, never a ground built by hand beside it): held to the main checkout by "
+                + "where it leads, every link on its way followed - "
+                + $"the file's own and a directory's above it (`{nameof(DssHarness.Core.Agents.Runtime.ConfinedPaths)}`) - kept from every place no agent's read "
+                + "reaches - every credential slot of the tool, every Claude Code directory and every place the user keeps credentials "
+                + "in, `agentPolicy.hiddenPlaces` among them - and from every read `agentPolicy.restrictions` refuse "
                 + $"(`{nameof(DssHarness.Core.Agents.Policy.AgentPolicy)}`), and read through the file as it was opened, where it stands decided again before a byte "
                 + $"passes (`{nameof(DssHarness.Core.Agents.Runtime.AgentFiles)}.{nameof(DssHarness.Core.Agents.Runtime.AgentFiles.OpenDecided)}`), so a link put on its way since reaches nothing; anything else "
                 + $"refused ({HarnessExit.Refused}), naming the input and the path, no run started (`{nameof(FlowInputs)}.{nameof(FlowInputs.OpenFiles)}`) - makes the run's "

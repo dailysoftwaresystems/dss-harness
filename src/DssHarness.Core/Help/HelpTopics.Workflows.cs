@@ -97,8 +97,10 @@ public static partial class HelpTopics
         builder.AppendLine("input of the kind file naming a file inside the repository by its path from the root or an");
         builder.AppendLine($"absolute one inside it, committed or not, which the run copies into its own {HarnessLayout.OrchestratorInputsDirectoryName}/<input>/");
         builder.AppendLine("as it starts, decided as an agent's read of it is (one that names none, or that leads out");
-        builder.AppendLine("of the repository or into a credential slot - by its own path or a link on its way - is");
-        builder.AppendLine($"refused, {HarnessExit.Refused}, no run started) and read through the file as it was opened, so a link");
+        builder.AppendLine("of the repository, into a credential slot, a place the user keeps credentials in -");
+        builder.AppendLine("agentPolicy.hiddenPlaces among them - or a Claude Code directory, by its own path or a link");
+        builder.AppendLine($"on its way, or whose read agentPolicy.restrictions refuse, is refused, {HarnessExit.Refused}, no run");
+        builder.AppendLine("started) and read through the file as it was opened, so a link");
         builder.AppendLine("put on its way since reaches nothing: every step of every session reads that copy for it");
         builder.AppendLine("- {input.<name>} the copy's path - whatever became of the file since, and every agent of");
         builder.AppendLine("the run reads it, wherever its own tree was cut from; params - its own knobs, defaulted in");
