@@ -247,14 +247,15 @@ public static partial class HelpTopics
             + "pack is ever sent changed; a step that pushes no pack, whose conversation holds no declaration of the codebase, is told none. A launch the walk of the step's order moves to another client or provider begins a "
             + "conversation of its own, and is given what its step pushes, as Claude Code, whose every launch begins one, "
             + "is. Each launch's first message is a line of the step's graph.jsonl - what of the graph it was pushed and what "
-            + "that cost, or why it was given no pack - and the step's figures are its last launch's, with the pages of the map and the pack its tool was asked for counted apart.");
+            + "that cost, or why it was given no pack - and the step's figures are its last launch's, with the pages of the map and the pack its tool was asked for counted apart, "
+            + "the pack's with the nodes its pages listed and how many of them the step then used, counted as the pushed pack's are.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             $"When a reason step that has a graph ends, the engine writes its working set, {OrchestratorLayout.StepWorkingSetFileName} - never the model: "
             + $"each node it {string.Join(", ", WorkingSetUses.All.SkipLast(1))} or {WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, every one however many, "
             + "edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone. It is made from the step's "
-            + $"{OrchestratorLayout.StepGraphFileName} - each node a graph call asked about by name (found), a line of which body gave (served), or an edit wrote, by its lines - and the tool calls its stored stream holds, "
+            + $"{OrchestratorLayout.StepGraphFileName} - each node a graph call asked about by name (found), a line of which body gave (served), or an edit wrote, by its lines, never one a pack page only listed - and the tool calls its stored stream holds, "
             + "on every client's form: a read (Read, view_file) by where the lines its answer gave stand once in the file as the step left it, else by their numbers, a write "
             + "(Edit, replace_in_file, insert_in_file) by where its new text stands once there - every place, with replace_all - else by the lines it names, a whole file's "
             + "write (Write, create_file) by every line - each matched to the declarations whose own lines it meets, a member's lines never its type's; a deletion writes "

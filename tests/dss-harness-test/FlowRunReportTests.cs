@@ -591,6 +591,36 @@ public sealed class FlowRunReportTests
     }
 
     /// <summary>
+    /// The run's graph totals sum every step's figures: the pushed pack's tokens beside the pages its steps pulled - the
+    /// map's pages and tokens, and the pack's pages, tokens, the nodes they listed and how many of them the steps then
+    /// used - so a run measures the pack it pulled as it measures the pack it pushed. A step an earlier build measured,
+    /// whose figures hold no pulled pages, adds none. Red with the pulled totals left out, or one of them not summed.
+    /// </summary>
+    [Fact]
+    public void TheRunsGraphTotals_SumThePagesItsStepsPulled_BesideThePushedPacksTokens()
+    {
+        var source = Source();
+        var steps = source.Flow.Steps;
+        var held = source with
+        {
+            Flow = source.Flow with
+            {
+                Steps =
+                [
+                    steps[0] with { Graph = JsonNode.Parse("""{"mode":"tools","pack":{"seeds":0,"nodes":0,"tokens":0,"used":0},"pulled":{"map":{"pages":1,"tokens":300},"pack":{"pages":2,"tokens":1500,"nodes":40,"used":3}},"calls":4,"servedTokens":2000}""") },
+                    steps[1] with { Graph = JsonNode.Parse("""{"mode":"map","pack":{"seeds":2,"nodes":5,"tokens":800,"used":1},"calls":0,"servedTokens":0}""") },
+                    steps[2] with { Graph = JsonNode.Parse("""{"mode":"tools","pack":{"seeds":1,"nodes":3,"tokens":200,"used":0},"pulled":{"map":{"pages":2,"tokens":700},"pack":{"pages":1,"tokens":900,"nodes":25,"used":5}},"calls":3,"servedTokens":1600}""") },
+                ],
+            },
+        };
+
+        var graph = FlowRunReport.Of(held)["totals"]!["graph"]!;
+
+        Assert.Equal((3, 1000, 7, 3600), (graph["steps"]!.GetValue<int>(), graph["packTokens"]!.GetValue<int>(), graph["calls"]!.GetValue<int>(), graph["servedTokens"]!.GetValue<int>()));
+        Assert.Equal("""{"map":{"pages":3,"tokens":1000},"pack":{"pages":3,"tokens":2400,"nodes":65,"used":8}}""", graph["pulled"]!.ToJsonString());
+    }
+
+    /// <summary>
     /// Every number the sections an analysis may cite hold has its unit in the report's one table of units, and every
     /// entry of the table is a member the report writes: a number the builder writes with no unit is one no placeholder of
     /// an impact could write, and an entry no member is names a unit for nothing - so a member added, renamed or moved
@@ -623,7 +653,7 @@ public sealed class FlowRunReportTests
                 [
                     steps[0] with
                     {
-                        Graph = JsonNode.Parse("""{"mode":"tools","from":"base","view":"base","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"pulled":{"map":{"pages":1,"tokens":300},"pack":{"pages":1,"tokens":500}},"calls":3,"servedTokens":1200,"bodies":1,"textHits":4,"edits":{"made":1,"refused":0},"wholeFileReads":{"count":1,"tokens":90},"outlinedReads":{"count":1,"tokens":2000,"outlineTokens":150},"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
+                        Graph = JsonNode.Parse("""{"mode":"tools","from":"base","view":"base","mapTokens":300,"pack":{"seeds":2,"nodes":5,"tokens":800,"used":3},"changesTokens":40,"pulled":{"map":{"pages":1,"tokens":300},"pack":{"pages":1,"tokens":500,"nodes":12,"used":2}},"calls":3,"servedTokens":1200,"bodies":1,"textHits":4,"edits":{"made":1,"refused":0},"wholeFileReads":{"count":1,"tokens":90},"outlinedReads":{"count":1,"tokens":2000,"outlineTokens":150},"escapes":{"count":1,"tokens":70,"lowConfidence":0,"stated":1}}"""),
                         Measure = steps[0].Measure! with { Ran = 10 },
                     },
                     steps[1],

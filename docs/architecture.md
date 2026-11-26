@@ -6379,7 +6379,9 @@ however many - edited first, then by how often - and a node the view no longer
 holds kept by its id, marked gone. `CodebaseWorkingSet.Make` reads it from the step's `graph.jsonl` (`GraphStepLine`,
 one `GraphCallLine` for each call of the tool, from the facts its answer carries, `GraphToolFacts`: each node a call
 asked about by name is found, each a line of which a `body`'s answer gives, within its cap, is served, and an `edit` is
-matched by the lines it wrote, as every write is, the node it named edited where they no longer declare it) and from
+matched by the lines it wrote, as every write is, the node it named edited where they no longer declare it; the nodes
+a `pack` answer's page lists, `GraphToolFacts.Listed`, are kept on its line, `GraphCallLine.Listed`, and are no use - a
+line of each, never its lines - so none is found or served, and a line an earlier build wrote without them still reads) and from
 the tool calls its stored stream holds (`OrchestrationStore.ReadStepStream`; a call is named by its `ToolCallStarted` or
 the `AssistantMessage` that made it), on every client's form: a read (`Read`, `view_file`) by where the lines its answer
 gave stand once in the file as the step left it, else by the first and the last number it gave them, a write (`Edit`,
@@ -6405,13 +6407,16 @@ cost) - a line an earlier build wrote of a read the narrowing refused (`GraphDen
 figure - and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used,
 `changesTokens` (the three its last launch was pushed: a pack made and not pushed counts 0, for its first message held
 none of it), `pulled` (the pages of the `map` and of the `pack` its tool was asked for and gave, each `pages` and
-`tokens`, counted from its `graph.jsonl`'s answered calls and among the served tokens), calls, served tokens, bodies,
-text hits, edits made and refused,
+`tokens`, counted from its `graph.jsonl`'s answered calls and among the served tokens, the `pack`'s with `nodes`, the
+nodes its pages listed, each once, and `used`, how many of them the step then used - by the one rule the pushed pack's
+`used` is counted by, `CodebaseWorkingSet.Used`: its working set's nodes the view still holds that they list), calls,
+served tokens, bodies, text hits, edits made and refused,
 whole-file reads counted from the stored stream on every client's form as the working set reads its calls - neither a
 page nor a range, its answer the file's numbered lines, so an outline given is none (`CodebaseWorkingSet.WholeFileReads`)
 - the outlined reads (`outlinedReads`: how many, `tokens` what reading them whole would have cost, `outlineTokens` what
 the outlines given in their place cost) and escapes - are held in its `step.json` under `graph` and summed for the run's
-report (`FlowReports`).
+report (`FlowRunReport`: its `totals.graph`, the pushed pack's `packTokens` beside the `pulled` map's pages and tokens
+and the pulled pack's pages, tokens, nodes and used).
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand - `--find`, `--node`, `--related`,
 `--outline` (a file the view holds; a path that names no node and is written as a file is, or is a directory the view holds
 files under; a symbol else), `--around`, `--impact`, `--body` and `--sites` - on the base or an agent's view

@@ -116,7 +116,10 @@ public sealed record GraphDeniedLine(string Path, int Lines, int Tokens) : Graph
             : null;
 }
 
-/// <summary>One call of the <c>graph</c> tool: its operation, how it ended, the nodes it asked about, served and edited, and what the answer cost.</summary>
+/// <summary>
+/// One call of the <c>graph</c> tool: its operation, how it ended, the nodes it asked about, served and edited, what the
+/// answer cost, and the nodes a <c>pack</c> answer's page listed.
+/// </summary>
 /// <param name="Op">The operation it asked, as the call named it; empty where a misused call named none.</param>
 /// <param name="Outcome">How it ended.</param>
 /// <param name="Asked">The nodes it asked about by name - <c>node</c>, <c>related</c>, <c>body</c> - by id.</param>
@@ -125,7 +128,12 @@ public sealed record GraphDeniedLine(string Path, int Lines, int Tokens) : Graph
 /// <param name="Wrote">The lines it wrote, where it wrote; null where it wrote none.</param>
 /// <param name="Tokens">The answer's estimated tokens - its bytes over four, the one bound every answer is held to.</param>
 /// <param name="Hits">How many text hits the answer added where the graph was not sure.</param>
-public sealed record GraphCallLine(string Op, GraphToolOutcome Outcome, IReadOnlyList<string> Asked, IReadOnlyList<string> Served, IReadOnlyList<string> Edited, GraphWrittenLines? Wrote = null, int Tokens = 0, int Hits = 0) : GraphStepLine
+/// <param name="Listed">
+/// The nodes the page of the context pack it gave lists, by id, each once (<see cref="GraphToolFacts.Listed"/>): no use
+/// of any, which the working set never counts, and what the step's figures weigh the pages it pulled by
+/// (<c>pulled.pack.used</c>); null for every other call, and on a line an earlier build wrote, which still reads.
+/// </param>
+public sealed record GraphCallLine(string Op, GraphToolOutcome Outcome, IReadOnlyList<string> Asked, IReadOnlyList<string> Served, IReadOnlyList<string> Edited, GraphWrittenLines? Wrote = null, int Tokens = 0, int Hits = 0, IReadOnlyList<string>? Listed = null) : GraphStepLine
 {
     /// <summary>The line of the call <paramref name="op"/> named, answered by <paramref name="answer"/>.</summary>
     /// <param name="op">The operation the call named; null where it named none.</param>
@@ -134,14 +142,14 @@ public sealed record GraphCallLine(string Op, GraphToolOutcome Outcome, IReadOnl
     {
         ArgumentNullException.ThrowIfNull(answer);
 
-        return new GraphCallLine(op ?? string.Empty, answer.Outcome, answer.Facts.Asked, answer.Facts.Served, answer.Facts.Edited, answer.Facts.Wrote, Codebase.EstimatedTokens.Of(answer.Text), answer.Facts.Hits);
+        return new GraphCallLine(op ?? string.Empty, answer.Outcome, answer.Facts.Asked, answer.Facts.Served, answer.Facts.Edited, answer.Facts.Wrote, Codebase.EstimatedTokens.Of(answer.Text), answer.Facts.Hits, answer.Facts.Listed is { Count: > 0 } listed ? listed : null);
     }
 
     /// <inheritdoc/>
     public override string? Problem()
         => string.IsNullOrWhiteSpace(Op) && Outcome != GraphToolOutcome.Usage ? "a call names its operation, unless it was refused as misused"
             : !Enum.IsDefined(Outcome) ? $"'{Outcome}' is no way a call ends"
-            : Asked.Concat(Served).Concat(Edited).Any(string.IsNullOrWhiteSpace) ? "a node is named by its id"
+            : Asked.Concat(Served).Concat(Edited).Concat(Listed ?? []).Any(string.IsNullOrWhiteSpace) ? "a node is named by its id"
             : Tokens < 0 || Hits < 0 ? "a call's tokens and hits are never below 0"
             : (Outcome == GraphToolOutcome.Wrote) != (Edited.Count == 1) || Edited.Count > 1 || (Outcome == GraphToolOutcome.Wrote) != (Wrote is not null)
                 ? "a call that wrote edited one node and names the lines it wrote, and one that wrote nothing neither"

@@ -111,8 +111,24 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
     }
 
     /// <summary>
+    /// How many of <paramref name="listed"/> the step then used: its nodes the view still held at its end that are among
+    /// them, each once - the one rule a pack's use is counted by, the page 1 its first message was pushed
+    /// (<c>pack.used</c>) and the pages the graph tool's <c>pack</c> gave it (<c>pulled.pack.used</c>) alike. A node a page
+    /// listed is no use of it: only a touch the working set counts is.
+    /// </summary>
+    /// <param name="listed">The nodes a pack listed, by id, in any order and any number of times.</param>
+    public int Used(IEnumerable<string> listed)
+    {
+        ArgumentNullException.ThrowIfNull(listed);
+
+        var among = listed.ToHashSet(StringComparer.Ordinal);
+        return Nodes.Count(node => !node.Gone && among.Contains(node.Id));
+    }
+
+    /// <summary>
     /// The working set of a step that has ended: the nodes its <c>graph</c> calls asked about, served and edited, and those
-    /// whose own lines its reads and writes met, as <paramref name="view"/> - its view at the step's end - holds them.
+    /// whose own lines its reads and writes met, as <paramref name="view"/> - its view at the step's end - holds them; a
+    /// node a <c>pack</c> answer listed (<see cref="GraphCallLine.Listed"/>) is none of them, for listing it is no use.
     /// </summary>
     /// <param name="view">The step's view, synced at its end.</param>
     /// <param name="stream">The step's stored stream (<see cref="Orchestration.OrchestrationStore.ReadStepStream"/>), every attempt's.</param>

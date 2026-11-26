@@ -536,8 +536,10 @@ public sealed class FlowStepGraph
     /// What the step's graph gave and what it saved, said as its <c>step.json</c> holds it: its mode, its view, what the map
     /// and the pack - or the changes in their place - its last launch was pushed cost, how many of the pushed pack's nodes
     /// the step then used, what the tool served - the pages of the map and the pack it was asked for among it, counted
-    /// apart under <c>pulled</c> - what the agent still read whole, and the whole reads the narrowing answered with an
-    /// outline - how many, what reading them whole would have cost and what the outlines cost (<c>outlinedReads</c>) -
+    /// apart under <c>pulled</c>, the pack's with the nodes its pages listed and how many of them the step then used, by
+    /// the one rule the pushed pack's are counted by (<see cref="CodebaseWorkingSet.Used"/>) - what the agent still read
+    /// whole, and the whole reads the narrowing answered with an outline - how many, what reading them whole would have
+    /// cost and what the outlines cost (<c>outlinedReads</c>) -
     /// counted from its <c>graph.jsonl</c> and its stored stream. A pack made and not pushed counts 0 under <c>pack</c>,
     /// for its first message held none of it. Its working set is written beside its output first
     /// (<c>working-set.json</c>), the seeds of the packs of the steps after it.
@@ -603,15 +605,16 @@ public sealed class FlowStepGraph
         var outlined = held.OfType<GraphOutlinedLine>().ToList();
         var whole = CodebaseWorkingSet.WholeFileReads(stream);
         var prompted = PromptLineOf(given ?? AgentCodebaseGiven.None);
-        var used = prompted.Nodes == 0 || Pack is null ? 0 : working.Nodes.Count(node => !node.Gone && Pack.Nodes.Contains(node.Id, StringComparer.Ordinal));
+        var used = prompted.Nodes == 0 || Pack is null ? 0 : working.Used(Pack.Nodes);
 
         // The pages of the map and the pack the tool was asked for and gave: a call each, its answer's tokens - among the
-        // served tokens, as every call's are.
-        JsonObject Pulled(GraphOp op)
-        {
-            var answered = calls.Where(line => line.Op == CodebaseGraphTool.NameOf(op) && line.Outcome == GraphToolOutcome.Answered).ToList();
-            return new JsonObject { ["pages"] = answered.Count, ["tokens"] = answered.Sum(line => line.Tokens) };
-        }
+        // served tokens, as every call's are - and, of the pack's, the nodes they listed, each once, and how many of them
+        // the step then used, by the rule the pushed pack's are counted by.
+        List<GraphCallLine> Answered(GraphOp op) => [.. calls.Where(line => line.Op == CodebaseGraphTool.NameOf(op) && line.Outcome == GraphToolOutcome.Answered)];
+
+        var mapPages = Answered(GraphOp.Map);
+        var packPages = Answered(GraphOp.Pack);
+        var listed = packPages.SelectMany(line => line.Listed ?? []).ToHashSet(StringComparer.Ordinal);
 
         return new JsonObject
         {
@@ -629,8 +632,14 @@ public sealed class FlowStepGraph
             ["changesTokens"] = prompted.ChangesTokens,
             ["pulled"] = new JsonObject
             {
-                ["map"] = Pulled(GraphOp.Map),
-                ["pack"] = Pulled(GraphOp.Pack),
+                ["map"] = new JsonObject { ["pages"] = mapPages.Count, ["tokens"] = mapPages.Sum(line => line.Tokens) },
+                ["pack"] = new JsonObject
+                {
+                    ["pages"] = packPages.Count,
+                    ["tokens"] = packPages.Sum(line => line.Tokens),
+                    ["nodes"] = listed.Count,
+                    ["used"] = working.Used(listed),
+                },
             },
             ["calls"] = calls.Count,
             ["servedTokens"] = calls.Sum(line => line.Tokens),
