@@ -630,7 +630,9 @@ public sealed partial class HelpTests
                 + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
                 + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
                 + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
-                + "each class searched by data its queries name again, its universe holding the axes the repository declares, and "
+                + "each class searched by data its queries name again, its universe counting the cells its axes that apply make - the "
+                + "product of the counts of their values, 1 where none applies, the plan's schema holding in the step that answers it "
+                + "that it answers every axis - and "
                 + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
                 + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two.",
             prose,
@@ -776,7 +778,7 @@ public sealed partial class HelpTests
                 + "passed: the call cited or a later one for passed, one whose record was written after the failing call's for failed-fixed - "
                 + "or reasoned why not, every test of the pin declared, the arm one of the registry its "
                 + "worktree holds and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every "
-                + "planned axis and the claim naming each, the arms the builder's answer lists for the item's own sweep (the step's arms) "
+                + "axis the planned class's universe says applies and the claim naming each, the arms the builder's answer lists for the item's own sweep (the step's arms) "
                 + "the arms the record names and no other, an id one arm however its case is written - and each home's touches since its "
                 + "base, the item's own commits left out, a record "
                 + "without a home audit refused where the home was touched by other work; a class's paths - the plan's and the record's, the "

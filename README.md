@@ -770,8 +770,14 @@ the shipped flow declares its `recommendations` and its `closure` there, `closur
 repository's own from the day init writes it: the universe its decisions range over, and what else
 judges them. The planner's, the plan audit's, the item audit's and the builders' prompts read
 `{text.closure}`, and the file says so: what a repository writes there weighs on what they
-decide a class covers. The builders' prompts hold the class-closure paragraph - close the class,
-at its one home, over the universe it names, nothing folded without the record of each class -
+decide a class covers. A class's universe answers every axis the file lists by its structure -
+the plan's schema holds a member for each (`kinds`, `targets`, `configurations`, `formats`,
+`entryPoints`, `tiers`, `forms`, `directions`), each its values and where they are declared or
+why it does not apply, and `further` for the axes the file's own heading names - so a universe
+that leaves an axis out is sent back within the step that answers it, and the plan audit judges
+each answer rather than looking for an axis left out. The builders' prompts hold the
+class-closure paragraph - close the class, at its one home, over the universe it names, nothing
+folded without the record of each class -
 and every prompt that goes on with an item (mend, rework, reconcile, anchors, unblock, redo and
 undo) is given the item's classes and the record so far under "The class you are closing", so a
 fresh agent holds the class as text, never a memory of it; and a step whose prompt reads the
@@ -792,7 +798,8 @@ name - to measure anything answered `passed`: the call cited or a later one for 
 whose record was written after the failing call's for `failed-fixed`), or reasoned why not,
 every test of the pin declared, the arm one of the registry the worktree holds
 and mutating the home's own file or a reason the class has nothing to mutate, the universe
-holding every planned axis and the claim naming each - and each home's touches since the run's
+holding every axis the planned class's universe says applies and the claim naming each - and
+each home's touches since the run's
 start commit, the item's own commits left out: a home touched by other work must carry a home
 audit. A class's paths - the plan's and the record's, the paths changed, an arm's site and the
 touches - are read as the plan check reads them, either separator, and compared as the machine
@@ -2372,7 +2379,9 @@ classes held to what the tree and the item's own paths say: one id to a class in
 inside the tree as a path an item reuses is, the home among the item's own paths and there in the tree where it exists,
 a site marked `home` exactly where it is the home by its path and symbol, every other site - which changes, reading the
 home or deleted - the item's too, more than one site consolidated at the home, each class searched by data its queries
-name again, its universe holding the axes the repository declares, and one home belonging to one item, two classes of
+name again, its universe counting the cells its axes that apply make - the product of the counts of their values, 1
+where none applies, the plan's schema holding in the step that answers it that it answers every axis - and one home
+belonging to one item, two classes of
 one item sharing one as they may; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
 `reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it

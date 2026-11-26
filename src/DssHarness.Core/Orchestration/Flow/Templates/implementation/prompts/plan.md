@@ -85,9 +85,9 @@ of is refused before anything is built, and a person is asked.
 
 {text.closure}
 
-Where the file above says a heading is empty, the repository has not declared its universe yet: take the axes from what
-the repository builds and tests - its kinds, targets, configurations, formats, entry points, tiers and forms, both
-directions - and name each in the universe of the class it belongs to.
+Where the file above says a heading is empty, the repository has not declared its universe yet: take the values of each
+axis from what the repository builds and tests - its kinds, targets, configurations, formats, entry points, tiers and
+forms, both directions.
 
 ## Close the class, at its one home
 
@@ -104,10 +104,14 @@ For every defect the plan fixes and every behaviour it changes, write the class 
    reaches, its around and its outline - of a file or a directory - to know where a node stands before reading any
    file whole, and text search for what the graph does not see, each such text search said in notCovered.
 4. Record each search: what was searched, how, the query as it was made, and how many places it found.
-5. Write the universe from the axes the repository declares, and the count of their product: each axis whole, from a
-   search of the tree for every cell of its kind - for the legs and the references, every file of every service that
+5. Write the universe: an answer for every axis the closure text lists - your answer's schema refuses a universe that
+   leaves one out - and for each further one it names. An axis the decision ranges over gives its values whole, from
+   a search of the tree for every cell of its kind - for the legs and the references, every file of every service that
    builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's searches
-   are. An axis written from the cells you happened on leaves one out, and an auditor holds the plan back for it.
+   are, and where the repository declares them; one it does not range over says why, as something an auditor can check
+   in the code. Its cells are the product of the counts of the values of the axes that apply. An axis written from the
+   cells you happened on leaves one out, and an auditor holds the plan back for it, as it does an axis said not to apply
+   that the code shows the decision ranges over.
 6. Where more than one site decides, the action is consolidate: the home decides, every other site reads it, and the
    item owns every path that changes. Patching some of a class's sites is never done; a class with one site names the
    home itself, and its searches prove it is the only one. The site at the home's path and symbol is marked home, and
@@ -157,7 +161,7 @@ A machine checks the items before anyone builds them: every name valid, no file 
 every path an item reuses or replaces there in the tree, every item saying what it reuses, creates or replaces, each
 home and site a path inside the tree, each class's home among the item's own paths and there in the tree, a site marked
 home only where it is the home, every other site the item's too, more than one site consolidated at the home, each
-class searched by data its queries name again, the universe holding the axes the repository declares, one class id
+class searched by data its queries name again, each universe counting the cells its axes that apply make, one class id
 used once, and one home belonging to one item. An independent auditor then checks
 the plan against the code, searching for itself what you say does not exist - the classes above all. Then
 a person approves it, unless they approved it beforehand in what they gave this run.

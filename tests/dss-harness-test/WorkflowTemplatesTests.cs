@@ -1,11 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Schemas;
 using NamedFiles = DssHarness.Core.Orchestration.Flow.WorkflowFiles;
 
 namespace DssHarness.Tests;
@@ -1325,7 +1328,7 @@ public sealed class WorkflowTemplatesTests
         var plan = Read("prompts/plan.md").ReplaceLineEndings("\n");
 
         Assert.Contains(
-            "and the count of their product: each axis whole, from a\n   search of the tree for every cell of its kind - for the legs and the references, every file of every service that\n   builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's searches\n   are.",
+            "An axis the decision ranges over gives its values whole, from\n   a search of the tree for every cell of its kind - for the legs and the references, every file of every service that\n   builds, tests, lints or checks the repository, never only the CI it names first - recorded as a class's searches\n   are,",
             plan,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1333,7 +1336,7 @@ public sealed class WorkflowTemplatesTests
             plan,
             StringComparison.Ordinal);
         Assert.Contains(
-            "an axis that leaves out a cell searched whole by you too, every cell of it the\n    universe leaves out named in the one finding,",
+            "an axis\n    that leaves out a cell searched whole by you too, every cell of it the universe leaves out named in the one\n    finding,",
             Read("prompts/plan-audit.md").ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1341,6 +1344,131 @@ public sealed class WorkflowTemplatesTests
             Read("prompts/replan.md").ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// A class's universe answers every axis the repository's closure text lists by its structure, so an omission is the
+    /// plan step's own to correct and never costs an audit or another planning iteration: the plan's schema holds a
+    /// member for each - its values and where they are declared, or why it does not apply - and the further axes beside
+    /// them, and the gate every client's answer passes sends back, within the step, a universe that leaves an axis
+    /// unanswered, an axis said not to apply with no reason, an axis said to apply with no value, and a further axis with
+    /// no name; a universe that answers each reads.
+    /// </summary>
+    [Fact]
+    public void APlanWhoseUniverseLeavesAnAxisUnanswered_IsSentBackWithinThePlanStep()
+    {
+        var gate = new StructuredOutputGate(new AgentOutput("plan", Read("schemas/plan.schema.json")), new Masking());
+        const string At = "$.output.items[0].classes[0].universe";
+
+        Assert.Empty(gate.Problems(Envelopes.Of(PlanAnswer(Universes.Of(("formats", ["cs", "md"]), ("region", ["eu", "us"]))))));
+
+        var unanswered = Universes.Of(("formats", ["cs", "md"]));
+        unanswered.Remove("configurations");
+        var unreasoned = Universes.Of(("formats", ["cs", "md"]));
+        unreasoned["forms"] = Universes.NotApplying(" ");
+        var valueless = Universes.Of(("formats", ["cs", "md"]));
+        valueless["tiers"] = Universes.Applies();
+        var unnamed = Universes.Of(("formats", ["cs", "md"]));
+        unnamed["further"] = new JsonArray(new JsonObject { ["name"] = "", ["answer"] = Universes.Applies("eu") });
+
+        Assert.Equal([$"{At}: 'configurations' is required and missing"], gate.Problems(Envelopes.Of(PlanAnswer(unanswered))));
+        Assert.Equal([$"{At}.forms: answers none of the 2 shapes its schema offers"], gate.Problems(Envelopes.Of(PlanAnswer(unreasoned))));
+        Assert.Equal([$"{At}.tiers: answers none of the 2 shapes its schema offers"], gate.Problems(Envelopes.Of(PlanAnswer(valueless))));
+        Assert.Equal([$"{At}.further[0].name: \"\" does not match its pattern"], gate.Problems(Envelopes.Of(PlanAnswer(unnamed))));
+    }
+
+    /// <summary>
+    /// The universe is defined once: a self-audit's and a diagnosis's items take the plan's work item whole, the class,
+    /// its universe and the two answers an axis has among it, never a second definition; the axes it answers are the
+    /// eight the closure text lists, and the closure text names each by its member, and no other.
+    /// </summary>
+    [Fact]
+    public void TheUniverse_IsDefinedOnce_AndTheClosureTextNamesEachOfItsAxes()
+    {
+        var plan = JsonNode.Parse(Read("schemas/plan.schema.json"))!;
+
+        foreach (var sharing in new[] { "schemas/self-audit.schema.json", "schemas/diagnosis.schema.json" })
+        {
+            var whole = JsonSchemaSubset.Whole(Read(sharing), beside => NamedFiles.RootOf(WorkflowTemplates.TextOf(NamedFiles.Beside(sharing, beside))));
+
+            Assert.Empty(whole.Problems);
+
+            foreach (var definition in new[] { "closureClass", "axisApplies", "axisDoesNotApply" })
+            {
+                Assert.True(JsonNode.DeepEquals(plan["$defs"]![definition], whole.Schema!["$defs"]![definition]), $"{sharing} holds the plan's {definition}");
+            }
+        }
+
+        Assert.Equal(["kinds", "targets", "configurations", "formats", "entryPoints", "tiers", "forms", "directions"], Universes.Shipped);
+
+        var closure = Read("closure.md").ReplaceLineEndings("\n");
+        var axes = closure[closure.IndexOf("## The axes", StringComparison.Ordinal)..closure.IndexOf("## The references", StringComparison.Ordinal)];
+
+        Assert.Equal(Universes.Shipped, [.. Regex.Matches(axes, @"\(`([A-Za-z]+)`\)").Select(match => match.Groups[1].Value)]);
+    }
+
+    /// <summary>
+    /// The audits judge each answer of a universe - an axis said not to apply that the code shows the decision ranges
+    /// over, an axis whose values leave out a cell - and never look for an axis left out, which the plan's schema holds:
+    /// an audit that holds a plan back for an omission a machine sees costs a whole planning iteration.
+    /// </summary>
+    [Fact]
+    public void TheAudits_JudgeEachAnswerOfAUniverse_NeverAnAxisLeftOut()
+    {
+        var planAudit = Prose.Words(Read("prompts/plan-audit.md"));
+        var itemAudit = Prose.Words(Read("prompts/item-audit.md"));
+
+        Assert.Contains(
+            "its schema has it answer every axis the text lists, so what you judge is each answer: an axis said not to apply that the code shows the decision ranges over, with what shows it, and an axis that leaves out a cell",
+            planAudit,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "its schema has it answer every axis the text lists: an axis it says does not apply that the code shows the decision ranges over is a finding, with what shows it, and so is an axis whose values leave out a cell",
+            itemAudit,
+            StringComparison.Ordinal);
+
+        foreach (var audit in new[] { planAudit, itemAudit, Prose.Words(Read("schemas/plan-audit.schema.json")) })
+        {
+            Assert.DoesNotContain("without a reason", audit, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>A plan as the planner answers it: one work item, deciding one class over <paramref name="universe"/>.</summary>
+    private static JsonObject PlanAnswer(JsonObject universe)
+        => new()
+        {
+            ["summary"] = "One item closes the rate.",
+            ["done"] = "the rate is decided in one place",
+            ["source"] = "made",
+            ["departures"] = new JsonArray(),
+            ["items"] = new JsonArray(new JsonObject
+            {
+                ["name"] = "one",
+                ["title"] = "The rate is decided in one place",
+                ["instructions"] = "Decide the rate at its home.",
+                ["done"] = "the rate is decided at its home",
+                ["ownedPaths"] = new JsonArray("src/**"),
+                ["forbiddenPaths"] = new JsonArray(),
+                ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/Home.cs", ["what"] = "the rate's home" }),
+                ["creates"] = new JsonArray(),
+                ["replaces"] = new JsonArray(),
+                ["tests"] = new JsonArray("HomeTests"),
+                ["noTests"] = "",
+                ["classes"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = "C1",
+                    ["invariant"] = "The rate is decided by the home for every format",
+                    ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["exists"] = true },
+                    ["sites"] = new JsonArray(new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["decides"] = "the rate", ["then"] = "home" }),
+                    ["searches"] = new JsonArray(new JsonObject { ["data"] = "the rate", ["via"] = "graph", ["query"] = "rate:", ["hits"] = 1 }),
+                    ["universe"] = universe.DeepClone(),
+                    ["action"] = "fix-at-home",
+                    ["notCovered"] = "",
+                }),
+                ["noClass"] = "",
+            }),
+            ["scope"] = new JsonArray(),
+            ["preExisting"] = new JsonArray(),
+        };
 
     private static string Read(string below)
     {

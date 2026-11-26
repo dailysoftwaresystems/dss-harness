@@ -128,8 +128,8 @@ that repairs it names the tests.
 Whether the round is clean, which is true exactly when you give no work item; the findings; what you could not
 verify; and the work items of a further round, shaped as the plan's items are, as many as the findings need: each sized to one
 builder's cycle, never more and never a sliver of one, each with its own definition of done - statements a check can
-answer one by one, the first of them the finding it settles - and each that changes a decision with its classes, or
-saying why in noClass where it decides none. An item that settles an issue the run owes names it in `settles`. Each takes a name no work item of this run has had, in this round or an
+answer one by one, the first of them the finding it settles - and each that changes a decision with its classes - each
+universe answering every axis with its values or why it does not apply - or saying why in noClass where it decides none. An item that settles an issue the run owes names it in `settles`. Each takes a name no work item of this run has had, in this round or an
 earlier one: the run knows a work item by its name, and keeps its tests and its updates under it, so a further item
 named as one already built would stand in that item's place - a follow-up to an item is a work item of its own, named
 for what it settles. Where the item audit found a site an item's class lacked or a cell its

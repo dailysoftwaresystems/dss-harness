@@ -101,17 +101,18 @@ The work of this run: {update.work}
     diagnostic, the verb, the literal - the graph's sites first - it joins every place that decides the data, and
     its coverage lines say what it searched by text alone - and your own text search beside it over the whole tree,
     across every tier, format, target and file kind and not only what the graph does not answer, never the plan's
-    searches; compare what you find with the plan's site list; hold the universe of each class against the
-    repository's closure text above - an axis that leaves out a cell searched whole by you too, every cell of it the
-    universe leaves out named in the one finding, so the revision closes the axis at once and no later audit finds
-    more of it; and check that a class with one site has searches that prove the home is the only
-    one.
+    searches; compare what you find with the plan's site list; judge the universe of each class against the
+    repository's closure text above - its schema has it answer every axis the text lists, so what you judge is each
+    answer: an axis said not to apply that the code shows the decision ranges over, with what shows it, and an axis
+    that leaves out a cell searched whole by you too, every cell of it the universe leaves out named in the one
+    finding, so the revision closes the axis at once and no later audit finds more of it; and check that a class with
+    one site has searches that prove the home is the only one.
 
 ## What to return
 
 Go, or the findings; what you checked; and, for each class you audited, what your closure part found - the sites you
-searched out that the plan's site list lacks, and the cells of its universe it leaves out without a reason. Go means
-the plan can be built as it stands; each of these is a finding that holds it back: a site the plan missed, an axis of
-the closure text the universe leaves out without a reason, an item that patches one site of several, a short site
-list, a home that is one of the sites and not the place that decides, and an item that changes a decision and declares
-no class.
+searched out that the plan's site list lacks, and the cells of its universe it leaves out. Go means the plan can be
+built as it stands; each of these is a finding that holds it back: a site the plan missed, an axis said not to apply
+that the decision ranges over, an axis whose values leave out a cell, an item that patches one site of several, a short
+site list, a home that is one of the sites and not the place that decides, and an item that changes a decision and
+declares no class.

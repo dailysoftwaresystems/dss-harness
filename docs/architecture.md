@@ -3529,7 +3529,12 @@ paths and there in the tree where it exists; a site is the home exactly where it
 compares paths, and its symbol are the home's, and only that site is marked `home`; every other site changes -
 `reads-home` or `deleted` - and is the item's too, for patching some of a class's sites is never done; more than one
 site means consolidate, as one site that is not the home does; a class is searched by data its queries name again,
-and its universe holds the axes the repository declares; and one home belongs to one item - two classes of one item
+and its universe counts the cells its axes that apply make - the product of the counts of their values, 1 where none
+applies, read by the one reading of a planned universe (`ClassClosureReading.PlannedAxes`, `CellsOf`) - while that it
+answers every axis the closure text lists, by a member of its own (`kinds`, `targets`, `configurations`, `formats`,
+`entryPoints`, `tiers`, `forms`, `directions`, and `further` for the repository's own), each its values and where they
+are declared or why it does not apply, is `plan.schema.json`'s to hold, so the structured-output check sends an omission
+back within the plan step and never costs an audit or another planning iteration; and one home belongs to one item - two classes of one item
 may share one, a place that decides more than one thing, which that item changes alone. The builder closes
 the class (part 01's B and C): the implementer's definition and the implement and remedy prompts hold the
 class-closure paragraph, every prompt that goes on with an item - mend, rework, reconcile, anchors, unblock, redo and
@@ -3585,7 +3590,8 @@ stands, and for `failed-fixed` one whose record was written after the failing ca
 result - a failure and a pass written at the same moment read as the failure last; never the builder's word or the
 stream's capped text of the answer), or reasoned, the pin's tests declared, the arm one of the
 registry's and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every
-planned axis and the claim naming each; a record without a home audit is refused where the home was touched by other
+axis the planned class's universe says applies (the record names each by the name the class's universe gives it,
+`ClassClosureReading.RecordedAxes`) and the claim naming each; a record without a home audit is refused where the home was touched by other
 work, and a home touched often enough is a hotspot in the check's answer. A class's paths - the plan's and the record's,
 read with either separator made forward (`ClassClosureReading.PathOf`, `PathPatterns.Normalize`), the paths changed, an
 arm's site and the touches - are compared by `ClassClosureProof.SamePath` under the machine's
