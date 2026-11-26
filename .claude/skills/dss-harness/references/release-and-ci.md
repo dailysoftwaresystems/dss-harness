@@ -48,6 +48,12 @@ if the runner lacks it, and runs the test binary directly, not through `dotnet t
 `DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS=1` so a test that needs a real build fails where a tool is missing instead of
 skipping green.
 
+Where one runner would take too long over the suite it runs in shards of whole test classes. The `deal` job deals
+every runner's shards once for the run, before any shard starts (its Deal step's `RUNNERS` says how many each runner
+has), and fails the run where a class would go undealt or be dealt twice; each shard runs the classes it was handed,
+and the `times` job after them keeps what each class took for the next run's deal. A shard that nears its limit is
+met by more shards, never a longer limit.
+
 A change that passes on one operating system can fail on another: the file system folds case on Windows and macOS
 and not on Linux, macOS keeps a file's old spelling on a rename where Windows takes the new one, and test doubles that
 stand for a folding file system must answer alike everywhere. Run the whole suite on Windows and on Linux before
@@ -63,8 +69,7 @@ it, so a maintainer runs such a change from a branch here. Read required checks 
 
 Every release stands on this check: neither Deploy nor Package Pipeline runs a suite. Deploy promotes `main`'s
 commit as the check passed it (for beta, with only `<Version>` bumped on top) and stable promotes what beta
-released. Never add a suite back to either; a slow runner is met by the Test step's `timeout-minutes` in
-`test.yml` (120, the job's 135).
+released. Never add a suite back to either; a slow runner is met by more shards in `test.yml` (§3).
 
 ## 5. Versions and channels
 
@@ -107,9 +112,10 @@ released. Never add a suite back to either; a slow runner is met by the Test ste
    [`WorkflowFiles`](../../../../tests/dss-harness-test/WorkflowFiles.cs) (`Lines`, `Job`, `StepNamed`,
    `StepRunning`). Find the tests a step is pinned by with `git grep -n "WorkflowFiles\." tests`, and change them in the
    same commit: `PackagePipelineTests` pins that neither Deploy nor the package pipeline runs a suite and that
-   what Deploy starts publishes the commit it pinned and promoted; `BuildToolsTests` pins the build-tools variable on the step that runs the suite.
-2. A workflow that newly runs the suite sets `DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"` on that step, last among its
-   variables, and joins the `BuildToolsTests` theory.
+   what Deploy starts publishes the commit it pinned and promoted; `BuildToolsTests` pins the build-tools variable on the step that runs the suite;
+   `TestMatrixTests` pins the one deal a run's shards run by, who reads and keeps the times, and that no awk is handed a value through `-v`.
+2. A workflow that newly runs the suite sets `DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"` on that step, among its
+   variables, and joins the `BuildToolsTests` theory with the job that runs it.
 3. Pin any new action to a full commit SHA with `# v<version>` beside it.
 4. Move the workflow's header comment, the "Pipelines" table and any prose in `docs/releasing.md` with the change.
 5. A workflow edit is proven only by CI on the pull request; nothing here runs a workflow locally.

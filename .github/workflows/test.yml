@@ -12,8 +12,11 @@ name: Test
 # or pass, for reasons that have nothing to do with the code.
 #
 # The suite is split into shards where one runner would take too long over it: a shard is a
-# set of whole test classes, dealt out heaviest first to the shard holding fewest tests so far
-# (see the Test step), so a runner's shards together run every test once.
+# set of whole test classes. The deal job deals every runner's shards once for the run,
+# before any shard starts, each class to the shard lightest so far by the seconds it took
+# when that runner last ran it, and every shard runs the classes it was dealt; a class dealt
+# to none, or to two, of a runner's shards fails the run. The times job, once the shards have
+# run, keeps what each class took for the next run's deal.
 #
 # Every action is pinned to a full commit SHA; see docs/releasing.md.
 
@@ -24,8 +27,176 @@ permissions:
   contents: read
 
 jobs:
+  deal:
+    # The run's one deal: every runner's shards, from one file of times a runner, before any shard
+    # starts. Were each shard to deal itself, as it once did, it would read whichever times another
+    # shard of the same run had just saved, and two shards of one runner could each be dealt a
+    # class, or neither. "Re-run failed jobs" runs a failed shard on the classes it failed on: a job
+    # that succeeded is not run again, and its outputs and artifacts stand for every attempt after.
+    name: deal
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    outputs:
+      matrix: ${{ steps.deal.outputs.matrix }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build
+        # The suite is built here only to be listed: the deal runs none of it.
+        run: dotnet build DssHarness.slnx --configuration Release
+
+      - name: Restore test times
+        # What each test class took when each runner last ran it, a file a runner, as the times job of
+        # the run that saved them last kept them. None the first time, and the deal then weighs a class
+        # by the tests it holds.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/test-times
+          key: test-class-times-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: test-class-times-
+
+      - name: Deal
+        # The classes are dealt out heaviest first, each to the shard lightest so far, so a runner's
+        # shards together run every class once. A class weighs the seconds its tests took when that
+        # runner last ran them: how many tests a class holds says nothing of how long they run - a
+        # class of rebases or of flows runs a minute a test where another runs a millisecond, and dealt
+        # by counts the heavy ones met in one shard, which ran past the step's limit while another of
+        # the same runner ended in twenty minutes. A class the runner never timed weighs its tests and
+        # one more for itself, at the seconds a test of the classes it timed took on average; where it
+        # timed none, counts alone. The suite's two listings - its classes, and its tests by name - name
+        # the same classes, or a class would go undealt; and each runner's shards hold every class once,
+        # each shard one at least, or the deal fails rather than leave a class to run twice or never.
+        id: deal
+        shell: bash
+        env:
+          # Shards per runner, from how long one run of the whole suite takes there: Linux holds
+          # it in one shard; Windows x86_64 in two; Windows arm64 in three, since that runner's
+          # speed wanders threefold between runs; macOS arm64 in three, and macOS x86_64, by far
+          # the slowest, in eight. GitHub runs only so many macOS jobs at once and queues the
+          # rest, so a macOS shard added shortens each shard more than it does the leg.
+          #
+          # A class is atomic to a shard. One class whose every test runs for minutes on the slow
+          # runners, as the implementation flow's do, still weighs what many of the suite's other
+          # classes do together, and no shard can be lighter than it; so the flow's tests are held
+          # in batteries, each a class of its own (ImplementationFlowTests+Planning and its
+          # siblings), which the deal spreads; when one grows until its shard nears the Test
+          # step's limit, the answer is more shards here, or that battery split again - never a
+          # longer limit.
+          RUNNERS: |
+            ubuntu-latest 1           # Linux x86_64
+            ubuntu-24.04-arm 1        # Linux arm64
+            windows-latest 2          # Windows x86_64
+            windows-11-vs2026-arm 3   # Windows arm64
+            macos-26-intel 8          # macOS x86_64
+            macos-latest 3            # macOS arm64
+        run: |
+          set -eo pipefail
+          suite=./build/bin/dss-harness-test/release/dss-harness-test
+          deal="$RUNNER_TEMP/test-deal"
+          mkdir -p "$deal/times" "$deal/shards"
+
+          # The classes, and how many tests each holds: a test's name is its class's, a dot, its
+          # method's, and a theory's arguments in brackets. Listing runs no test, which the suite's
+          # runner reports as exit 8.
+          "$suite" --xunit-list classes --ignore-exit-code 8 | tr -d '\r' \
+            | grep -E '^[A-Za-z_][A-Za-z0-9_.+`]*$' | LC_ALL=C sort > "$deal/classes.txt"
+
+          "$suite" --list-tests --ignore-exit-code 8 | tr -d '\r' \
+            | awk '/^  [A-Za-z_]/ && !/^  duration:/ {
+                name = substr($0, 3); at = index(name, "(")
+                if (at) name = substr(name, 1, at - 1)
+                sub(/\.[^.]*$/, "", name); held[name]++
+              }
+              END { for (name in held) print held[name], name }' > "$deal/tests.txt"
+
+          if ! cut -d ' ' -f 2 "$deal/tests.txt" | LC_ALL=C sort | cmp -s - "$deal/classes.txt"; then
+            echo "::error::The suite's classes and the classes its tests name differ, so the deal would leave a class out: $(cut -d ' ' -f 2 "$deal/tests.txt" | LC_ALL=C sort | LC_ALL=C comm -3 - "$deal/classes.txt" | tr -d '\t' | tr '\n' ' ')"
+            exit 1
+          fi
+
+          matrix=
+          while read -r os shards _; do
+            [ -n "$os" ] || continue
+
+            case "$shards" in
+              '' | 0* | *[!0-9]*) echo "::error::Runner $os is given '$shards' shards; a runner takes one or more."; exit 1 ;;
+            esac
+
+            # The times the runner's classes took, as the times job last kept them; none for a runner
+            # never timed. Every file reaches awk as an operand, which it opens as named and fails on
+            # where it cannot, and every number through its environment: never through -v, which reads
+            # the escapes in a value.
+            if [ -f "$RUNNER_TEMP/test-times/$os.txt" ]; then
+              cp "$RUNNER_TEMP/test-times/$os.txt" "$deal/times/$os.txt"
+            else
+              : > "$deal/times/$os.txt"
+            fi
+
+            mkdir -p "$deal/shards/$os"
+
+            awk '
+              FILENAME == ARGV[1] { held[$2] = $1; next }
+              FILENAME == ARGV[2] { took[$2] = $1; next }
+              { classes[++n] = $0 }
+              END {
+                for (i = 1; i <= n; i++) if (classes[i] in took) { seconds += took[classes[i]]; counted += held[classes[i]] + 1 }
+                rate = seconds > 0 ? seconds / counted : 1
+                for (i = 1; i <= n; i++) {
+                  class = classes[i]
+                  printf "%.3f %s\n", (class in took ? took[class] : (held[class] + 1) * rate), class
+                }
+              }' "$deal/tests.txt" "$deal/times/$os.txt" "$deal/classes.txt" \
+              | LC_ALL=C sort -k1,1nr -k2,2 \
+              | SHARDS="$shards" DEALT="$deal/shards/$os" awk '
+                  BEGIN { n = ENVIRON["SHARDS"] + 0 }
+                  {
+                    least = 1
+                    for (s = 2; s <= n; s++) if (load[s] < load[least]) least = s
+                    load[least] += $1
+                    print $2 > (ENVIRON["DEALT"] "/" least ".txt")
+                  }'
+
+            for shard in $(seq "$shards"); do
+              if [ ! -s "$deal/shards/$os/$shard.txt" ]; then
+                echo "::error::Shard $shard of $shards of $os holds no test class: the suite lists $(wc -l < "$deal/classes.txt" | tr -d ' ')."
+                exit 1
+              fi
+
+              matrix="$matrix${matrix:+,}{\"os\":\"$os\",\"shard\":$shard,\"shards\":$shards}"
+            done
+
+            if ! cat "$deal/shards/$os"/*.txt | LC_ALL=C sort | cmp -s - "$deal/classes.txt"; then
+              echo "::error::The shards of $os do not hold every test class once."
+              exit 1
+            fi
+
+            echo "$os: $(for shard in $(seq "$shards"); do wc -l < "$deal/shards/$os/$shard.txt" | tr -d ' '; done | paste -sd ' ' -) of $(wc -l < "$deal/classes.txt" | tr -d ' ') test classes."
+          done <<< "$RUNNERS"
+
+          echo "matrix={\"include\":[$matrix]}" >> "$GITHUB_OUTPUT"
+
+      - name: Hand on the deal
+        # Overwrite, so "Re-run all jobs" replaces the deal an earlier attempt of this run uploaded.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-deal
+          path: ${{ runner.temp }}/test-deal
+          if-no-files-found: error
+          overwrite: true
+
   test:
     name: test (${{ matrix.os }}, ${{ matrix.shard }}/${{ matrix.shards }})
+    needs: deal
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
 
@@ -35,40 +206,8 @@ jobs:
       # matrix exists to answer.
       fail-fast: false
       #
-      # Shards per runner, from how long one run of the whole suite takes there: Linux holds
-      # it in one shard; Windows x86_64 in two; Windows arm64 in three, since that runner's
-      # speed wanders threefold between runs; macOS arm64 in three, and macOS x86_64, by far
-      # the slowest, in eight. GitHub runs only so many macOS jobs at once and queues the
-      # rest, so a macOS shard added shortens each shard more than it does the leg.
-      #
-      # A class is atomic to a shard, and the dealing weighs a class by the seconds its tests
-      # took when this runner last ran them (see the Test step). One class whose every test
-      # runs for minutes on the slow runners, as the implementation flow's do, still weighs what
-      # many of the suite's other classes do together, and no shard can be lighter than it; so
-      # the flow's tests are held in batteries, each a class of its own
-      # (ImplementationFlowTests+Planning and its siblings), which the dealing spreads; when
-      # one grows until its shard nears the step's limit, the answer is more shards, or that
-      # battery split again - never a longer limit.
-      matrix:
-        include:
-          - { os: ubuntu-latest, shard: 1, shards: 1 }           # Linux x86_64
-          - { os: ubuntu-24.04-arm, shard: 1, shards: 1 }        # Linux arm64
-          - { os: windows-latest, shard: 1, shards: 2 }          # Windows x86_64
-          - { os: windows-latest, shard: 2, shards: 2 }
-          - { os: windows-11-vs2026-arm, shard: 1, shards: 3 }   # Windows arm64
-          - { os: windows-11-vs2026-arm, shard: 2, shards: 3 }
-          - { os: windows-11-vs2026-arm, shard: 3, shards: 3 }
-          - { os: macos-26-intel, shard: 1, shards: 8 }          # macOS x86_64
-          - { os: macos-26-intel, shard: 2, shards: 8 }
-          - { os: macos-26-intel, shard: 3, shards: 8 }
-          - { os: macos-26-intel, shard: 4, shards: 8 }
-          - { os: macos-26-intel, shard: 5, shards: 8 }
-          - { os: macos-26-intel, shard: 6, shards: 8 }
-          - { os: macos-26-intel, shard: 7, shards: 8 }
-          - { os: macos-26-intel, shard: 8, shards: 8 }
-          - { os: macos-latest, shard: 1, shards: 3 }            # macOS arm64
-          - { os: macos-latest, shard: 2, shards: 3 }
-          - { os: macos-latest, shard: 3, shards: 3 }
+      # Every runner's every shard, as the deal job dealt them (its Deal step's RUNNERS).
+      matrix: ${{ fromJSON(needs.deal.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -130,15 +269,13 @@ jobs:
             sudo apparmor_parser -r "$profile"
           fi
 
-      - name: Restore test times
-        # What each test class took when this runner last ran it, which the Test step deals the shards by: the newest
-        # file any shard of this runner saved, each holding every class's time - its own shard's measured anew, the rest
-        # as it found them. None the first time, and the dealing then weighs a class by the tests it holds.
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: The deal
+        # The run's deal, which every shard of it runs by: an earlier attempt's, where this one runs a
+        # failed shard again. Kept outside the checkout, which some tests read.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: ${{ runner.temp }}/test-times
-          key: test-times-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
-          restore-keys: test-times-${{ matrix.os }}-
+          name: test-deal
+          path: ${{ runner.temp }}/test-deal
 
       - name: Test
         # The suite's own executable, which exits non-zero when any test fails: never through
@@ -153,129 +290,111 @@ jobs:
         # with the suite and wanders with the runner; more shards, not a longer limit, are the
         # answer when a shard nears it.
         #
-        # A shard is a set of whole test classes. The classes are dealt out heaviest first, each
-        # to the shard lightest so far, in one order on every runner, so a runner's shards
-        # together run every class once. A class weighs the seconds its tests took when this
-        # runner last ran them (the Restore test times step): how many tests a class holds says
-        # nothing of how long they run - a class of rebases or of flows runs a minute a test where
-        # another runs a millisecond, and dealt by counts the heavy ones met in one shard, which
-        # ran past the step's limit while another of the same runner ended in twenty minutes. A
-        # class this runner never timed weighs its tests and one more for itself, at the seconds a
-        # test of the classes it timed took on average; where it timed none, counts alone. A
-        # shard that holds no class fails the step rather than running nothing green.
+        # A shard runs the whole test classes the deal job dealt it, and no other.
         timeout-minutes: 75
         shell: bash
         env:
           # A runner is meant to hold cmake, ninja and a compiler: a test that really builds fails here where one is
           # lacking, and is skipped only on a developer's machine that has none.
           DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"
+          RUNS_ON: ${{ matrix.os }}
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ matrix.shards }}
         run: |
           # No -u: bash 3.2, macOS's own, reads an empty "$@" as unset.
           set -eo pipefail
           suite=./build/bin/dss-harness-test/release/dss-harness-test${{ runner.os == 'Windows' && '.exe' || '' }}
-
-          # The lists are kept outside the checkout, which some tests read. Listing runs no test,
-          # which the suite's runner reports as exit 8.
-          "$suite" --xunit-list classes --ignore-exit-code 8 | tr -d '\r' \
-            | grep -E '^[A-Za-z_][A-Za-z0-9_.+`]*$' | LC_ALL=C sort > "$RUNNER_TEMP/test-classes.txt"
-
-          # How many tests each class holds: a test's name is its class's, a dot, its method's,
-          # and a theory's arguments in brackets.
-          "$suite" --list-tests --ignore-exit-code 8 | tr -d '\r' \
-            | awk '/^  [A-Za-z_]/ && !/^  duration:/ {
-                name = substr($0, 3); at = index(name, "(")
-                if (at) name = substr(name, 1, at - 1)
-                sub(/\.[^.]*$/, "", name); held[name]++
-              }
-              END { for (name in held) print held[name], name }' > "$RUNNER_TEMP/test-weights.txt"
-
-          # The seconds each class took when this runner last ran it, as the Keep test times step wrote them.
-          mkdir -p "$RUNNER_TEMP/test-times"
-          times="$RUNNER_TEMP/test-times/times.txt"
-          [ -f "$times" ] || : > "$times"
-
-          # Every file reaches awk as an operand, which it opens as named and fails on where it cannot, and every number
-          # through its environment: never through -v, which reads the escapes in a value - on Windows D:\a\_temp came
-          # through as D:, a bell and _temp, and a file that is not there reads as empty.
-          awk '
-            FILENAME == ARGV[1] { held[$2] = $1; next }
-            FILENAME == ARGV[2] { took[$2] = $1; next }
-            { classes[++n] = $0 }
-            END {
-              for (i = 1; i <= n; i++) if (classes[i] in took) { seconds += took[classes[i]]; counted += held[classes[i]] + 1 }
-              rate = seconds > 0 ? seconds / counted : 1
-              for (i = 1; i <= n; i++) {
-                class = classes[i]
-                printf "%.3f %s\n", (class in took ? took[class] : (held[class] + 1) * rate), class
-              }
-            }' "$RUNNER_TEMP/test-weights.txt" "$times" "$RUNNER_TEMP/test-classes.txt" \
-            | LC_ALL=C sort -k1,1nr -k2,2 \
-            | awk 'BEGIN { n = ENVIRON["SHARDS"] + 0; i = ENVIRON["SHARD"] + 0 } {
-                least = 1
-                for (s = 2; s <= n; s++) if (load[s] < load[least]) least = s
-                load[least] += $1
-                if (least == i) print $2
-              }' > "$RUNNER_TEMP/test-shard.txt"
+          deal="$RUNNER_TEMP/test-deal"
 
           set --
           while IFS= read -r class; do
             set -- "$@" "$class"
-          done < "$RUNNER_TEMP/test-shard.txt"
+          done < "$deal/shards/$RUNS_ON/$SHARD.txt"
 
-          if [ "$#" -eq 0 ]; then
-            echo "::error::Shard $SHARD of $SHARDS holds no test class: the suite listed $(wc -l < "$RUNNER_TEMP/test-classes.txt" | tr -d ' ')."
-            exit 1
-          fi
-
-          echo "Shard $SHARD of $SHARDS: $# of $(wc -l < "$RUNNER_TEMP/test-classes.txt" | tr -d ' ') test classes."
+          echo "Shard $SHARD of $SHARDS: $# of $(wc -l < "$deal/classes.txt" | tr -d ' ') test classes."
           # Bounded by the suite itself short of the step's limit, a shard past its time ends aborted with what it ran
-          # reported - its slowest tests among it - and the Keep test times step times its classes from that report.
+          # reported - its slowest tests among it - and the times job times its classes from that report.
           "$suite" --xunit-diagnostics on --long-running 120 --show-slowest-tests 20 --timeout 70m \
-            --report-xunit-junit --report-xunit-junit-filename shard.xml --results-directory "$RUNNER_TEMP/test-report" \
+            --report-xunit-junit --report-xunit-junit-filename "$RUNS_ON-$SHARD.xml" --results-directory "$RUNNER_TEMP/test-report" \
             --filter-class "$@"
 
-      - name: Keep test times
-        # What each class of this shard took, for the next run's dealing: written over the times this run was dealt by,
-        # each class the suite still lists kept - this shard's as the report says them, the rest as they were - so the
-        # file saved holds every class, and whichever shard's is restored next deals the whole suite. A class the suite's
-        # own bound cut short weighs as though the tests it never ran took what its others did; a shard that wrote no
-        # report leaves its classes the times they had.
-        id: keep
+      - name: Hand on the report
+        # What each class of this shard took, for the times job, named by its runner and shard. A shard
+        # that wrote no report hands on none. Overwrite, so a shard run again replaces the report its
+        # earlier attempt handed on.
         if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-report-${{ matrix.os }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/test-report/${{ matrix.os }}-${{ matrix.shard }}.xml
+          if-no-files-found: ignore
+          overwrite: true
+
+  times:
+    # What each class took, kept for the next run's deal once the shards have run, failed or not: one
+    # file a runner, written over the times this run was dealt by - each class a shard of this run
+    # timed as its report says, the rest as the deal read them - and saved as one entry, which the
+    # next run's deal restores whole. A class the suite's own bound cut short weighs as though the
+    # tests it never ran took what its others did; a shard that handed on no report leaves its classes
+    # the times they had. A file that is there and cannot be read fails the job.
+    name: test times
+    needs: [deal, test]
+    if: always() && needs.deal.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: The deal
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-deal
+          path: ${{ runner.temp }}/test-deal
+
+      - name: The shards' reports
+        # Each shard's latest attempt's, all in one directory.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: test-report-*
+          path: ${{ runner.temp }}/test-report
+          merge-multiple: true
+
+      - name: Keep test times
         shell: bash
         run: |
           set -eo pipefail
-          report="$RUNNER_TEMP/test-report/shard.xml"
-          times="$RUNNER_TEMP/test-times/times.txt"
-          [ -f "$report" ] && [ -f "$times" ] || exit 0
+          deal="$RUNNER_TEMP/test-deal"
+          mkdir -p "$RUNNER_TEMP/test-times"
 
-          # The report is one line of XML: each test case's class and seconds, summed by class. The files reach awk as
-          # operands, as the Test step's do, and the report last, on its input.
-          tr '<' '\n' < "$report" | awk '
-            FILENAME == ARGV[1] { listed[$0] = 1; next }
-            FILENAME == ARGV[2] { held[$2] = $1; next }
-            FILENAME == ARGV[3] { took[$2] = $1; next }
-            /^testcase / {
-              if (!match($0, / time="[^"]*"/)) next
-              seconds = substr($0, RSTART + 7, RLENGTH - 8)
-              if (!match($0, / classname="[^"]*"/)) next
-              class = substr($0, RSTART + 12, RLENGTH - 13)
-              fresh[class] += seconds
-              ran[class]++
-            }
-            END {
-              for (class in fresh) took[class] = held[class] > ran[class] ? fresh[class] * held[class] / ran[class] : fresh[class]
-              for (class in took) if (class in listed) printf "%.3f %s\n", took[class], class
-            }' "$RUNNER_TEMP/test-classes.txt" "$RUNNER_TEMP/test-weights.txt" "$times" - | LC_ALL=C sort -k2,2 > "$times.next"
+          for dealt in "$deal/shards"/*/; do
+            os=$(basename "$dealt")
 
-          mv "$times.next" "$times"
-          echo "kept=true" >> "$GITHUB_OUTPUT"
+            # Each report is one line of XML: each test case's class and seconds, summed by class. The files reach
+            # awk as operands, as the deal's do, and the reports last, on its input.
+            for shard in "$dealt"*.txt; do
+              report="$RUNNER_TEMP/test-report/$os-$(basename "$shard" .txt).xml"
+              [ ! -f "$report" ] || tr '<' '\n' < "$report"
+            done | awk '
+              FILENAME == ARGV[1] { listed[$0] = 1; next }
+              FILENAME == ARGV[2] { held[$2] = $1; next }
+              FILENAME == ARGV[3] { took[$2] = $1; next }
+              /^testcase / {
+                if (!match($0, / time="[^"]*"/)) next
+                seconds = substr($0, RSTART + 7, RLENGTH - 8)
+                if (!match($0, / classname="[^"]*"/)) next
+                class = substr($0, RSTART + 12, RLENGTH - 13)
+                fresh[class] += seconds
+                ran[class]++
+              }
+              END {
+                for (class in fresh) took[class] = held[class] > ran[class] ? fresh[class] * held[class] / ran[class] : fresh[class]
+                for (class in took) if (class in listed) printf "%.3f %s\n", took[class], class
+              }' "$deal/classes.txt" "$deal/tests.txt" "$deal/times/$os.txt" - | LC_ALL=C sort -k2,2 > "$RUNNER_TEMP/test-times/$os.txt"
+
+            echo "$os: $(wc -l < "$RUNNER_TEMP/test-times/$os.txt" | tr -d ' ') of $(wc -l < "$deal/classes.txt" | tr -d ' ') test classes timed."
+          done
 
       - name: Save test times
-        if: always() && steps.keep.outputs.kept == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/test-times
-          key: test-times-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          key: test-class-times-${{ github.run_id }}-${{ github.run_attempt }}
