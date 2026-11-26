@@ -24,8 +24,9 @@ internal static class CreateAgentCommand
     private static readonly Option<bool> ReadsOnlyOption = new(AgentService.ReadsOnlyOption)
     {
         Description = "Used by the orchestrator engine for a step that only reads; of no use typed by hand. Makes an agent that "
-            + "only reads: its tree, made as every agent's is, at the main checkout's HEAD and brought there again as each of its "
-            + "steps starts, whatever it wrote there discarded. Nothing of it is seeded, refreshed, rebased or folded.",
+            + "only reads: its tree, made as every agent's is, at the main checkout's HEAD and brought there again - or to the commit "
+            + "its step names - as each of its steps starts, whatever it wrote there discarded. Nothing of it is seeded, refreshed, "
+            + "rebased or folded.",
     };
 
     /// <summary>

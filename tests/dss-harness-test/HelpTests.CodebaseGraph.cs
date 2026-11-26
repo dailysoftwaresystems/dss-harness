@@ -65,6 +65,25 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The codebase-graph topic says what view an agent that only reads is served: the base, its own tree never synced as a
+    /// view - but by a step that names the commit its tree starts at, whose tree holds that commit and not the base, and
+    /// whose own tree's view is synced once the tree stands there, and served.
+    /// </summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysAReaderWhoseStepNamesACommit_IsServedItsOwnTreesView()
+    {
+        var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
+
+        Assert.Contains(
+            Prose.Words(
+                "An agent that only reads is served the base: its own tree, brought to the main checkout's HEAD as each of its steps starts, is never synced as a view - but by a "
+                + "step that names the commit its tree starts at (commit, 'help workflows'), whose tree then holds that commit and not the base: that tree's own view is synced, "
+                + "by a whole listing held against the base, once the tree stands there, and served."),
+            prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The topic says every spelling the keys' join names a key by - a literal of its last segment, of its whole path, of
     /// its path in brackets in either quote mark, of the path as .NET's configuration spells it, and of a path through a
     /// YAML alias or merge - each read from the code, so a later wording change to the spellings is held.

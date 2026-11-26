@@ -12,7 +12,7 @@ Reported by `{source.step}`:
 
 ## The run
 
-The base commit, where the run began: {orient.startCommit}
+The base commit, where the run began: {orient.startCommit} - your tree is this commit.
 
 What the run is for: {intake.triage.title}
 
@@ -35,8 +35,9 @@ empty where none is:
 
 ## What to do
 
-1. Reproduce it on `{orient.startCommit}`, read-only: quote what you read at that commit, or keep a command that reads it
-   and what it printed.
+1. Reproduce it on `{orient.startCommit}`, read-only. Your tree is that commit: read and search it as it stands - the
+   lines you need of a file, a search of the tree, the graph - and quote what you read, or keep a command that reads
+   the commit's history and what it printed. Reading a file through `git show` is never needed.
 2. Choose the course: `unproven` where you could not reproduce it; `duplicate` where the list above holds it,
    whatever became of it; `fix` where it blocks that step, is related or is critical; `next` where it is a defect in
    code this run's change does not touch, that blocks nothing, no relation of the work and not critical - a defect

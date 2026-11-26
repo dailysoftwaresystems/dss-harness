@@ -1560,6 +1560,8 @@ public static class WorkflowValidator
                 AccessRules(entry, where);
             }
 
+            CommitRules(entry, where, resumesAnother);
+
             if (step.AskRounds is not null && step.Ask is not true)
             {
                 _problems.Add($"{where} says askRounds without ask; how often a step may ask is a step that asks's own bound");
@@ -1616,6 +1618,40 @@ public static class WorkflowValidator
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// The commit a reason step's tree starts at (<c>commit</c>) is a reading step's alone: the tree it names is the one
+        /// the engine's own read-only agent is given, brought there as the step starts. A step that writes, or works in a
+        /// worktree a create-agent step made - by its own keys, or by those of the step whose work it goes on with, whose
+        /// agent it works as - works where its work is folded from, which nothing brings to a commit, and is refused naming
+        /// one rather than starting in a tree the key does not say.
+        /// </summary>
+        /// <param name="entry">The reason step.</param>
+        /// <param name="where">The step's path, as its problems name it.</param>
+        /// <param name="resumesAnother">Whether the step goes on with another step's work.</param>
+        private void CommitRules(Entry entry, string where, bool resumesAnother)
+        {
+            var step = entry.Step;
+
+            if (step.Commit is null)
+            {
+                return;
+            }
+
+            var root = resumesAnother ? ResumeChain.Root(_definition, entry.Path, step) : step;
+
+            if (root.Access != "write" && root.In is null)
+            {
+                return;
+            }
+
+            var does = root.Access == "write" ? "writes" : $"works in '{root.In}'";
+            var whose = resumesAnother ? $"goes on with the work of '{step.Resume}', which {does}," : does;
+
+            _problems.Add(
+                $"{where} {whose} and names commit; a tree starts at a commit only where its step only reads - the engine's own read-only "
+                + "agent's, brought there as the step starts - and a worktree a create-agent step made holds work that is folded, which no step brings to a commit");
         }
 
         /// <summary>

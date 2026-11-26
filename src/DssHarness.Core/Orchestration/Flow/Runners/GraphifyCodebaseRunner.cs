@@ -61,7 +61,7 @@ public sealed class GraphifyCodebaseRunner(
 
             switch (store.ReadAgent(layout, agent))
             {
-                case { State: AgentStates.Live } record when FlowGraphSyncs.WorktreeOf(agent, record, context.Layout) is { } worktree:
+                case { State: AgentStates.Live } record when FlowGraphSyncs.WorktreeOf(agent, record, context.Layout, run.Step) is { } worktree:
                     request = request with { Worktree = worktree };
                     break;
 

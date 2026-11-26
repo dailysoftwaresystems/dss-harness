@@ -1319,6 +1319,7 @@ public static class WorkflowFileParser
                     ResumePrompt = ScalarIn(keys, $"{where}.resumePrompt", problems),
                     Outputs = ScalarIn(keys, $"{where}.outputs", problems),
                     Access = EnumIn(keys, $"{where}.access", problems, ["read", "write"]),
+                    Commit = ScalarIn(keys, $"{where}.commit", problems),
                     Resume = ScalarIn(keys, $"{where}.resume", problems),
                     Independent = BooleanIn(keys, $"{where}.independent", problems),
                     OnPreExisting = ScalarIn(keys, $"{where}.onPreExisting", problems),

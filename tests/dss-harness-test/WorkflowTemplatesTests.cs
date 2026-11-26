@@ -954,7 +954,7 @@ public sealed class WorkflowTemplatesTests
 
         // The prompts that name the graph today, so a new one is held as it comes.
         Assert.Equal(
-            ["item-pipeline/prompts/home-audit.md", "item-pipeline/prompts/rework.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            ["item-pipeline/prompts/home-audit.md", "item-pipeline/prompts/rework.md", "prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md", "prompts/pre-existing.md"],
             [.. naming.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
 
         // A file of a workflow the shipped one uses is named under that workflow's place, as the embedded set holds it.
@@ -1118,11 +1118,12 @@ public sealed class WorkflowTemplatesTests
 
         // Every reasoning step - the recovery's among them - sends what it met that was there before the run to the one
         // triage step, which is raised by such an issue, never scheduled, and gives one it decides to fix to the recovery.
+        // It reproduces the issue on the commit the run began on, which its tree is, and only reads.
         Assert.Empty(untriaged);
         var triage = Assert.Single(definition.Steps, step => step.Raised is not null);
         Assert.Equal(
-            ("triage-pre-existing-issue", "reason", WorkflowStep.RaisedByPreExisting, WorkflowStep.Recover, (string?)null),
-            (triage.Name, triage.Type, triage.Raised, triage.OnAddress, triage.OnPreExisting));
+            ("triage-pre-existing-issue", "reason", WorkflowStep.RaisedByPreExisting, WorkflowStep.Recover, (string?)null, "{orient.startCommit}", (string?)null, (string?)null),
+            (triage.Name, triage.Type, triage.Raised, triage.OnAddress, triage.OnPreExisting, triage.Commit, triage.Access, triage.In));
 
         return;
 

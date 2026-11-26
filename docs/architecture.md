@@ -1491,16 +1491,23 @@ trees. Its record says `"access": "read"` (`AgentRecord.Access`) beside the tree
 which is every record an older tool wrote of one and what the tool still writes for one, so those records read as they
 always did. The engine makes one for a read-only reason step, and nothing else does - the option's help says a person
 has no use for one by hand. As every step that works as it starts - each attempt of its first, and of each that goes
-on with its work - the engine brings its tree to the main checkout's HEAD then (`IAgentService.ReadyAsync`, asked by
-`CreateAgentRunner.ReadyAsync` before anything of the step reads the tree): held as every agent's worktree is while it
-is written, its commit kept alive first, then a forced detached checkout of that commit and a clean of every file git
-does not track - ignored ones and repositories of their own included (`git clean -ffdx`) - proved after by its HEAD and
-by git listing nothing in it the commit does not hold as it is, so the tree is exactly what the main checkout committed
-at the step's start, whatever the agent wrote there before; the record then names that commit. An attempt that goes on
-with an answer in its own conversation - a person's, a limit's `more` or `compact` - is the same start going on, and
-finds the tree as its attempt left it. A tree that is not there - a record an older tool wrote, saying `"access":
-"read"` and naming no tree, or a making that failed - is made at the step's start, and the record given its three facts;
-anything else at its path is refused, nothing touched. The agent may write its tree, where it builds and tests, and its
+on with its work - the engine brings its tree to the main checkout's HEAD then, or to the commit the step's `commit`
+names (`IAgentService.ReadyAsync`, asked by `CreateAgentRunner.ReadyAsync` before anything of the step reads the tree,
+with the step's `commit` as the engine filled it where the step started - `AgentReadyRequest.Commit`, which
+`AgentReady.Asked` says back): held as every agent's worktree is while it is written, its commit kept alive first, then
+a forced detached checkout of that commit and a clean of every file git does not track - ignored ones and repositories
+of their own included (`git clean -ffdx`) - proved after by its HEAD and by git listing nothing in it the commit does
+not hold as it is, so the tree is exactly what that commit holds - the main checkout's at the step's start where the
+step names none - whatever the agent wrote there before; the record then names that commit. A commit asked is read as
+git reads one in the main checkout before anything is held: one that names none the repository holds, blank among
+them, is refused with nothing changed and fails the step, never read as the main checkout's HEAD in its place. The key
+is a reading step's alone: the definition's check refuses it on a step that writes or works in an agent's worktree, by
+its own keys or by those of the step whose work it goes on with (`WorkflowValidator`). An attempt that goes on with an
+answer in its own conversation - a person's, a limit's `more` or `compact` - is the same start going on, and finds the
+tree as its attempt left it. A tree that is not there - a record an older tool wrote, saying `"access": "read"` and
+naming no tree, or a making that failed - is made at the step's start, at the main checkout's HEAD by the one making,
+and brought on to the commit asked where that is another, and the record given its three facts; anything else at its
+path is refused, nothing touched. The agent may write its tree, where it builds and tests, and its
 work directory - whatever its definition's `writes` says, since nothing it writes is ever folded, committed or pushed.
 It counts against no limit, the limit being a limit on the worktrees whose work is folded: `OrchestrationRules.OpenAgents`
 leaves it out, its tree listed or not, and so do list-orchestrator's open agents and delete-orchestrator's way, which
@@ -3507,7 +3514,8 @@ tools given `run` - that the engine gives it by, the tool runtime offers it by a
 so no launch is told to take a tool its server does not list; its every call - a leg, its variant, a filter, the cell
 measured - runs through `ITestLegs` as a leg step's legs are (`FlowStepLegs`, the one owner of a step's legs: the
 isolation decided first, the process scope over the step's directory, the ledger kept), in the agent's worktree where
-it has one - an agent that only reads measures its own tree, at the main checkout's HEAD, which no fold moves and the
+it has one - an agent that only reads measures its own tree, at the main checkout's HEAD or the commit its step names,
+which no fold moves and the
 start of its next step takes back - and in a local copy of the main tree where it does not
 (`ReasonStepRunner.MeasuredAsync`), read by
 `FlowLegVerdicts.ClassOf` - a red leg failed, a leg that passed passed, every other verdict unmeasured with the leg's
@@ -3662,7 +3670,8 @@ makes a read-only reason step's agent the same way, its tree by the same making.
 step itself: the agent it is given - the one its `in` names, the work a `resume` goes on with
 (`FlowCoordinator.NamedAgentOf` walks the chain), or the engine's own read-only one, named with its model before its
 record (`FlowCoordinator.Start`) and made through `CreateAgentRunner.MakeAsync(readsOnly: true)` where the step names
-none, and its tree brought to the main checkout's HEAD by `CreateAgentRunner.ReadyAsync` as every step that works as it
+none, and its tree brought to the main checkout's HEAD - or to the commit the step's `commit` names - by
+`CreateAgentRunner.ReadyAsync` as every step that works as it
 starts, before the step's ground and its record of what the tree held untracked (`AgentStepStart`) are taken - the
 definition it works by read where
 the chain of work it goes on with began (`ResumeChain.Root`, the one owner the validator reads it by too: a step that
@@ -4328,7 +4337,8 @@ program a launch starts is found ready where the step starts (`ClaudeCodeUpdateS
 reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
 each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
 `work/<agent>/` (`OrchestratorLayout.WorkDirectory`); the child is started in the tree it works on
-(`ReasonLaunch.Workspace`) - its worktree, a read-only agent's own tree among them, brought to the main checkout's HEAD
+(`ReasonLaunch.Workspace`) - its worktree, a read-only agent's own tree among them, brought to the main checkout's HEAD,
+or to the commit its step names,
 as the step started, so a path relative to where it starts, its tools', its commands' and those its prompt writes from
 the repository's root, names what the repository holds, and a command over that tree names the working directory, which
 the policy never refuses for the slots beneath it (`AgentPolicy.ThroughWorkingDirectory`) - and the reporter, which
@@ -5975,8 +5985,10 @@ first where the run has none - as the overlay of each file the worktree holds ot
 not hold, the digest of the base it stands on with it: a file whose extract the base or an earlier sync of the view made
 is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads,
 which is served the base: its own tree, the main checkout's HEAD as each of its steps starts, is never synced as a view
-(`FlowGraphSyncs.WorktreeOf`). Each
-tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
+(`FlowGraphSyncs.WorktreeOf`) - but by a step that names the commit its tree starts at (`commit`), whose tree then
+holds that commit and not the base: that tree's own view is the one it is served (`FlowGraphSyncs.ViewsOwnTree`),
+synced by a whole listing once the step's runner brought the tree there (`FlowGraphSyncs.ReadiedAsync`) and never at
+the step's start before it, when the tree stands as the agent's last step left it. Each tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
 as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
 (`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it
 again under its gate with no file read, from the earlier manifest it stood on, until a newer sync of the base holds them

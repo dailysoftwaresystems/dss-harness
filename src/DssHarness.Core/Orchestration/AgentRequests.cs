@@ -9,25 +9,33 @@ namespace DssHarness.Core.Orchestration;
 /// <param name="Session">The session to record for it, where one is given.</param>
 /// <param name="ReadsOnly">
 /// Whether it is made to only read: the engine's own, for a read-only reason step, its tree made by the same making as
-/// every agent's and brought to the main checkout's HEAD as each of its steps starts, nothing of it ever folded. Such an
-/// agent is handed nothing and records no session, so <paramref name="Empty"/> or <paramref name="Session"/> beside it is
-/// a usage error.
+/// every agent's and brought to the main checkout's HEAD, or to the commit its step names, as each of its steps starts,
+/// nothing of it ever folded. Such an agent is handed nothing and records no session, so <paramref name="Empty"/> or
+/// <paramref name="Session"/> beside it is a usage error.
 /// </param>
 public sealed record AgentCreateRequest(string StartDirectory, string Orchestrator, string Agent, string Model, bool Empty, string? Session, bool ReadsOnly = false);
 
-/// <summary>What bringing a read-only agent's tree to the main checkout's HEAD was asked, as one of its steps starts.</summary>
+/// <summary>
+/// What bringing a read-only agent's tree to the main checkout's HEAD - or to the commit its step names - was asked, as one
+/// of its steps starts.
+/// </summary>
 /// <param name="StartDirectory">The directory the run works from.</param>
 /// <param name="Orchestrator">The orchestrator the agent belongs to.</param>
 /// <param name="Agent">The agent's name.</param>
-public sealed record AgentReadyRequest(string StartDirectory, string Orchestrator, string Agent);
+/// <param name="Commit">
+/// The commit the tree is brought to, as the step's <c>commit</c> was filled: one the main checkout's repository holds, read
+/// as git reads a commit; null for the main checkout's HEAD.
+/// </param>
+public sealed record AgentReadyRequest(string StartDirectory, string Orchestrator, string Agent, string? Commit = null);
 
-/// <summary>What bringing a read-only agent's tree to the main checkout's HEAD answered.</summary>
+/// <summary>What bringing a read-only agent's tree to the main checkout's HEAD, or to the commit asked, answered.</summary>
 /// <param name="Orchestrator">The orchestrator the agent belongs to.</param>
 /// <param name="Name">The agent's name.</param>
 /// <param name="Tree">Its tree's path.</param>
-/// <param name="Commit">The main checkout's HEAD the tree now stands on, exactly as committed.</param>
+/// <param name="Commit">The commit the tree now stands on, exactly as committed: the one asked, else the main checkout's HEAD.</param>
 /// <param name="Made">Whether the tree was made, for it was not there, rather than brought there from where it stood.</param>
-public sealed record AgentReady(string Orchestrator, string Name, string Tree, string Commit, bool Made);
+/// <param name="Asked">The commit asked, as the request named it; null where none was, and the tree stands on the main checkout's HEAD.</param>
+public sealed record AgentReady(string Orchestrator, string Name, string Tree, string Commit, bool Made, string? Asked = null);
 
 /// <summary>What seeding an agent again was asked: what its seeding hands it, and whether it may overwrite its own work.</summary>
 /// <param name="StartDirectory">The directory the command was run from.</param>

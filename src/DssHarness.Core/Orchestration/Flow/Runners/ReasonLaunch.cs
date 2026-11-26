@@ -27,8 +27,9 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
     /// Where an agent's run works: its agent's worktree - at the path its record resolves under the worktrees root it was
     /// made under, never the record's address - which is also where it starts, so every path relative to where it starts,
     /// its tools' and its commands' and those its prompts write from the repository's root, names what the repository
-    /// holds. An agent that only reads has a tree of its own as every agent has, brought to the main checkout's HEAD as
-    /// each of its steps starts, and starts there too; the workspace says it only reads (<see cref="AgentWorkspace.OnlyReads"/>),
+    /// holds. An agent that only reads has a tree of its own as every agent has, brought to the main checkout's HEAD - or to
+    /// the commit its step names - as each of its steps starts, and starts there too; the workspace says it only reads
+    /// (<see cref="AgentWorkspace.OnlyReads"/>),
     /// for it reads the main checkout as well. Else, for a run of no agent's - the reporter, which reads the run's records
     /// alone - or an agent whose record an older tool wrote with no tree, its own work directory. Its work directory and the
     /// run's directory either way. The work directory is made here, before any client is handed the workspace: a run that

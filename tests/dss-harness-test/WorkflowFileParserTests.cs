@@ -1301,8 +1301,8 @@ public sealed class WorkflowFileParserTests
     {
         Assert.Equal(
             [
-                "line 5, column 12: 'draft.agent' holds {input.agent}, and agent is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
-                "line 8, column 18: 'draft.description' holds {plan.title}, and description is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
+                "line 5, column 12: 'draft.agent' holds {input.agent}, and agent is no template: it is read as it is written, never filled; a reason step fills commit.",
+                "line 8, column 18: 'draft.description' holds {plan.title}, and description is no template: it is read as it is written, never filled; a reason step fills commit.",
                 "line 13, column 19: 'build.legs' holds {input.leg}, and legs is no template: it is read as it is written, never filled; a test step fills exclude, labels, affected and noTests.",
                 "line 16, column 13: 'build.on.step' holds {draft.next}, and on.step is no template: it is read as it is written, never filled; a test step fills exclude, labels, affected and noTests.",
                 "line 24, column 14: 'fold.within' holds {input.dir}, and within is no template: it is read as it is written, never filled; a fold step fills none of its keys.",
