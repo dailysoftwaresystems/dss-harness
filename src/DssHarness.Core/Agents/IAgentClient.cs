@@ -993,7 +993,7 @@ public sealed record AgentEntries(Configuration.AgentProviderConfig Provider, Co
 /// The tool, answering from the run's own view of its graph; null where none was built, and every call of the tool then
 /// answers <see cref="Gone"/>.
 /// </param>
-/// <param name="Recorded">Told of each line the graph leaves - a call, an escape, a denied read - where the run keeps them; null where it keeps none.</param>
+/// <param name="Recorded">Told of each line the graph leaves - a call, an escape, a whole read answered with the file's outline - where the run keeps them; null where it keeps none.</param>
 /// <param name="AfterWriteAsync">
 /// Syncs the graph by what a write or a command of the run's wrote, and makes <paramref name="Tool"/> answer from the view
 /// it leaves (<see cref="Runtime.AfterWrites.SyncGraphAsync"/>); null where nothing syncs.

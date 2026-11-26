@@ -589,7 +589,12 @@ public static partial class FlowRunReport
                     ["count"] = served.Sum(step => step.Graph?["wholeFileReads"]?["count"]?.GetValue<int>() ?? 0),
                     ["tokens"] = served.Sum(step => step.Graph?["wholeFileReads"]?["tokens"]?.GetValue<int>() ?? 0),
                 },
-                ["deniedReads"] = served.Sum(step => step.Graph?["deniedReads"]?.GetValue<int>() ?? 0),
+                ["outlinedReads"] = new JsonObject
+                {
+                    ["count"] = served.Sum(step => step.Graph?["outlinedReads"]?["count"]?.GetValue<int>() ?? 0),
+                    ["tokens"] = served.Sum(step => step.Graph?["outlinedReads"]?["tokens"]?.GetValue<int>() ?? 0),
+                    ["outlineTokens"] = served.Sum(step => step.Graph?["outlinedReads"]?["outlineTokens"]?.GetValue<int>() ?? 0),
+                },
                 ["escapes"] = new JsonObject
                 {
                     ["count"] = served.Sum(step => step.Graph?["escapes"]?["count"]?.GetValue<int>() ?? 0),

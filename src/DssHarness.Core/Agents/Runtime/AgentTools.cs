@@ -222,6 +222,38 @@ public static class AgentTools
             .OrderBy(tool => tool.Name, StringComparer.Ordinal)];
     }
 
+    /// <summary>What <c>view_file</c> says of its answers in a step that has a codebase graph: a range headed by the declarations its lines meet.</summary>
+    public const string ViewFileInAGraphStep =
+        "In this step a range of a file the codebase graph parsed begins with the declarations its lines meet, each as the graph names a node - handle, kind, signature, path:start-end #hash - so you can ask graph's body for one or read the lines beside it exactly.";
+
+    /// <summary>What <c>search_files</c> says of its answers in a step that has a codebase graph: each hit under the declaration it is in.</summary>
+    public const string SearchFilesInAGraphStep =
+        "In this step a hit inside a declaration of a file the codebase graph parsed is given under that declaration's line - handle, kind, signature, path:start-end #hash, as the graph names a node - with the declaration's hits and their context indented beneath it, so you know which declaration each hit is in and the lines to read next; a hit outside every declaration is given as it is.";
+
+    /// <summary>What <c>view_file</c> says of a whole read in a step whose reads the graph narrows: such a read of a long file the graph parsed is answered with its outline.</summary>
+    public static string ViewFileNarrowed { get; } =
+        $"A whole read of such a file of more than {CodebaseGraphTool.NarrowLines.ToString(CultureInfo.InvariantCulture)} lines is answered with its outline in its place - every declaration with its lines and its hash - and how to read the lines you need.";
+
+    /// <summary>
+    /// <paramref name="tools"/> as a step that has a codebase graph is offered them: <c>view_file</c> and <c>search_files</c>
+    /// each saying how the graph is in its answers - a range headed by the declarations it meets, a search's hits under
+    /// theirs, and, where the step's reads are <paramref name="narrow"/>ed, a whole read of a long file the graph parsed
+    /// answered with its outline - and every other tool as it is.
+    /// </summary>
+    /// <param name="tools">The tools the step is offered.</param>
+    /// <param name="narrow">Whether the step's whole reads are narrowed (<c>graphReads: narrow</c>).</param>
+    public static IReadOnlyList<AgentToolDefinition> InAGraphStep(IEnumerable<AgentToolDefinition> tools, bool narrow)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+
+        return [.. tools.Select(tool => tool.Name switch
+        {
+            ViewFile => tool with { Description = $"{tool.Description} {ViewFileInAGraphStep}{(narrow ? " " + ViewFileNarrowed : string.Empty)}" },
+            SearchFiles => tool with { Description = $"{tool.Description} {SearchFilesInAGraphStep}" },
+            _ => tool,
+        })];
+    }
+
     /// <summary>
     /// An input's schema: an object of these members, each typed and said, the required ones required, nothing else taken -
     /// written as every JSON an agent's call carries is (<see cref="AgentEnvelope.Written"/>).

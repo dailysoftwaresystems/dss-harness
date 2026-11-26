@@ -91,9 +91,10 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is denied a whole view_file - one with no start_line "
-                + "and no end_line - of a file its graph holds parsed over the narrowing bound, by the tool runtime as on the API clients "
-                + "and with the same words, a range passing and the same two escapes counted and recorded as the graph's lines.",
+            "A step whose reads are narrowed (graphReads: narrow, 'help codebase-graph') is answered a whole view_file - one with no start_line "
+                + "and no end_line - of a file its graph holds parsed over the narrowing bound with the file's outline in its place, by the tool "
+                + "runtime as on the API clients and with the same words, a range passing and the same two escapes counted and recorded as the "
+                + "graph's lines; its search_files hits and its ranges answer from the graph as they do there.",
             prose,
             StringComparison.Ordinal);
         Assert.DoesNotContain("its edit operation is not given on this client", prose, StringComparison.Ordinal);

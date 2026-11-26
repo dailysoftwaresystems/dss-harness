@@ -140,16 +140,21 @@ public enum GraphToolOutcome
 }
 
 /// <summary>
-/// What a whole read of one file is under the narrowing of reads (<c>graphReads: narrow</c>): denied, with the way to
-/// the graph; allowed as an escape <c>lowConfidence</c>, with why the graph is not sure of the file; or allowed plainly.
+/// What a whole read of one file is under the narrowing of reads (<c>graphReads: narrow</c>): answered with the file's
+/// outline in its place; allowed as an escape <c>lowConfidence</c>, with why the graph is not sure of the file; or allowed
+/// plainly.
 /// </summary>
-/// <param name="Narrowed">Whether the read is denied.</param>
-/// <param name="Text">Where it is denied, the sentence the model reads with the way to the graph; where it is an escape, why the graph is not sure of the file.</param>
-/// <param name="Escape">The escape that lets the read - <see cref="GraphEscapeLine.LowConfidence"/> - or null where it is denied or needs none.</param>
-/// <param name="Path">The file, by the path the view holds it at, where it is denied or let by as an escape - what its line records it as; null where the read passes plainly.</param>
+/// <param name="Narrowed">Whether the read is answered with the file's outline in its place.</param>
+/// <param name="Text">
+/// Where it is narrowed, the line the model reads first, saying what it is given and how to read the file's lines -
+/// followed by the outline itself where <see cref="CodebaseGraphTool.WholeReadAsync"/> answers it; where it is an escape,
+/// why the graph is not sure of the file.
+/// </param>
+/// <param name="Escape">The escape that lets the read - <see cref="GraphEscapeLine.LowConfidence"/> - or null where it is narrowed or needs none.</param>
+/// <param name="Path">The file, by the path the view holds it at, where it is narrowed or let by as an escape - what its line records it as; null where the read passes plainly.</param>
 public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, string? Path = null)
 {
-    /// <summary>A read that passes plainly: not denied, no escape to record.</summary>
+    /// <summary>A read that passes plainly: not narrowed, no escape to record.</summary>
     public static GraphWholeRead Passed { get; } = new(Narrowed: false, string.Empty, null);
 }
 
@@ -202,7 +207,7 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// </param>
 /// <param name="changes">The pages of the codebase changes the step's message began, read at each <c>changes</c>; null, or answering null, where it was told none.</param>
 /// <param name="map">A page of the repository map the step's first message began, read at each <c>map</c> by its number; null, or answering none, where it was given no map.</param>
-public sealed class CodebaseGraphTool(
+public sealed partial class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
     IFileSystem fileSystem,
@@ -344,7 +349,7 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>
     /// The most lines a file may hold and a whole read of it still pass the narrowing: a longer one the view holds as
-    /// parsed is denied, with the way to the graph (<c>graphReads: narrow</c>).
+    /// parsed is answered with its outline in its place (<c>graphReads: narrow</c>, <see cref="WholeReadAsync"/>).
     /// </summary>
     public const int NarrowLines = 200;
 
@@ -356,9 +361,10 @@ public sealed class CodebaseGraphTool(
 
     /// <summary>
     /// What a whole read of the file at <paramref name="path"/> of <paramref name="lines"/> lines is under the narrowing
-    /// (<c>graphReads: narrow</c>): denied, with the way to the graph, where the view holds the file as parsed and it is
-    /// over <see cref="NarrowLines"/> lines - or allowed, an escape <c>lowConfidence</c> with why where the graph is not
-    /// sure of it, plainly where the view does not hold it as parsed, it is short enough, or a <c>wholeFile</c> lifted it.
+    /// (<c>graphReads: narrow</c>): narrowed - answered with its outline, the line said first saying how to read its lines
+    /// (<see cref="WholeReadAsync"/>) - where the view holds the file as parsed and it is over <see cref="NarrowLines"/>
+    /// lines; or allowed, an escape <c>lowConfidence</c> with why where the graph is not sure of it, plainly where the view
+    /// does not hold it as parsed, it is short enough, or a <c>wholeFile</c> lifted it.
     /// </summary>
     /// <param name="path">The file, relative to the tree, as the reader spells it.</param>
     /// <param name="lines">How many lines the file holds, as the reader read it.</param>
@@ -379,7 +385,7 @@ public sealed class CodebaseGraphTool(
         return lines > NarrowLines
             ? new GraphWholeRead(
                 Narrowed: true,
-                $"'{ReportText.Printable(held)}' is {lines.ToString(CultureInfo.InvariantCulture)} lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
+                $"'{ReportText.Printable(held)}' is {lines.ToString(CultureInfo.InvariantCulture)} lines and in the codebase graph, so its outline is given in place of the whole file: read the lines you need with start_line and end_line, or the file a page at a time with page, ask graph's body for a declaration by its handle, or, if you need the file whole, say why with graph's wholeFile",
                 null,
                 held)
             : GraphWholeRead.Passed;
