@@ -1594,7 +1594,13 @@ the agent's capabilities and no other, each served by the engine's tool server (
 `mcp__dssharness__delete_directory`, `mcp__dssharness__move_path`; `run`:
 `mcp__dssharness__run_command`; `web`: `mcp__dssharness__web_fetch`,
 `mcp__dssharness__web_search`), never one that starts agents, loads skills, asks a person or
-plans. None of Claude Code's own tools is given: `--tools` names none (`--tools ""`), so its shell
+plans. Its turns are the model's answers, as on the API clients and as Claude Code counts the turns
+its `--max-turns` holds the step's `maxTurns` to: each response a launch writes - the lines of one
+response sharing its message id, a line that names none an answer of its own, a message Claude Code
+writes itself none - counted as it arrives, over every launch of the run, so a launch cut before its
+turn's result still counts what it answered; the run's result, a side-task's record and a step's
+measure say them, never the engine's messages to the launch. None of Claude Code's own tools is
+given: `--tools` names none (`--tools ""`), so its shell
 and its file tools reach no launch, and a side-task alone keeps Claude Code's own `WebFetch` and
 `WebSearch` beside the engine's; each call is asked of the engine and run by the tool
 runtime below as on the API clients - a command by `run_command`, under the isolation of the

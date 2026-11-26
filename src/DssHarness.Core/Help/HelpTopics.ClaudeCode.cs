@@ -54,7 +54,12 @@ public static partial class HelpTopics
             + "directory, with every other root it reaches added. It is given its model and no fallback, the step's effort, "
             + "turns and budget, and the tools of the agent's capabilities and no other, each served by the engine's tool server - "
             + tools
-            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. None of Claude Code's own tools "
+            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. Its turns are the model's answers, as on "
+            + "the API clients and as Claude Code counts the turns its --max-turns holds the step's maxTurns to: each response a launch "
+            + "writes - the lines of one response sharing its message id, a line that names none an answer of its own, a message Claude "
+            + "Code writes itself none - counted as it arrives, over every launch of the run, so a launch cut before its turn's result "
+            + "still counts what it answered; the run's result, a side-task's record and a step's measure say them, never the engine's "
+            + "messages to the launch. None of Claude Code's own tools "
             + $"is given: --tools names none (--tools \"\"), so its shell and its file tools ({own}) reach no launch, and a side-task "
             + $"alone keeps Claude Code's own {ownWeb} beside the engine's; each call is asked of the engine and run by the tool "
             + $"runtime below as on the API clients - a command by {Agents.Runtime.AgentTools.RunCommand}, under the isolation of the agent's commands, its output kept "

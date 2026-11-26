@@ -338,7 +338,11 @@ public sealed record MessageSent(string Text, AgentMessageKind Which) : AgentEve
 /// <param name="Waiting">How many of the messages written to the agent it has still not taken, by the client's own count.</param>
 public sealed record MessagesDropped(int Count, int Waiting) : AgentEvent;
 
-/// <summary>A turn of the agent's work began.</summary>
+/// <summary>
+/// A turn of the agent's work began: on the API clients one answer of the model's; on Claude Code one exchange of the
+/// engine's with the launch - a message it wrote that the launch took, and every answer the model gave it before its
+/// result (<see cref="TurnFinished.Answers"/>).
+/// </summary>
 /// <param name="Turn">The turn's number, from one.</param>
 public sealed record TurnStarted(int Turn) : AgentEvent;
 
@@ -347,7 +351,18 @@ public sealed record TurnStarted(int Turn) : AgentEvent;
 /// <param name="Model">The model that served it, as its own message named it.</param>
 /// <param name="Usage">What the turn used.</param>
 /// <param name="StopReason">Why it ended, as the client says it; null where it does not say.</param>
-public sealed record TurnFinished(int Turn, string Model, AgentUsage Usage, string? StopReason = null) : AgentEvent;
+/// <param name="Answers">
+/// How many answers of the model's the turn held - one response each, which the run counts as its turns
+/// (<see cref="AgentRunResult.Turns"/>): said by a client whose turn is an exchange that may hold many (Claude Code), naught
+/// where the model answered nothing; null where the turn is one answer - the API clients' - and in a stream written
+/// before turns said it, read as one (<see cref="AnswersHeld"/>).
+/// </param>
+public sealed record TurnFinished(int Turn, string Model, AgentUsage Usage, string? StopReason = null, int? Answers = null) : AgentEvent
+{
+    /// <summary>How many answers of the model's the turn held: its <see cref="Answers"/>, one where it says none - the one reading of it.</summary>
+    [JsonIgnore]
+    public int AnswersHeld => Answers ?? 1;
+}
 
 /// <summary>A fragment of the answer's text as it was written. Shown while it is written; the whole message that follows holds it.</summary>
 /// <param name="Text">The fragment.</param>
@@ -551,4 +566,12 @@ public sealed record RunFinished(AgentRunStatus Status, string? Error = null) : 
     /// chat's.
     /// </summary>
     public int? MessagesAnswered { get; init; }
+
+    /// <summary>
+    /// How many turns the run took, as its result says (<see cref="AgentRunResult.Turns"/>): the model's answers, one
+    /// response each, over every entry and launch of it - a launch cut before its turn's end among them, whose answers no
+    /// <see cref="TurnFinished"/> says. Null where it took none, and in a stream written before runs said it: there the
+    /// run's turns are what its ended turns held (<see cref="TurnFinished.AnswersHeld"/>).
+    /// </summary>
+    public int? Turns { get; init; }
 }

@@ -411,6 +411,52 @@ public sealed class AgentRunSpendTests
     }
 
     /// <summary>
+    /// The run's account counts its turns as the model's answers, run by run: a run whose end says its own count is that
+    /// count - its launch cut before a turn's end answered more than its ended turns say - a run a crash cut before its
+    /// end, which a later run's start shows, is the answers its ended turns held, and a run whose end says none, as a
+    /// stream written before runs said it, is its ended turns', each one where it says no answers of its own.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsAccount_CountsItsTurnsAsTheModelsAnswers_EachRunsOwnCountWhereItsEndSaysIt()
+    {
+        var (providers, problems) = AgentProviders.Resolve(new HarnessConfig());
+
+        Assert.Empty(problems);
+
+        var spend = new AgentRunSpend(providers!, "claude-sonnet-5-5");
+        var used = AgentUsage.None;
+        AgentEvent[] stream =
+        [
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "end_turn", Answers: 3),
+            new TurnStarted(2),
+            new RunFinished(AgentRunStatus.Stalled) { Turns = 5 },
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "tool_use", Answers: 4),
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "end_turn"),
+            new TurnStarted(2),
+            new TurnFinished(2, "claude-sonnet-5-5", used, "end_turn"),
+            new RunFinished(AgentRunStatus.Completed),
+            new RunStarted(1),
+            new TurnStarted(1),
+            new TurnFinished(1, "claude-sonnet-5-5", used, "tool_use", Answers: 6),
+        ];
+
+        foreach (var happened in stream)
+        {
+            await spend.EmitAsync(happened);
+        }
+
+        // 5 the first run's end says, 4 of the run the second's start showed cut, 2 of the run whose end said none, and 6 of
+        // the run under way.
+        Assert.Equal((17, (int?)17), (spend.TurnsTaken, spend.Account().Turns));
+    }
+
+    /// <summary>
     /// Parts fold into one: the counted sums add, and the first reason a part could not be counted is kept - a later
     /// counted part never makes the whole known again, and a part said uncounted with no reason still says one.
     /// </summary>

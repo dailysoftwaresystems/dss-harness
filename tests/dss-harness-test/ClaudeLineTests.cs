@@ -55,6 +55,11 @@ public sealed class ClaudeLineTests
                         Assert.Equal("assistant", type);
                         Assert.False(string.IsNullOrEmpty(assistant.Model), $"{file}: an assistant message names no model");
                         Assert.All(assistant.Calls, call => Assert.False(string.IsNullOrEmpty(call.Id) || string.IsNullOrEmpty(call.Tool)));
+
+                        // Every line names the response it is a block of - the model's by Anthropic's message id - which is
+                        // how the client counts each answer once.
+                        Assert.False(string.IsNullOrEmpty(assistant.Id), $"{file}: an assistant message names no response");
+                        Assert.True(assistant.Model == ClaudeLine.Synthetic || assistant.Id?.StartsWith("msg_", StringComparison.Ordinal) == true, $"{file}: the model's response '{assistant.Id}' is no message id");
                         break;
                     case ClaudeLine.User user:
                         Assert.Equal("user", type);
@@ -196,15 +201,15 @@ public sealed class ClaudeLineTests
 
     /// <summary>
     /// An assistant message reads whole: its text blocks joined, its thinking, each call with its input, the error Claude
-    /// Code wrote it for, and the model - <see cref="ClaudeLine.Synthetic"/> where no model wrote it.
+    /// Code wrote it for, the response it is of, and the model - <see cref="ClaudeLine.Synthetic"/> where no model wrote it.
     /// </summary>
     [Fact]
     public void AnAssistantMessage_ReadsWhole()
     {
         var line = Assert.IsType<ClaudeLine.Assistant>(ClaudeLine.Read(
-            """{"type":"assistant","message":{"model":"claude-sonnet-5-5","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"a"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"x"}},{"type":"text","text":"b"}],"usage":{"input_tokens":3,"output_tokens":4}}}"""));
+            """{"type":"assistant","message":{"model":"claude-sonnet-5-5","id":"msg_1","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"a"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"x"}},{"type":"text","text":"b"}],"usage":{"input_tokens":3,"output_tokens":4}}}"""));
 
-        Assert.Equal(("claude-sonnet-5-5", "ab", "hm", (string?)null), (line.Model, line.Text, line.Thinking, line.Error));
+        Assert.Equal(("claude-sonnet-5-5", "ab", "hm", (string?)null, "msg_1"), (line.Model, line.Text, line.Thinking, line.Error, line.Id));
         var call = Assert.Single(line.Calls);
         Assert.Equal(("toolu_1", "Read", "x"), (call.Id, call.Tool, call.Input!["file_path"]!.GetValue<string>()));
         Assert.Equal(3, line.Usage!.InputTokens);
@@ -212,7 +217,7 @@ public sealed class ClaudeLineTests
         var refused = Assert.IsType<ClaudeLine.Assistant>(ClaudeLine.Read(
             """{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Invalid API key"}]},"error":"authentication_failed"}"""));
 
-        Assert.Equal((ClaudeLine.Synthetic, "authentication_failed", (string?)null), (refused.Model, refused.Error, refused.Thinking));
+        Assert.Equal((ClaudeLine.Synthetic, "authentication_failed", (string?)null, (string?)null), (refused.Model, refused.Error, refused.Thinking, refused.Id));
         Assert.Null(refused.Usage);
         Assert.Equal(((string?)null, (string?)null), (refused.StopReason, refused.Category));
 

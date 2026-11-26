@@ -27,6 +27,14 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// and run on another has not done what it was configured to do.
 /// </para>
 /// <para>
+/// A turn of the run's is one answer of the model's, as on the API clients and as Claude Code counts the turns its
+/// <c>--max-turns</c> holds: each response the launch writes - its lines sharing one message id, a line that names none its
+/// own - counted over every launch as it arrives, the run's <see cref="AgentRunResult.Turns"/>. The engine's own exchanges
+/// with a launch - each message of the engine's a turn took, which may hold many answers - number the turns' events
+/// (<see cref="TurnStarted"/>, <see cref="TurnFinished"/>), and each exchange's end says the answers it held
+/// (<see cref="TurnFinished.Answers"/>).
+/// </para>
+/// <para>
 /// A launch that signs in with a key is given its entry's key; one Claude Code reports invalid is passed over, and where
 /// the step had done no work yet the next key is given a new launch with the step's prompt. Work a key refused part way
 /// through leaves for the engine's fallback, which goes on from what it stored.
@@ -204,7 +212,7 @@ public sealed class ClaudeCodeClient(
                     await events.EmitAsync(FallbackStarted.KeyRefused(
                         model, run.Provider ?? string.Empty, ClientName, refused.Name, keys[entry + 1]!.Name,
                         $"Claude Code reported {refused.Name} invalid", "a new launch with the step's prompt",
-                        totals.Turns, threwAway: false)).ConfigureAwait(false);
+                        totals.Answers, threwAway: false)).ConfigureAwait(false);
                     continue;
                 }
             }
@@ -222,7 +230,7 @@ public sealed class ClaudeCodeClient(
         => result with
         {
             Model = run.Model,
-            Turns = totals.Turns,
+            Turns = totals.Answers,
             ToolCalls = totals.Calls,
             Denials = totals.Denials,
             WebRequests = totals.WebRequests,
@@ -248,7 +256,21 @@ public sealed class ClaudeCodeClient(
     /// <summary>What every launch of a run adds to.</summary>
     private sealed class Totals
     {
-        public int Turns { get; set; }
+        /// <summary>
+        /// The engine's exchanges with the run's launches: each message of the engine's a launch took that began a turn,
+        /// numbered from one over every launch - what the turns' events are numbered by (<see cref="TurnStarted"/>,
+        /// <see cref="TurnFinished"/>).
+        /// </summary>
+        public int Exchanges { get; set; }
+
+        /// <summary>
+        /// The run's turns: the model's answers over every launch of it, one response each, counted as each first arrives
+        /// (<see cref="AgentRunResult.Turns"/>).
+        /// </summary>
+        public int Answers { get; set; }
+
+        /// <summary>The id of every response counted among <see cref="Answers"/>: the lines of one response are one answer.</summary>
+        public HashSet<string> Answered { get; } = new(StringComparer.Ordinal);
 
         public int Calls { get; set; }
 
@@ -385,6 +407,9 @@ public sealed class ClaudeCodeClient(
         private bool _initialized;
         private string? _version = run.ProgramVersion;
         private bool _inTurn;
+
+        // How many of the model's answers the turn under way - or the one last ended - holds, which its end says.
+        private int _turnAnswers;
 
         // The ids of the messages written that no turn has taken yet, in the order they were written.
         private readonly List<string> _pending = [];
@@ -806,8 +831,9 @@ public sealed class ClaudeCodeClient(
                     _inTurn = true;
                     _declined = null;
                     _limit = null;
-                    totals.Turns++;
-                    await Emit(new TurnStarted(totals.Turns)).ConfigureAwait(false);
+                    _turnAnswers = 0;
+                    totals.Exchanges++;
+                    await Emit(new TurnStarted(totals.Exchanges)).ConfigureAwait(false);
 
                     // A turn that began after the person left - a line taken before the interrupt dropped it - is cut too.
                     if (_leaving && !_leaveAsked)
@@ -908,6 +934,16 @@ public sealed class ClaudeCodeClient(
 
         private async Task<LaunchOutcome?> OnAssistantAsync(ClaudeLine.Assistant assistant)
         {
+            // Each answer of the model's is one of the run's turns, counted as its first line arrives - so a launch cut before
+            // its turn's result still counts what it answered: Claude Code writes a line for each block of a response, every
+            // line of it naming the response's id, and a line that names none is an answer of its own. A message Claude Code
+            // wrote itself is no answer of a model's.
+            if (assistant.Model != ClaudeLine.Synthetic && (assistant.Id is not { Length: > 0 } id || totals.Answered.Add(id)))
+            {
+                totals.Answers++;
+                _turnAnswers++;
+            }
+
             switch (assistant.Error)
             {
                 case "authentication_failed":
@@ -928,7 +964,7 @@ public sealed class ClaudeCodeClient(
                 _declined = assistant.Category ?? _declined ?? string.Empty;
             }
 
-            if (assistant.Model is { } named && named != ClaudeLine.Synthetic && Served(named, $"its turn {totals.Turns}") is { } wrong)
+            if (assistant.Model is { } named && named != ClaudeLine.Synthetic && Served(named, $"its turn {totals.Answers}") is { } wrong)
             {
                 return wrong;
             }
@@ -1352,7 +1388,7 @@ public sealed class ClaudeCodeClient(
             // the one key it signed in with.
             totals.Used.Add(served, result.Usage, 1, key?.Name, part);
 
-            await Emit(new TurnFinished(totals.Turns, served, result.Usage, result.StopReason)).ConfigureAwait(false);
+            await Emit(new TurnFinished(totals.Exchanges, served, result.Usage, result.StopReason, _turnAnswers)).ConfigureAwait(false);
             await Emit(new UsageReported(result.Usage, totals.Used.Total)).ConfigureAwait(false);
 
             switch (_handing)

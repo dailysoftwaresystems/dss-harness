@@ -662,7 +662,7 @@ internal sealed class Working
                 launch.Entry.Effort,
                 turn.Served,
                 turn.Usage,
-                turn.Served.Count,
+                turn.Answers,
                 Status: null,
                 SideTaskPolicy.Said)
             {
@@ -1264,7 +1264,7 @@ internal sealed class Working
                     break;
 
                 case TurnFinished finished:
-                    Seen.OneServed(finished.Model, finished.Usage);
+                    Seen.OneServed(finished.Model, finished.Usage, finished.AnswersHeld);
                     break;
             }
 
@@ -1475,14 +1475,17 @@ internal sealed class Working
         }
 
         /// <summary>One model served one turn, and used what it used.</summary>
-        public void OneServed(string model, AgentUsage usage)
+        /// <param name="model">The model that served it.</param>
+        /// <param name="usage">What it used.</param>
+        /// <param name="answers">How many answers of the model's it held, one response each (<see cref="TurnFinished.AnswersHeld"/>).</param>
+        public void OneServed(string model, AgentUsage usage, int answers)
         {
             lock (_gate)
             {
                 _served.Add(new AgentServedModel(model, _served.Count + 1));
                 _used.Add(new AgentModelUsage(model, usage));
 
-                _ended.Add(new EndedTurn(_began ?? clock.GetUtcNow(), [new AgentServedModel(model, 1)], new AgentUsageReport(usage, [new AgentModelUsage(model, usage)])));
+                _ended.Add(new EndedTurn(_began ?? clock.GetUtcNow(), [new AgentServedModel(model, 1)], new AgentUsageReport(usage, [new AgentModelUsage(model, usage)]), answers));
                 _began = null;
                 _turnEnded.TrySetResult();
             }
@@ -1508,7 +1511,8 @@ internal sealed class Working
     /// <param name="Began">When it began: when the agent took the message it answers.</param>
     /// <param name="Served">The model that served it.</param>
     /// <param name="Usage">What it used, with no cost: a launch's cost is the launch's.</param>
-    internal sealed record EndedTurn(DateTimeOffset Began, IReadOnlyList<AgentServedModel> Served, AgentUsageReport Usage);
+    /// <param name="Answers">How many answers of the model's it held, one response each: the agent's turns it took.</param>
+    internal sealed record EndedTurn(DateTimeOffset Began, IReadOnlyList<AgentServedModel> Served, AgentUsageReport Usage, int Answers);
 
     /// <summary>What one turn was seen to do, as a copy the chat holds.</summary>
     /// <param name="Denials">Its denials, as they were said.</param>

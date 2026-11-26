@@ -22,7 +22,10 @@ public abstract record ClaudeLine(JsonObject Node)
     /// <param name="McpServers">Each MCP server the launch has, by its name, with its status: <c>connected</c> for one it took.</param>
     public sealed record Init(JsonObject Node, string? Model, IReadOnlyList<string> Tools, string? ApiKeySource, string? Version, IReadOnlyList<(string Name, string? Status)> McpServers) : ClaudeLine(Node);
 
-    /// <summary>An assistant message, whole: its text, its thinking, each call it made, and the error Claude Code wrote it for.</summary>
+    /// <summary>
+    /// An assistant message, whole: its text, its thinking, each call it made, and the error Claude Code wrote it for. Claude
+    /// Code writes one such line for each block of a response, every line of one response naming the same message id.
+    /// </summary>
     /// <param name="Node">The line.</param>
     /// <param name="Model">The model that wrote it; <see cref="Synthetic"/> for one Claude Code wrote itself.</param>
     /// <param name="Text">Its text, its blocks joined.</param>
@@ -32,6 +35,7 @@ public abstract record ClaudeLine(JsonObject Node)
     /// <param name="Usage">What it used, where it says.</param>
     /// <param name="StopReason">Why the model stopped writing it, where it says: <c>refusal</c> for a message it declined.</param>
     /// <param name="Category">What a decline was of, where the provider names it.</param>
+    /// <param name="Id">The id of the response it is a block of (<c>message.id</c>), which every line of that response names; null where the line names none.</param>
     public sealed record Assistant(
         JsonObject Node,
         string? Model,
@@ -41,7 +45,8 @@ public abstract record ClaudeLine(JsonObject Node)
         string? Error,
         AgentUsage? Usage,
         string? StopReason = null,
-        string? Category = null) : ClaudeLine(Node);
+        string? Category = null,
+        string? Id = null) : ClaudeLine(Node);
 
     /// <summary>A user message in the stream: one the launch took from its input, echoed, or the results of the calls it ran.</summary>
     /// <param name="Node">The line.</param>
@@ -297,7 +302,8 @@ public abstract record ClaudeLine(JsonObject Node)
             TextOf(node["error"]),
             message?["usage"] is JsonObject usage ? UsageOf(usage) : null,
             TextOf(message?["stop_reason"]),
-            TextOf(message?["stop_details"]?["category"]));
+            TextOf(message?["stop_details"]?["category"]),
+            TextOf(message?["id"]));
     }
 
     private static RateLimit RateLimitOf(JsonObject node)

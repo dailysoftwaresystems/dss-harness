@@ -131,6 +131,12 @@ public sealed class SideTaskServiceTests
         /// <summary>Where set, each launch's turn of this number fails, as an API error ends one, and the launch with it.</summary>
         public int? FailsOnTurn { get; set; }
 
+        /// <summary>
+        /// Where set, how many answers of the model's each turn of a launch holds, by the turn's number, as Claude Code's
+        /// turn's end says them; where not, each turn's end says none, read as one.
+        /// </summary>
+        public Func<int, int>? AnswersOf { get; set; }
+
         /// <summary>Whether the turn that fails ends with no result of its own, as a program gone in the middle of a turn does.</summary>
         public bool FailsWithoutAResult { get; set; }
 
@@ -340,7 +346,7 @@ public sealed class SideTaskServiceTests
 
             // A turn that ended stands: the conversation is begun, as Claude Code tells it.
             await events.ConversationBegunAsync();
-            await events.EmitAsync(new TurnFinished(turn, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "end_turn"));
+            await events.EmitAsync(new TurnFinished(turn, run.Model ?? "m", new AgentUsage(7, 3, 0, 0, 0, 0), "end_turn", AnswersOf?.Invoke(turn)));
         }
     }
 
@@ -2173,7 +2179,8 @@ public sealed class SideTaskServiceTests
     /// <summary>
     /// Each turn of a launch held open reaches the side-task's record as it ends - one record each, never two merged
     /// into one, and never only when the launch ends: the first turn is in <c>task.json</c> before the second is
-    /// answered, and the launch's ending is its last turn's.
+    /// answered, the launch's ending is its last turn's, and each record's turns of the agent's are the model's answers
+    /// its turn's end said it held.
     /// </summary>
     [Fact]
     public async Task EachTurnOfALaunchHeldOpen_ReachesTheRecordAsItEnds()
@@ -2182,6 +2189,7 @@ public sealed class SideTaskServiceTests
         using var tree = temp;
         var directory = LayoutOf(temp, "turned").Directory;
         var recordedBeforeTheSecond = -1;
+        rendered.AnswersOf = turn => turn + 1;
 
         rendered.BeforeAnswering = async turn =>
         {
@@ -2211,7 +2219,7 @@ public sealed class SideTaskServiceTests
         var record = RecordOf(harness, temp, directory)!;
         var served = rendered.Runs[0].Model!;
         Assert.Equal(
-            [((AgentRunStatus?)null, served, 1, 7), (AgentRunStatus.Completed, served, 1, 7)],
+            [((AgentRunStatus?)null, served, 2, 7), (AgentRunStatus.Completed, served, 3, 7)],
             record.Turns.Select(turn => (turn.Status, Assert.Single(turn.Served).Model, turn.Turns, turn.Usage!.Total.InputTokens)));
     }
 

@@ -29,7 +29,7 @@ public sealed partial class HelpTests
 {
     /// <summary>
     /// The agent-clients topic says what the claude-code client does with a launch - a new session each time, streamed
-    /// both ways, every tool the engine's tool server's and none of Claude Code's own, the page an answer of it holds, every
+    /// both ways, its turns the model's answers, every tool the engine's tool server's and none of Claude Code's own, the page an answer of it holds, every
     /// call asked of the engine, the repair, the message at work, the handoff, the model held, the environment, a key passed
     /// over - its tools and names read from the types that hold them.
     /// </summary>
@@ -54,6 +54,14 @@ public sealed partial class HelpTests
                 + "step is given one, and a step whose agent runs commands, of a repository that declares legs, takes mcp__dssharness__measure, which measures one cell of the universe "
                 + "a class of the item names on one of the run's legs "
                 + "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "- and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode. Its turns are the model's answers, as on the API clients and as "
+                + "Claude Code counts the turns its --max-turns holds the step's maxTurns to: each response a launch writes - the lines of one response "
+                + "sharing its message id, a line that names none an answer of its own, a message Claude Code writes itself none - counted as it "
+                + "arrives, over every launch of the run, so a launch cut before its turn's result still counts what it answered; the run's result, "
+                + "a side-task's record and a step's measure say them, never the engine's messages to the launch. None of Claude Code's own tools",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -160,8 +168,8 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The README and the architecture say the claude-code client and how it signs in as the help does, and the
-    /// architecture names its owners by the types that are them.
+    /// The README and the architecture say the claude-code client - what its turns are among it - and how it signs in as
+    /// the help does, and the architecture names its owners by the types that are them.
     /// </summary>
     [Fact]
     public async Task TheDocumentsSayTheClaudeCodeClient()
@@ -194,6 +202,14 @@ public sealed partial class HelpTests
                 + "`mcp__dssharness__replace_in_file`, `mcp__dssharness__insert_in_file`, `mcp__dssharness__create_directory`, `mcp__dssharness__delete_file`, "
                 + "`mcp__dssharness__delete_directory`, `mcp__dssharness__move_path`; `run`: `mcp__dssharness__run_command`; `web`: `mcp__dssharness__web_fetch`, "
                 + "`mcp__dssharness__web_search`), never one that starts agents, loads skills, asks a person or plans.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Its turns are the model's answers, as on the API clients and as Claude Code counts the turns its `--max-turns` holds the step's "
+                + "`maxTurns` to: each response a launch writes - the lines of one response sharing its message id, a line that names none an answer of "
+                + "its own, a message Claude Code writes itself none - counted as it arrives, over every launch of the run, so a launch cut before its "
+                + "turn's result still counts what it answered; the run's result, a side-task's record and a step's measure say them, never the "
+                + "engine's messages to the launch.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -274,6 +290,14 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.ServedName)}",
             $"{nameof(DssHarness.Core.Agents.AgentToolRunner)}.{nameof(DssHarness.Core.Agents.AgentToolRunner.Harness)}",
             $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.CallResult.RefusedByRule)}",
+
+            // What the run's turns are on this client, and who reads them: each response counted by its id, the exchange's
+            // end and the run's end saying them, the measure reading them.
+            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.Assistant)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine.Assistant.Id)}",
+            $"{nameof(DssHarness.Core.Agents.AgentRunResult)}.{nameof(DssHarness.Core.Agents.AgentRunResult.Turns)}",
+            $"{nameof(DssHarness.Core.Agents.TurnFinished)}.{nameof(DssHarness.Core.Agents.TurnFinished.Answers)}",
+            $"{nameof(DssHarness.Core.Agents.RunFinished)}.{nameof(DssHarness.Core.Agents.RunFinished.Turns)}",
+            $"{nameof(AgentRunSpend)}.{nameof(AgentRunSpend.TurnsTaken)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);

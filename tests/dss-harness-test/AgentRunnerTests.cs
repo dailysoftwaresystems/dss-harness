@@ -63,7 +63,8 @@ public sealed class AgentRunnerTests
         Assert.Equal(["runStarted", "sessionStarted", "textDelta", "assistantMessage", "runFinished"], seen.Select(Kind));
         Assert.Equal(["runStarted", "sessionStarted", "assistantMessage", "runFinished"], Lines(temp).Select(LineKind));
         Assert.Equal(new RunStarted(1) { At = seen[0].At, Seq = 1 }, seen[0]);
-        Assert.Equal(new RunFinished(AgentRunStatus.Completed) { At = seen[^1].At, Seq = 5 }, seen[^1]);
+        // The run's end says the turns its result took, so its stream alone says them.
+        Assert.Equal(new RunFinished(AgentRunStatus.Completed) { Turns = 1, At = seen[^1].At, Seq = 5 }, seen[^1]);
         Assert.Equal(JsonSerializer.Serialize(result, JsonStateFile.Options) + "\n", File.ReadAllText(ResultFile(temp)));
     }
 
@@ -576,7 +577,9 @@ public sealed class AgentRunnerTests
         Assert.Equal(AgentRunStatus.Failed, result.Status);
         Assert.Equal(error, result.Error);
         Assert.Equal(["runStarted", "sessionStarted"], Lines(temp).Select(LineKind));
-        Assert.Equal(new RunFinished(AgentRunStatus.Failed, error) { At = seen[^1].At, Seq = 5 }, seen[^1]);
+
+        // What the client did stands in the failed run's end: the turn it took is said.
+        Assert.Equal(new RunFinished(AgentRunStatus.Failed, error) { Turns = 1, At = seen[^1].At, Seq = 5 }, seen[^1]);
         Assert.Equal(error, ReadResult(temp).Error);
     }
 

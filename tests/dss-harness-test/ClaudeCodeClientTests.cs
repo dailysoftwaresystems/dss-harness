@@ -748,7 +748,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 + "- $.output.answers: is said by no property of the schema\n"
                 + "Answer again, whole, as the schema says.",
             sent[1].Text);
-        Assert.Equal(2, result.Turns);
+
+        // Each of the two exchanges is two of the model's answers - its text, then its answer's own block.
+        Assert.Equal((4, 2), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>An answer still wrong after its repairs ends the step <see cref="AgentRunStatus.InvalidOutput"/>.</summary>
@@ -2235,11 +2237,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         using var kit = new Kit();
         kit.Script([new JsonObject { ["slowMs"] = 4000, ["answer"] = Envelopes.Of(new JsonObject { ["answers"] = "a" }) }, new JsonObject { ["takeAfterMs"] = 5000 }]);
         var run = kit.Run(new AgentOutput("o", Schema)) with { Limits = new AgentLimits(30, 2.5m, null, StallSeconds: 7) };
+        var sink = new Sink();
 
-        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+        var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
-        Assert.Equal(2, result.Turns);
+
+        // Both exchanges ran - the repair's taken late - each two of the model's answers: its text and its answer's block.
+        Assert.Equal((4, 2), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>
@@ -2263,7 +2268,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
-        Assert.Equal(("Read it, and second.", 1), (result.FinalText, result.Turns));
+
+        // One exchange of the engine's answered both messages, in two of the model's answers: the call, then the text.
+        Assert.Equal(("Read it, and second.", 2), (result.FinalText, result.Turns));
+        Assert.Equal([1], sink.Of<TurnStarted>().Select(started => started.Turn));
     }
 
     /// <summary>
@@ -2535,12 +2543,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Script([new JsonObject { ["takenLate"] = true }, new JsonObject { ["text"] = "Nothing done yet." }]);
         var run = kit.Run();
         run.Handoff.Ask();
+        var sink = new Sink();
 
-        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+        var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.True(result.Status == AgentRunStatus.HandedOff, $"{result.Status}: {result.Error}");
         Assert.Equal("Nothing done yet.", result.Handoff?.Answer);
-        Assert.Equal(2, result.Turns);
+
+        // The late exchange ran, cut as it began with nothing answered: the one answer of the model's is the question's.
+        Assert.Equal((1, 2), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>
@@ -2579,7 +2590,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.True(result.Status == AgentRunStatus.HandedOff, $"{result.Status}: {result.Error}");
         Assert.Equal("Nothing done yet.", result.Handoff?.Answer);
-        Assert.Equal(3, result.Turns);
+
+        // Three exchanges ran - the cut one, the late one, the question - and the model answered the question alone.
+        Assert.Equal((1, 3), (result.Turns, sink.Of<TurnStarted>().Count));
     }
 
     /// <summary>
@@ -3209,7 +3222,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
         const string Why = "the agent gave no handoff in 2 answers";
-        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why), 3), (result.Status, result.Handoff, result.Turns));
+
+        // The cut exchange answered nothing; each of the two questions' was one empty answer of the model's.
+        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why), 2, 3), (result.Status, result.Handoff, result.Turns, sink.Of<TurnStarted>().Count));
         Assert.Equal(2, sink.Of<MessageSent>().Count(message => message.Which == AgentMessageKind.HandoffQuestion));
         Assert.Equal(new HandoffAnswered(false, Why), Assert.Single(sink.Of<HandoffAnswered>()));
     }
@@ -3255,6 +3270,70 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal((AgentRunStatus.Completed, 2), (result.Status, result.Turns));
         Assert.Equal(new AgentCost(Reported: 0.02m), result.Usage?.Cost);
+    }
+
+    /// <summary>
+    /// A run's turns are the model's answers, one response each, as on the API clients - never the engine's messages to
+    /// the launch: one exchange whose model wrote a response in two lines that share its id, another response, two lines
+    /// that name no id - each an answer of its own - and its text, with a message Claude Code wrote itself among them, took
+    /// five turns, while the exchange's events still number one turn, whose end says the five it held.
+    /// </summary>
+    [Fact]
+    public async Task ARunsTurns_AreTheModelsAnswers_EachResponseOnce_NeverTheEnginesMessages()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["answers"] = new JsonArray(
+                    new JsonArray("Reading the task,", " then the plan."),
+                    new JsonArray("A second response."),
+                    "A line that names no response.",
+                    new JsonObject { ["synthetic"] = "Claude Code's own line." },
+                    "Another that names none."),
+                ["text"] = "Done.",
+            },
+        ]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Equal(("Done.", 5), (result.FinalText, result.Turns));
+        Assert.Equal([1], sink.Of<TurnStarted>().Select(started => started.Turn));
+        Assert.Equal([(1, (int?)5)], sink.Of<TurnFinished>().Select(finished => (finished.Turn, finished.Answers)));
+
+        // Every line was told as the message it is, Claude Code's own among them: what is counted is not what is said.
+        Assert.Equal(
+            ["Reading the task,", " then the plan.", "A second response.", "A line that names no response.", "Claude Code's own line.", "Another that names none.", "Done."],
+            sink.Of<AssistantMessage>().Select(message => message.Text));
+    }
+
+    /// <summary>
+    /// A launch cut before its turn's result still counts what its model answered, as each answer came - in the run's
+    /// result, in the run's end the stored stream says, and so in the step's measure, which reads the run's own count
+    /// where no turn's end says those answers.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchCutBeforeItsTurnsResult_StillCountsWhatItAnswered_InItsResultAndItsStepsMeasure()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["answers"] = new JsonArray(new JsonArray("Reading,", " then writing."), "A line that names no response."), ["text"] = "Written.", ["exitAfter"] = 3 }]);
+        var (providers, problems) = AgentProviders.Resolve(new DssHarness.Core.Configuration.HarnessConfig());
+        Assert.Empty(problems);
+        var measure = new DssHarness.Core.Orchestration.Flow.AgentRunSpend(providers!, Model);
+
+        var result = await kit.StepRunner().RunAsync(kit.Step(), measure, Token);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.StartsWith("Claude Code ended before its turn's result, exit 3", result.Error, StringComparison.Ordinal);
+        Assert.Equal((3, (int?)3), (result.Turns, measure.Account().Turns));
+
+        // No turn's end said them: the run's end alone does.
+        var stream = File.ReadAllLines(Path.Combine(kit.StepDirectory, StoredStream.FileName)).Select(line => JsonNode.Parse(line)!).ToList();
+        Assert.DoesNotContain(stream, line => line["kind"]!.GetValue<string>() == "turnFinished");
+        Assert.Equal(("runFinished", 3), (stream[^1]["kind"]!.GetValue<string>(), stream[^1]["turns"]!.GetValue<int>()));
     }
 
     /// <summary>
@@ -3474,8 +3553,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
+        // Two exchanges, the second cut before the model answered anything: one answer of the model's in all.
         Assert.Equal(
-            (AgentRunStatus.Completed, 2, (int?)2, true, (decimal?)0.02m),
+            (AgentRunStatus.Completed, 1, (int?)2, true, (decimal?)0.02m),
             (result.Status, result.Turns, result.MessagesAnswered, result.EndedWithItsLastTurn, result.Usage?.Cost?.Usd));
         Assert.Equal([1, 2], sink.Of<TurnFinished>().Select(finished => finished.Turn));
         Assert.Equal(
@@ -3529,10 +3609,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
+        // The exchange was cut before the model answered anything: no turn of the model's, and the exchange's end says so.
         Assert.Equal(
-            (AgentRunStatus.Cancelled, ClaudeCodeClient.TurnCut, 1, true, (decimal?)0.01m),
+            (AgentRunStatus.Cancelled, ClaudeCodeClient.TurnCut, 0, true, (decimal?)0.01m),
             (result.Status, result.Error, result.Turns, result.EndedWithItsLastTurn, result.Usage?.Cost?.Usd));
-        Assert.Single(sink.Of<TurnFinished>());
+        Assert.Equal((int?)0, Assert.Single(sink.Of<TurnFinished>()).Answers);
     }
 
     /// <summary>

@@ -82,7 +82,7 @@ public enum AgentNotStartedBecause
 /// one for each model that served, in order.
 /// </summary>
 /// <param name="Model">The model.</param>
-/// <param name="FromTurn">The turn it began serving on, from one.</param>
+/// <param name="FromTurn">The turn it began serving on, from one, counted as the run's turns are (<see cref="AgentRunResult.Turns"/>).</param>
 public sealed record AgentServedModel(string Model, int FromTurn);
 
 /// <summary>
@@ -222,7 +222,11 @@ public sealed record AgentHandoff(string? Answer = null, string? WhyNone = null)
 /// <param name="Session">The session the run worked as, where the client names one.</param>
 /// <param name="Model">The model the step asked for.</param>
 /// <param name="Usage">What it used and what that cost.</param>
-/// <param name="Turns">How many turns it took.</param>
+/// <param name="Turns">
+/// How many turns it took: the model's answers, one response each - what re-reads the conversation and what the step's
+/// <c>maxTurns</c> bounds - on every client alike: an API client's turns, and on Claude Code each assistant message of every
+/// launch of the run, as Claude Code counts the turns its <c>--max-turns</c> holds, never the engine's messages to it.
+/// </param>
 /// <param name="ToolCalls">How many tool calls it made.</param>
 /// <param name="Duration">How long it ran.</param>
 /// <param name="Denials">How many permissions it was denied.</param>

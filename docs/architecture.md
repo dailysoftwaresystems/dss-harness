@@ -3044,8 +3044,16 @@ turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's; the age
 message the engine wrote was taken or dropped - each with an id of its own, by which the
 interrupt's receipt names those it dropped), the model each message names, and a key reported
 invalid moved past with a new launch, all in one launch's loop that the stored stream
-(`AgentRunner`) records as it runs. A step with the web takes the harness's own fetch and search
-from the engine's tool server, `Agents\Runtime\AgentToolServer`: one MCP server of type `sdk`
+(`AgentRunner`) records as it runs. The run's turns are the model's answers, as on the API clients
+and as Claude Code counts the turns its `--max-turns` holds: each response a launch writes, counted
+as its first line arrives over every launch of the run (`ClaudeLine.Assistant.Id`, which every line of
+one response names; a line that names none an answer of its own, a message Claude Code wrote itself
+none), so a launch cut before its turn's result still counts what it answered
+(`AgentRunResult.Turns`) - never the engine's own exchanges with the launch, which number the turns'
+events (`TurnStarted`, `TurnFinished`) and may each hold many answers, as each one's end says
+(`TurnFinished.Answers`). The run's end says the result's count (`RunFinished.Turns`), which a step's
+measure reads (`AgentRunSpend.TurnsTaken`), as a side-task's record reads each exchange's answers.
+A step with the web takes the harness's own fetch and search from the engine's tool server, `Agents\Runtime\AgentToolServer`: one MCP server of type `sdk`
 (`ClaudeLaunch.McpConfiguration`, the step's `claude-mcp.json`, which `--mcp-config` names beside
 `--strict-mcp-config`), whose every message Claude Code sends its host as an `mcp_message` control
 request - the probe found it does so for a host that is no SDK on every version taken, its
@@ -4023,8 +4031,10 @@ it (`runs[]`: an asking closes one and its answer's continuation opens the next,
 letting one start does), what served it - the provider, the model, the effort, where a fallback moved it from and
 why - its tokens by kind and dollars, each part of them by the model that served it at the price copied as its cost was
 counted (`parts[]`: a price changed in the configuration later never changes what a past turn cost), the uncounted
-reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns, the tool calls
-by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, what
+reason where a part could not be counted, how many usage reports it was charged (`reports`), the turns (the model's
+answers, one response each, on every client: each run's own count as its end says it, `RunFinished.Turns`, and for a
+run a crash cut before its end the answers its ended turns held, `TurnFinished.AnswersHeld` -
+`AgentRunSpend.TurnsTaken`), the tool calls by name with their failures and denials (a denied call is a call and a denial, never a failure), the compactions, what
 it asked of the codebase graph in pages past the first (`graphPages`: how many, and the deepest page one answer
 reached, with the operation that asked it and how many pages were asked of that answer - an answer its operation and
 its inputs less the page, keyed as a kept result is - whichever client called the tool, by the one reading of a
