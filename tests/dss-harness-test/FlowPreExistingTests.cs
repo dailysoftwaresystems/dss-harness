@@ -1438,6 +1438,44 @@ public sealed class FlowPreExistingTests
         => Assert.Equal(path, FlowIssueHold.IsPath(entry));
 
     /// <summary>
+    /// Every issue a run is told is triaged, however many: a triage is raised once for each, and the visits of the
+    /// triage step are no loop, so no count of them bounds them - the hundred and fiftieth is triaged as the first was.
+    /// </summary>
+    [Fact]
+    public async Task AHundredAndFiftyIssuesReportedInOneRun_AreEachTriaged()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var titles = Enumerable.Range(1, 150).Select(index => $"hole {index.ToString(System.Globalization.CultureInfo.InvariantCulture)}").ToList();
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [.. titles.Select(title => Issue(title))]))
+            .On("triage", (FlowStepRun run) => Course("unproven", run.Issue!.Title));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(60), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        var triages = coordinator.Instances.Values.Where(instance => instance.Step.Name == "triage").ToList();
+        Assert.Equal(titles, triages.Select(triage => triage.Issue!.Title));
+        Assert.All(triages, triage => Assert.Equal((FlowInstanceState.Done, (string?)null), (triage.State, triage.Error)));
+        Assert.Equal(["triage", .. Enumerable.Range(2, 149).Select(visit => $"triage+{visit.ToString(System.Globalization.CultureInfo.InvariantCulture)}")], triages.Select(triage => triage.Id));
+    }
+
+    /// <summary>
     /// Fixes side by side are each counted once, in the place their issue was taken: being fixed when its triage ended,
     /// and fixed once the visit that took it ended - so {run.preExisting} says the issues in the order they were taken,
     /// whichever visit ended first.

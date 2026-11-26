@@ -152,11 +152,12 @@ public sealed record FlowCodebaseGraph(
 /// failure of their own does <paramref name="OnFailure"/>'s - both written in the file, as a step's own wiring is.
 /// </summary>
 /// <param name="MaxVisits">
-/// How often the recovery may take the failures of one step in one scope, where the file says; past it the run asks
-/// (<c>recoveryBound</c>), with the advisor's recommendation of a fix and the choices. Within it - and where it says
-/// nothing, within the engine's bound of <see cref="MostVisits"/> visits of one step in one scope - a step that fails
-/// again after the recovery goes to it again, by its own <c>onFailure: recover</c>; the recovery never sends itself
-/// anything.
+/// How often the recovery may take one thing - the failures of one step in one scope, or one issue sent to fix - where
+/// the file says; past it the run asks (<c>recoveryBound</c>), with the advisor's recommendation of a fix and the
+/// choices. Within it - and where it says nothing, within <see cref="MostVisits"/> - a step that fails again after the
+/// recovery goes to it again, by its own <c>onFailure: recover</c>; the recovery never sends itself anything. It bounds
+/// that loop alone: the recovery takes the failures of any number of steps, and any number of issues, each counted on
+/// its own.
 /// </param>
 /// <param name="Steps">The recovery's own steps, which take every key the flow's steps take.</param>
 /// <param name="OnSuccess">Where the run goes once the recovery's steps are done: <see cref="FailedStep"/>.</param>
@@ -171,12 +172,16 @@ public sealed record FlowRecover(
     string OnSuccess,
     string OnFailure)
 {
-    /// <summary>The most a recovery may be given: the engine's bound on the visits of one step in one scope.</summary>
+    /// <summary>
+    /// The most visits <c>maxVisits</c> may give the recovery for one thing it takes, and what it is given where the file
+    /// names none: the bound of the recovery's own loop, never one on how many things it takes.
+    /// </summary>
     public const int MostVisits = 99;
 
     /// <summary>
-    /// How many visits the recovery may make for one step in one scope before the run asks: its <c>maxVisits</c>, else
-    /// <see cref="MostVisits"/> - the one bound the engine holds the recovery to and the facts of a run count by.
+    /// How many visits the recovery may make for one thing it takes - one step's failures in one scope, or one issue -
+    /// before the run asks: its <c>maxVisits</c>, else <see cref="MostVisits"/> - the one bound the engine holds the
+    /// recovery to and the facts of a run count by.
     /// </summary>
     [JsonIgnore]
     public int VisitsAllowed => MaxVisits ?? MostVisits;
@@ -828,15 +833,17 @@ public sealed record WorkflowStep
     /// <summary>The step the run goes back to once this handler is done.</summary>
     public string? Then { get; init; } = null;
 
-    /// <summary>How often this handler may be raised; past it the run asks.</summary>
+    /// <summary>How often this handler may be raised in the scope its loop goes round in; past it the run asks.</summary>
     public int? MaxVisits { get; init; } = null;
 
-    /// <summary>How often a handler may be raised in one scope where its file names no <c>maxVisits</c>.</summary>
+    /// <summary>How often a handler may be raised in the scope its loop goes round in where its file names no <c>maxVisits</c>.</summary>
     public const int DefaultMaxVisits = 3;
 
     /// <summary>
-    /// How often this handler may be raised in one scope before the run asks: its <c>maxVisits</c>, else
-    /// <see cref="DefaultMaxVisits"/> - the one bound the engine holds a handler to and the facts of a run count by.
+    /// How often this handler may be raised in the scope its loop goes round in before the run asks - its own, or, where
+    /// its <c>then</c> sends the run back over a group around it, the scope that <c>then</c> goes back to: its
+    /// <c>maxVisits</c>, else <see cref="DefaultMaxVisits"/> - the one bound the engine holds a handler to and the facts
+    /// of a run count by.
     /// </summary>
     [JsonIgnore]
     public int VisitsAllowed => MaxVisits ?? DefaultMaxVisits;

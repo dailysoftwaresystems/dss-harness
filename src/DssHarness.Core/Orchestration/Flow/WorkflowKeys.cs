@@ -60,7 +60,7 @@ public static class WorkflowKeys
         new("steps", $"the recovery's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))}, reads the step that failed as source, and sees every step of the flow") { Required = true },
         new("onSuccess", "where the run goes once the recovery's steps are done: failed-step, the step that gave it its failure, which runs again from where it stopped") { Required = true },
         new("onFailure", "what a failure inside the recovery does once its steps' retries are spent: pause, a person is asked, or stop - never recover, since no step calls itself") { Required = true },
-        new("maxVisits", $"how often the recovery may take the failures of one step in one scope, from 1 to {FlowRecover.MostVisits}; absent, the engine's bound of {FlowRecover.MostVisits} visits of one step in one scope; past it the run asks (recoveryBound), with the advisor's recommended fix"),
+        new("maxVisits", $"how often the recovery may take one thing - the failures of one step in one scope, or one issue sent to fix - from 1 to {FlowRecover.MostVisits}; absent, {FlowRecover.MostVisits}; past it the run asks (recoveryBound), with the advisor's recommended fix. It bounds that loop alone: the recovery takes any number of steps' failures and issues, each counted on its own"),
     ];
 
     /// <summary>What one declared input takes.</summary>

@@ -656,7 +656,10 @@ When they are done the run goes where the recovery's `onSuccess` says - `failed-
 gave it its failure, which runs again from where it stopped - and a failure of the recovery's own
 work does what its `onFailure` says once its steps' retries are spent: `pause` or `stop` - never the recovery again, which would be it calling itself. A step
 that fails again comes back by its own `onFailure`, until it passes or a person is asked; past
-`maxVisits` the run asks, with the advisor's recommended fix. A reasoning step is never recovered: a
+`maxVisits` the run asks, with the advisor's recommended fix - counted for each step's failures and
+each issue on its own, so the recovery takes any number of them. A loop stops at its own bound alone -
+a repeat's, a handler's `maxVisits`, the recovery's - and a step visited again for what is no loop, a
+triage for each issue reported among them, is never refused for how often. A reasoning step is never recovered: a
 failed agent is tried again (`retries`, waiting `backoffSeconds`, twice as long each time) and on
 each model of its fallback, quota or a provider that fails pauses the run where it can resume, and
 what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its steps, so a run of it

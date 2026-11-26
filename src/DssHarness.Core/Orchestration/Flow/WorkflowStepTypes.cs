@@ -118,7 +118,7 @@ public static class WorkflowStepTypes
         new("answers", "answers this step gives to question kinds, beforehand") { Keys = AnswerKeys },
         new("on", "the ending of another step that raises this one; it is never started by the schedule") { Keys = OnKeys },
         new("then", "the step the run goes back to once this handler is done"),
-        new("maxVisits", "how often this handler may be raised in one scope, from 1 to 20; absent, 3; past it the run asks"),
+        new("maxVisits", "how often this handler may be raised in the scope its loop goes round in - its own, or, where its then sends the run back over a group around it, the scope that then goes back to - from 1 to 20; absent, 3; past it the run asks"),
     ];
 
     /// <summary>

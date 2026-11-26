@@ -616,7 +616,8 @@ public sealed class FlowStatusTests
     /// <summary>
     /// A handler that can still be raised counts, to its bound, its own visits and the steps its <c>then</c> sends the
     /// run back over - the step it names and what depends on it in its scope - at each visit; one that sends the run back
-    /// outside its own group is held by no numeric bound, the run's own bound of instances all that holds it, and is said.
+    /// over the group it is in is held to its bound in the scope its loop goes round in, as the engine counts it: past
+    /// its visits made in every visit of that group, each turn a new visit of the group whole.
     /// </summary>
     [Fact]
     public void AHandlersRedirect_CountsWhatItSendsTheRunBackOver_AtEachVisit()
@@ -666,12 +667,19 @@ public sealed class FlowStatusTests
             nameof(FlowRunStatus.Running),
             [
                 Step("prepare", nameof(FlowInstanceState.Done), "orient", started: At(10, 0), finished: At(10, 1)),
-                Step("stage", nameof(FlowInstanceState.Running), group: true, started: At(10, 1)),
-                Step("stage.test", nameof(FlowInstanceState.Running), "orient", started: At(10, 9)),
+                Step("stage", nameof(FlowInstanceState.Skipped), group: true, started: At(10, 1), finished: At(10, 4)),
+                Step("stage.test", nameof(FlowInstanceState.Failed), "orient", started: At(10, 1), finished: At(10, 2)),
+                Step("stage.fix", nameof(FlowInstanceState.Done), "orient", started: At(10, 2), finished: At(10, 3), raisedBy: "stage.test"),
+                Step("prepare+2", nameof(FlowInstanceState.Done), "orient", started: At(10, 4), finished: At(10, 5), visit: 2),
+                Step("stage+2", nameof(FlowInstanceState.Running), group: true, started: At(10, 5), visit: 2),
+                Step("stage+2.test", nameof(FlowInstanceState.Running), "orient", started: At(10, 9)),
             ]);
 
+        // The two instances under way, and fix's loop going round at the top, where one of its three visits was made: two
+        // turns left, each fix, prepare and stage whole (its own record, test and fix's three visits) - 2 + 2 + 10 - with
+        // fix's three in the stage visit under way counted there too.
         Assert.Equal(
-            "left      at least 2 step instances, at most 4999 step instances (the engine's bounds and the run's own bound of at most 5000 instances); 'stage.fix' sends the run back to 'prepare', outside its own group",
+            "left      at least 2 step instances, at most 19 step instances (the engine's bounds)",
             FlowStatus.Facts(outward, staged, questions: null, updates: null, Engine, AsOf).First(fact => fact.StartsWith("left", StringComparison.Ordinal)));
     }
 

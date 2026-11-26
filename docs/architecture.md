@@ -2448,8 +2448,17 @@ are done the run goes where `onSuccess` says - `failed-step`, the step that gave
 failure, which runs again from where it stopped - and a failure of the recovery's own work does what
 `onFailure` says once its steps' retries are spent: `pause` or `stop` - never the recovery again, which would be it calling itself. A step that fails again
 comes back by its own `onFailure`, until it passes or a person is asked; past `maxVisits` (from 1 to
-99; absent, the engine's bound of 99) the run asks `recoveryBound`, with the advisor's recommended
-fix. A reasoning step is never recovered, by its own word or a group's: its agent is tried again
+99; absent, 99 - `FlowRecover.MostVisits`) the run asks `recoveryBound`, with the advisor's recommended
+fix. That bounds the recovery's loop for one thing it takes - one step's failures in one scope, or one issue
+(`FlowCoordinator.RecoveryOf`) - and nothing else: the recovery takes the failures of any number of steps, and any
+number of issues, each counted on its own. No engine-wide bound on the visits of a step stands beside the loops' own:
+a step visited again for what is not a loop - a triage for each issue reported, a pause's changed answer, the always
+steps once per session, the planning step for each plan update - is never refused, and each loop stops at the bound it
+declares - a repeat's, a handler's `maxVisits`, the recovery's - or where a person answers its question. A handler's
+visits are counted in the scope its loop goes round in (`FlowCoordinator.LoopScopeOf`): its own - the item's, the
+iteration's, the group visit's - save where its `then` sends the run back over a group around it, which each turn
+makes anew, holding the handler again; there they are counted, and its `more` answers granted, in the scope that
+`then` goes back to, so that loop too ends at the handler's own bound. A reasoning step is never recovered, by its own word or a group's: its agent is tried again
 (`retries`, waiting `backoffSeconds`, twice as long each time, at most 900) and on each model of its
 fallback, an account at its limit or a provider that fails is a pause that resumes it, and what
 still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
@@ -4965,7 +4974,9 @@ which. The most is everything the run may still make by the engine's own bounds 
 each group, iteration, item and recovery visit not ended - each member the schedule has not drawn yet;
 `FlowRepeat.Bound` for each repeat instance not ended, past the iterations it made;
 `WorkflowStep.VisitsAllowed` for a handler, in each scope its source can still end in, as the engine
-counts its visits, with the steps its `then` sends the run back over at each visit; and
+counts its visits, with the steps its `then` sends the run back over at each visit - where that `then` sends the
+run back over a group around it, in the scope it goes back to, past the visits made of it anywhere in that scope's
+instance; and
 `FlowRecover.VisitsAllowed` for each step whose failure the recovery can take (the policy that decides
 for it, `FlowScope.OnFailureOf`, is `recover`), each visit of the recovery with the steps it sends the
 run back over - what a redirect resets read by the engine's one rule of it, `FlowResets.Of`, and a step
@@ -4976,8 +4987,8 @@ plan update added to a loop), a handler's granted visit the run has not carried 
 scope it was granted in, and each piece of a plan update not carried out one item of the work-item
 group. What such a visit makes is counted whole - a group with all that is in it, its loops to their
 bounds and its own handlers and recovery. What no numeric bound holds - a `forEach` not yet expanded, a
-repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a handler that
-sends the run back outside its own group, a plan update still to be planned - is named, the run's own
+repeat with no numeric bound, a step whose pre-existing issues each raise a triage, a plan update
+still to be planned - is named, the run's own
 bound of instances the only one that holds it; and a question open at a bound is named as what can
 grant more past it. Where the
 workflow's `reporter` names an agent, its words follow the facts, run by the one runner of the

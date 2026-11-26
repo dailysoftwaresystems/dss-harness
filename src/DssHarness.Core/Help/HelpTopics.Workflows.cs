@@ -123,8 +123,9 @@ public static partial class HelpTopics
         builder.AppendLine("of its own work, past its steps' retries, does what its onFailure says: pause or stop; the");
         builder.AppendLine("recovery never calls itself. A step that fails again goes to the recovery again by its own");
         builder.AppendLine("onFailure, until it");
-        builder.AppendLine($"passes, a person is asked, or maxVisits is met (absent, the engine's bound of {FlowRecover.MostVisits}");
-        builder.AppendLine("visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix:");
+        builder.AppendLine($"passes, a person is asked, or maxVisits is met (absent, {FlowRecover.MostVisits} visits of one step's");
+        builder.AppendLine("failures, or of one issue's, each counted on its own); past it the run asks (recoveryBound),");
+        builder.AppendLine("with the advisor's recommendation of a fix:");
         builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();

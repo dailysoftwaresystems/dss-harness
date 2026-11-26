@@ -1215,9 +1215,9 @@ public sealed class FlowHandlerTests
     }
 
     /// <summary>
-    /// The engine's bound on the visits of one step in one scope has one owner, <see cref="FlowRecover.MostVisits"/>, which
-    /// the recovery's maxVisits is held to as well: no file of the engine spells the number itself, so the bound a redirect
-    /// meets and the one the recovery is held to cannot drift apart.
+    /// The most visits the recovery's maxVisits may give, and what it gives where the file names none, has one owner,
+    /// <see cref="FlowRecover.MostVisits"/>: no file of the engine spells the number itself, so the range the definition's
+    /// check holds the key to and the default the engine counts by cannot drift apart.
     /// </summary>
     [Fact]
     public void TheRecoverVisitBound_HasOneOwner()
@@ -1248,9 +1248,47 @@ public sealed class FlowHandlerTests
         Assert.Equal([("WorkflowModels.cs", $"public const int MostVisits = {spelt};")], spelling);
     }
 
-    /// <summary>A step that a redirect would visit a hundredth time fails, saying so.</summary>
+    /// <summary>
+    /// The help, the README and the architecture say that a loop is held to its own bound alone - no engine-wide bound on
+    /// a step's visits beside it - that the recovery's maxVisits is counted for each step's failures and each issue on its
+    /// own, and that a handler whose then sends the run back over its group is counted where its loop goes round.
+    /// </summary>
     [Fact]
-    public async Task ARedirectThatWouldVisitAStepMoreThan99Times_FailsItSayingSo()
+    public void TheHelpTheReadmeAndTheArchitecture_SayALoopIsHeldToItsOwnBoundAlone()
+    {
+        var workflows = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "how often this handler may be raised in the scope its loop goes round in - its own, or, where its then sends the run back over a group around it, the scope that then goes back to - from 1 to 20; absent, 3; past it the run asks",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"how often the recovery may take one thing - the failures of one step in one scope, or one issue sent to fix - from 1 to {FlowRecover.MostVisits}; absent, {FlowRecover.MostVisits}; past it the run asks (recoveryBound), with the advisor's recommended fix. It bounds that loop alone: the recovery takes any number of steps' failures and issues, each counted on its own",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A loop stops at its own bound alone - a repeat's, a handler's `maxVisits`, the recovery's - and a step visited again for what is no loop, a triage for each issue reported among them, is never refused for how often.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "No engine-wide bound on the visits of a step stands beside the loops' own: a step visited again for what is not a loop - a triage for each issue reported, a pause's changed answer, the always steps once per session, the planning step for each plan update - is never refused, and each loop stops at the bound it declares - a repeat's, a handler's `maxVisits`, the recovery's - or where a person answers its question.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "save where its `then` sends the run back over a group around it, which each turn makes anew, holding the handler again; there they are counted, and its `more` answers granted, in the scope that `then` goes back to, so that loop too ends at the handler's own bound.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A loop is held to its own bound and to nothing else: a handler at its maxVisits asks, and each more a person gives
+    /// is one more turn of it - past a hundred visits of the step it sends the run back to, none of them refused - until
+    /// the answer that ends it, after which the step's own onFailure decides.
+    /// </summary>
+    [Fact]
+    public async Task AHandlersLoop_GoesOnForEveryMoreAPersonGives_PastAHundredVisits()
     {
         var definition = Parse("""
             name: flow
@@ -1268,32 +1306,84 @@ public sealed class FlowHandlerTests
             .On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        const int more = 120;
 
-        // The run asks at the handler's bound once for each of the target's failures, and each more grants one more
-        // visit, until the run would visit build a hundredth time.
-        while (true)
+        // The run asks at the handler's bound once for each of the target's failures past it, and each more grants one
+        // more visit of fix, and so one more of build.
+        for (var given = 0; given <= more; given++)
         {
             var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
-            if (end.Status is FlowRunStatus.Failed)
-            {
-                var bound = coordinator.Instances.Values.Last(instance => instance.Step.Name == "build");
-
-                // Ninety-nine visits ran; the hundredth was refused before it ran.
-                Assert.Equal(100, bound.Visit);
-                Assert.Equal(99, runner.Started.Count(started => started == "build" || started.StartsWith("build+", StringComparison.Ordinal)));
-                Assert.Equal(13, bound.Exit);
-                Assert.Equal($"'build' was visited {FlowRecover.MostVisits} times in its scope; at most {FlowRecover.MostVisits} visits of one step in one scope are allowed", bound.Error);
-                return;
-            }
-
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
             var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+            Assert.Equal($"'fix' has answered 'build' {(given + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)} times, and 'build' failed again (20)", asked.Problem);
 
-            if (!coordinator.TryAnswer(asked.Id, "more", out _))
+            if (!coordinator.TryAnswer(asked.Id, given < more ? "more" : "fail", out _))
             {
-                Assert.Fail("the bound's more was refused");
+                Assert.Fail("the bound's answer was refused");
             }
         }
+
+        var ended = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+        // The first visit of build and one for each visit of fix: the one its bound gave, and one for each more.
+        var builds = coordinator.Instances.Values.Where(instance => instance.Step.Name == "build").ToList();
+        Assert.Equal(more + 2, builds.Count);
+        Assert.Equal(more + 1, coordinator.Instances.Values.Count(instance => instance.Step.Name == "fix"));
+        Assert.All(builds, build => Assert.Equal("leg 'windows' ended Red (20)", build.Error));
+        Assert.Equal(FlowRunStatus.Failed, ended.Status);
+    }
+
+    /// <summary>
+    /// A handler whose then sends the run back over the group it is in - each turn a new visit of that group, the
+    /// handler in it again with none of its visits there - is held to its own maxVisits all the same: its visits are
+    /// counted in the scope its loop goes round in, and at its bound the run asks, as at any handler's.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerWhoseThenSendsTheRunBackOverItsGroup_StopsAtItsOwnBound()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: prepare
+                type: orient
+              - name: stage
+                dependsOn: [prepare]
+                steps:
+                  - name: test
+                    type: orient
+                    onFailure: stop
+                  - name: fix
+                    type: orient
+                    on: {step: test, outcome: failure, codes: [20]}
+                    then: prepare
+                    maxVisits: 2
+            """);
+        // test fails at every visit the bound lets the loop make, and passes past them: a loop its bound did not stop
+        // ends there, done, rather than going round for ever.
+        var runner = new FakeRunner()
+            .On("test", (int asked) => asked <= 10
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // Two turns, each a new visit of prepare and of stage; test's third failure meets fix at its bound.
+        Assert.Equal(["prepare", "stage.test", "stage.fix", "prepare+2", "stage+2.test", "stage+2.fix", "prepare+3", "stage+3.test"], runner.Started);
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+        Assert.Equal("'fix' has answered 'test' 2 times, and 'test' failed again (20)", asked.Problem);
+        Assert.Equal("stage+3.test", asked.Instance);
+
+        // A more is one more turn of the same loop, counted where it goes round: one more visit of fix, then the question again.
+        Assert.True(coordinator.TryAnswer(asked.Id, "more", out _));
+        var again = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(["prepare", "stage.test", "stage.fix", "prepare+2", "stage+2.test", "stage+2.fix", "prepare+3", "stage+3.test", "stage+3.fix", "prepare+4", "stage+4.test"], runner.Started);
+        Assert.Equal(FlowRunStatus.Paused, again.Status);
+        Assert.Equal("'fix' has answered 'test' 3 times, and 'test' failed again (20)", AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound").Problem);
     }
 
     /// <summary>A leftover that cannot be read fails its repeat as an unreadable until does: what a loop left is never dropped unsaid.</summary>

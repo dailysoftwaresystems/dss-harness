@@ -84,6 +84,44 @@ public sealed class FlowRecoverTests
         return asked[0];
     }
 
+    /// <summary>
+    /// The recovery takes the failures of any number of steps, each its own: its maxVisits bounds the visits it makes
+    /// for one step's failures - the loop of that step and the recovery - and nothing counts the visits it makes for
+    /// different steps against one another, so a hundred and fifty steps of one scope that each fail once each take a
+    /// visit, and each runs again done.
+    /// </summary>
+    [Fact]
+    public async Task TheFailuresOfAHundredAndFiftyStepsOfOneScope_EachTakeAVisitOfTheRecovery()
+    {
+        const int count = 150;
+        var names = Enumerable.Range(1, count).Select(index => $"step-{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}").ToList();
+        var definition = Parse(
+            "name: flow\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  maxVisits: 1\n  steps:\n    - name: mend\n      type: orient\nsteps:\n"
+            + string.Concat(names.Select(name => $"  - name: {name}\n    type: orient\n    onFailure: recover\n")));
+        var runner = new FakeRunner().On("mend", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        foreach (var name in names)
+        {
+            _ = runner.On(name, (FlowStepRun run) => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        }
+
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(60), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Empty(coordinator.OpenQuestions);
+
+        // One visit of the recovery for each step, each its first for that step, each done.
+        var visits = coordinator.Instances.Values.Where(instance => instance.Step.Name == FlowScope.Recovery).ToList();
+        Assert.Equal(names.Order(StringComparer.Ordinal), visits.Select(visit => visit.RaisedBy!.Step.Name).Order(StringComparer.Ordinal));
+        Assert.All(visits, visit => Assert.Equal((FlowInstanceState.Done, 1), (visit.State, visit.Visit)));
+        Assert.All(names, name => Assert.Equal(FlowInstanceState.Done, coordinator.Instances[$"{name}+2"].State));
+    }
+
     /// <summary>A failure whose onFailure says recover is given to the recovery, and the step that failed runs again from where it stopped.</summary>
     [Fact]
     public async Task AFailureSayingRecoverIsGivenToTheRecovery_AndTheFailedStepRunsAgain()
