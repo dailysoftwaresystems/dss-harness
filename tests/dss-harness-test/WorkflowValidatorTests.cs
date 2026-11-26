@@ -575,6 +575,87 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// A reason step names the commit its tree starts at only where it only reads: one that writes, one that names a
+    /// create-agent step's worktree with in, and one that goes on with the work of a step that writes each work where their
+    /// work is folded from, which nothing brings to a commit, and naming one is refused. A reading step's commit - its own,
+    /// or one going on with a reading step's work - holds, read as the template it is: one that reads a name no step
+    /// declares is refused as any template's is.
+    /// </summary>
+    [Fact]
+    public void TheCommitATreeStartsAt_IsAReadingStepsAlone()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: orient
+                type: orient
+              - name: make
+                type: create-agent
+                agent: implementer
+                dependsOn: [orient]
+              - name: build
+                type: reason
+                agent: implementer
+                access: write
+                in: make
+                dependsOn: [make]
+                commit: '{orient.startCommit}'
+                prompt: prompts/build.md
+                outputs: schemas/build.json
+              - name: peeks
+                type: reason
+                agent: reader
+                in: make
+                dependsOn: [make]
+                commit: '{orient.startCommit}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+              - name: goes-on
+                type: reason
+                resume: build
+                dependsOn: [build]
+                commit: '{orient.startCommit}'
+                prompt: prompts/build.md
+                outputs: schemas/build.json
+              - name: reads
+                type: reason
+                agent: reader
+                dependsOn: [orient]
+                commit: '{orient.startCommit}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+              - name: reads-on
+                type: reason
+                resume: reads
+                dependsOn: [reads]
+                commit: '{orient.startCommit}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+              - name: misreads
+                type: reason
+                agent: reader
+                dependsOn: [orient]
+                commit: '{nowhere.sha}'
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+            """);
+
+        const string OnlyReads = "a tree starts at a commit only where its step only reads - the engine's own read-only agent's, brought there as the step starts - "
+            + "and a worktree a create-agent step made holds work that is folded, which no step brings to a commit";
+
+        Assert.Equal(
+            [
+                $"step 'build' writes and names commit; {OnlyReads}",
+                "step 'peeks' reads and names 'in'; a reading step works as an agent of its own that only reads, never in a worktree a create-agent step made",
+                $"step 'peeks' works in 'make' and names commit; {OnlyReads}",
+                $"step 'goes-on' goes on with the work of 'build', which writes, and names commit; {OnlyReads}",
+                "'misreads.commit' reads 'nowhere.sha', which no step before 'misreads', no input and no param provides",
+            ],
+            problems);
+    }
+
+    /// <summary>
     /// A step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run
     /// back to it, or in the recovery - and only such a step has a resume prompt to be asked with when it does; it began
     /// that work, so it names the agent definition it works by. A step that goes on with another's work runs in that

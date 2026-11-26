@@ -89,10 +89,12 @@ public interface IAgentService : IUseCase
     Task<UseCaseResult<AgentCreated>> CreateAsync(AgentCreateRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Brings a live agent that only reads to the main checkout's HEAD, as one of its steps starts: its tree made where it is
-    /// not there - a record an older tool wrote names none - else checked out at that commit, forced and detached, and
-    /// cleaned of every file git does not track, ignored ones included, so what the agent wrote there before is gone and the
-    /// tree is exactly what the main checkout committed. The answer carries <see cref="AgentReady"/> facts.
+    /// Brings a live agent that only reads to the main checkout's HEAD - or to the commit the request asks, which its step
+    /// names - as one of its steps starts: its tree made where it is not there - a record an older tool wrote names none -
+    /// else checked out at that commit, forced and detached, and cleaned of every file git does not track, ignored ones
+    /// included, so what the agent wrote there before is gone and the tree is exactly what that commit holds. A commit asked
+    /// that names none the repository holds - blank among them - is refused before anything is held, nothing changed. The
+    /// answer carries <see cref="AgentReady"/> facts.
     /// </summary>
     Task<UseCaseResult<AgentReady>> ReadyAsync(AgentReadyRequest request, CancellationToken cancellationToken = default);
 
@@ -208,7 +210,8 @@ public sealed class AgentService(
     public const string RetiredNoWorktreeOption = "--no-worktree";
 
     /// <summary>
-    /// What a read-only agent's log names the bringing of its tree to the main checkout's HEAD by: the type of the one kind
+    /// What a read-only agent's log names the bringing of its tree to the main checkout's HEAD, or to the commit its step
+    /// names, by: the type of the one kind
     /// of step that works as such an agent, whose start asks it.
     /// </summary>
     public const string ReadyLine = "reason";
@@ -216,7 +219,7 @@ public sealed class AgentService(
     /// <summary>The refusal of <see cref="RetiredNoWorktreeOption"/>, naming what took its place: a constant, as the option's own name is.</summary>
     public const string RetiredNoWorktree
         = $"{RetiredNoWorktreeOption} is retired: every agent has a tree of its own now, and an agent that only reads is made with "
-            + $"{ReadsOnlyOption}, its tree brought to the main checkout's HEAD as each of its steps starts. Nothing was changed.";
+            + $"{ReadsOnlyOption}, its tree brought to the main checkout's HEAD, or to the commit its step names, as each of its steps starts. Nothing was changed.";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IGitClient _gitClient = gitClient;
@@ -399,7 +402,7 @@ public sealed class AgentService(
             // Its record and its two directories are written, and its tree is made as the start of each of its steps makes
             // one that is not there: by the one making of every agent's tree, at the main checkout's HEAD. The log line is
             // the last of it.
-            var made = await ReadyTreeAsync(context, layout, _store.ReadAgent(layout, agent)!, CreateCommand, cancellationToken).ConfigureAwait(false);
+            var made = await ReadyTreeAsync(context, layout, _store.ReadAgent(layout, agent)!, CreateCommand, commit: null, asked: null, cancellationToken).ConfigureAwait(false);
 
             if (made.Facts is not AgentReady ready)
             {
@@ -413,7 +416,7 @@ public sealed class AgentService(
             }
 
             return _log.Record(layout, agent, CreateCommand, CommandOutcome.Ok(
-                $"Agent '{agent}' of '{orchestrator}' was created to only read: its tree is the main checkout's HEAD, brought there again as each of its "
+                $"Agent '{agent}' of '{orchestrator}' was created to only read: its tree is the main checkout's HEAD, brought there again - or to the commit its step names - as each of its "
                 + $"steps starts, and nothing it writes there or in '{layout.WorkDirectory(agent)}' is ever folded",
                 [$"record {layout.AgentRecordFile(agent)}", ready.Tree, $"base {OrchestrationReports.Base(ready.Commit)}", layout.WorkDirectory(agent), layout.PlansDirectory(agent)]));
         }
@@ -594,7 +597,8 @@ public sealed class AgentService(
 
     /// <summary>
     /// What running create-agent again does: records the session, and nothing else - and nothing at all for an agent that
-    /// only reads, which records none, and whose tree the start of each of its steps brings to the main checkout's HEAD.
+    /// only reads, which records none, and whose tree the start of each of its steps brings to the main checkout's HEAD, or to
+    /// the commit the step names.
     /// </summary>
     private CommandOutcome Again(OrchestratorLayout layout, AgentRecord existing, string model, bool empty, string? session, bool readsOnly)
     {
@@ -3712,7 +3716,7 @@ public sealed class AgentService(
         if (record.Reads)
         {
             return new AgentAt(CommandOutcome.Refused(
-                $"{Agent(record)} only reads: its tree is the main checkout's HEAD as each of its steps starts, and there is nothing of it to seed, "
+                $"{Agent(record)} only reads: its tree is the main checkout's HEAD, or the commit its step names, as each of its steps starts, and there is nothing of it to seed, "
                 + "refresh, rebase or fold."));
         }
 
@@ -4354,35 +4358,61 @@ public sealed class AgentService(
         if (record.State != AgentStates.Live)
         {
             return UseCaseResult<AgentReady>.From(CommandOutcome.Refused(
-                $"{Agent(record)} is {record.State}: a tree is brought to the main checkout's HEAD only for a live agent that only reads. Nothing was changed."));
+                $"{Agent(record)} is {record.State}: a tree is brought to the main checkout's HEAD, or to the commit asked, only for a live agent that only reads. Nothing was changed."));
         }
 
         if (!record.Reads)
         {
             return UseCaseResult<AgentReady>.From(CommandOutcome.Refused(
                 $"{Agent(record)} has a worktree whose work is folded: only the tree of an agent that only reads is brought to the main checkout's HEAD, "
-                + "whatever was written in it discarded. Nothing was changed."));
+                + "or to the commit asked, whatever was written in it discarded. Nothing was changed."));
+        }
+
+        // The commit asked is read before anything is held or written, as git reads a commit: a value that names none -
+        // blank, as a template filled to nothing is, or one the repository does not hold - is refused, never read as the
+        // main checkout's HEAD in its place, and the tree is left as it stands.
+        string? commit = null;
+
+        if (request.Commit is { } asked)
+        {
+            if (string.IsNullOrWhiteSpace(asked))
+            {
+                return UseCaseResult<AgentReady>.From(CommandOutcome.Refused(
+                    $"The commit asked for the tree of {Lower(Agent(record))} is blank, and names no commit; name one the repository holds. Nothing was changed."));
+            }
+
+            commit = await _gitClient.ResolveCommitAsync(context.Layout.MainCheckoutRoot, asked.Trim(), cancellationToken).ConfigureAwait(false);
+
+            if (commit is null)
+            {
+                return UseCaseResult<AgentReady>.From(CommandOutcome.Refused(
+                    $"'{ReportText.Printable(asked)}', the commit asked for the tree of {Lower(Agent(record))}, names no commit of the repository; "
+                    + "name one the main checkout's repository holds. Nothing was changed."));
+            }
         }
 
         return UseCaseResult<AgentReady>.From(
-            _log.Record(layout, record.Name, ReadyLine, await ReadyTreeAsync(context, layout, record, ReadyLine, cancellationToken).ConfigureAwait(false)));
+            _log.Record(layout, record.Name, ReadyLine, await ReadyTreeAsync(context, layout, record, ReadyLine, commit, request.Commit, cancellationToken).ConfigureAwait(false)));
     }
 
     /// <summary>
-    /// Brings the tree of an agent that only reads to the main checkout's HEAD, held while it is written as every agent's
-    /// worktree is: made where nothing is at its path - by the one making of every agent's tree
-    /// (<see cref="IWorktreeService.CreateAtAsync"/>), at that commit - else, where its repository stands there, brought to
-    /// that commit with whatever the agent wrote there before discarded (<see cref="BringToHeadAsync"/>); anything else
-    /// there is refused, nothing read, written or removed. Its record then names the tree and the commit it stands on - a
-    /// record an older tool wrote, naming no tree, is given the tree's three facts - and the answer carries
-    /// <see cref="AgentReady"/> facts. Once the making or the bringing has begun it is never interrupted.
+    /// Brings the tree of an agent that only reads to the main checkout's HEAD - or to <paramref name="commit"/>, where one
+    /// was asked - held while it is written as every agent's worktree is: made where nothing is at its path - by the one
+    /// making of every agent's tree (<see cref="IWorktreeService.CreateAtAsync"/>), at the main checkout's HEAD, and brought
+    /// on to the commit asked where that is another - else, where its repository stands there, brought to that commit with
+    /// whatever the agent wrote there before discarded (<see cref="BringToAsync"/>); anything else there is refused, nothing
+    /// read, written or removed. Its record then names the tree and the commit it stands on - a record an older tool wrote,
+    /// naming no tree, is given the tree's three facts - and the answer carries <see cref="AgentReady"/> facts. Once the
+    /// making or the bringing has begun it is never interrupted.
     /// </summary>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="layout">The agent's orchestrator.</param>
     /// <param name="record">The agent's record: a live agent that only reads.</param>
     /// <param name="command">What the hold names as holding the tree.</param>
+    /// <param name="commit">The commit the tree is brought to, as the main checkout's repository resolved the one asked; null for the main checkout's HEAD.</param>
+    /// <param name="asked">The commit asked, as it was named; null where none was.</param>
     /// <param name="cancellationToken">Stops the hold's taking, and the asking of what is at the tree's path.</param>
-    private async Task<CommandOutcome> ReadyTreeAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string command, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> ReadyTreeAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string command, string? commit, string? asked, CancellationToken cancellationToken)
     {
         var main = context.Layout.MainCheckoutRoot;
         var address = WorktreeAddress.Nested(record.Orchestrator, record.Name);
@@ -4405,7 +4435,8 @@ public sealed class AgentService(
             // What is at its path is asked as every agent's tree is, as the repository of its own it is made: what a record an
             // older tool wrote names nothing of is that too.
             var standing = await StandingAsync(context, record with { Worktree = address.Name, Tree = AgentRecord.TreeRepository }, path, cancellationToken).ConfigureAwait(false);
-            string commit;
+            var target = commit is null ? "the main checkout's HEAD" : ReportText.Commit(commit);
+            string stands;
             bool made;
 
             switch (standing.Kind)
@@ -4421,18 +4452,33 @@ public sealed class AgentService(
                             : created.Outcome;
                     }
 
-                    (commit, made) = (at, true);
+                    (stands, made) = (at, true);
+
+                    // Made at the main checkout's HEAD, by the one making: a commit asked that is another is where it is
+                    // brought on, as a tree that was there is brought.
+                    if (commit is not null && commit != at)
+                    {
+                        var (on, unbrought) = await BringToAsync(main, address, path, commit).ConfigureAwait(false);
+
+                        if (unbrought is not null)
+                        {
+                            return CommandOutcome.Failed(HarnessExit.CommandFailed, $"The tree of {Lower(Agent(record))} was made at '{path}', at the main checkout's HEAD, and not brought to {target}: {unbrought.TrimEnd('.')}.");
+                        }
+
+                        stands = on!;
+                    }
+
                     break;
 
                 case Standing.Registered:
-                    var (brought, failure) = await BringToHeadAsync(main, address, path).ConfigureAwait(false);
+                    var (brought, failure) = await BringToAsync(main, address, path, commit).ConfigureAwait(false);
 
                     if (failure is not null)
                     {
-                        return CommandOutcome.Failed(HarnessExit.CommandFailed, $"The tree of {Lower(Agent(record))}, '{path}', was not brought to the main checkout's HEAD: {failure.TrimEnd('.')}.");
+                        return CommandOutcome.Failed(HarnessExit.CommandFailed, $"The tree of {Lower(Agent(record))}, '{path}', was not brought to {target}: {failure.TrimEnd('.')}.");
                     }
 
-                    (commit, made) = (brought!, false);
+                    (stands, made) = (brought!, false);
                     break;
 
                 default:
@@ -4446,35 +4492,38 @@ public sealed class AgentService(
                 Worktree = address.Name,
                 Tree = AgentRecord.TreeRepository,
                 WorktreesRoot = current.WorktreesRoot ?? configured,
-                Base = commit,
+                Base = stands,
             });
+
+            var where = commit is null ? "the main checkout's HEAD" : $"{ReportText.Commit(stands)}, the commit asked";
 
             return CommandOutcome.Ok(
                 made
-                    ? $"made the tree of {Lower(Agent(record))} at the main checkout's HEAD"
-                    : $"brought the tree of {Lower(Agent(record))} to the main checkout's HEAD, whatever was written in it discarded",
-                [path, $"base {OrchestrationReports.Base(commit)}", $"record {layout.AgentRecordFile(record.Name)}"])
+                    ? $"made the tree of {Lower(Agent(record))} at {where}"
+                    : $"brought the tree of {Lower(Agent(record))} to {where}, whatever was written in it discarded",
+                [path, $"base {OrchestrationReports.Base(stands)}", $"record {layout.AgentRecordFile(record.Name)}"])
                 with
             {
-                Facts = new AgentReady(record.Orchestrator, record.Name, path, commit, made),
+                Facts = new AgentReady(record.Orchestrator, record.Name, path, stands, made, asked),
             };
         }
     }
 
     /// <summary>
-    /// Brings the agent's repository at <paramref name="path"/> to the main checkout's HEAD: the commit kept alive first, as
-    /// its making keeps the one it is made at - the repository holds no ref the main checkout's gc reads - then checked out
-    /// there, forced and detached, every tracked file put back as the commit holds it, and cleaned of every file git does not
-    /// track, ignored ones and repositories of their own included; then proved, for git's exit codes are not taken as proof:
-    /// its HEAD that commit, and git listing nothing in it that the commit does not hold as it is. Never interrupted. The
-    /// commit, or why it could not be.
+    /// Brings the agent's repository at <paramref name="path"/> to <paramref name="commit"/>, or to the main checkout's HEAD
+    /// where it is null: the commit kept alive first, as its making keeps the one it is made at - the repository holds no
+    /// ref the main checkout's gc reads - then checked out there, forced and detached, every tracked file put back as the
+    /// commit holds it, and cleaned of every file git does not track, ignored ones and repositories of their own included;
+    /// then proved, for git's exit codes are not taken as proof: its HEAD that commit, and git listing nothing in it that the
+    /// commit does not hold as it is. Never interrupted. The commit, or why it could not be.
     /// </summary>
     /// <param name="mainCheckoutRoot">The main checkout.</param>
     /// <param name="address">The agent's address, which names the keepalive.</param>
     /// <param name="path">The agent's repository.</param>
-    private async Task<(string? Commit, string? Failure)> BringToHeadAsync(string mainCheckoutRoot, WorktreeAddress address, string path)
+    /// <param name="commit">The commit it is brought to, one the main checkout's repository holds; null for the main checkout's HEAD.</param>
+    private async Task<(string? Commit, string? Failure)> BringToAsync(string mainCheckoutRoot, WorktreeAddress address, string path, string? commit)
     {
-        if (await _gitClient.ResolveCommitAsync(mainCheckoutRoot, "HEAD", CancellationToken.None).ConfigureAwait(false) is not { } head)
+        if ((commit ?? await _gitClient.ResolveCommitAsync(mainCheckoutRoot, "HEAD", CancellationToken.None).ConfigureAwait(false)) is not { } head)
         {
             return (null, $"'{ReportText.Printable(mainCheckoutRoot)}' has no commit yet; commit something there first. Nothing was changed");
         }

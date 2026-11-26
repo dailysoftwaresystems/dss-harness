@@ -117,7 +117,7 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
-    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null, MeasuredTests? tests = null)
+    private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null, MeasuredTests? tests = null, FlowGraphSyncs? graphSyncs = null)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
@@ -134,7 +134,8 @@ public sealed class ReasonStepRunnerTests
             kit.Harness.ChildSessions,
             kit.Harness.GitClient,
             updates,
-            graphService);
+            graphService,
+            graphSyncs: graphSyncs);
 
     /// <summary>
     /// The kit's configuration with one leg declared, of the configuration <c>debug</c>: what a step's measure tool is
@@ -914,6 +915,84 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(head, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
         Assert.Equal(head, kit.Record("reader").Base);
         Assert.Equal("uncommitted in the main tree\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// A step working as an agent that only reads that names the commit its tree starts at - the run's start, which the
+    /// main checkout has moved on from - starts in its tree at that commit, not at the main checkout's HEAD: every file as
+    /// that commit holds it, a file committed since not there, what an earlier step wrote gone, the tree's HEAD that commit
+    /// and the record naming it. The next step of the agent that names none starts at the main checkout's HEAD again.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatOnlyReadsAndNamesACommit_StartsInItsTreeAtThatCommit_AndOneThatNamesNoneAtTheHead()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var tree = kit.Worktree("reader");
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+
+        OrchestrationKit.Write(tree, "made.txt", "an earlier step of the agent made this\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "changed since\n");
+        OrchestrationKit.Write(kit.Main, "c.txt", "committed since\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "since", Token);
+        var head = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        var seen = new List<(string? A, bool C, bool Made, string? Head)>();
+        agents.Answer = step =>
+        {
+            var at = step.Workspace.WorkingDirectory;
+            seen.Add((
+                OrchestrationKit.Read(at, "a.txt"),
+                File.Exists(Path.Combine(at, "c.txt")),
+                File.Exists(Path.Combine(at, "made.txt")),
+                kit.Harness.GitClient.ResolveCommitAsync(at, "HEAD", Token).GetAwaiter().GetResult()));
+            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "done");
+        };
+        var run = Run(kit, agent: "reader");
+        var runner = Runner(kit, agents);
+
+        var atStart = await runner.RunAsync(run with { Step = run.Step with { Commit = start } }, Token);
+
+        Assert.True(atStart.Passed, atStart.Error);
+        Assert.Equal([("one\n", false, false, start)], seen);
+        Assert.Equal(tree, agents.Asked.Single().Workspace.WorkingDirectory);
+        Assert.Equal(start, kit.Record("reader").Base);
+
+        Assert.True((await runner.RunAsync(run with { Instance = "next" }, Token)).Passed);
+
+        Assert.Equal(("changed since\n", true, false, head), seen[1]);
+        Assert.Equal(head, kit.Record("reader").Base);
+    }
+
+    /// <summary>
+    /// A step working as an agent that only reads whose commit names none the repository holds fails as it starts, its
+    /// agent never asked, saying the tree was not brought to the commit the step names and what that named: the tree
+    /// stands as it stood - what an earlier step wrote there kept - and the record names the commit it stood on.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatOnlyReadsAndNamesACommitTheRepositoryDoesNotHold_Fails_NothingChanged()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var tree = kit.Worktree("reader");
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        OrchestrationKit.Write(tree, "made.txt", "an earlier step of the agent made this\n");
+        var run = Run(kit, agent: "reader");
+        const string Unknown = "0123456789abcdef0123456789abcdef01234567";
+
+        var result = await Runner(kit, agents).RunAsync(run with { Step = run.Step with { Commit = Unknown } }, Token);
+
+        Assert.False(result.Passed);
+        Assert.Equal(HarnessExit.Refused, result.Exit);
+        Assert.Equal(
+            $"the tree of agent 'reader' of 'o1', which only reads, was not brought to the commit its step names: '{Unknown}', the commit asked for the tree of "
+                + "agent 'reader' of 'o1', names no commit of the repository; name one the main checkout's repository holds. Nothing was changed.",
+            result.Error);
+        Assert.Empty(agents.Asked);
+        Assert.Equal("an earlier step of the agent made this\n", OrchestrationKit.Read(tree, "made.txt"));
+        Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
+        Assert.Equal(start, kit.Record("reader").Base);
     }
 
     /// <summary>
@@ -2072,6 +2151,39 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("tools", result.Graph["mode"]!.GetValue<string>());
         Assert.Equal("base", result.Graph["view"]!.GetValue<string>());
         Assert.Equal(WorkflowStep.GraphFromTask, result.Graph["from"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A reason step whose agent only reads and that names the commit its tree starts at is served the graph's view of that
+    /// tree - its agent's own, synced once the tree stands at the commit - never the base's, which holds what the main
+    /// checkout has committed since: its pack, seeded from a task that names the class the commit declares and the main
+    /// checkout no longer does, holds that class, and its view is named for its agent.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatOnlyReadsAndNamesACommit_IsServedTheViewOfItsOwnTreeAtThatCommit()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+
+        // The main checkout moves on: the Planner gone, a Scheduler in its place, and the base synced on it.
+        File.Delete(Path.Combine(kit.Main, "src", "Planner.cs"));
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Scheduler.cs"), PlannerSource.Replace("Planner", "Scheduler", StringComparison.Ordinal));
+        await kit.Harness.CommitAllAsync(kit.Main, "since", Token);
+        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph, graphSyncs: kit.Harness.GraphSyncs)
+            .RunAsync(Graphing(kit, Graphed(think: $"    commit: {start}\n"), prompt: "Plan the work on the Planner."), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal("a9", result.Graph!["view"]!.GetValue<string>());
+        Assert.True(File.Exists(kit.Layout.GraphViewFile("a9")), "the agent's own view was not synced");
+
+        var asked = agents.Asked.Single();
+        Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(asked.Workspace.WorkingDirectory, "HEAD", Token));
+        Assert.Contains("src/Planner.cs", asked.Codebase, StringComparison.Ordinal);
+        Assert.DoesNotContain("Scheduler", asked.Codebase, StringComparison.Ordinal);
     }
 
     /// <summary>

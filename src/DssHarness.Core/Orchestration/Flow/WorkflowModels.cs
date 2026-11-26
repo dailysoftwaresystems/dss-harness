@@ -1162,7 +1162,10 @@ public sealed record WorkflowStep
     /// <summary>How many of a branch's runs a CI read looks at, where the file says.</summary>
     public int? Limit { get; init; } = null;
 
-    /// <summary>The commit whose checks a CI wait waits for, a template.</summary>
+    /// <summary>
+    /// The commit whose checks a CI wait waits for, or the commit the tree of a reason step that only reads starts at in
+    /// place of the main checkout's HEAD - both a template, read by the step's own type.
+    /// </summary>
     public string? Commit { get; init; } = null;
 
     /// <summary>How long a CI wait waits for the first check to appear.</summary>

@@ -7,8 +7,9 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// The agent that only reads: a record, its two directories and a tree of its own, made by the making every agent's tree
-/// is made by, at the main checkout's HEAD - brought there again as each of its steps starts, never folded. The engine
-/// makes one for a read-only reason step, and no verb that works a worktree's work works on it.
+/// is made by, at the main checkout's HEAD - brought there again, or to the commit its step names, as each of its steps
+/// starts, never folded. The engine makes one for a read-only reason step, and no verb that works a worktree's work works
+/// on it.
 /// </summary>
 public sealed class ReadingAgentTests
 {
@@ -39,7 +40,7 @@ public sealed class ReadingAgentTests
 
         Assert.Equal(HarnessExit.Success, created.Outcome.ExitCode);
         Assert.Equal(
-            "Agent 'a7' of 'o1' was created to only read: its tree is the main checkout's HEAD, brought there again as each of its steps starts, "
+            "Agent 'a7' of 'o1' was created to only read: its tree is the main checkout's HEAD, brought there again - or to the commit its step names - as each of its steps starts, "
                 + $"and nothing it writes there or in '{kit.Layout.WorkDirectory("a7")}' is ever folded",
             created.Outcome.Message);
         Assert.Equal(
@@ -268,7 +269,7 @@ public sealed class ReadingAgentTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
-            "Agent 'a7' of 'o1' only reads: its tree is the main checkout's HEAD as each of its steps starts, and there is nothing of it to seed, "
+            "Agent 'a7' of 'o1' only reads: its tree is the main checkout's HEAD, or the commit its step names, as each of its steps starts, and there is nothing of it to seed, "
                 + "refresh, rebase or fold.",
             refused.Message);
         Assert.Equal(0, asked);
@@ -323,6 +324,91 @@ public sealed class ReadingAgentTests
     }
 
     /// <summary>
+    /// Readied at a commit asked - one the main checkout has moved on from, named as git reads a commit, by a short id -
+    /// its tree is brought to that commit rather than the main checkout's HEAD, as it is brought to HEAD: what it wrote there
+    /// is gone, every file as that commit holds it, a file committed since not there; the record and the keepalive name the
+    /// commit, the answer says the commit asked and the commit it resolved to, and nothing of the main checkout changes.
+    /// </summary>
+    [Fact]
+    public async Task ReadyingItAtACommitAsked_BringsItsTreeToThatCommit_DiscardingWhatItWrote()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("a7");
+        var tree = kit.Worktree("a7");
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+
+        OrchestrationKit.Write(tree, "made.txt", "the agent made this\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "changed since\n");
+        OrchestrationKit.Write(kit.Main, "c.txt", "committed since\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "since", Token);
+        var head = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        var asked = start[..12];
+
+        var ready = await kit.Harness.AgentService.ReadyAsync(new AgentReadyRequest(kit.Main, OrchestrationKit.Orchestrator, "a7", asked), Token);
+
+        Assert.Equal(HarnessExit.Success, ready.Outcome.ExitCode);
+        Assert.Equal(
+            $"brought the tree of agent 'a7' of 'o1' to {DssHarness.Core.Output.ReportText.Commit(start)}, the commit asked, whatever was written in it discarded",
+            ready.Outcome.Message);
+        Assert.Equal(
+            [tree, $"base {OrchestrationReports.Base(start)}", $"record {kit.Layout.AgentRecordFile("a7")}", $"log {kit.Layout.LogFile("a7")}"],
+            ready.Outcome.Details);
+        Assert.Equal(new AgentReady("o1", "a7", tree, start, Made: false, Asked: asked), ready.Facts);
+
+        Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
+        Assert.Equal(("one\n", "two\n"), (OrchestrationKit.Read(tree, "a.txt"), OrchestrationKit.Read(tree, "b.txt")));
+        Assert.False(File.Exists(Path.Combine(tree, "c.txt")));
+        Assert.False(File.Exists(Path.Combine(tree, "made.txt")));
+        Assert.Equal(start, kit.Record("a7").Base);
+        Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, WorktreeKeepalive.BaseRef("o1/a7"), Token));
+
+        // The main checkout is where it was: its HEAD the commit it made since, its files that commit's.
+        Assert.Equal(head, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token));
+        Assert.Equal("changed since\n", OrchestrationKit.Read(kit.Main, "a.txt"));
+    }
+
+    /// <summary>
+    /// A commit asked that names none the repository holds - an id no object has, a name no ref has, a blank one - is
+    /// refused before anything is held, saying what it named: the tree stands as it stood, what the agent wrote there kept,
+    /// and the record and the log are as they were. It is never read as the main checkout's HEAD in its place.
+    /// </summary>
+    [Fact]
+    public async Task ReadyingItAtACommitTheRepositoryDoesNotHold_IsRefused_NothingChanged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("a7");
+        var tree = kit.Worktree("a7");
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+
+        OrchestrationKit.Write(tree, "made.txt", "the agent made this\n");
+        OrchestrationKit.Write(kit.Main, "c.txt", "committed since\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "since", Token);
+        var record = File.ReadAllText(kit.Layout.AgentRecordFile("a7"));
+        var log = File.ReadAllLines(kit.Layout.LogFile("a7"));
+
+        foreach (var (asked, said) in new[]
+        {
+            ("0123456789abcdef0123456789abcdef01234567", "'0123456789abcdef0123456789abcdef01234567', the commit asked for the tree of agent 'a7' of 'o1', names no commit of the repository; name one the main checkout's repository holds. Nothing was changed."),
+            ("no-such-branch", "'no-such-branch', the commit asked for the tree of agent 'a7' of 'o1', names no commit of the repository; name one the main checkout's repository holds. Nothing was changed."),
+            ("  ", "The commit asked for the tree of agent 'a7' of 'o1' is blank, and names no commit; name one the repository holds. Nothing was changed."),
+        })
+        {
+            var refused = await kit.Harness.AgentService.ReadyAsync(new AgentReadyRequest(kit.Main, OrchestrationKit.Orchestrator, "a7", asked), Token);
+
+            Assert.Equal((HarnessExit.Refused, said), (refused.Outcome.ExitCode, refused.Outcome.Message));
+            Assert.Null(refused.Facts);
+        }
+
+        Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
+        Assert.Equal("the agent made this\n", OrchestrationKit.Read(tree, "made.txt"));
+        Assert.False(File.Exists(Path.Combine(tree, "c.txt")));
+        Assert.Equal(record, File.ReadAllText(kit.Layout.AgentRecordFile("a7")));
+        Assert.Equal(log, File.ReadAllLines(kit.Layout.LogFile("a7")));
+    }
+
+    /// <summary>
     /// A record an older tool wrote - "access": "read" and no tree - is given its tree as it is readied: made by the one
     /// making at the main checkout's HEAD, and the record given the tree's three facts and the commit.
     /// </summary>
@@ -350,6 +436,34 @@ public sealed class ReadingAgentTests
     }
 
     /// <summary>
+    /// A tree that is not there, readied at a commit asked the main checkout has moved on from, is made by the one making
+    /// at the main checkout's HEAD and brought on to that commit: it stands there, the record and the keepalive name it.
+    /// </summary>
+    [Fact]
+    public async Task ReadyingOneWithNoTree_AtACommitAsked_MakesItsTreeAndBringsItThere()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("a7");
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/a7", force: true, deleteEvidence: true, cancellationToken: Token);
+        kit.Harness.OrchestrationStore.UpdateAgent(kit.Layout, "a7", current => current with { Worktree = null, Tree = null, WorktreesRoot = null, Base = null });
+        OrchestrationKit.Write(kit.Main, "c.txt", "committed since\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "since", Token);
+        var tree = kit.Worktree("a7");
+
+        var ready = await kit.Harness.AgentService.ReadyAsync(new AgentReadyRequest(kit.Main, OrchestrationKit.Orchestrator, "a7", start), Token);
+
+        Assert.Equal(HarnessExit.Success, ready.Outcome.ExitCode);
+        Assert.Equal($"made the tree of agent 'a7' of 'o1' at {DssHarness.Core.Output.ReportText.Commit(start)}, the commit asked", ready.Outcome.Message);
+        Assert.Equal(new AgentReady("o1", "a7", tree, start, Made: true, Asked: start), ready.Facts);
+        Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
+        Assert.False(File.Exists(Path.Combine(tree, "c.txt")));
+        Assert.Equal(("o1/a7", start), (kit.Record("a7").Worktree, kit.Record("a7").Base));
+        Assert.Equal(start, await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, WorktreeKeepalive.BaseRef("o1/a7"), Token));
+    }
+
+    /// <summary>
     /// Only the tree of a live agent that only reads is brought to the main checkout's HEAD: an agent whose work is folded
     /// is refused, nothing of its worktree touched, and so is whatever stands at a reader's tree path that is not its
     /// repository - a directory with no .git of its own, which git would answer for with the main checkout.
@@ -367,7 +481,7 @@ public sealed class ReadingAgentTests
         Assert.Equal(HarnessExit.Refused, folded.Outcome.ExitCode);
         Assert.Equal(
             "Agent 'w1' of 'o1' has a worktree whose work is folded: only the tree of an agent that only reads is brought to the main checkout's HEAD, "
-                + "whatever was written in it discarded. Nothing was changed.",
+                + "or to the commit asked, whatever was written in it discarded. Nothing was changed.",
             folded.Outcome.Message);
         Assert.Equal("the builder's work\n", OrchestrationKit.Read(worktree, "a.txt"));
 
@@ -718,7 +832,7 @@ public sealed class ReadingAgentTests
             Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
             Assert.Contains(
                 "--no-worktree is retired: every agent has a tree of its own now, and an agent that only reads is made with --reads-only, its tree "
-                    + "brought to the main checkout's HEAD as each of its steps starts. Nothing was changed.",
+                    + "brought to the main checkout's HEAD, or to the commit its step names, as each of its steps starts. Nothing was changed.",
                 Prose.Words(refused.StandardError + refused.StandardOutput),
                 StringComparison.Ordinal);
             Assert.False(Directory.Exists(kit.Layout.AgentDirectory("a8")));
@@ -742,7 +856,7 @@ public sealed class ReadingAgentTests
         Assert.Equal(HarnessExit.Success, help.ExitCode);
         Assert.Contains(
             "--reads-only Used by the orchestrator engine for a step that only reads; of no use typed by hand. Makes an agent that only reads: "
-                + "its tree, made as every agent's is, at the main checkout's HEAD and brought there again as each of its steps starts, whatever it "
+                + "its tree, made as every agent's is, at the main checkout's HEAD and brought there again - or to the commit its step names - as each of its steps starts, whatever it "
                 + "wrote there discarded. Nothing of it is seeded, refreshed, rebased or folded.",
             text,
             StringComparison.Ordinal);

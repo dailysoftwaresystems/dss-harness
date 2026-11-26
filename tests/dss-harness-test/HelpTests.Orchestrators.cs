@@ -288,7 +288,8 @@ public sealed partial class HelpTests
         {
             "An agent can also be made to only read (create-agent --reads-only): the engine makes one for a read-only reason "
                 + "step, and a person has no use for one by hand. Its tree is made as every agent's is, at the main checkout's "
-                + "HEAD, and as each of its steps starts the engine brings it to the main checkout's HEAD then - a forced detached "
+                + "HEAD, and as each of its steps starts the engine brings it to the main checkout's HEAD then, or to the commit the "
+                + "step names (commit, 'help workflows') - a forced detached "
                 + "checkout of that commit and a clean of every file git does not track, ignored ones included - so whatever it "
                 + "wrote there before is gone; it may write its tree and its work directory, and nothing it writes is ever folded, "
                 + "committed or pushed. A record an older tool wrote, naming no tree, is given one as its next step starts.",

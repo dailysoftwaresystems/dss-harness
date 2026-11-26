@@ -380,6 +380,47 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A reason step whose agent only reads and that names the commit its tree starts at is synced nothing at its start -
+    /// its tree stands as the agent's last step left it until the step's runner brings it to that commit - and its own
+    /// tree's view once the tree is readied there, a line of the sync log naming the agent; a step that names no commit is
+    /// readied no view, and its start syncs the base as every reader's does.
+    /// </summary>
+    [Fact]
+    public async Task AReaderWhoseStepNamesACommit_IsSyncedItsOwnTreesView_OnlyOnceItsTreeIsReadied()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit), Token);
+        var start = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        var plain = Reason(kit, "reader");
+        var atCommit = plain with { Step = plain.Step with { Commit = start } };
+        var syncs = kit.Harness.GraphSyncs;
+
+        IReadOnlyList<(string?, string?)> Lines()
+            => [.. File.ReadAllLines(kit.Layout.GraphSyncFile).Select(line => JsonNode.Parse(line)!).Select(line => ((string?)line["view"], (string?)line["why"]))];
+
+        await syncs.AtStartAsync(atCommit, Token);
+
+        Assert.Equal([("base", "test")], Lines());
+        Assert.False(File.Exists(kit.Layout.GraphViewFile("reader")));
+
+        await syncs.ReadiedAsync(atCommit, "reader", Token);
+
+        Assert.Equal([("base", "test"), ("reader", "think:start")], Lines());
+        Assert.True(File.Exists(kit.Layout.GraphViewFile("reader")));
+
+        await syncs.ReadiedAsync(plain, "reader", Token);
+
+        Assert.Equal([("base", "test"), ("reader", "think:start")], Lines());
+
+        await syncs.AtStartAsync(plain, Token);
+
+        Assert.Equal([("base", "test"), ("reader", "think:start"), ("base", "think:start")], Lines());
+    }
+
+    /// <summary>
     /// A sync the engine makes of its own that fails never fails its step: it is a line of the sync log saying why, and a
     /// warning - and where the run has no graph, none is tried.
     /// </summary>

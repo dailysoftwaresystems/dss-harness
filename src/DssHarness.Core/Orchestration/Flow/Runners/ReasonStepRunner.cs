@@ -22,7 +22,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// The <c>reason</c> step: the agent a reason step is given, made where the step names none (a read-only agent, its tree
 /// made by the one making of every agent's - <see cref="CreateAgentRunner.MakeAsync"/> over the one verb that makes agents -
-/// and brought to the main checkout's HEAD as each step that works as it starts, <see cref="CreateAgentRunner.ReadyAsync"/>), and its step worked
+/// and brought to the main checkout's HEAD, or to the commit the step names, as each step that works as it starts,
+/// <see cref="CreateAgentRunner.ReadyAsync"/>), and its step worked
 /// through <see cref="IAgentRunner"/> - the definition it works by read where the chain of work it goes on with began
 /// (<see cref="ResumeChain.Root"/>), the step's model resolved with that definition below its own, its order, workspace,
 /// ground and mask built as every launch builds them (<see cref="ReasonLaunch"/>), its prompt as the engine filled it
@@ -32,7 +33,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the agent's record, and guards the repository's key-spend record across runs.</param>
-/// <param name="create">Makes the read-only agent a step that names none is given, and brings its tree to the main checkout's HEAD as each step that works as it starts.</param>
+/// <param name="create">Makes the read-only agent a step that names none is given, and brings its tree to the main checkout's HEAD, or to the commit the step names, as each step that works as it starts.</param>
 /// <param name="runner">Works the step, whatever the client is.</param>
 /// <param name="fileSystem">The file system the step's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
@@ -47,6 +48,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
+/// <param name="graphSyncs">
+/// The engine's own syncs of a run's graph, for the view of a reader's own tree once it is brought to the commit its step
+/// names (<see cref="FlowGraphSyncs.ReadiedAsync"/>); null where none is given, and no such view is synced.
+/// </param>
 /// <param name="tests">Tests the legs, for the measure tool the step's agent is given where the repository declares legs and the agent runs commands.</param>
 /// <param name="children">Records in the step's directory the group of what a measure call's legs start bound, while anything is in it.</param>
 public sealed class ReasonStepRunner(
@@ -66,7 +71,8 @@ public sealed class ReasonStepRunner(
     Git.IGitClient gitClient,
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
-    TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
+    TimeProvider? graphClock = null,
+    FlowGraphSyncs? graphSyncs = null) : IFlowStepTypeRunner, IFlowHandoffRunner
 {
     /// <inheritdoc/>
     public string Type => "reason";
@@ -126,10 +132,11 @@ public sealed class ReasonStepRunner(
         }
 
         // An agent that only reads works in a tree of its own that is exactly what the main checkout committed as the step
-        // starts - each attempt of its first step and of every one that goes on with its work: brought to the main
-        // checkout's HEAD now, whatever it wrote there before discarded, and made where it is not there, before anything of
-        // the step reads it. An attempt that goes on with an answer in its own conversation - a person's, a limit's more or
-        // compact - is the same start going on, and finds the tree as its attempt left it.
+        // starts - or the commit the step's commit names - each attempt of its first step and of every one that goes on with
+        // its work: brought to the main checkout's HEAD, or to that commit, now, whatever it wrote there before discarded,
+        // and made where it is not there, before anything of the step reads it. An attempt that goes on with an answer in
+        // its own conversation - a person's, a limit's more or compact - is the same start going on, and finds the tree as
+        // its attempt left it.
         if (agentRecord.Reads && GoingOnOf(run) is null)
         {
             if (await create.ReadyAsync(run, agent, cancellationToken).ConfigureAwait(false) is { } unready)
@@ -138,6 +145,13 @@ public sealed class ReasonStepRunner(
             }
 
             agentRecord = store.ReadAgent(layout, agent)!;
+
+            // A tree brought to the commit the step names holds what that commit holds, not what the base does: its own view
+            // is the one the step is served, synced now that the tree stands there - the step's start came before.
+            if (graphSyncs is not null && FlowGraphSyncs.ViewsOwnTree(agentRecord, run.Step))
+            {
+                await graphSyncs.ReadiedAsync(run, agent, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
@@ -303,7 +317,8 @@ public sealed class ReasonStepRunner(
 
         // The step's serving of the run's codebase graph: its pack made from what the run handed the prompt and given as
         // the <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
-        // offered where its step says tools, its view the one the engine syncs at the step's start. A step whose mode is
+        // offered where its step says tools, its view the one the engine syncs at the step's start - or, for a reader's
+        // tree brought to the commit its step names, the one synced above once it stood there. A step whose mode is
         // off is served nothing, and one whose graph cannot be served goes on without it. The pack is seeded from the
         // values the prompt was filled with - the request, the work item, the upstream outputs it reads - with the
         // handoff, or from the words an answer sends, never from the template's own words: every run of the workflow is
@@ -497,7 +512,8 @@ public sealed class ReasonStepRunner(
     /// One measure call answered: the leg it names, built as the variant it names - the build configuration the leg's
     /// own configuration declares, the only one a measurement of the leg runs - tested with the filter it names through
     /// the test service, in the tree the agent works in where it has one of its own - an agent that only reads has its tree
-    /// at the main checkout's HEAD, which the start of its next step takes back with whatever the measurement built - else
+    /// at the main checkout's HEAD, or at the commit its step names, which the start of its next step takes back with
+    /// whatever the measurement built - else
     /// in a local copy of the main tree the leg makes as a leg's local copy is, so no fold in flight changes what it
     /// measures; run as every step
     /// of the engine runs legs (<see cref="FlowStepLegs"/>) - the isolation decided first, under the step's process scope,

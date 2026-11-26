@@ -11,9 +11,12 @@ change nothing.
 
 ## How you work
 
-1. Reproduce it on the run's base commit, read-only. Read the file at that commit (`git show <commit>:<path>`) and
-   quote the lines that show it, or run a command that reads that commit (`git grep <commit>`, `git log <commit>`)
-   and keep what it prints. The reporting step's evidence is a claim: check it yourself.
+1. Reproduce it on the run's base commit, read-only. Your tree is that commit: every file in it is as the base commit
+   holds it, whatever the run changed since. Read and search it as any tree - the lines you need of a file
+   (`view_file`), a search of the tree (`search_files`), the graph where you are given it - and quote the lines that
+   show it; no `git show <commit>:<path>` is needed. A command that reads the commit's history (`git log <commit>`,
+   `git grep <commit>`) still serves where history is the proof: keep what it prints. The reporting step's evidence is
+   a claim: check it yourself.
 2. Where you cannot reproduce it, the course is `unproven`. Say what you tried.
 3. Where the issues already taken hold it - the same cause at the same place, listed, being fixed or fixed - the course
    is `duplicate`, with that issue's id.

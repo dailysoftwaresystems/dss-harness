@@ -94,7 +94,8 @@ public sealed record AgentRecord
 
     /// <summary>
     /// What <see cref="Access"/> holds for an agent that only reads: its tree is its own scratch, which the engine brings to
-    /// the main checkout's HEAD as each of its steps starts, and nothing it writes there is ever folded.
+    /// the main checkout's HEAD - or to the commit its step names - as each of its steps starts, and nothing it writes there
+    /// is ever folded.
     /// </summary>
     public const string AccessRead = "read";
 
@@ -102,8 +103,9 @@ public sealed record AgentRecord
     /// Whether the agent works in a worktree of its own whose work is folded (<see cref="AccessWrite"/>, which every
     /// record said before there was another kind) or only reads (<see cref="AccessRead"/>), which the engine makes for a
     /// read-only reason step: a tree of its own as well, made by the same making, never folded, brought to the main
-    /// checkout's HEAD as each of its steps starts with whatever it wrote there before discarded. Null is write, so the
-    /// tool writes no <c>access</c> for an agent whose work is folded and an older tool still reads its record.
+    /// checkout's HEAD, or to the commit its step names, as each of its steps starts with whatever it wrote there before
+    /// discarded. Null is write, so the tool writes no <c>access</c> for an agent whose work is folded and an older tool
+    /// still reads its record.
     /// </summary>
     public string? Access { get; init; }
 
@@ -148,7 +150,7 @@ public sealed record AgentRecord
 
     /// <summary>
     /// The commit its worktree was made from; null until the worktree is made. For an agent that only reads, the main
-    /// checkout's HEAD its tree was last brought to, as its last step started.
+    /// checkout's HEAD its tree was last brought to as its last step started, or the commit that step named.
     /// </summary>
     public string? Base { get; init; }
 
@@ -246,8 +248,8 @@ public sealed record AgentRecord
 
         if (Reads)
         {
-            // An agent that only reads never moves a base - its tree is brought to the main checkout's HEAD, never rebased -
-            // and a record that says a move of one is not the record of such an agent.
+            // An agent that only reads never moves a base - its tree is brought to the main checkout's HEAD, or to the commit its
+            // step names, never rebased - and a record that says a move of one is not the record of such an agent.
             if (Moving is { } to)
             {
                 return $"it only reads, and records a move of a base to '{to}'";
