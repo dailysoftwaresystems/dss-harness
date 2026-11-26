@@ -44,13 +44,13 @@ public enum GraphOp
     /// <summary>The narrowing of reads lifted for a file for the rest of the step.</summary>
     WholeFile,
 
-    /// <summary>A page of the context pack the step's first message began, by its number.</summary>
+    /// <summary>A page of the step's context pack, by its number: every page, from page 1, where its first message pushed none.</summary>
     Pack,
 
     /// <summary>A page of the codebase changes the step's message began, by its number.</summary>
     Changes,
 
-    /// <summary>A page of the repository map the step's first message began, by its number.</summary>
+    /// <summary>A page of the run's repository map, by its number: every page, from page 1, where its first message pushed none.</summary>
     Map,
 }
 
@@ -210,11 +210,11 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// given holds none (<see cref="AgentToolRuntime"/>); null where the tool serves a person's own view (the verb).
 /// </param>
 /// <param name="pack">
-/// The pages of the context pack the step's first message began, read at each <c>pack</c> - a side-task's follows its last
-/// message's pack; null, or answering null, where it has none.
+/// The pages of the step's context pack, read at each <c>pack</c> - every page, from page 1, where its first message pushed
+/// none - a side-task's following its last message's pack; null, or answering null, where it has none.
 /// </param>
 /// <param name="changes">The pages of the codebase changes the step's message began, read at each <c>changes</c>; null, or answering null, where it was told none.</param>
-/// <param name="map">A page of the repository map the step's first message began, read at each <c>map</c> by its number; null, or answering none, where it was given no map.</param>
+/// <param name="map">A page of the run's repository map, read at each <c>map</c> by its number - every page, from page 1, where its first message pushed none; null, or answering none, where it was given no map.</param>
 public sealed partial class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
@@ -577,8 +577,8 @@ public sealed partial class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// <c>pack</c> and <c>changes</c>: page <paramref name="page"/> of a text the step's message began, as it was laid whole
-    /// when it was made, its first and last lines with it; a page past the last refused with how many there are, as any
+    /// <c>pack</c> and <c>changes</c>: page <paramref name="page"/> of the step's pack or of the changes its message began, as
+    /// it was laid whole when it was made, its first and last lines with it; a page past the last refused with how many there are, as any
     /// answer's is, and a text the step was not given said.
     /// </summary>
     private static GraphToolAnswer TextPage(GraphTextPages? text, string asked, string what, int page)
@@ -597,8 +597,8 @@ public sealed partial class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// <c>map</c>: page <paramref name="page"/> of the repository map the step's first message began, read from where the
-    /// run keeps it; a page past the last refused with how many there are, as any answer's is, a map the run was given
+    /// <c>map</c>: page <paramref name="page"/> of the run's repository map, from page 1 - a step with the tool is pushed none
+    /// of it - read from where the run keeps it; a page past the last refused with how many there are, as any answer's is, a map the run was given
     /// none of said, and a page that cannot be read said with why.
     /// </summary>
     /// <param name="read">The page as the run's serving of its map read it; null where the run was given no map.</param>
