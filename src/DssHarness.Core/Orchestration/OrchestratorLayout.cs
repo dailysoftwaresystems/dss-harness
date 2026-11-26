@@ -558,7 +558,11 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <c>inputs/&lt;input&gt;/&lt;the file's own name&gt;</c>, a directory an input, so a step reads it by the name the person
     /// gave it.
     /// </summary>
-    /// <param name="input">The input's name: a word of letters, digits and dashes, as every declared name is.</param>
+    /// <param name="input">
+    /// The input's name: a word of letters, digits and dashes, as every declared name is, and apart from every other input's
+    /// in more than case, as the definition's check holds it - so two inputs never share one directory on a file system
+    /// that folds case.
+    /// </param>
     /// <param name="given">The path the input was given, relative to the repository's root.</param>
     public string InputCopy(string input, string given)
     {

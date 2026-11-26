@@ -49,7 +49,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
 
         var (run, context) = await sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
 
@@ -88,7 +88,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
 
         var (mine, _) = await sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, wantedName: "mine", cancellationToken: Token);
         Released(harness, mine);
@@ -107,7 +107,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var left = OrchestratorLayout.Of(layout, "left");
 
         Directory.CreateDirectory(left.Directory);
@@ -130,7 +130,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
 
         var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, refusal: name => $"run '{name}' is too deep", cancellationToken: Token));
 
@@ -167,7 +167,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var definition = WithFiles();
         var given = new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = "notes/plan.md", ["request"] = "build it" };
 
@@ -187,10 +187,11 @@ public sealed class FlowSessionsTests
     }
 
     /// <summary>
-    /// A run's own file input that names no file inside the repository refuses the start, naming the input and the path
-    /// and saying that no run was started, and nothing of the run is made - its directory, its record, its owner: a path
-    /// that is not there, one that is a directory, an absolute one even of a file that is there, one that climbs out by
-    /// '..', and one in a credential slot of the tool, which no agent of a run reads and so no copy may hand one.
+    /// A run's own file input that names no file inside the repository an agent may read refuses the start, naming the
+    /// input and the path and saying that no run was started, and nothing of the run is made - its directory, its record,
+    /// its owner: a path that is not there, one that is a directory, an absolute one outside the repository, one that
+    /// climbs out of it by '..', and one in a credential slot of the tool, which no agent of a run reads and so no copy may
+    /// hand one - each refused as an agent's read of it is, in the deciders' own words.
     /// </summary>
     [Fact]
     public async Task AFileInputThatNamesNoFileInsideTheRepository_RefusesTheStart_NothingOfTheRunMade()
@@ -199,8 +200,8 @@ public sealed class FlowSessionsTests
         using var outside = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
-        var secrets = Path.Combine(temp.Path, ".harness-config", "runner", ".secrets");
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
+        var key = Path.Combine(temp.Path, ".harness-config", "runner", ".secrets", "key");
 
         temp.WriteFile(Path.Combine("notes", "kept.md"), "a file beside\n");
         temp.WriteFile(Path.Combine(".harness-config", "runner", ".secrets", "key"), "the secret\n");
@@ -210,26 +211,152 @@ public sealed class FlowSessionsTests
         {
             ("notes/plan.md", $"and '{Path.Combine(temp.Path, "notes", "plan.md")}' is not there"),
             ("notes", $"and '{Path.Combine(temp.Path, "notes")}' is a directory"),
-            (absolute, "an absolute path"),
-            ("../plan.md", "which climbs out by '..'"),
-            (".harness-config/runner/.secrets/key", $"which is in '{secrets}', a credential slot of this tool, which no agent reads"),
+            (absolute, ReadRefused($"'{absolute}' is outside the roots of this agent: {temp.Path}")),
+            ("../plan.md", ReadRefused($"'{Path.Combine(Path.GetDirectoryName(temp.Path)!, "plan.md")}' is outside the roots of this agent: {temp.Path}")),
+            (".harness-config/runner/.secrets/key", ReadRefused($"'{key}' is a credential slot of this tool: no file tool of an agent reads or writes one")),
         })
         {
-            var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(
-                layout,
-                WithFiles(),
-                () => ChildSweep.None,
-                FlowService.RunCommand,
-                inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = value },
-                cancellationToken: Token));
-
-            Assert.Equal(HarnessExit.Refused, raised.ExitCode);
-            Assert.Equal(
-                $"input 'plan' is '{value}', {why}; a file input names a file inside the repository by its path from the repository's root ('{temp.Path}'), and the run keeps a copy of it from its start. No run was started.",
-                raised.Message);
-            Assert.False(Directory.Exists(OrchestratorLayout.Of(layout, "r1").Directory), $"'{value}' made nothing of the run");
-            Assert.False(File.Exists(OrchestratorLayout.Of(layout, "r1").OwnerFile));
+            await RefusedAsync(sessions, layout, value, why);
         }
+
+        Assert.Equal("a plan outside\n", File.ReadAllText(absolute));
+    }
+
+    /// <summary>
+    /// A file input whose path leads out of the repository through a link inside it - a directory on its way that is a
+    /// link to a place outside, or one into a credential slot of the tool - refuses the start as an agent's read of it is
+    /// refused, by where it leads, and nothing of the run is made: the link is followed to decide, never to copy what lies
+    /// beyond it, for every agent of the run would read the copy.
+    /// </summary>
+    [Fact]
+    public async Task AFileInputWhoseDirectoryOnItsWayIsALinkLeadingOut_RefusesTheStart_ByWhereItLeads()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
+        var secrets = Path.Combine(temp.Path, ".harness-config", "runner", ".secrets");
+
+        outside.WriteFile("plan.md", "a plan outside\n");
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".secrets", "key"), "the secret\n");
+        Directory.CreateDirectory(temp.Combine("notes"));
+        TestLinks.DirectoryLink(temp.Combine("notes", "away"), outside.Path);
+        TestLinks.DirectoryLink(temp.Combine("notes", "keys"), secrets);
+
+        await RefusedAsync(
+            sessions,
+            layout,
+            "notes/away/plan.md",
+            ReadRefused($"'{temp.Combine("notes", "away", "plan.md")}' leads to '{Path.Combine(outside.Path, "plan.md")}', outside the roots of this agent: {temp.Path}"));
+        await RefusedAsync(
+            sessions,
+            layout,
+            "notes/keys/key",
+            ReadRefused($"'{Path.Combine(secrets, "key")}' is a credential slot of this tool: no file tool of an agent reads or writes one"));
+    }
+
+    /// <summary>
+    /// A file input that is itself a link inside the repository to a file outside it refuses the start by where it leads,
+    /// nothing of the run made - and the file it leads to is never copied, for every agent of the run would read the copy.
+    /// Where this machine does not let this user make a file link the test is skipped: a directory's link on the way, which
+    /// needs no privilege, is held by its own test.
+    /// </summary>
+    [Fact]
+    public async Task AFileInputThatIsALinkLeadingOut_RefusesTheStart_ByWhereItLeads()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
+        var secret = outside.WriteFile("id_rsa", "the secret outside\n");
+        var plan = temp.Combine("notes", "plan.md");
+
+        Directory.CreateDirectory(temp.Combine("notes"));
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(plan, secret));
+
+        await RefusedAsync(sessions, layout, "notes/plan.md", ReadRefused($"'{plan}' leads to '{secret}', outside the roots of this agent: {temp.Path}"));
+    }
+
+    /// <summary>
+    /// A file input that reaches its file inside the repository through a link that stays inside it - a directory on its
+    /// way that is a link to another of the repository's - is copied as any other, the bytes of the file it leads to; and
+    /// one given by its absolute path inside the repository is copied too, its value kept as given and its copy named by the
+    /// file's own name.
+    /// </summary>
+    [Fact]
+    public async Task AFileInputThroughALinkThatStaysInside_OrGivenAbsoluteInsideTheRepository_IsCopied()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
+        var definition = WithFiles();
+        var spec = temp.WriteFile(Path.Combine("docs", "spec.md"), "the spec, given whole\n");
+        var given = new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = "notes/plan.md", ["spec"] = spec };
+
+        temp.WriteFile(Path.Combine("real", "plan.md"), "the plan, through a link\n");
+        TestLinks.DirectoryLink(temp.Combine("notes"), temp.Combine("real"));
+
+        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, inputs: given, cancellationToken: Token);
+        var plan = run.InputCopy("plan", "notes/plan.md");
+        var copied = run.InputCopy("spec", spec);
+
+        Assert.Equal(Path.Combine(run.InputsDirectory, "spec", "spec.md"), copied);
+        Assert.Equal([plan, copied], Directory.GetFiles(run.InputsDirectory, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        Assert.Equal(["the plan, through a link\n", "the spec, given whole\n"], [File.ReadAllText(plan), File.ReadAllText(copied)]);
+        Assert.Equal(given, context.Inputs);
+    }
+
+    /// <summary>
+    /// A file input whose directory on its way is made a link out of the repository after its path was decided and before
+    /// it is opened - swapped in between the check and the act - keeps nothing of where the link leads: the file is read
+    /// through itself as it was opened, where it stands decided again before a byte passes, so the start is refused naming
+    /// where the open file stood, nothing of the run is made and the file outside is left as it was.
+    /// </summary>
+    [Fact]
+    public async Task AFileInputWhoseWayIsMadeALinkAtItsOpen_RefusesTheStart_WhereTheOpenFileStands()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var notes = temp.Combine("notes");
+        var sessions = new FlowSessions(harness.OrchestrationStore, new LinkedAtOpen(harness.FileSystem, notes, outside.Path), harness.Identity, harness.GitClient, harness.Platform);
+        var opened = outside.WriteFile("plan.md", "the plan outside\n");
+        var plan = temp.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was decided\n");
+
+        await RefusedAsync(
+            sessions,
+            layout,
+            "notes/plan.md",
+            ReadRefused($"'{plan}' was opened as '{opened}', where a link put on its way after it was decided leads; nothing was read: '{opened}' is where the open file stands, outside the roots of this agent: {temp.Path}"));
+        Assert.Equal("the plan outside\n", File.ReadAllText(opened));
+    }
+
+    /// <summary>The refusal's clause for a file input an agent's read of which is refused for <paramref name="reason"/>.</summary>
+    private static string ReadRefused(string reason) => $"which is refused as an agent's read of it would be: {reason}";
+
+    /// <summary>
+    /// Starts a run whose input <c>plan</c> is <paramref name="value"/> and holds it refused (13) for <paramref name="why"/>,
+    /// naming the input, the path and the repository's root and saying that no run was started, with nothing of the run made.
+    /// </summary>
+    private static async Task RefusedAsync(FlowSessions sessions, HarnessLayout layout, string value, string why)
+    {
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(
+            layout,
+            WithFiles(),
+            () => ChildSweep.None,
+            FlowService.RunCommand,
+            inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = value },
+            cancellationToken: Token));
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"input 'plan' is '{value}', {why}; a file input names a file inside the repository that an agent may read, by its path from the repository's root ('{layout.MainCheckoutRoot}') or an absolute one inside it, and the run keeps a copy of it from its start. No run was started."),
+            (raised.ExitCode, raised.Message));
+        Assert.False(Directory.Exists(OrchestratorLayout.Of(layout, "r1").Directory), $"'{value}' made nothing of the run");
+        Assert.False(File.Exists(OrchestratorLayout.Of(layout, "r1").OwnerFile));
     }
 
     /// <summary>A session is refused while another run of the repository is unfinished over a live owner, and the refusal names the run and the ways on with it.</summary>
@@ -239,7 +366,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
 
         // The run's engine holds it: its owner was claimed with it.
         _ = await sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
@@ -261,7 +388,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var definition = Definition();
 
         var (other, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
@@ -329,7 +456,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
 
         var (first, _) = await sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         Released(harness, first);
@@ -364,7 +491,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var definition = Definition();
 
         var (other, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
@@ -394,7 +521,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var results = AtOnce(
             async () => (await sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, wantedName: "left", cancellationToken: Token)).Run.Name,
             async () => (await sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, wantedName: "right", cancellationToken: Token)).Run.Name);
@@ -413,7 +540,7 @@ public sealed class FlowSessionsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var (run, _) = await sessions.CreateAsync(layout, Definition(), () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         Released(harness, run);
 

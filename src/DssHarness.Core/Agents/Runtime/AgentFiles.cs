@@ -15,7 +15,7 @@ namespace DssHarness.Core.Agents.Runtime;
 /// link. A search reads text alone, every file whatever its size, streamed a line at a time (<see cref="StreamedText"/>):
 /// a binary file and one that is no text this tool reads are passed over and counted, and one that could not be read is
 /// counted apart, with why the first was not.
-/// The one way the tools read and write a file's bytes besides (<see cref="OpenDecided"/>, <see cref="ReadAsync"/>,
+/// The one way the tools read and write a file's bytes besides (<see cref="OpenDecided(string, Func{string, AgentPolicyAnswer.Denied?})"/>, <see cref="ReadAsync"/>,
 /// <see cref="Write(string, string, Action{Stream}, Func{string, AgentPolicyAnswer.Denied?})"/>): a read through the file as
 /// it was opened, where it stands decided again before a byte passes; a write relative to its directory held from its
 /// writable root with no link on the way (<see cref="HeldDirectory"/>). A directory is listed by its path, so what a link put
@@ -323,15 +323,31 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
     /// <exception cref="IOException">The file could not be opened or named, or is no regular file.</exception>
     /// <exception cref="UnauthorizedAccessException">This process may not read it.</exception>
     public (Stream? Stream, AgentPolicyAnswer.Denied? Denied) OpenDecided(string file, Func<string, AgentPolicyAnswer.Denied?> refusal)
+        => OpenDecided(_fileSystem, file, refusal);
+
+    /// <summary>
+    /// The file at <paramref name="file"/> opened to read by <paramref name="fileSystem"/>, as the instance's
+    /// <see cref="OpenDecided(string, Func{string, AgentPolicyAnswer.Denied?})"/> opens it - its body, for a reader that
+    /// lists no tree and so has no git to hand the files: a run's own file inputs, read as an agent's read of each is
+    /// decided, since every agent of the run reads the copy (<see cref="Orchestration.Flow.FlowInputs.OpenFiles"/>).
+    /// </summary>
+    /// <param name="fileSystem">Opens the file and names where it stands.</param>
+    /// <param name="file">The file, absolute, as it was decided.</param>
+    /// <param name="refusal">Why a place may not be read, by its absolute path; null where it may.</param>
+    /// <returns>The open file, which its caller closes; or, where it stands at a place <paramref name="refusal"/> refuses, why - nothing read, nothing left open.</returns>
+    /// <exception cref="IOException">The file could not be opened or named, or is no regular file.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read it.</exception>
+    public static (Stream? Stream, AgentPolicyAnswer.Denied? Denied) OpenDecided(IFileSystem fileSystem, string file, Func<string, AgentPolicyAnswer.Denied?> refusal)
     {
+        ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(file);
         ArgumentNullException.ThrowIfNull(refusal);
 
-        var stream = _fileSystem.OpenRead(file);
+        var stream = fileSystem.OpenRead(file);
 
         try
         {
-            var opened = _fileSystem.FinalPathOf(stream);
+            var opened = fileSystem.FinalPathOf(stream);
 
             if (refusal(opened) is { } denied)
             {
@@ -353,7 +369,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
     }
 
     /// <summary>
-    /// The file at <paramref name="file"/> opened to read as <see cref="OpenDecided"/> opens it, for a reader that is handed
+    /// The file at <paramref name="file"/> opened to read as <see cref="OpenDecided(string, Func{string, AgentPolicyAnswer.Denied?})"/> opens it, for a reader that is handed
     /// an opener: one that stands at a place <paramref name="refusal"/> refuses raises its refusal
     /// (<see cref="AgentReadRefusedException"/>), nothing read.
     /// </summary>
@@ -369,7 +385,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
 
     /// <summary>
     /// The bytes of the file at <paramref name="file"/>, read through the file as it was opened, decided again where it
-    /// stands (<see cref="OpenDecided"/>), and read to its end, never more than <paramref name="most"/> bytes however much it
+    /// stands (<see cref="OpenDecided(string, Func{string, AgentPolicyAnswer.Denied?})"/>), and read to its end, never more than <paramref name="most"/> bytes however much it
     /// grew since it was measured, held as it is read: nothing is set aside for bytes the file does not hold.
     /// </summary>
     /// <param name="file">The file, absolute, as it was decided.</param>

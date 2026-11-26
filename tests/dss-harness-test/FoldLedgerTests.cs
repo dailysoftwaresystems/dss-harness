@@ -847,7 +847,7 @@ public sealed class FoldLedgerTests
         var harness = new HarnessFactory();
         await harness.InitializeGitRepositoryAsync(temp.Path, Token);
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
         var (other, _) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
@@ -897,7 +897,7 @@ public sealed class FoldLedgerTests
         _ = await harness.RunGitAsync(temp.Path, ["add", "--", "a.txt", ".gitignore"], Token);
         _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "a base"], Token);
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
         var (other, _) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
@@ -969,7 +969,7 @@ public sealed class FoldLedgerTests
         _ = await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "a file with carriage returns"], Token);
         _ = await harness.RunGitAsync(temp.Path, ["config", "core.autocrlf", "true"], Token);
         var layout = new HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
         var (other, _) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
         new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);

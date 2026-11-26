@@ -2989,34 +2989,6 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
         }
     }
 
-    /// <summary>
-    /// A file system that makes <paramref name="directory"/> a real link to <paramref name="target"/> - the directory moved
-    /// aside - the moment a file under it is opened to be read or written, after its path was decided.
-    /// </summary>
-    private sealed class LinkedAtOpen(IFileSystem inner, string directory, string target) : PassThroughFileSystem(inner)
-    {
-        public override Stream OpenRead(string path)
-        {
-            Link(path);
-            return base.OpenRead(path);
-        }
-
-        public override HeldDirectory Hold(string anchor, string held, bool make, string? asked = null)
-        {
-            Link(asked ?? held);
-            return base.Hold(anchor, held, make, asked);
-        }
-
-        private void Link(string path)
-        {
-            if (path.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !IsLink(directory))
-            {
-                Directory.Move(directory, directory + "-was");
-                TestLinks.DirectoryLink(directory, target);
-            }
-        }
-    }
-
     /// <summary>A file system whose reads of files under a directory take a while, which counts how many are under way at once.</summary>
     private sealed class SlowReads(IFileSystem inner, string under) : PassThroughFileSystem(inner)
     {

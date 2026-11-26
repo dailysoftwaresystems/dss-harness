@@ -2089,7 +2089,9 @@ step, and init says so in a note naming the file read now. The shipped set is he
 is by this build's own tests, so a build whose own workflow does not hold fails before it ships.
 
 A definition declares `inputs` - the values a run is started with, each with a kind, a default and
-the options it takes - `params`, its own knobs defaulted in the file and read as `param.<name>`,
+the options it takes, two whose names differ by case alone refused on every system, since a run keeps a file input's
+copy in a directory of the input's name and a file system that folds case holds one for both - `params`, its own knobs
+defaulted in the file and read as `param.<name>`,
 and `outputs`, what the whole workflow produces, each from a step of the flow. Its steps are of
 one `type` - from `orient` and `reason` through the leg steps, the fold family, the checks, git
 and the forge, to `pause` - or groups holding steps of their own: a group runs its steps once for
@@ -4675,8 +4677,12 @@ said - chooses the name (`r<N>`, one more than the highest there; a name `--run`
 to the path budget of its agents' worktrees - what each worktree's own check counts below it
 (`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - opens the file each of
 the run's own inputs of the kind `file` names where its value, given or its default, is not empty - a path from the
-main checkout's root, never absolute, with no `..` and in none of the tool's credential slots, read from the main
-checkout as it stands, committed or not; anything else refused (13), naming the input and the path, no run started
+main checkout's root or an absolute one inside it, read from the main checkout as it stands, committed or not, and
+decided as an agent's read of it over the main checkout alone would be, since every agent of the run reads the copy:
+held to the main checkout by where it leads, every link on its way followed - the file's own and a directory's above
+it (`ConfinedPaths`) - kept from every credential slot of the tool (`AgentPolicy`), and read through the file as it
+was opened, where it stands decided again before a byte passes (`AgentFiles.OpenDecided`), so a link put on its way
+since reaches nothing; anything else refused (13), naming the input and the path, no run started
 (`FlowInputs.OpenFiles`) - makes the run's directory and copies each file into it, `inputs/<input>/<the file's name>`
 (`OrchestratorLayout.InputCopy`), before it makes the run's record, its status and its owner
 (`.orchestrators/<run>.owner.json`), and leaves the section. What a step reads for such an input - `{input.<name>}`

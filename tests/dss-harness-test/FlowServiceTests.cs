@@ -104,7 +104,7 @@ public sealed class FlowServiceTests
             files,
             store,
             engines,
-            new FlowSessions(store, files, engines, harness.GitClient),
+            new FlowSessions(store, files, engines, harness.GitClient, harness.Platform),
             validation ?? new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
             harness.OrchestrationLog,
@@ -3073,9 +3073,9 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
-    /// A start whose own file input names no file inside the repository - one that is not there, one that climbs out by
-    /// '..' - is refused (13) by the command, naming the input and the path and saying no run was started, and nothing of
-    /// the run is made.
+    /// A start whose own file input names no file inside the repository that an agent may read - one that is not there,
+    /// one that climbs out by '..' to a file that is - is refused (13) by the command, naming the input and the path and
+    /// saying no run was started, and nothing of the run is made.
     /// </summary>
     [Fact]
     public async Task AStartWhoseFileInputNamesNoFileInsideTheRepository_IsRefused_NothingOfTheRunMade()
@@ -3097,13 +3097,13 @@ public sealed class FlowServiceTests
         foreach (var (value, why) in new[]
         {
             ("notes/plan.md", $"and '{Path.Combine(repository.Path, "notes", "plan.md")}' is not there"),
-            ($"../{Path.GetFileName(outside.Path)}/plan.md", "which climbs out by '..'"),
+            ($"../{Path.GetFileName(outside.Path)}/plan.md", $"which is refused as an agent's read of it would be: '{Path.Combine(outside.Path, "plan.md")}' is outside the roots of this agent: {repository.Path}"),
         })
         {
             var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: [$"plan={value}"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
             Assert.Equal(
-                (HarnessExit.Refused, $"input 'plan' is '{value}', {why}; a file input names a file inside the repository by its path from the repository's root ('{repository.Path}'), and the run keeps a copy of it from its start. No run was started."),
+                (HarnessExit.Refused, $"input 'plan' is '{value}', {why}; a file input names a file inside the repository that an agent may read, by its path from the repository's root ('{repository.Path}') or an absolute one inside it, and the run keeps a copy of it from its start. No run was started."),
                 (refused.ExitCode, refused.Message));
             Assert.False(Directory.Exists(RunOf(repository).Directory), $"'{value}' made nothing of the run");
         }
@@ -4663,7 +4663,7 @@ public sealed class FlowServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
-        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
         var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
@@ -4785,7 +4785,7 @@ public sealed class FlowServiceTests
 
         var run = RunOf(repository);
         var deleted = await repository.Harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: true, Token);
-        var sessions = new FlowSessions(repository.Harness.OrchestrationStore, repository.Harness.FileSystem, repository.Harness.Identity, repository.Harness.GitClient);
+        var sessions = new FlowSessions(repository.Harness.OrchestrationStore, repository.Harness.FileSystem, repository.Harness.Identity, repository.Harness.GitClient, repository.Harness.Platform);
 
         Assert.Equal(HarnessExit.Success, deleted.ExitCode);
 

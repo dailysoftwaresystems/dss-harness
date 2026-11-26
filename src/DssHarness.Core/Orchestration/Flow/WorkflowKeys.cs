@@ -66,9 +66,9 @@ public static class WorkflowKeys
     /// <summary>What one declared input takes.</summary>
     public static IReadOnlyList<KeyDescription> Input =>
     [
-        new("name", "the input's name, as --input name=value spells it") { Required = true },
+        new("name", "the input's name, as --input name=value spells it, apart from every other input's in more than case") { Required = true },
         new("description", "what the value is for, shown when it is missing"),
-        new("kind", "text (the default) or file: a file inside the repository by its path from the root, committed or not, which the run copies as it starts, its steps reading the copy in every session"),
+        new("kind", "text (the default) or file: a file inside the repository by its path from the root or an absolute one inside it, committed or not, decided as an agent's read of it is, which the run copies as it starts, its steps reading the copy in every session"),
         new("default", "what to use when nothing supplies it; empty is the input not given, and is always taken"),
         new("required", "refuse a run that gives it no value and declares no default"),
         new("options", "the values a text input takes; a run started with another is refused"),

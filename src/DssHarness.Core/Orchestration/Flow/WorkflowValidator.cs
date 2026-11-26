@@ -421,6 +421,15 @@ public static class WorkflowValidator
                 }
             }
 
+            // A run keeps the file each of its own file inputs names in a directory of the input's name
+            // (OrchestratorLayout.InputCopy), and a file system that folds case holds one directory for two names that differ
+            // by case alone: such names are refused on every system alike, so a workflow that loads on one loads on all. A
+            // name written twice whole was refused where the file was read.
+            foreach (var alike in _definition.Inputs.GroupBy(input => input.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+            {
+                _problems.Add($"the inputs {string.Join(" and ", alike.Select(input => $"'{input.Name}'"))} differ by case alone, and a run keeps a file input's copy in a directory named for the input, which a file system that folds case - Windows', macOS's - holds once for both; name them apart");
+            }
+
             foreach (var parameter in _definition.Params)
             {
                 DeclaredNameRules(parameter.Name, "param");

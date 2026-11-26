@@ -780,11 +780,13 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// </summary>
     private Decided OpenedPlace(string final, bool write) => Decide(_paths.Opened(final, write), full => write ? _policy.Write(full) : _policy.Read(full));
 
-    /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it - reached only where it allows.</summary>
+    /// <summary>A place decided: refused where it is not confined to the roots, else as <paramref name="policy"/> answers it - reached only where it allows (<see cref="ConfinedPath.Allowed"/>).</summary>
     private static Decided Decide(ConfinedPath confined, Func<string, AgentPolicyAnswer> policy)
-        => confined.Full is not { } full ? new Decided(null, confined.Denied)
-            : policy(full).Refusal() is { } denied ? new Decided(null, denied)
-            : new Decided(full, null);
+    {
+        var allowed = confined.Allowed(policy);
+
+        return new Decided(allowed.Full, allowed.Denied);
+    }
 
     /// <summary>A member's text, or null where the input leaves it out.</summary>
     private static string? Text(JsonObject input, string name) => input[name]?.GetValue<string>();
