@@ -3,6 +3,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
@@ -53,39 +54,45 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
     /// Whether the directory at <paramref name="path"/>, which sits at <paramref name="address"/> under the worktrees root, is
     /// an agent's repository of the main checkout at <paramref name="mainCheckoutRoot"/>: an agent's address, its <c>.git</c> a
     /// directory whose own configuration carries the mark naming that checkout and that address, and that checkout lending it
-    /// its objects. The one rule every command that finds, lists or weighs an agent's tree asks.
+    /// its objects. The one rule every command that finds, lists or weighs an agent's tree asks. A directory taken away while
+    /// git is asked about it is none (<see cref="UnlessTakenAwayAsync"/>).
     /// </summary>
     /// <param name="mainCheckoutRoot">The main checkout, as git spells its root.</param>
     /// <param name="address">Where the directory sits under the worktrees root.</param>
     /// <param name="path">The directory.</param>
     /// <param name="cancellationToken">Stops git.</param>
-    /// <exception cref="HarnessException">git could not be asked (<see cref="HarnessExit.CommandFailed"/>): never read as no.</exception>
+    /// <exception cref="HarnessException">
+    /// git could not be asked (<see cref="HarnessExit.CommandFailed"/>) about a directory that still holds its <c>.git</c>, or
+    /// about the main checkout: never read as no.
+    /// </exception>
+    /// <exception cref="ProgramStartException">git could not be started in a directory that still holds its <c>.git</c>.</exception>
     public async Task<bool> IsAtAsync(string mainCheckoutRoot, WorktreeAddress address, string path, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(address);
 
         return address.IsNested
-            && await MarkedAtAsync(mainCheckoutRoot, address, path, cancellationToken).ConfigureAwait(false)
-            && await AgentRepositoryMark.BorrowsAsync(
-                _gitClient,
-                _platform,
+            && await IsOneAsync(
+                mainCheckoutRoot,
+                address,
                 path,
-                await AgentRepositoryMark.ObjectsOfAsync(_gitClient, mainCheckoutRoot, cancellationToken).ConfigureAwait(false),
+                () => AgentRepositoryMark.ObjectsOfAsync(_gitClient, mainCheckoutRoot, cancellationToken),
                 cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// The agents' repositories of the main checkout at <paramref name="mainCheckoutRoot"/> below
     /// <paramref name="worktreesDirectory"/>, in the order of their addresses: each directory two below the root, in a
-    /// directory that is no tree itself, that <see cref="IsAtAsync"/> takes for one.
+    /// directory that is no tree itself, that <see cref="IsAtAsync"/> takes for one - a directory taken away while git is
+    /// asked about it being none (<see cref="UnlessTakenAwayAsync"/>).
     /// </summary>
     /// <param name="mainCheckoutRoot">The main checkout, as git spells its root.</param>
     /// <param name="worktreesDirectory">The worktrees root, as configured.</param>
     /// <param name="cancellationToken">Stops git.</param>
     /// <exception cref="HarnessException">
-    /// A directory could not be looked in, or git could not be asked (<see cref="HarnessExit.CommandFailed"/>): never read as
-    /// none there.
+    /// A directory could not be looked in, or git could not be asked (<see cref="HarnessExit.CommandFailed"/>) about one that
+    /// still holds its <c>.git</c>, or about the main checkout: never read as none there.
     /// </exception>
+    /// <exception cref="ProgramStartException">git could not be started in a directory that still holds its <c>.git</c>.</exception>
     public async Task<IReadOnlyList<AgentRepositoryFound>> ListUnderAsync(string mainCheckoutRoot, string worktreesDirectory, CancellationToken cancellationToken)
     {
         if (!_fileSystem.DirectoryExists(worktreesDirectory))
@@ -113,8 +120,7 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
 
         foreach (var candidate in candidates)
         {
-            if (await MarkedAtAsync(mainCheckoutRoot, candidate.Address, candidate.Path, cancellationToken).ConfigureAwait(false)
-                && await AgentRepositoryMark.BorrowsAsync(_gitClient, _platform, candidate.Path, objects, cancellationToken).ConfigureAwait(false))
+            if (await IsOneAsync(mainCheckoutRoot, candidate.Address, candidate.Path, () => Task.FromResult(objects), cancellationToken).ConfigureAwait(false))
             {
                 found.Add(candidate);
             }
@@ -132,6 +138,50 @@ internal sealed class AgentRepositories(IGitClient gitClient, IFileSystem fileSy
             {
                 throw WorktreeInspector.CouldNotBeLookedIn(directory, ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// Whether the directory at <paramref name="path"/> carries the mark naming the main checkout and
+    /// <paramref name="address"/>, and borrows the objects <paramref name="objects"/> names - the main checkout's, asked of
+    /// it only once the mark is read - each asked of git in the directory unless it is taken away meanwhile
+    /// (<see cref="UnlessTakenAwayAsync"/>).
+    /// </summary>
+    private async Task<bool> IsOneAsync(string mainCheckoutRoot, WorktreeAddress address, string path, Func<Task<string>> objects, CancellationToken cancellationToken)
+    {
+        if (!await UnlessTakenAwayAsync(path, () => MarkedAtAsync(mainCheckoutRoot, address, path, cancellationToken)).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        // The main checkout's own answer is asked outside the directory: one it cannot give fails the asking, whatever
+        // became of the directory.
+        var borrowed = await objects().ConfigureAwait(false);
+
+        return await UnlessTakenAwayAsync(path, () => AgentRepositoryMark.BorrowsAsync(_gitClient, _platform, path, borrowed, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What <paramref name="ask"/> - a question put to git in the directory at <paramref name="path"/> - answers, or no where
+    /// the directory is taken away while git is asked: a deletion that runs meanwhile - another command's, a person's, the
+    /// engine's own of an agent that only read once its work is over, which runs beside the run's next steps - can take the
+    /// directory from under git, which then cannot be started in it or cannot read it, and the failure that brings is the
+    /// deletion's, never the asking's. Told as a directory holding no <c>.git</c> of its own once git failed, which is none
+    /// as one that held none before git was asked is: a failure in a directory that still holds its <c>.git</c> is git's,
+    /// raised, never read as no. Linux and macOS take a directory a process works in from under it; Windows refuses that
+    /// deletion, and takes it only before git starts.
+    /// </summary>
+    /// <param name="path">The directory git is asked in.</param>
+    /// <param name="ask">The question.</param>
+    private async Task<bool> UnlessTakenAwayAsync(string path, Func<Task<bool>> ask)
+    {
+        try
+        {
+            return await ask().ConfigureAwait(false);
+        }
+        catch (Exception ex) when ((ex is HarnessException or ProgramStartException) && !WorktreeInspector.HoldsOwnGit(_fileSystem, path))
+        {
+            return false;
         }
     }
 

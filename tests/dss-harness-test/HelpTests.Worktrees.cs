@@ -163,7 +163,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, made by "
             + "create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, and delete-worktree "
-            + "takes that address. An agent's worktree is a repository of its own, not one of git's linked worktrees: it borrows this "
+            + "takes that address; one a deletion takes away while it is listed - the engine deletes an agent that only read once its work "
+            + "is over, beside the run's next steps - is not listed, never a failure of the listing. "
+            + "An agent's worktree is a repository of its own, not one of git's linked worktrees: it borrows this "
             + "checkout's objects through its alternates and writes only its own, holds no ref but its detached HEAD, and includes this "
             + "checkout's configuration before its own keys, so git worktree list here does not show it and nothing done in it reaches "
             + "this checkout's refs or objects. Its own .git/config carries the mark naming this main checkout and its address: a command "

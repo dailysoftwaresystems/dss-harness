@@ -474,10 +474,11 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
                 // A worktree git records elsewhere is one, whatever directory it is in: never a person's to delete.
                 moved.Add((child, recorded));
             }
-            else if (orchestrators)
+            else if (orchestrators && HoldsOwnGit(_fileSystem, child))
             {
                 // Each git does not record is told apart, whatever its name: nothing here can say what it holds, so it is a
                 // person's to look in and delete - what a removal left, or a copy an earlier version of this tool kept there.
+                // One a deletion took away while it was asked about holds no .git of its own any more, and is none.
                 unrecorded.Add(child);
             }
         }
