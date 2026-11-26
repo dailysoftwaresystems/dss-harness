@@ -6883,9 +6883,9 @@ public sealed class FlowCoordinator
             }
 
             // A step that names an agent claims that agent's own tree, as its instance's create-agent made it - one that
-            // goes on with another's work, that step's; a step of others claims its target's alone, each target admitted
-            // on its own.
-            var claims = FlowClaims.Of(ClaimingStepOf(instance), _runnerFacts, instance.Step.Others is null ? WorksInOf(instance) : TargetOf(instance));
+            // goes on with another's work, that step's, and a reason step the engine's own read-only agent it was given,
+            // whose tree its start resets - and a step of others claims its target's alone, each target admitted on its own.
+            var claims = FlowClaims.Of(ClaimingStepOf(instance), _runnerFacts, instance.Step.Others is null ? ClaimedAgentOf(instance) : TargetOf(instance));
 
             if (claims.Any(claim => held.Concat(reserved).Any(claim.Conflicts)))
             {
@@ -10357,13 +10357,33 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The step as its claims are read: its own - a reason step that goes on with another's work with that step's <c>in</c>
-    /// and access, which it names none of.
+    /// The step as its claims are read: its own - a reason step that goes on with another's work with that step's <c>in</c>,
+    /// which it names none of, the tree it claims before that agent is made. The agent it claims the tree of is the one it
+    /// works in (<see cref="WorksInOf"/>), whatever its access.
     /// </summary>
     private static WorkflowStep ClaimingStepOf(FlowInstance instance)
         => WorkingOf(instance) is { } working && !ReferenceEquals(working, instance)
-            ? instance.Step with { In = working.Step.In, Access = working.Step.Access }
+            ? instance.Step with { In = working.Step.In }
             : instance.Step;
+
+    /// <summary>
+    /// The agent whose tree <paramref name="instance"/>'s claims name: the one it works in (<see cref="WorksInOf"/>) - save
+    /// where it works as a reading step that goes on with its own work (its <c>resume</c> names itself), whose visits all
+    /// work in the one agent the first of them made (<see cref="Start"/>): every visit of that declaration, and every step
+    /// that goes on with one, names that agent by the declaration, made yet or not, so two visits admitted in one pass -
+    /// neither yet given its agent - claim the one tree too. Null where the step works in no agent, or in one of its own
+    /// not yet named.
+    /// </summary>
+    private string? ClaimedAgentOf(FlowInstance instance)
+    {
+        var working = WorkingOf(instance);
+
+        return working.Step is { Type: "reason", Resume: { } resumed } step
+            && string.Equals(resumed, step.Name, StringComparison.Ordinal)
+            && WorkflowStepTypes.MakesAgent(step)
+                ? $"the agent of {working.Path}"
+                : WorksInOf(instance);
+    }
 
     /// <summary>Gives back every claim <paramref name="instance"/> still holds.</summary>
     private void Release(FlowInstance instance)

@@ -2336,23 +2336,25 @@ work, its tree removed and nothing folded - a tree of its own, made as every age
 that works as it (each attempt of its first, and of each that goes on with its work) brings to the main checkout's HEAD
 then, whatever it wrote there before discarded, so the step reads exactly what the main checkout committed, starts in
 it, and may write it and its work directory, never folded; an answer that goes on with an attempt finds the tree as
-the attempt left it: the step's model resolved with its agent definition below its own and its order built as
-entries of a model and one of its provider's keys, each entry's credential read from the slot; its prompt file read
-and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work
-directory; the work it goes on with rendered as its continuation record, and its going on by the client's kind - the
-stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer,
-held to the schema its `outputs` names, the step's output - a schema in the subset the engine reads, which
-`validate-workflow` and a run's start refuse otherwise (exit 12), each problem naming the file, the step and the place
-in the schema that says it, and which the step's start holds it to again before any client is asked; a schema may share
-a definition with the schema files beside it, a `$ref` of the form `plan.schema.json#/$defs/workItem` naming one, and
-where the schema is read - the check, a run, a path typed by it - the definition is taken into the schema's own
-`$defs`, so the shipped plan, self-audit and diagnosis schemas hold one work-item definition between them; and where
-the repository declares legs, a step whose agent runs commands (its capabilities hold `run`) is given the `measure`
-tool on every client: one call takes a leg, its variant (the build configuration the leg's own configuration
-declares), a test filter and the cell of a universe being measured, runs those tests of that leg through the test
-service as a `test` step's legs are run - in the agent's worktree where it has one (an agent that only reads measures
-its own tree, at the main checkout's HEAD), in a local copy of the main tree where it does not, under the agents'
-isolation and the step's own record of what its legs start - and answers what
+the attempt left it; no two steps work in one agent's tree at once, for a reason step holds write on the tree of the
+agent it works in whatever its access - of two that go on with one step's work, two visits of one that goes on with
+its own among them, the second starts once the first has ended: the step's model resolved with its agent definition
+below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read
+from the slot; its prompt file read and filled where the step starts, each skill it names looked up again and the
+folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, and
+its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch
+rendered where it does not; and its answer, held to the schema its `outputs` names, the step's output - a schema in
+the subset the engine reads, which `validate-workflow` and a run's start refuse otherwise (exit 12), each problem
+naming the file, the step and the place in the schema that says it, and which the step's start holds it to again
+before any client is asked; a schema may share a definition with the schema files beside it, a `$ref` of the form
+`plan.schema.json#/$defs/workItem` naming one, and where the schema is read - the check, a run, a path typed by it -
+the definition is taken into the schema's own `$defs`, so the shipped plan, self-audit and diagnosis schemas hold one
+work-item definition between them; and where the repository declares legs, a step whose agent runs commands (its
+capabilities hold `run`) is given the `measure` tool on every client: one call takes a leg, its variant (the build
+configuration the leg's own configuration declares), a test filter and the cell of a universe being measured, runs
+those tests of that leg through the test service as a `test` step's legs are run - in the agent's worktree where it
+has one (an agent that only reads measures its own tree, at the main checkout's HEAD), in a local copy of the main tree
+where it does not, under the agents' isolation and the step's own record of what its legs start - and answers what
 they showed: `passed` where the leg passed, `failed` where its build or its tests failed, and `unmeasured` with why
 for anything else (a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not
 declared), the verdict spelt as the ledger spells it, with the run's directory and the call's own records

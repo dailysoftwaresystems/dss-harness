@@ -59,7 +59,7 @@ public sealed class WorkflowStepTypesTests
             [
                 ("orient", "read main"),
                 ("graphify-codebase", "read main, read the agent's tree where in names one"),
-                ("reason", "read main, write the agent's tree where its access is write"),
+                ("reason", "read main, write the tree of the agent it works in"),
                 ("build", "run(tree)"),
                 ("test", "run(tree)"),
                 ("run", "run(tree), write(tree) where its runner says writesTree"),

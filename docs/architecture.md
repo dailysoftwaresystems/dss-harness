@@ -4321,6 +4321,12 @@ the repository's root, names what the repository holds, and a command over that 
 the policy never refuses for the slots beneath it (`AgentPolicy.ThroughWorkingDirectory`) - and the reporter, which
 works as no agent of the run's, in its own scratch; the continuation's copies and the
 skills are put in the step's own `handed/` (`OrchestratorLayout.HandedDirectory`), which no command writes.
+A reason step holds write on the tree of the agent it works in whatever its access (`FlowClaims.Of`, read through the
+step whose work it goes on with, `FlowCoordinator.WorkingOf`): the start of a step that works as an agent that only
+reads resets that tree and its work writes it, so of two steps that go on with one reading step's work the second
+starts once the first has ended - two visits of one that goes on with its own, which work in the agent its first visit
+made, claiming that agent by the declaration before either is given it (`FlowCoordinator.ClaimedAgentOf`) - and no
+step's start discards another's scratch under it.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
 person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause

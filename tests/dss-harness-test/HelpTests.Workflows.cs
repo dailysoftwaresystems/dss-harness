@@ -361,6 +361,33 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The README and the architecture say what a reason step holds of the tree of the agent it works in - write, whatever
+    /// its access, since the start of a step that works as an agent that only reads resets that tree and its work writes it
+    /// - and that of two steps that go on with one step's work, two visits of one that goes on with its own among them, the
+    /// second starts once the first has ended; the step types' table says it in the claim it carries.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAReasonStepHoldsWriteOnTheTreeOfTheAgentItWorksIn_WhateverItsAccess()
+    {
+        Assert.Equal(["read main", "write the tree of the agent it works in"], WorkflowStepTypes.Find("reason")!.ClaimsOf);
+        Assert.Contains(
+            "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in "
+                + "whatever its access - of two that go on with one step's work, two visits of one that goes on with its own among "
+                + "them, the second starts once the first has ended:",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A reason step holds write on the tree of the agent it works in whatever its access "
+                + $"(`{nameof(FlowClaims)}.{nameof(FlowClaims.Of)}`, read through the step whose work it goes on with, `{nameof(FlowCoordinator)}.WorkingOf`): the start of a step "
+                + "that works as an agent that only reads resets that tree and its work writes it, so of two steps that go on with one "
+                + "reading step's work the second starts once the first has ended - two visits of one that goes on with its own, which "
+                + "work in the agent its first visit made, claiming that agent by the declaration before either is given it "
+                + $"(`{nameof(FlowCoordinator)}.ClaimedAgentOf`) - and no step's start discards another's scratch under it",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows topic carries its worked examples - the two ways a step is raised by another step's ending, and
     /// the loops a repository can build its own work around - each printed as a whole workflow and each holding as it
     /// is printed, read by the same reader that reads a workflow's own file and checked by the same check.
@@ -499,6 +526,8 @@ public sealed partial class HelpTests
                 + "step can go on with its work, its tree removed and nothing folded: a tree of its own, made as every agent's is, which the start of every step that works as it - each attempt of its first, and of each that goes on "
                 + "with its work - brings to the main checkout's HEAD then, whatever it wrote there before discarded, so the step reads exactly what the main checkout committed, starts in it, and may write it and its work directory, "
                 + "never folded; an answer that goes on with an attempt finds the tree as the attempt left it; "
+                + "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in whatever its access - "
+                + "of two that go on with one step's work, two visits of one that goes on with its own among them, the second starts once the first has ended; "
                 + "the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
                 + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
                 + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
