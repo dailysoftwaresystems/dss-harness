@@ -2565,7 +2565,14 @@ the next is diagnosed on the tree the first left (`FixWaitsFor`, the triage's re
 two issues stop runs again once (`RunTheReporterAgain`): after every issue that stops it is settled - no triage of one
 still to answer, no fix of one waiting or at work - where a visit fixed one, sent back by the visit that ended last;
 never while a fix of another still works, and never twice. `{run.preExisting}` says each issue in the place it was taken,
-whichever visit ended first. From the moment it is sent to fix until its visit ends - a visit paused on a person, or
+whichever visit ended first - the order its triage ended, which a resume rebuilds the tally in from each triage's
+recorded `endedIn`, a listed issue and one owed the next round under their files' own ids, so the words read after a
+resume as before it. An always step starts once no issue's triage or fix is at work beside it - one raised in the
+always phase by another always step's report, or let go on by an answer given while it ran (`FlowCoordinator.IssueWorkOf`,
+a hold of `HoldOf`, its record's `waitsOn` saying `an issue's triage or fix to end`, `FlowWaits.IssueWork`) - so what it
+is told of the run's issues is true when it is told; work that waits on a person, or on the session's end, is not waited
+for, and the issue is said as it stands. The phase itself begins only once nothing runs and nothing is due, so no work
+begun before it is still at work when it starts. From the moment it is sent to fix until its visit ends - a visit paused on a person, or
 asked whether its failure is tried again, included - the issue holds the files its triage's `where` names, each entry a
 path from the repository's root and never the command it may name instead (`FlowIssueHold.IsPath`), and, once a check of
 its visit has read the remedy items its diagnosis gives, every path those items own: `FlowIssueHold`, the one owner of

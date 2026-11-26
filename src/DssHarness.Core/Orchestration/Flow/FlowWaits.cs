@@ -32,6 +32,12 @@ public static class FlowWaits
     /// <summary>A stop under way to end: a stopping run starts its always steps alone.</summary>
     public const string Stop = "the stop to end";
 
+    /// <summary>
+    /// An issue's triage or fix at work beside the always phase, which an always step starts after, so what it is told of
+    /// the run's issues is true when it is told.
+    /// </summary>
+    public const string IssueWork = "an issue's triage or fix to end";
+
     /// <summary>An advice of the step's own question that was ended, and whose runner has not ended yet.</summary>
     public const string Advice = "an advice to end";
 
