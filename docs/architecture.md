@@ -4288,7 +4288,10 @@ The planning of a plan update: where the run has begun the scope its plan update
 raised by the update alone as a handler is raised by an ending (`FlowCoordinator.RaisePlanner`: a new visit of it in
 the newest instance of that scope, `FlowInstance.RaisedByUpdate` in its record, a group around it that had ended in
 progress again), never drawn by the ordinary schedule (`FlowCoordinator.Instantiate`), and admitted ahead of
-everything else (`AdmissionWalk`) - while the run is held (`FlowCoordinator.HoldOf`: nothing starts outside that
+everything else (`AdmissionWalk`, which walks every other waiting step in the order it first became ready,
+`FlowStepMeasure.ReadyAt`, the fixed order breaking ties: a step blocked on a claim reserves it, so a fold or an
+agent's making waiting behind readers is never overtaken by a reader that became ready after it - a busy run's
+pre-existing triages once starved a recovery's remedy that way) - while the run is held (`FlowCoordinator.HoldOf`: nothing starts outside that
 scope, a held step reserving no claim, what is in flight untouched, no next iteration of a loop outside it, no
 redirect made outside it), `flow.json` saying `hold {update, at}` (`FlowHoldRecord`). The step's `amend.then` is
 followed when it is done - the redirect's machinery inside that scope (`FlowCoordinator.SettleUpdates` ->

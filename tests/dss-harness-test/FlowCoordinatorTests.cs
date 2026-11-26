@@ -1350,6 +1350,56 @@ public sealed class FlowCoordinatorTests
         _ = await session;
     }
 
+    /// <summary>
+    /// A step blocked on a claim is overtaken by no step that became ready after it, wherever either is declared: the
+    /// agent's making here, a writer of the main tree, is ready while two readers run and waits; a reader declared before
+    /// it becomes ready after it, and waits behind it in turn, so the making starts once the readers it waited for end.
+    /// Walked in declaration order, the later reader was admitted first, and a run that keeps starting readers - a busy
+    /// run's pre-existing triages - kept the writer waiting for good.
+    /// </summary>
+    [Fact]
+    public async Task AStepBlockedOnAClaim_IsOvertakenByNoStepReadyAfterIt_WhereverItIsDeclared()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: second
+                type: orient
+              - name: late
+                type: orient
+                dependsOn: [second]
+              - name: quick
+                type: orient
+              - name: making
+                type: create-agent
+                agent: worker.md
+                dependsOn: [quick]
+            """);
+        var runner = new FakeRunner();
+        var first = runner.Hold("first");
+        var second = runner.Hold("second");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var token = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(token);
+        await runner.StartedAsync("quick").WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        // The making is ready - quick ended - and waits on the claim the two readers hold.
+        while (coordinator.Instances["making"].Measure?.ReadyAt is null)
+        {
+            await Task.Delay(10, token);
+        }
+
+        second.Done();
+        await runner.StartedAsync("second").WaitAsync(TimeSpan.FromSeconds(30), token);
+        first.Done();
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        Assert.Equal(["first", "second", "quick", "making", "late"], runner.Started);
+    }
+
     /// <summary>A run step whose runner writes the tree claims write on it, and not run: a reader, which shares the tree with a runner, waits behind it.</summary>
     [Fact]
     public async Task ARunStepWhoseRunnerWritesTheTree_ClaimsWriteOnItsTree()

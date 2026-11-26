@@ -6755,13 +6755,16 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The one walk admission makes, deciding nothing it does not say: every step that has not started, in the fixed
-    /// order - the visit a plan update raised first, then declaration order, then instance id - held to what keeps the
-    /// run from starting it (a hard stop, a pause under way, a stopping run, a pending redirect, an update's hold), to
-    /// its dependencies, to the <c>alone</c> barrier, to the claims and to the limits, all-or-nothing, each step the
-    /// walk admits counted as running for the ones after it. A step blocked on a claim reserves every claim it waits
-    /// for, so no later step takes what it waits for first and a fold waiting behind readers is not starved; one
-    /// blocked on a limit, a hold or a pause reserves nothing. Admission starts what it admits, the run's records list
+    /// The one walk admission makes, deciding nothing it does not say: every step that has not started - the visit a plan
+    /// update raised first, then each in the order it first became ready, the earliest first (its measure's
+    /// <see cref="FlowStepMeasure.ReadyAt"/>, one not ready yet after every one that is), then declaration order, then
+    /// instance id - held to what keeps the run from starting it (a hard stop, a pause under way, a stopping run, a
+    /// pending redirect, an update's hold), to its dependencies, to the <c>alone</c> barrier, to the claims and to the
+    /// limits, all-or-nothing, each step the walk admits counted as running for the ones after it. A step blocked on a
+    /// claim reserves every claim it waits for, so no step that became ready after it takes what it waits for first: a
+    /// fold or an agent's making waiting behind readers is not starved by the readers a busy run keeps starting - a
+    /// pre-existing triage raised later, a step declared before it. One blocked on a limit, a hold or a pause reserves
+    /// nothing. Admission starts what it admits, the run's records list
     /// it as what starts next, and each step's record says what it waits on: all three read this walk.
     /// </summary>
     private List<Admission> AdmissionWalk()
@@ -6769,6 +6772,7 @@ public sealed class FlowCoordinator
         var waiting = _created
             .Where(instance => instance.State is FlowInstanceState.NotStarted && !instance.Step.IsGroup)
             .OrderByDescending(instance => instance.RaisedByUpdate is not null)
+            .ThenBy(instance => instance.Measure?.ReadyAt ?? DateTimeOffset.MaxValue)
             .ThenBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
             .ThenBy(instance => instance.Id, StringComparer.Ordinal)
             .ToList();
