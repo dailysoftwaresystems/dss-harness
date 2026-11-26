@@ -1261,6 +1261,39 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The planner is told the issues the run owes its next round wherever it writes the plan - planning it, revising it
+    /// and updating it - as the self-audit is, each to be a work item naming its id in <c>settles</c>: the round's check
+    /// refuses a round that leaves one unsettled, and a plan update the check raises for one adds the item that settles it.
+    /// </summary>
+    [Fact]
+    public void ThePlannersPrompts_ListTheIssuesOwedTheNextRound_EachAWorkItemThatSettlesIt()
+    {
+        const string Listed = "The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be built, and what must be measured first: {run.nextRound}";
+
+        foreach (var prompt in new[] { "prompts/plan.md", "prompts/replan.md", "prompts/plan-update.md", "prompts/self-audit.md" })
+        {
+            Assert.Contains(Listed, Prose.Words(Read(prompt)), StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "Each issue listed becomes a work item of the plan, which its first round builds before the rest: make it one, with its size and a class - it is a defect too, and the rules of a class below apply to it - and name the issue it settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one unsettled.",
+            Prose.Words(Read("prompts/plan.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each issue listed is a work item of the plan, which its first round builds before the rest, naming the issue it settles in `settles` by its id exactly: keep the one the plan has, or make one, with its size and a class, where it has none.",
+            Prose.Words(Read("prompts/replan.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an issue the check says is owed the next round and settled by no work item is an `added` item that settles it, as below.",
+            Prose.Words(Read("prompts/plan-update.md")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Each issue listed becomes a work item of the round, built before the rest, naming the issue it settles in `settles` by its id exactly: where no item of the plan settles it yet, add one, with its size and a class, as an `added` piece.",
+            Prose.Words(Read("prompts/plan-update.md")),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The planner names the run's base commit, never a branch, where an item's definition of done compares with the tree
     /// before the work: a builder works in a repository of its own that holds no branch, where <c>main</c> names nothing,
     /// and a statement that names it can never hold there.

@@ -923,8 +923,9 @@ public sealed record FlowNextRoundFile(
 }
 
 /// <summary>
-/// One issue the run owes its next round, with its size: what the self-audit is told to make the round's first item of,
-/// which names it in <c>settles</c>, and what the check that opens the round holds its items to. It is settled by the
+/// One issue the run owes its next round, with its size: what the planner and the self-audit are told to make a work item
+/// of the round, built first, which names it in <c>settles</c>; what every check whose items a round opens with lets an
+/// item settle; and what the check that opens the round holds its items to. It is settled by the
 /// work item that names it, once that item ended done with its work landed - a commit of its own made - never by one
 /// that ended done with nothing landed, as an item a person skipped does.
 /// </summary>

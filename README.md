@@ -833,10 +833,14 @@ and the same hotspots as `{run.closure}` and `{run.hotspots}`, through the insta
 commit subjects, a hotspot's path, a pin that lists the case by hand - each disproved or made a work
 item. A pre-existing
 issue the triage answers `next` for - a defect in code the run's change does not touch that blocks
-nothing - is owed the run's next round as its first item, sized by its files: the self-audit makes
-it one with its class, the check that opens a round - and no other check - refuses a round whose
-items leave one unsettled, and the rounds go on while one is left - never the round the issue came
-from, which no fold waits for. The item that names the issue settles it once it ends done with a
+nothing - is owed the run's next round as its first item, sized by its files: the planner, where
+it plans or updates the plan while one is owed, and the self-audit make it one with its class,
+naming it in `settles`; every check whose items a round opens with - the plan's, so the one a plan
+update sends the run back to, and the round's own - takes that item and refuses one that names an
+issue the run does not owe, and a recovery's check refuses every `settles`; the check that opens a
+round - and no other check - refuses a round whose items leave one unsettled, and the rounds go on
+while one is left - never the round the issue came from, which no fold waits for. The item that
+names the issue settles it once it ends done with a
 commit of its own made; one a person skipped lands nothing and settles nothing, and the issue stays
 owed.
 
