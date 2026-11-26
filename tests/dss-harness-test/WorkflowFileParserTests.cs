@@ -811,7 +811,7 @@ public sealed class WorkflowFileParserTests
 
     /// <summary>
     /// An input's kind is one of the four it can take, an input of a kind other than text takes no options - a file
-    /// input is a path, checked when the run starts, a value is read as an expression and a step as a name - and
+    /// input is a path, its file copied as the run starts, a value is read as an expression and a step as a name - and
     /// options given empty are refused rather than read as any value, which is what leaving the key out says.
     /// </summary>
     [Fact]

@@ -68,7 +68,7 @@ public static class WorkflowKeys
     [
         new("name", "the input's name, as --input name=value spells it") { Required = true },
         new("description", "what the value is for, shown when it is missing"),
-        new("kind", "text (the default) or file: a path inside the repository, checked when the run starts"),
+        new("kind", "text (the default) or file: a file inside the repository by its path from the root, committed or not, which the run copies as it starts, its steps reading the copy in every session"),
         new("default", "what to use when nothing supplies it; empty is the input not given, and is always taken"),
         new("required", "refuse a run that gives it no value and declares no default"),
         new("options", "the values a text input takes; a run started with another is refused"),

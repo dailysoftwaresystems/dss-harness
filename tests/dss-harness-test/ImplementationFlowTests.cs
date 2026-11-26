@@ -1792,8 +1792,8 @@ public sealed class ImplementationFlowTests
         }
 
         /// <summary>
-        /// A run given a plan: the items come from the file the person wrote, named to the planner and to the plan's
-        /// auditor - and a red CI leg is not the run's work: the prioritizer puts it to a person as a stop, and the
+        /// A run given a plan: the items come from the file the person wrote, kept as the run's copy as it started and
+        /// that copy named to the prioritizer, the planner and the plan's auditor - and a red CI leg is not the run's work: the prioritizer puts it to a person as a stop, and the
         /// person's decision reaches the planner with it.
         /// </summary>
         [Fact]
@@ -1836,10 +1836,15 @@ public sealed class ImplementationFlowTests
 
             var paused = await StartAsync(kit, "plan=docs/plan.md", "preapproved=yes");
 
+            // The run kept a copy of the plan as it started, and every step reads that copy for it.
+            var plan = kit.RunOf().InputCopy("plan", "docs/plan.md");
+
+            Assert.Equal(File.ReadAllText(Path.Combine(kit.Tree.Path, "docs", "plan.md")), File.ReadAllText(plan));
+
             // The prioritizer read the plan and the red leg, and chose the plan's work - the red is a stop, not the work.
             var priorityPrompt = kit.Agents.Of("prioritizer").Single().Prompt;
 
-            Assert.Contains("docs/plan.md", priorityPrompt, StringComparison.Ordinal);
+            Assert.Contains(plan, priorityPrompt, StringComparison.Ordinal);
             Assert.True(priorityPrompt.Contains("build-reports", StringComparison.Ordinal), priorityPrompt);
 
             var asked = Assert.Single(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
@@ -1851,8 +1856,8 @@ public sealed class ImplementationFlowTests
             Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
 
             // The plan the person wrote was given to the planner and to its auditor, with the person's decision.
-            Assert.Contains("docs/plan.md", kit.Agents.Of("planner").Single().Prompt, StringComparison.Ordinal);
-            Assert.Contains("docs/plan.md", kit.Agents.Of("plan-auditor").Single().Prompt, StringComparison.Ordinal);
+            Assert.Contains(plan, kit.Agents.Of("planner").Single().Prompt, StringComparison.Ordinal);
+            Assert.Contains(plan, kit.Agents.Of("plan-auditor").Single().Prompt, StringComparison.Ordinal);
             Assert.Contains("Go ahead; the plan's first item mends the leg.", kit.Agents.Of("planner").Single().Prompt, StringComparison.Ordinal);
         }
 

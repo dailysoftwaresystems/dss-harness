@@ -1353,8 +1353,9 @@ A machine shared by several users is not seen whole: each user's queue is their 
 
 An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its
 agents keep is in the main checkout under `.orchestrators/<orchestrator>/` - records, logs, plans, scratch, its
-runs' temp and artifacts (one directory of each with every run, `OrchestratorLayout.TempDirectory` and
-`ArtifactsDirectory`, made with the run and taken away with its directory), the rows an agent files, its kept
+runs' temp, artifacts and inputs (one directory of each with every run, `OrchestratorLayout.TempDirectory`,
+`ArtifactsDirectory` and `InputsDirectory`, made with the run and taken away with its directory - the last holding a
+copy of each file the run's own file inputs named, made as it starts), the rows an agent files, its kept
 evidence and transcripts - never in a worktree, and init keeps the directory in git by its
 placeholder and everything made in it out; sync withholds it from every host by name. A session taking the work
 over, on another account or after the last one ended, reads it there. `OrchestratorLayout` spells every path once;
@@ -4640,8 +4641,21 @@ unfinished run with work in the tree - a run whose agent's record cannot be read
 said - chooses the name (`r<N>`, one more than the highest there; a name `--run` gives is held to
 `worktrees.maxNameLength` where the repository sets one and refused where a record or anything else is there), holds the start
 to the path budget of its agents' worktrees - what each worktree's own check counts below it
-(`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - makes the run's record, its status and its owner
-(`.orchestrators/<run>.owner.json`), and leaves the section. A session of a run already made -
+(`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - opens the file each of
+the run's own inputs of the kind `file` names where its value, given or its default, is not empty - a path from the
+main checkout's root, never absolute, with no `..` and in none of the tool's credential slots, read from the main
+checkout as it stands, committed or not; anything else refused (13), naming the input and the path, no run started
+(`FlowInputs.OpenFiles`) - makes the run's directory and copies each file into it, `inputs/<input>/<the file's name>`
+(`OrchestratorLayout.InputCopy`), before it makes the run's record, its status and its owner
+(`.orchestrators/<run>.owner.json`), and leaves the section. What a step reads for such an input - `{input.<name>}`
+in every prompt and every expression, and a pull request's base - is the copy's full path (`FlowInputs.AsRead`, the
+one owner of what a step reads for an input, which every session hands the engine), so every step of every session,
+a resume's included, reads the file the run was started with, whatever the person did to it since; the run's records
+keep the value as it was given. Every agent of the run reads the run's `inputs/` as a root of its own
+(`AgentStepGround`): an untracked or uncommitted file is in no agent's tree - a write agent's worktree is cut from the
+run's start commit, and an agent that only reads has its tree brought to the main checkout's HEAD - and reaches both
+alike. A used workflow's file input is no such thing: it names a file of that workflow's own directory, which the
+definition's check reads. A session of a run already made -
 `resume-orchestrator`, or `answer-orchestrator` where no engine runs the run - first sweeps what a
 killed engine's steps left running (`ChildSessions`), refuses a definition the repository's entry
 in the main checkout no longer matches - compared by digest of what the definition says

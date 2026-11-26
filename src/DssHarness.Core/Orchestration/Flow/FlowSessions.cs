@@ -74,8 +74,11 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// record and the way on with that one), one whose directory is there holding no run's record refused as well, else
     /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
     /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
-    /// process. Once the test for another unfinished run - the last look at a live owner - has passed, and before anything of
-    /// the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
+    /// process. Before anything of the run is made, each of the run's own inputs of the kind <c>file</c> that is not empty
+    /// is held to a file inside the repository and opened (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
+    /// made each is copied into the run's inputs (<see cref="OrchestratorLayout.InputsDirectory"/>) before its record is
+    /// written; the context keeps the values as they were given. Once the test for another unfinished run - the last look
+    /// at a live owner - has passed, and before anything of the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
     /// record because its session holds this very process is refused: the run's engine, this process, would be ended with it
     /// by the next command run from outside, which ends what the record names. Swept there, what it keeps is never older
     /// than the start: an owner seen standing before the section and gone since is swept with the rest.
@@ -96,7 +99,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">
     /// Another run of the repository is unfinished, the sweep keeps a record whose session holds this very process, the name
-    /// is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).
+    /// is taken, <paramref name="refusal"/> refuses it, or a file input names no file inside the repository
+    /// (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
         HarnessLayout layout,
@@ -135,11 +139,19 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             var run = OrchestratorLayout.Of(layout, name);
 
+            // The files the run's own file inputs name, opened before anything of the run is made: one that names no file
+            // inside the repository refuses the start, and the bytes the run keeps are those of the very file checked.
+            using var files = FlowInputs.OpenFiles(_fileSystem, definition, FlowInputs.Resolve(definition, inputs), layout.MainCheckoutRoot);
+
             // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
-            // life, and its artifacts, kept for the run's life and copied wherever asked - both taken away with the run.
+            // life, its artifacts, kept for the run's life and copied wherever asked, and its inputs, where each file a
+            // file input names is copied before the run's record is written, so a run that has a record has its copies -
+            // all taken away with the run.
             _fileSystem.CreateDirectory(run.Directory);
             _fileSystem.CreateDirectory(run.TempDirectory);
             _fileSystem.CreateDirectory(run.ArtifactsDirectory);
+            _fileSystem.CreateDirectory(run.InputsDirectory);
+            files.Keep(_fileSystem, run);
             _store.WriteOrchestrator(
                 run,
                 new OrchestratorRecord

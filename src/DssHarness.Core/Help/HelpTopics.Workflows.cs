@@ -92,7 +92,12 @@ public static partial class HelpTopics
         builder.AppendLine("for the folder alone would name a workflow it has not got; --from vendors a remote one.");
         builder.AppendLine();
         builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
-        builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
+        builder.AppendLine("default and the options it takes, an input of the kind file naming a file inside the");
+        builder.AppendLine("repository by its path from the root, committed or not, which the run copies into its");
+        builder.AppendLine($"own {HarnessLayout.OrchestratorInputsDirectoryName}/ as it starts (one that names none is refused, {HarnessExit.Refused}, no run started):");
+        builder.AppendLine("every step of every session reads that copy for it - {input.<name>} the copy's path -");
+        builder.AppendLine("whatever became of the file since, and every agent of the run reads it, wherever its");
+        builder.AppendLine("own tree was cut from; params - its own knobs, defaulted in the file and read");
         builder.AppendLine("as param.<name>; and outputs - what the whole workflow produces, each from a step of");
         builder.AppendLine("the flow. Its steps are of the types below, or groups holding steps of their own: a");
         builder.AppendLine("group runs its steps once for each work item a forEach yields, again and again until a");

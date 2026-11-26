@@ -713,7 +713,10 @@ public sealed class FlowCoordinator
     /// <param name="runner">The step runner every step of the run is given to.</param>
     /// <param name="runnerFacts">What the engine asks of the runners a workflow names.</param>
     /// <param name="clock">How the run waits: every retry waits by this.</param>
-    /// <param name="inputs">The values the run is started with, by input name.</param>
+    /// <param name="inputs">
+    /// The values the run's steps read, by input name (<see cref="FlowInputs.AsRead"/>): those it was started with, an input
+    /// of the kind <c>file</c> the path of the copy the run made of the file as it started.
+    /// </param>
     /// <param name="records">Records the run on disk at every change, in the run's own order; null for a run that holds nothing.</param>
     /// <param name="resume">The state a killed or stopped run left, to go on with; null for a run that begins.</param>
     /// <param name="runName">
@@ -12032,7 +12035,8 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The run's inputs as one object: the values the run was started with - and the one its <c>amend</c> block names
+    /// The run's inputs as one object: the values the run's steps read - those it was started with, a file input the copy
+    /// the run made of its file (<see cref="FlowInputs.AsRead"/>) - and the one its <c>amend</c> block names
     /// as given with its amendments, the value as given then each amendment under a line that says when it was made,
     /// for every prompt and every expression that reads it. The value as given alone is what a <c>preAnswer</c>'s
     /// quote is looked for in, which reads <c>_inputs</c> and never this.

@@ -309,6 +309,58 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The help, the command's own help, the README and the architecture say what a run's own file input is: a file
+    /// inside the repository by its path from the root, committed or not, refused with no run started where it names none,
+    /// copied into the run's inputs as it starts, and read there - its copy's path - by every step of every session and
+    /// every agent of the run, whatever became of the file since; the orchestrators topic and the layout name the place.
+    /// </summary>
+    [Fact]
+    public async Task TheHelpAndTheDocuments_SayARunsFileInputIsCopiedAsItStarts_AndReadThereByEveryStepAndAgent()
+    {
+        Assert.Contains(
+            "A workflow declares inputs - the values a run is started with, each with a kind, a default and the options it takes, "
+                + "an input of the kind file naming a file inside the repository by its path from the root, committed or not, which "
+                + $"the run copies into its own {HarnessLayout.OrchestratorInputsDirectoryName}/ as it starts (one that names none is refused, {HarnessExit.Refused}, no run started): every step of "
+                + "every session reads that copy for it - {input.<name>} the copy's path - whatever became of the file since, and "
+                + "every agent of the run reads it, wherever its own tree was cut from;",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/ the file one of the run's own file inputs named, copied as the run starts - committed or "
+                + "not - and kept for its life: what every step of every session reads for that input, whatever became of the file "
+                + "since, and every agent of the run reads; taken away with the run's directory",
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a file input names a file inside the repository by its path from the root, which the run copies as it starts.",
+            Prose.Words((await CliRunner.RunAsync([FlowService.RunCommand, "--help"], TestContext.Current.CancellationToken)).StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "an input of the kind `file` names a file inside the repository by its path from the root - committed or not, refused "
+                + $"({HarnessExit.Refused}) with nothing made where it names none - which the run copies into its own `{HarnessLayout.OrchestratorInputsDirectoryName}/` as it starts: every "
+                + "step of every session reads that copy for the input, whatever became of the file since, and every agent of the run reads it.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "opens the file each of the run's own inputs of the kind `file` names where its value, given or its default, is not "
+                + "empty - a path from the main checkout's root, never absolute, with no `..` and in none of the tool's credential "
+                + $"slots, read from the main checkout as it stands, committed or not; anything else refused ({HarnessExit.Refused}), naming the "
+                + $"input and the path, no run started (`{nameof(FlowInputs)}.{nameof(FlowInputs.OpenFiles)}`) - makes the run's directory and copies each file "
+                + $"into it, `{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/<the file's name>` (`{nameof(OrchestratorLayout)}.{nameof(OrchestratorLayout.InputCopy)}`), before it makes the run's "
+                + "record, its status and its owner",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What a step reads for such an input - `{input.<name>}` in every prompt and every expression, and a pull request's "
+                + $"base - is the copy's full path (`{nameof(FlowInputs)}.{nameof(FlowInputs.AsRead)}`, the one owner of what a step reads for an input, "
+                + "which every session hands the engine), so every step of every session, a resume's included, reads the file the run "
+                + "was started with, whatever the person did to it since; the run's records keep the value as it was given. Every "
+                + $"agent of the run reads the run's `{HarnessLayout.OrchestratorInputsDirectoryName}/` as a root of its own (`{nameof(DssHarness.Core.Agents.Policy.AgentStepGround)}`)",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows topic carries its worked examples - the two ways a step is raised by another step's ending, and
     /// the loops a repository can build its own work around - each printed as a whole workflow and each holding as it
     /// is printed, read by the same reader that reads a workflow's own file and checked by the same check.

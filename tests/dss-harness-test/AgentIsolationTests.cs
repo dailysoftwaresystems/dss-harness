@@ -229,7 +229,8 @@ public sealed class AgentIsolationTests
             ],
             commands.Hidden);
         Assert.Equal(writes.OrderBy(write => write.Path, StringComparer.Ordinal), commands.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
-        Assert.Equal([worktree, kit.Main, work], commands.Reads);
+        // The run's inputs, the copies of the files its own file inputs named, are read as the agent's roots are.
+        Assert.Equal([worktree, kit.Main, work, kit.Layout.InputsDirectory], commands.Reads);
         Assert.Equal([Path.Combine(claude, AgentIsolation.ShellSnapshots)], commands.Reopened);
         Assert.Equal(kit.Layout.TempDirectory, Path.GetDirectoryName(commands.Temp));
         Assert.Equal([new("TMPDIR", commands.Temp!), .. IsolationCaches.Environment(caches)], commands.Environment);

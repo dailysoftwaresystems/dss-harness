@@ -336,7 +336,8 @@ public sealed record FlowAnswer(
 /// <param name="Name">The input's name, as <c>--input name=value</c> spells it, or as a <c>with:</c> value spells it.</param>
 /// <param name="Description">What the value is for, shown when it is missing.</param>
 /// <param name="Kind">
-/// <c>text</c>, or <c>file</c>: a path inside the repository, which must be a file when the run starts - and, of a
+/// <c>text</c>, or <c>file</c>: a file inside the repository by its path from the root, committed or not, which the run
+/// copies as it starts and its steps read as that copy (<see cref="FlowInputs.AsRead"/>) - and, of a
 /// workflow another uses as a step, also <c>value</c>: any typed value, read as an expression, and <c>step</c>: a name
 /// its steps say in <c>onFailure</c> or <c>then</c> through <c>{input.&lt;name&gt;}</c>, resolved in the caller.
 /// </param>
@@ -354,7 +355,12 @@ public sealed record FlowInput(
     /// <summary>The kind a file that says nothing is read as.</summary>
     public const string TextKind = "text";
 
-    /// <summary>The kind a path inside the repository is: checked to be a file when the run starts.</summary>
+    /// <summary>
+    /// The kind a file inside the repository is, named by its path from the root: of the run's own workflow, held to a file
+    /// there as the run starts, committed or not, and copied into the run's directory (<see cref="FlowInputs.OpenFiles"/>),
+    /// a step reading the copy's path for it in every session (<see cref="FlowInputs.AsRead"/>); of a workflow used as a
+    /// step, a path of that workflow's own directory, which the definition's check reads.
+    /// </summary>
     public const string FileKind = "file";
 
     /// <summary>The kind any typed value takes, read as an expression: a used workflow's alone.</summary>
