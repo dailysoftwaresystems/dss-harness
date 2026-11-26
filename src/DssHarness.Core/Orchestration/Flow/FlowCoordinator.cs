@@ -6885,7 +6885,7 @@ public sealed class FlowCoordinator
             // A step that names an agent claims that agent's own tree, as its instance's create-agent made it - one that
             // goes on with another's work, that step's, and a reason step the engine's own read-only agent it was given,
             // whose tree its start resets - and a step of others claims its target's alone, each target admitted on its own.
-            var claims = FlowClaims.Of(ClaimingStepOf(instance), _runnerFacts, instance.Step.Others is null ? ClaimedAgentOf(instance) : TargetOf(instance));
+            var claims = ClaimsOf(instance);
 
             if (claims.Any(claim => held.Concat(reserved).Any(claim.Conflicts)))
             {
@@ -7080,8 +7080,6 @@ public sealed class FlowCoordinator
         instance.Measure = (instance.Measure ?? new FlowStepMeasure(ReadyAt: now)).Running(instance.Attempt, now);
 
         // What an attempt says of its legs is its own: the attempt before it placed its legs where it did.
-        instance.HeldClaims.Clear();
-        instance.HeldClaims.AddRange(claims);
         instance.LegsInCopies.Clear();
         instance.LegsInTree.Clear();
         instance.CopiesMade.Clear();
@@ -7117,7 +7115,17 @@ public sealed class FlowCoordinator
                 ?? NameAgent();
             instance.MadeModel ??= _agentModels.GetValueOrDefault(instance.Path);
             instance.WorksIn ??= instance.Made;
+
+            // A reading step that begins work of its own claimed nothing of that agent's tree where it was admitted - the
+            // agent is its own, named only now - and holds write on it from here, read by the one owner of what a step
+            // claims: so what this attempt holds, and keeps held past its end where its runner outlives it (Linger),
+            // names the tree, and a later attempt of the step itself, which works in the same agent, never brings that
+            // tree to the main checkout's HEAD under a runner still at work there.
+            claims = ClaimsOf(instance);
         }
+
+        instance.HeldClaims.Clear();
+        instance.HeldClaims.AddRange(claims);
 
         Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
@@ -10384,6 +10392,15 @@ public sealed class FlowCoordinator
                 ? $"the agent of {working.Path}"
                 : WorksInOf(instance);
     }
+
+    /// <summary>
+    /// The claims <paramref name="instance"/> holds as the run stands now (<see cref="FlowClaims.Of"/>): of the step as its
+    /// claims are read (<see cref="ClaimingStepOf"/>), for the agent they name (<see cref="ClaimedAgentOf"/>) - or, for a
+    /// step of <c>others</c>, the target whose turn it is. What admission weighs, and what a start that names the step's
+    /// own agent holds from then on.
+    /// </summary>
+    private IReadOnlyList<FlowClaim> ClaimsOf(FlowInstance instance)
+        => FlowClaims.Of(ClaimingStepOf(instance), _runnerFacts, instance.Step.Others is null ? ClaimedAgentOf(instance) : TargetOf(instance));
 
     /// <summary>Gives back every claim <paramref name="instance"/> still holds.</summary>
     private void Release(FlowInstance instance)

@@ -2512,6 +2512,72 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["next"].State);
     }
 
+    /// <summary>
+    /// A reading step that begins work of its own holds its own agent's tree from the moment its start names that agent:
+    /// a runner of its first attempt that does not end within the drain's bound of its time limit's stop keeps the tree
+    /// held, so the retry a person answers its failure with - which works in the same agent, and whose start brings that
+    /// tree to the main checkout's HEAD - waits on the claim, and starts once the old runner has answered, never beside it.
+    /// </summary>
+    [Fact]
+    public async Task AReadingStepsRetry_WaitsOnItsOwnAgentsTree_UntilTheRunnerThatOutlivedItsFirstAttemptAnswers()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: audit
+                type: reason
+                prompt: audit.md
+                outputs: audit.json
+                timeoutMinutes: 1
+                onFailure: pause
+              - name: other
+                type: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var outlived = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner().OnAsync("audit", run => run.Attempt == 1 ? outlived.Task : Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)));
+        var other = runner.Hold("other");
+        var clock = new TimerClock();
+        var records = new Snapshots();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+        var paused = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "audit" && step.State == FlowInstanceState.Paused));
+        var retried = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "audit" && step.Attempt == 2
+            && (step.WaitsOn.Count > 0 || step.State != FlowInstanceState.NotStarted)));
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+        _ = await paused.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        var asked = Assert.Single(coordinator.OpenQuestions);
+
+        Assert.Equal("failure", asked.Kind);
+        Assert.Equal(FlowHandedOver.Taken, await coordinator.OfferAnswerAsync(asked.Id, "retry").WaitAsync(TimeSpan.FromSeconds(30), cancel));
+
+        var waiting = (await retried.WaitAsync(TimeSpan.FromSeconds(30), cancel)).Steps.Single(step => step.Instance == "audit");
+
+        // The first attempt's runner still works in the agent's tree: the retry waits on that tree's claim alone.
+        Assert.Equal((FlowInstanceState.NotStarted, 2), (waiting.State, waiting.Attempt));
+        Assert.Equal([FlowWaits.Claim], waiting.WaitsOn);
+        Assert.Equal(["audit", "other"], runner.Started);
+
+        outlived.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var done = records.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "audit" && step.State == FlowInstanceState.Done));
+        _ = await done.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        other.Done();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["audit", "other", "audit"], runner.Started);
+        Assert.Equal((FlowInstanceState.Done, 2), (coordinator.Instances["audit"].State, coordinator.Instances["audit"].Attempt));
+
+        // Both attempts worked in the one agent the first start named.
+        Assert.NotNull(runner.Runs[0].Made);
+        Assert.Equal(runner.Runs[0].Made!.Name, runner.Runs[2].Made?.Name);
+    }
+
     /// <summary>The architecture says what a step's time limit is, as the reader, the validator and the coordinator hold it.</summary>
     [Fact]
     public void TheArchitecture_SaysWhatAStepsTimeLimitIs()

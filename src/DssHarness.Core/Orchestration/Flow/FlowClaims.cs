@@ -67,8 +67,10 @@ public static class FlowClaims
     /// and not run. A reason step holds read on the main tree and write on the tree of the agent it works in, whatever
     /// its access - the agent its <c>in</c> names, the engine's own read-only one it was given, or the one of the step whose
     /// work it goes on with - since its start brings an agent that only reads to the main checkout's HEAD and its work
-    /// writes the tree; a reading step that begins work of its own holds nothing of a tree until its agent is named, for
-    /// that agent is its own. A string the cases do not name holds nothing.
+    /// writes the tree; a reading step that begins work of its own claims nothing of that agent's tree where it is
+    /// admitted, for the agent is its own and named only as the step starts, and holds write on it from that moment - the
+    /// claims read again for the agent named - so what its attempt holds, and keeps held past its end while its runner
+    /// still works, names the tree. A string the cases do not name holds nothing.
     /// </summary>
     /// <param name="step">The step as it was declared.</param>
     /// <param name="runners">What the engine asks of the runners a workflow names.</param>
