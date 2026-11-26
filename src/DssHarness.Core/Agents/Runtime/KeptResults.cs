@@ -11,8 +11,10 @@ namespace DssHarness.Core.Agents.Runtime;
 /// The whole results of a conversation's calls, a page at a time: what <c>read_result</c> reads, and what a call's own
 /// answer gives the first page of. A call's whole result is the file beside the stream its records keep it in
 /// (<see cref="AgentCallRecords.ResultFile"/>) - an answer longer than a page, a command's log - and its pages are laid from
-/// that file once (<see cref="TextPages"/>), not numbered, at the room of a tool's answer to a model, and kept for the
-/// conversation's life under the call's own key (<see cref="PageKey.OfCall"/>) in the conversation's kept answers, the
+/// that file once (<see cref="TextPages"/>), not numbered, with the blocks its writer kept beside it
+/// (<see cref="TextBlocks"/>) - a page that begins among a declaration's hits giving the declaration's line again first - at
+/// the room of a tool's answer to a model, and kept for the conversation's life under the call's own key
+/// (<see cref="PageKey.OfCall"/>) in the conversation's kept answers, the
 /// step's <c>graph-pages</c> directory, which is put away when the conversation ends - so every page of a result, a resumed
 /// conversation's among them, is read by seeking to its mark. A page asked of a file that changed since its pages were laid
 /// is laid again, and says so (<see cref="TextPages.Relaid"/>). Beside a call's id, <c>read_result</c> reads a message of the
@@ -166,7 +168,7 @@ public sealed class KeptResults(IFileSystem fileSystem, string stepDirectory, Ke
             return null;
         }
 
-        var (kept, note) = await LaidAsync(file, PageKey.OfCall(id), Asked(id), numbered: false, _fileSystem.OpenRead, cancellationToken).ConfigureAwait(false);
+        var (kept, note) = await ResultLaidAsync(id, cancellationToken).ConfigureAwait(false);
 
         return await TextPages.PageAsync(_fileSystem.OpenRead, kept, page, numbered: false, note, Paging.AskAgain, cancellationToken).ConfigureAwait(false);
     }
@@ -185,10 +187,26 @@ public sealed class KeptResults(IFileSystem fileSystem, string stepDirectory, Ke
         ArgumentNullException.ThrowIfNull(id);
 
         var file = AgentCallRecords.ResultFile(_stepDirectory, id);
-        var (kept, note) = await LaidAsync(file, PageKey.OfCall(id), Asked(id), numbered: false, _fileSystem.OpenRead, cancellationToken).ConfigureAwait(false);
+        var (kept, note) = await ResultLaidAsync(id, cancellationToken).ConfigureAwait(false);
         var said = kept.Marks.Count == 1 ? note : note is null ? WholeIn(file) : $"{note} · {WholeIn(file)}";
 
         return (await TextPages.PageAsync(_fileSystem.OpenRead, kept, 1, numbered: false, said, AskOf(id), cancellationToken).ConfigureAwait(false)).Text;
+    }
+
+    /// <summary>
+    /// The pages of the whole result kept for <paramref name="id"/>, as every page of it is given from them - its first in
+    /// the call's own answer, and each <c>read_result</c> asks: laid from the result's file as <see cref="LaidAsync"/> lays a
+    /// text, not numbered, with the blocks its writer kept beside it where it kept any (<see cref="TextBlocks"/>), so a page
+    /// that begins inside one - among a declaration's hits - gives its head again first.
+    /// </summary>
+    /// <param name="id">The id, as a call's client named it or a record gave it.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="InvalidDataException">The result's file does not read as text.</exception>
+    internal Task<(TextPagesKept Kept, string? Note)> ResultLaidAsync(string id, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+
+        return LaidAsync(AgentCallRecords.ResultFile(_stepDirectory, id), PageKey.OfCall(id), Asked(id), numbered: false, _fileSystem.OpenRead, blocked: true, cancellationToken);
     }
 
     /// <summary>
@@ -203,9 +221,13 @@ public sealed class KeptResults(IFileSystem fileSystem, string stepDirectory, Ke
     /// <param name="asked">How its pages name what was asked, for a page past the last to say.</param>
     /// <param name="numbered">Whether each line is numbered, as a file viewed numbers its lines.</param>
     /// <param name="open">Opens the file to read: a reader that decides where an open file stands opens it so.</param>
+    /// <param name="blocked">
+    /// Whether the text is laid with the blocks its writer kept beside it, where it kept any (<see cref="TextBlocks"/>): a
+    /// call's result is; a file viewed never is, whatever is beside it.
+    /// </param>
     /// <param name="cancellationToken">Stops the read.</param>
     /// <exception cref="InvalidDataException">The file does not read as text.</exception>
-    internal async Task<(TextPagesKept Kept, string? Note)> LaidAsync(string file, string key, string asked, bool numbered, Func<string, Stream> open, CancellationToken cancellationToken)
+    internal async Task<(TextPagesKept Kept, string? Note)> LaidAsync(string file, string key, string asked, bool numbered, Func<string, Stream> open, bool blocked, CancellationToken cancellationToken)
     {
         var standing = _fileSystem.StandingOf(file);
 
@@ -214,9 +236,16 @@ public sealed class KeptResults(IFileSystem fileSystem, string stepDirectory, Ke
             return (held, null);
         }
 
-        // Laid again, which reads the file once: pages kept on the same bytes - by a resumed conversation - are the pages
-        // its earlier ones were given from, and pages kept on other bytes say the text changed.
-        var fresh = await TextPages.LayAsync(open, file, key, asked, Room, numbered, cancellationToken).ConfigureAwait(false);
+        // Laid again, which reads the file once - its blocks with it, where it is laid with them: pages kept on the same
+        // bytes - by a resumed conversation - are the pages its earlier ones were given from, and pages kept on other bytes
+        // say the text changed.
+        TextPagesKept fresh;
+
+        using (var blocks = blocked ? TextBlocks.Read(_fileSystem, file) : null)
+        {
+            fresh = await TextPages.LayAsync(open, file, key, asked, Room, numbered, blocks, cancellationToken).ConfigureAwait(false);
+        }
+
         var found = _pages.Find(key, fresh.Digest);
         TextPagesKept kept;
         string? note = null;

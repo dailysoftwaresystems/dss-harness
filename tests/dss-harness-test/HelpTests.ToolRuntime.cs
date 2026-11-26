@@ -100,11 +100,14 @@ public sealed partial class HelpTests
                 + "and an id no result is kept for is refused. It reads too a message of the agent's a compaction gave by reference, by the id the "
                 + "compaction names ('message-' and its text's digest), from the step's stored stream, and the continuation record the conversation "
                 + "began with by 'continuation-record'. Its pages are laid once from the file, kept in the step's graph-pages/ for the "
-                + "conversation's life, and laid again, saying so, where the file changed since.",
+                + "conversation's life, and laid again, saying so, where the file changed since; a result whose lines head blocks - a search's "
+                + $"hits beneath their declaration's line - keeps them beside its file ({DssHarness.Core.Pages.TextBlocks.Extension}), written with it and read only "
+                + "while its bytes are the ones they were written beside, and a page that begins inside one begins with its head again, said as "
+                + "going on, counted as no result and held within the page.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A step whose graph is tools - a graphify-codebase step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the operations its agent's capabilities give, edit among them where it may write, and its context pack in its first message, after the run's map", prose, StringComparison.Ordinal);
-        Assert.Contains("and the reads it makes already answer from the graph, so the step learns the structure in the calls it makes anyway: search_files gives each hit inside a declaration of a file the graph parsed under that declaration's line - handle, kind, signature and path:start-end #hash, as the graph names a node, the innermost that holds the hit - its hits and their context indented beneath it, a hit outside every declaration as it is, and a range of view_file is headed by the declarations its lines meet, the head held within the page with the lines, each declaration checked against the file as it stands - read again where one moved, one whose lines the file no longer holds left out.", prose, StringComparison.Ordinal);
+        Assert.Contains("and the reads it makes already answer from the graph, so the step learns the structure in the calls it makes anyway: search_files gives each hit inside a declaration of a file the graph parsed under that declaration's line - handle, kind, signature and path:start-end #hash, as the graph names a node, the innermost that holds the hit - its hits and their context indented beneath it, a page of the answer that begins among them beginning with the declaration's line again, said as going on and counted as no result, a hit outside every declaration as it is, and a range of view_file is headed by the declarations its lines meet, the head held within the page with the lines, each declaration checked against the file as it stands - read again where one moved, one whose lines the file no longer holds left out.", prose, StringComparison.Ordinal);
         Assert.Contains($"Its graphReads narrow (the default) answers a whole view_file - one naming no page and no range - of a file the graph parsed over {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NarrowLines} lines with the file's outline in its place - a line saying how to read its lines by range or by page, ask a body, or lift the narrowing, then every declaration with its span and its hash as the file stands, paged as every answer is - no view an edit may follow; a range, a page, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with the lines the graph read it as, a path it holds no parsed file at refused as a misuse - each call, escape and outlined read a line of the step's graph.jsonl", prose, StringComparison.Ordinal);
         Assert.Contains("an edit it made is a write, alone in its turn and counted among the files written; a wholeFile is alone in its turn too, for the reads beside it are narrowed by what it lifts, the graph's other reads running with the other reads. The step's view is synced after each write - by the paths it wrote, a directory moved or deleted by every file beneath it - and whole after each command, on every client, and the graph tool answers from what each sync leaves.", prose, StringComparison.Ordinal);
     }
@@ -147,7 +150,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "In a step that has a codebase graph the reads answer from it, so the step learns the structure in the calls it makes anyway: each hit "
                 + "`search_files` finds inside a declaration of a file the graph parsed is given under that declaration's line - its handle, kind, "
-                + "signature and `path:start-end #hash`, the innermost that holds the hit - with its hits and their context indented beneath it, a range "
+                + "signature and `path:start-end #hash`, the innermost that holds the hit - with its hits and their context indented beneath it, a page "
+                + "of the answer that begins among them beginning with the declaration's line again, marked `… goes on` and counted as no result, a range "
                 + "`view_file` gives is headed by the declarations its lines meet, each checked against the file as it stands, and where the step's "
                 + $"reads are narrowed (`graphReads: narrow`, the default) a whole `view_file` of a file the graph parsed over {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NarrowLines} "
                 + "lines is answered with the file's outline in its place, with how to read its lines - no wasted turn (`help codebase-graph`).",
@@ -184,7 +188,10 @@ public sealed partial class HelpTests
                 + "is refused with its range, and an id no result is kept for is refused. It reads too a message of the agent's a compaction gave by "
                 + $"reference, by the id the compaction names (`{DssHarness.Core.Agents.StoredStream.MessagePrefix}` and its text's digest), from the step's stored "
                 + $"stream, and the continuation record the conversation began with by `{DssHarness.Core.Agents.Runtime.KeptResults.ContinuationId}`. Its pages are laid "
-                + $"once from the file, kept in the step's `{OrchestratorLayout.StepPagesDirectoryName}/` for the conversation's life, and laid again, saying so, where the file changed since.",
+                + $"once from the file, kept in the step's `{OrchestratorLayout.StepPagesDirectoryName}/` for the conversation's life, and laid again, saying so, where the file changed since; "
+                + "a result whose lines head blocks - a search's hits beneath their declaration's line - keeps them beside its file "
+                + $"(`{DssHarness.Core.Pages.TextBlocks.Extension}`), written with it and read only while its bytes are the ones they were written beside, and a page that "
+                + "begins inside one begins with its head again, said as going on, counted as no result and held within the page.",
             readme,
             StringComparison.Ordinal);
 
@@ -212,7 +219,30 @@ public sealed partial class HelpTests
                 + $"life; a file that changed since its pages were laid is laid again, the page saying so (`{nameof(DssHarness.Core.Pages.TextPages)}.{nameof(DssHarness.Core.Pages.TextPages.Relaid)}`).",
             architecture,
             StringComparison.Ordinal);
+        Assert.Contains(
+            $"A writer of an answer says which of its lines head a block and which belong to one (`{nameof(DssHarness.Core.Agents.ResultLines)}.{nameof(DssHarness.Core.Agents.ResultLines.HeadAsync)}`, "
+                + $"`{nameof(DssHarness.Core.Agents.ResultLines)}.{nameof(DssHarness.Core.Agents.ResultLines.BlockLineAsync)}`), and an answer past a page keeps its blocks beside its file in "
+                + $"the same pass (`{nameof(DssHarness.Core.Pages.TextBlocks)}.{nameof(DssHarness.Core.Pages.TextBlocks.FileOf)}`, ended by the digest of the file's bytes), so every page of a "
+                + $"result - its first in the call's own answer and each `{DssHarness.Core.Agents.Runtime.AgentTools.ReadResult}` gives - is laid with them by the one path a result's pages "
+                + $"are laid by (`{nameof(DssHarness.Core.Agents.Runtime.KeptResults)}.{nameof(DssHarness.Core.Agents.Runtime.KeptResults.ResultLaidAsync)}`), and a page that begins inside a "
+                + "block gives its head again; a file viewed is never laid with blocks, whatever is beside it.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"A text laid with the blocks its writer kept beside it (`{nameof(DssHarness.Core.Pages.TextBlocks)}`: each block's head, the lines after it and its end by the bytes the "
+                + "file holds them at, read a line at a time in the same pass, then the digest of the bytes they were written beside) gives a page that begins inside a block the "
+                + $"block's head again first, its mark naming where the file holds the head (`{nameof(DssHarness.Core.Pages.TextPageMark)}.{nameof(DssHarness.Core.Pages.TextPageMark.Head)}`), "
+                + $"said as going on and counting nothing, by the one rule a page laid in memory gives a result's block's head again by (`{nameof(DssHarness.Core.Pages.Paging)}.{nameof(DssHarness.Core.Pages.Paging.HoldsAgain)}`: "
+                + $"only where the room left beside it holds the least piece of what follows, `{nameof(DssHarness.Core.Pages.Pieces)}.{nameof(DssHarness.Core.Pages.Pieces.Least)}`, so no page passes its room)",
+            architecture,
+            StringComparison.Ordinal);
         Assert.Contains($"the names `{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings)}.{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings.Launched)}` sets", architecture, StringComparison.Ordinal);
+
+        // The orchestrators topic lists where a result's blocks are kept, beside its file.
+        Assert.Contains(
+            $"  <step>/{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/{DssHarness.Core.Pages.PageKey.CallPrefix}<digest>.txt{DssHarness.Core.Pages.TextBlocks.Extension}  beside an answer whose lines head blocks",
+            HelpText.Of("orchestrators").StandardOutput,
+            StringComparison.Ordinal);
 
         foreach (var owner in new[]
         {

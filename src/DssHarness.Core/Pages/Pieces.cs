@@ -12,6 +12,12 @@ namespace DssHarness.Core.Pages;
 /// </summary>
 internal static class Pieces
 {
+    /// <summary>
+    /// The most characters the least piece of an entry takes: the mark a continued piece begins with, a surrogate pair, the
+    /// mark that says it goes on, and its line's end - so a page whose room left holds it moves any entry on within its room.
+    /// </summary>
+    public const int Least = 5;
+
     /// <summary>What is left of an entry of <paramref name="text"/> once <paramref name="offset"/> of its characters were given: the entry whole at none, else the rest marked as going on from before.</summary>
     /// <param name="text">The entry's text.</param>
     /// <param name="offset">How many of its characters the pages before gave.</param>

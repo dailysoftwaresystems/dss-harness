@@ -63,7 +63,7 @@ them.
 | `Mutations` | `check-mutations` (`MutationService`, `MutationRegistry*`, `ArmJudge`, `MutationFixture`) |
 | `Orchestration` | Orchestrators and agents: seeding, folding, rebasing (`OrchestratorService`, `AgentService`, `AgentFold`); the engine in `Flow`, its step runners in `Flow/Runners`, and its own syncs of a run's graph (`FlowGraphSyncs`) |
 | `Output` | `IHarnessOutput`/`ConsoleHarnessOutput`, text and JSON reports, a cut by characters that never parts a surrogate pair (`TextCut`), a one-line list that names every item that fits and says where the whole is (`Names`) |
-| `Pages` | An answer's pages, none of them cut (`Paging`, `IPageEntry`, `PageRoom`), a conversation's kept answers (`KeptAnswers`, `IKeptFreshness`, `PageKey`), a text file's pages laid by streaming it (`TextPages`) |
+| `Pages` | An answer's pages, none of them cut (`Paging`, `IPageEntry`, `PageRoom`), a conversation's kept answers (`KeptAnswers`, `IKeptFreshness`, `PageKey`), a text file's pages laid by streaming it (`TextPages`), with the blocks its writer kept beside it (`TextBlocks`) |
 | `Platform` | The operating-system seam (`IHostPlatform`, `IFilePermissions`, `IProcessTable`, `PathBudget`) |
 | `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult`/`ProcessStoppedException`, containment (`ContainExec`, `Containment`, `ProcessScope`), `CommandLineText` (the one no-shell line splitter) |
 | `Projects` | What `init` detects and seeds (`IProjectDetector`) |

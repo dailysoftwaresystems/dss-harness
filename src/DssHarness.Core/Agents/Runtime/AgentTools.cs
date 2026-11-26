@@ -226,9 +226,9 @@ public static class AgentTools
     public const string ViewFileInAGraphStep =
         "In this step a range of a file the codebase graph parsed begins with the declarations its lines meet, each as the graph names a node - handle, kind, signature, path:start-end #hash - so you can ask graph's body for one or read the lines beside it exactly.";
 
-    /// <summary>What <c>search_files</c> says of its answers in a step that has a codebase graph: each hit under the declaration it is in.</summary>
+    /// <summary>What <c>search_files</c> says of its answers in a step that has a codebase graph: each hit under the declaration it is in, a page that begins among them headed by its line again.</summary>
     public const string SearchFilesInAGraphStep =
-        "In this step a hit inside a declaration of a file the codebase graph parsed is given under that declaration's line - handle, kind, signature, path:start-end #hash, as the graph names a node - with the declaration's hits and their context indented beneath it, so you know which declaration each hit is in and the lines to read next; a hit outside every declaration is given as it is.";
+        "In this step a hit inside a declaration of a file the codebase graph parsed is given under that declaration's line - handle, kind, signature, path:start-end #hash, as the graph names a node - with the declaration's hits and their context indented beneath it, so you know which declaration each hit is in and the lines to read next; a hit outside every declaration is given as it is. A page of the answer that begins among a declaration's hits begins with that declaration's line again, marked '… goes on', counted as no result.";
 
     /// <summary>What <c>view_file</c> says of a whole read in a step whose reads the graph narrows: such a read of a long file the graph parsed is answered with its outline.</summary>
     public static string ViewFileNarrowed { get; } =

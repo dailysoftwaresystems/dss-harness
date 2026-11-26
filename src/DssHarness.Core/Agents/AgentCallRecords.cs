@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -328,7 +329,11 @@ public sealed class AgentCallRecords : IDisposable
 /// the answer ends (<see cref="IFileSystem.WriteAtomic"/>), by a writer of its own that takes the lines as they come, a
 /// producer that outruns it waiting; an answer abandoned before its end leaves no file. Once every line is written, the
 /// answer is the lines whole where they fit a page (<see cref="Text"/>), else the call's file, which holds every one
-/// (<see cref="File"/>).
+/// (<see cref="File"/>). A line may head a block, and the lines after it belong to it (<see cref="HeadAsync"/>,
+/// <see cref="BlockLineAsync"/>) - a search's hits beneath their declaration's line: an answer past a page whose lines
+/// headed any keeps its blocks beside its file, in the same pass, each where the file holds it, ended by the digest of
+/// the file's bytes (<see cref="TextBlocks"/>), so a page of it that begins inside one gives its head again first; one
+/// whose lines headed none keeps none.
 /// </summary>
 public sealed class ResultLines : IAsyncDisposable
 {
@@ -341,12 +346,33 @@ public sealed class ResultLines : IAsyncDisposable
     private readonly ILineMask _mask;
     private readonly string _file;
     private readonly StringBuilder _held = new();
-    private readonly Channel<string> _pieces = Channel.CreateBounded<string>(
+
+    /// <summary>The blocks the lines held so far have ended, in order: handed to the file's writer once the answer passes a page.</summary>
+    private readonly List<TextBlock> _heldBlocks = [];
+
+    private readonly Channel<Piece> _pieces = Channel.CreateBounded<Piece>(
         new BoundedChannelOptions(Waiting) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
 
     private Task? _writing;
     private bool _first = true;
     private volatile bool _ended;
+
+    /// <summary>The byte of the call's file the next line begins at: every line before it, and the line feed after each.</summary>
+    private long _offset;
+
+    /// <summary>
+    /// The block the line written last is of: where its head begins, where the line after its head does, and whether a line
+    /// of it came after its head; null where the line written last is of none.
+    /// </summary>
+    private (long Head, long Body, bool Lines)? _block;
+
+    /// <summary>What a line of the answer is to its blocks: of none, the head of one, or a line of the block its last head opened.</summary>
+    private enum Role
+    {
+        None,
+        Head,
+        OfBlock,
+    }
 
     /// <summary>A writer of the answer whose file, once it passes a page, is <paramref name="file"/>.</summary>
     internal ResultLines(IFileSystem fileSystem, ILineMask mask, string file)
@@ -365,19 +391,57 @@ public sealed class ResultLines : IAsyncDisposable
     /// <summary>The call's file, which holds every line once the answer ends, where they passed a page; null where they fit one.</summary>
     public string? File => _writing is null ? null : _file;
 
-    /// <summary>Writes <paramref name="line"/>, masked: held while the answer fits a page, else written on into the call's file.</summary>
+    /// <summary>Writes <paramref name="line"/>, masked, a line of no block: held while the answer fits a page, else written on into the call's file.</summary>
     /// <param name="line">One line of the answer, with no line ending in it.</param>
     /// <param name="cancellationToken">Stops a wait for the file's writer.</param>
-    public async ValueTask LineAsync(string line, CancellationToken cancellationToken)
+    public ValueTask LineAsync(string line, CancellationToken cancellationToken) => WrittenAsync(line, Role.None, cancellationToken);
+
+    /// <summary>
+    /// Writes <paramref name="line"/>, masked, as <see cref="LineAsync"/> writes a line, as the head of a block: the lines
+    /// written after it by <see cref="BlockLineAsync"/> belong to it, until a line of no block or another head is written.
+    /// </summary>
+    /// <param name="line">One line of the answer, with no line ending in it.</param>
+    /// <param name="cancellationToken">Stops a wait for the file's writer.</param>
+    public ValueTask HeadAsync(string line, CancellationToken cancellationToken) => WrittenAsync(line, Role.Head, cancellationToken);
+
+    /// <summary>Writes <paramref name="line"/>, masked, as <see cref="LineAsync"/> writes a line, as a line of the block the last head opened.</summary>
+    /// <param name="line">One line of the answer, with no line ending in it.</param>
+    /// <param name="cancellationToken">Stops a wait for the file's writer.</param>
+    /// <exception cref="InvalidOperationException">No block is open: the line written last is of none.</exception>
+    public ValueTask BlockLineAsync(string line, CancellationToken cancellationToken) => WrittenAsync(line, Role.OfBlock, cancellationToken);
+
+    /// <summary>Writes <paramref name="line"/>, masked, as <paramref name="role"/> says it is to the answer's blocks.</summary>
+    private async ValueTask WrittenAsync(string line, Role role, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(line);
 
+        if (role == Role.OfBlock && _block is null)
+        {
+            throw new InvalidOperationException("A line of a block follows its head, and no block is open: the line written last is of none.");
+        }
+
         var masked = _mask.Redact(line);
+        var begins = _offset;
+
         Count++;
+        _offset += Utf8NoMark.GetByteCount(masked) + 1;
+
+        // A line of no block, or another's head, ends the block open before it: the block ends where the line begins.
+        if (role != Role.OfBlock)
+        {
+            await EndedAsync(begins, cancellationToken).ConfigureAwait(false);
+        }
+
+        _block = role switch
+        {
+            Role.Head => (begins, _offset, false),
+            Role.OfBlock => _block!.Value with { Lines = true },
+            _ => null,
+        };
 
         if (_writing is not null)
         {
-            await HandAsync("\n" + masked, cancellationToken).ConfigureAwait(false);
+            await HandAsync(new Piece("\n" + masked, null), cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -393,13 +457,43 @@ public sealed class ResultLines : IAsyncDisposable
         if (!Runtime.KeptResults.OnePage(_held))
         {
             _writing = Task.Factory.StartNew(Write, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-            await HandAsync(_held.ToString(), cancellationToken).ConfigureAwait(false);
+            await HandAsync(new Piece(_held.ToString(), null), cancellationToken).ConfigureAwait(false);
             _held.Clear();
+
+            foreach (var block in _heldBlocks)
+            {
+                await HandAsync(new Piece(null, block), cancellationToken).ConfigureAwait(false);
+            }
+
+            _heldBlocks.Clear();
         }
     }
 
+    /// <summary>
+    /// Ends the block open, where one is and a line of it came after its head, at <paramref name="next"/> - where the line
+    /// after it begins, or the answer's end: held while the answer fits a page, else handed to the file's writer.
+    /// </summary>
+    private async ValueTask EndedAsync(long next, CancellationToken cancellationToken)
+    {
+        if (_block is { Lines: true } open)
+        {
+            var block = new TextBlock(open.Head, open.Body, next);
+
+            if (_writing is null)
+            {
+                _heldBlocks.Add(block);
+            }
+            else
+            {
+                await HandAsync(new Piece(null, block), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        _block = null;
+    }
+
     /// <summary>Hands <paramref name="piece"/> to the file's writer, waiting while it is behind: a writer that failed raises why.</summary>
-    private async ValueTask HandAsync(string piece, CancellationToken cancellationToken)
+    private async ValueTask HandAsync(Piece piece, CancellationToken cancellationToken)
     {
         try
         {
@@ -426,7 +520,8 @@ public sealed class ResultLines : IAsyncDisposable
     /// Writes the call's file again, once the answer has ended past a page, as <paramref name="write"/> makes it of what the
     /// file holds: the answer's lines read a piece at a time, never held whole, and what is written about them the
     /// caller's, masked by it. The file is put in place whole (<see cref="IFileSystem.WriteAtomic"/>), on a thread of its
-    /// own, as the answer's lines were.
+    /// own, as the answer's lines were. Blocks its lines headed are of the lines as they were written: the digest they end
+    /// with is no longer the file's, and its pages are laid as its lines alone (<see cref="TextBlocks"/>).
     /// </summary>
     /// <param name="write">Writes the file anew, given what it held and where the new one is written.</param>
     /// <exception cref="InvalidOperationException">The answer has not ended, or its lines fit a page and it has no file.</exception>
@@ -452,9 +547,15 @@ public sealed class ResultLines : IAsyncDisposable
             TaskScheduler.Default);
     }
 
-    /// <summary>Ends the answer: once it returns, every line is in the call's file, where the answer passed a page.</summary>
+    /// <summary>Ends the answer: once it returns, every line is in the call's file, and every block its lines headed beside it, where the answer passed a page.</summary>
     public async Task EndAsync()
     {
+        // The block open ends with the answer: past its last line, which no line feed follows.
+        if (Count > 0)
+        {
+            await EndedAsync(_offset - 1, CancellationToken.None).ConfigureAwait(false);
+        }
+
         _ended = true;
         _pieces.Writer.TryComplete();
 
@@ -480,7 +581,9 @@ public sealed class ResultLines : IAsyncDisposable
 
     /// <summary>
     /// Writes the call's file whole from the pieces as they come, on a thread of its own that waits for each, and puts it in
-    /// place once the answer ends - leaving the file as it was where the answer was abandoned.
+    /// place once the answer ends - leaving the file as it was where the answer was abandoned. From the first block a piece
+    /// brings, if one does, the blocks are written beside the file as they come (<see cref="TextBlocks.FileOf"/>), ended by
+    /// the digest of every byte the file holds, and put in place just before it.
     /// </summary>
     private void Write()
     {
@@ -489,21 +592,24 @@ public sealed class ResultLines : IAsyncDisposable
             _fileSystem.CreateDirectory(Path.GetDirectoryName(_file)!);
             _fileSystem.WriteAtomic(_file, stream =>
             {
-                using var writer = new StreamWriter(stream, Utf8NoMark, leaveOpen: true);
-                var reader = _pieces.Reader;
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-                while (reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+                if (Pump(stream, hash, blocks: null) is { } first)
                 {
-                    while (reader.TryRead(out var piece))
+                    _fileSystem.WriteAtomic(TextBlocks.FileOf(_file), kept =>
                     {
-                        writer.Write(piece);
-                    }
+                        var blocks = new TextBlocks.Writer(kept);
+
+                        blocks.Add(first);
+                        Pump(stream, hash, blocks);
+                        Whole();
+
+                        // The digest FileContentHash gives the bytes the file holds, taken as they were written.
+                        blocks.End(Convert.ToHexStringLower(hash.GetHashAndReset()));
+                    });
                 }
 
-                if (!_ended)
-                {
-                    throw new OperationCanceledException("the answer was abandoned before its end, and its file is not put in place");
-                }
+                Whole();
             });
         }
         catch (Exception ex)
@@ -513,6 +619,55 @@ public sealed class ResultLines : IAsyncDisposable
             throw;
         }
     }
+
+    /// <summary>
+    /// Writes the pieces as they come until the last: each text's bytes into <paramref name="text"/>, hashed as they are
+    /// written, and each block into <paramref name="blocks"/> - where none is given yet, the first block a piece brings is
+    /// returned, for its file to be opened, and the pieces after it are left; null once every piece is written.
+    /// </summary>
+    private TextBlock? Pump(Stream text, IncrementalHash hash, TextBlocks.Writer? blocks)
+    {
+        var reader = _pieces.Reader;
+
+        while (reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+        {
+            while (reader.TryRead(out var piece))
+            {
+                if (piece.Block is not { } block)
+                {
+                    // Each piece is whole lines, or a line feed and a line, so no character is parted from the one after it.
+                    var bytes = Utf8NoMark.GetBytes(piece.Text!);
+                    hash.AppendData(bytes);
+                    text.Write(bytes);
+                }
+                else if (blocks is null)
+                {
+                    return block;
+                }
+                else
+                {
+                    blocks.Add(block);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Refuses to put in place what an answer abandoned before its end wrote.</summary>
+    /// <exception cref="OperationCanceledException">The answer was abandoned.</exception>
+    private void Whole()
+    {
+        if (!_ended)
+        {
+            throw new OperationCanceledException("the answer was abandoned before its end, and its file is not put in place");
+        }
+    }
+
+    /// <summary>What the file's writer is handed: text of the answer, or a block its lines ended - one of the two.</summary>
+    /// <param name="Text">Text of the answer: whole lines, or a line feed and a line.</param>
+    /// <param name="Block">A block the answer's lines ended, where the file holds it.</param>
+    private readonly record struct Piece(string? Text, TextBlock? Block);
 }
 
 /// <summary>
