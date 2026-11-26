@@ -218,20 +218,90 @@ public static partial class CodebaseContextPack
     ];
 
     /// <summary>
-    /// The edges a change's impact set is walked over from the declarations it changed: their tests, their callers, the
-    /// members they override and that override them, their implementations and what dispatches to them, and their
-    /// derived types - each from the node reached, to the end of the walk.
+    /// The edges a change's impact set is walked over from the declarations it changed - those of
+    /// <see cref="GraphRelations.Impact"/>, in its order: their tests, their callers, the members they override and that
+    /// override them, their implementations and what dispatches to them, and their derived types - each from the node
+    /// reached, to the end of the walk.
     /// </summary>
-    public static IReadOnlyList<(GraphSide Side, string Kind)> Impacted { get; } =
-    [
-        .. GraphRelations.Edges(GraphRelations.Tests),
-        .. GraphRelations.Edges(GraphRelations.Callers),
-        (GraphSide.Out, CodeEdgeKinds.Overrides),
-        (GraphSide.In, CodeEdgeKinds.Overrides),
-        .. GraphRelations.Edges(GraphRelations.Implementations),
-        (GraphSide.In, CodeEdgeKinds.Dispatches),
-        .. GraphRelations.Edges(GraphRelations.Derived),
-    ];
+    public static IReadOnlyList<(GraphSide Side, string Kind)> Impacted { get; } = [.. GraphRelations.Impact.SelectMany(GraphRelations.Edges)];
+
+    /// <summary>
+    /// What a change of <paramref name="changed"/> reaches: the one walk of a change's impact, which the change-first pack
+    /// leads with and the <c>graph</c> tool's <c>impact</c> answers - best first over <see cref="Impacted"/> from every one
+    /// of them at once, each node settled once at its best score, a change's tests carried whole and every other edge half,
+    /// weighed by the edge's confidence and shared among the nodes of that edge's kind the node it was reached from reaches
+    /// (<see cref="BestFirst"/>), so a hub is gone through and its many neighbours ranked down, never cut. The sources come
+    /// first, then every node reached, each with the edge and the node its best path reached it by.
+    /// </summary>
+    /// <param name="queries">The view walked.</param>
+    /// <param name="changed">The declarations changed, each with its weight and its order.</param>
+    /// <param name="goesThrough">Whether a node reached is listed and gone through: one the reader may not read is neither.</param>
+    public static IEnumerable<GraphWalked> Impact(CodebaseGraphQueries queries, IEnumerable<GraphWalked> changed, Func<GraphCard, bool> goesThrough)
+    {
+        ArgumentNullException.ThrowIfNull(queries);
+        ArgumentNullException.ThrowIfNull(changed);
+        ArgumentNullException.ThrowIfNull(goesThrough);
+
+        return BestFirst(queries, changed, Impacted, impact: true, goesThrough);
+    }
+
+    /// <summary>
+    /// The walk from <paramref name="sources"/> over <paramref name="edges"/>, best first, as far as it is read: each node
+    /// once, at its best score - its source's weight, at each edge carried on by <see cref="Carried"/>, weighed by the
+    /// edge's confidence and shared among the nodes of that edge's kind the node it was reached from reaches, so a hub's
+    /// many neighbours are ranked down by how many they are and never cut. Ties go to the earlier source, then the fewer
+    /// edges, then the id. A node <paramref name="goesThrough"/> refuses is not gone through at all. It keeps what it has
+    /// reached and never reaches it again: linear in the edges it follows, its cycles among them, with no count of hops.
+    /// Each node it settles names the edge and the node its best path reached it by, settled before it, as its score never
+    /// rises along a path.
+    /// </summary>
+    private static IEnumerable<GraphWalked> BestFirst(CodebaseGraphQueries queries, IEnumerable<GraphWalked> sources, IReadOnlyList<(GraphSide Side, string Kind)> edges, bool impact, Func<GraphCard, bool> goesThrough)
+    {
+        var queue = new PriorityQueue<GraphWalked, GraphWalked>(ReachOrder.Instance);
+        var best = new Dictionary<string, GraphWalked>(StringComparer.Ordinal);
+        var settled = new HashSet<string>(StringComparer.Ordinal);
+
+        void Offer(GraphWalked reach)
+        {
+            if (settled.Contains(reach.Id) || (best.TryGetValue(reach.Id, out var had) && ReachOrder.Instance.Compare(reach, had) >= 0))
+            {
+                return;
+            }
+
+            best[reach.Id] = reach;
+            queue.Enqueue(reach, reach);
+        }
+
+        foreach (var source in sources)
+        {
+            Offer(source);
+        }
+
+        while (queue.TryDequeue(out var reach, out _))
+        {
+            // A reach a better one came after is passed over: a node is settled once, at its best.
+            if (!settled.Add(reach.Id))
+            {
+                continue;
+            }
+
+            yield return reach;
+
+            var steps = queries.Steps(reach.Id, edges);
+            var degrees = steps.GroupBy(step => (step.Side, step.Kind)).ToDictionary(kind => kind.Key, kind => kind.Select(step => step.To).Distinct(StringComparer.Ordinal).Count());
+
+            foreach (var step in steps)
+            {
+                if (settled.Contains(step.To) || !goesThrough(queries.Card(step.To)))
+                {
+                    continue;
+                }
+
+                var score = reach.Score * Carried(step.Kind, impact) * Confidence(step.Confidence) / degrees[(step.Side, step.Kind)];
+                Offer(new GraphWalked(step.To, score, reach.Order, reach.Hop + 1) { By = step, From = reach.Id });
+            }
+        }
+    }
 
     /// <summary>Makes the pack of <paramref name="request"/> from <paramref name="queries"/>' view: its page 1, and the rest laid once whole with it.</summary>
     /// <param name="queries">The step's view, synced at its start.</param>
@@ -263,11 +333,29 @@ public static partial class CodebaseContextPack
     /// </summary>
     /// <param name="step">The edge followed.</param>
     /// <param name="from">The simple name of the node it was followed from.</param>
-    public static string Phrase(GraphStep step, string from)
+    public static string Phrase(GraphStep step, string from) => $"{Verb(step).Said} {from}";
+
+    /// <summary>
+    /// <see cref="Phrase"/> as a clause that follows the node named before it, as a path reads a step after its first:
+    /// <c>which calls FoldAsync</c>, <c>which is overridden by Area</c>.
+    /// </summary>
+    /// <param name="step">The edge followed.</param>
+    /// <param name="from">The name of the node it was followed from.</param>
+    public static string Which(GraphStep step, string from)
+    {
+        var (said, passive) = Verb(step);
+        return passive ? $"which is {said} {from}" : $"which {said} {from}";
+    }
+
+    /// <summary>
+    /// How <see cref="Phrase"/> says the edge <paramref name="step"/> followed, and whether it says it of the node reached as
+    /// what the edge's own node does to it - followed out of a node, all but a dispatch, which the member reached answers.
+    /// </summary>
+    private static (string Said, bool Passive) Verb(GraphStep step)
     {
         ArgumentNullException.ThrowIfNull(step);
 
-        var verb = (step.Kind, step.Side) switch
+        var said = (step.Kind, step.Side) switch
         {
             (CodeEdgeKinds.Calls, GraphSide.In) => "calls",
             (CodeEdgeKinds.Calls, GraphSide.Out) => "called by",
@@ -288,7 +376,7 @@ public static partial class CodebaseContextPack
             _ => step.Kind,
         };
 
-        return $"{verb} {from}";
+        return (said, step.Side == GraphSide.Out && step.Kind != CodeEdgeKinds.Dispatches);
     }
 
     /// <summary>
@@ -365,22 +453,22 @@ public static partial class CodebaseContextPack
 
                 // Their impact set is walked twice, the same walk each time: the tests it reaches first, under a section of
                 // their own, then every other node it reaches.
-                IEnumerable<Reach> Impact() => BestFirst(change.Held.Select((card, order) => new Reach(card.Id, EditedWeight, order, 0, "changed", CodeConfidences.Exact)), Impacted, impact: true);
+                IEnumerable<GraphWalked> Impacts() => Impact(queries, change.Held.Select((card, order) => new GraphWalked(card.Id, EditedWeight, order, 0) { Why = "changed" }), Reads);
 
-                foreach (var line in Section("their tests:", Impact().Where(reach => reach.Kind == CodeEdgeKinds.Tests)))
+                foreach (var line in Section("their tests:", Impacts().Where(reach => reach.By?.Kind == CodeEdgeKinds.Tests)))
                 {
                     yield return line;
                 }
 
-                foreach (var line in Section("their impact:", Impact().Where(reach => reach.Kind is not null and not CodeEdgeKinds.Tests)))
+                foreach (var line in Section("their impact:", Impacts().Where(reach => reach.By is { } by && by.Kind != CodeEdgeKinds.Tests)))
                 {
                     yield return line;
                 }
             }
 
-            var seeds = _seeds.Select(seed => new Reach(seed.Id, seed.Weight, seed.Order, 0, seed.Why, CodeConfidences.Exact));
+            var seeds = _seeds.Select(seed => new GraphWalked(seed.Id, seed.Weight, seed.Order, 0) { Why = seed.Why });
 
-            foreach (var line in Section(_taskCaption, BestFirst(seeds, Walked, impact: false)))
+            foreach (var line in Section(_taskCaption, BestFirst(queries, seeds, Walked, impact: false, Reads)))
             {
                 yield return line;
             }
@@ -390,7 +478,7 @@ public static partial class CodebaseContextPack
         /// One section's lines from a walk best first: each node it reaches that no line listed yet, in the order the walk
         /// reaches it, generated code after every other - held back until the walk has given the rest.
         /// </summary>
-        private IEnumerable<GraphTextLine> Section(string? caption, IEnumerable<Reach> walk)
+        private IEnumerable<GraphTextLine> Section(string? caption, IEnumerable<GraphWalked> walk)
         {
             var generated = new List<GraphTextLine>();
 
@@ -402,7 +490,8 @@ public static partial class CodebaseContextPack
                 }
 
                 var card = queries.Card(reach.Id);
-                var line = new GraphTextLine(caption, $"{GraphLines.Of(card)} | {Related(reach.Relation, reach.Confidence)}", card.Id);
+                var relation = reach.By is { } by ? Related(Phrase(by, queries.Card(reach.From!).Name), by.Confidence) : reach.Why!;
+                var line = new GraphTextLine(caption, $"{GraphLines.Of(card)} | {relation}", card.Id);
 
                 if (card.Generated)
                 {
@@ -416,63 +505,6 @@ public static partial class CodebaseContextPack
             foreach (var line in generated)
             {
                 yield return line;
-            }
-        }
-
-        /// <summary>
-        /// The walk from <paramref name="sources"/> over <paramref name="edges"/>, best first, as far as it is read: each node
-        /// once, at its best score - its source's weight, at each edge carried on by <see cref="Carried"/>, weighed by the
-        /// edge's confidence and shared among the nodes of that edge's kind the node it was reached from reaches, so a hub's
-        /// many neighbours are ranked down by how many they are and never cut. Ties go to the earlier source, then the fewer
-        /// edges, then the id. A node the step may not read is not gone through at all, and is counted. It keeps what it has
-        /// reached and never reaches it again: linear in the edges it follows, its cycles among them, with no count of hops.
-        /// </summary>
-        private IEnumerable<Reach> BestFirst(IEnumerable<Reach> sources, IReadOnlyList<(GraphSide Side, string Kind)> edges, bool impact)
-        {
-            var queue = new PriorityQueue<Reach, Reach>(ReachOrder.Instance);
-            var best = new Dictionary<string, Reach>(StringComparer.Ordinal);
-            var settled = new HashSet<string>(StringComparer.Ordinal);
-
-            void Offer(Reach reach)
-            {
-                if (settled.Contains(reach.Id) || (best.TryGetValue(reach.Id, out var had) && ReachOrder.Instance.Compare(reach, had) >= 0))
-                {
-                    return;
-                }
-
-                best[reach.Id] = reach;
-                queue.Enqueue(reach, reach);
-            }
-
-            foreach (var source in sources)
-            {
-                Offer(source);
-            }
-
-            while (queue.TryDequeue(out var reach, out _))
-            {
-                // A reach a better one came after is passed over: a node is settled once, at its best.
-                if (!settled.Add(reach.Id))
-                {
-                    continue;
-                }
-
-                yield return reach;
-
-                var name = queries.Card(reach.Id).Name;
-                var steps = queries.Steps(reach.Id, edges);
-                var degrees = steps.GroupBy(step => (step.Side, step.Kind)).ToDictionary(kind => kind.Key, kind => kind.Select(step => step.To).Distinct(StringComparer.Ordinal).Count());
-
-                foreach (var step in steps)
-                {
-                    if (settled.Contains(step.To) || !Reads(queries.Card(step.To)))
-                    {
-                        continue;
-                    }
-
-                    var score = reach.Score * Carried(step.Kind, impact) * Confidence(step.Confidence) / degrees[(step.Side, step.Kind)];
-                    Offer(new Reach(step.To, score, reach.Order, reach.Hop + 1, Phrase(step, name), step.Confidence) { Kind = step.Kind });
-                }
             }
         }
 
@@ -972,19 +1004,12 @@ public static partial class CodebaseContextPack
         Words,
     }
 
-    /// <summary>A node a walk reached, as its best path reached it.</summary>
-    private sealed record Reach(string Id, double Score, int Order, int Hop, string Relation, string Confidence)
-    {
-        /// <summary>The kind of the edge its best path reached it by; null for a node a walk starts from.</summary>
-        public string? Kind { get; init; }
-    }
-
     /// <summary>The order a walk settles what it reached in: the better score first, then the earlier source, the fewer edges, the id.</summary>
-    private sealed class ReachOrder : IComparer<Reach>
+    private sealed class ReachOrder : IComparer<GraphWalked>
     {
         public static ReachOrder Instance { get; } = new();
 
-        public int Compare(Reach? x, Reach? y)
+        public int Compare(GraphWalked? x, GraphWalked? y)
         {
             ArgumentNullException.ThrowIfNull(x);
             ArgumentNullException.ThrowIfNull(y);
