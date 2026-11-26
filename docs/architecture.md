@@ -1036,7 +1036,9 @@ repositories are its own contents, and do not make it such a directory.
 An agent's worktree is a repository of its own (`AgentRepositories`): one that git records
 nowhere, so the main checkout's `git worktree list` holds the main checkout alone, whose own `.git/config` carries the mark naming this main checkout and the agent's address
 (`harness.mainCheckout`, `harness.agent`, read by `AgentRepositoryMark` from that file alone, never
-through the main checkout's configuration it includes), and which borrows the main checkout's
+through the main checkout's configuration it includes, and asked of git only where the file holds a header
+that may open the `harness` section - every location of a main checkout looks, and a file whose values
+merely spell the word, a user's address or a remote's name, starts no git), and which borrows the main checkout's
 objects. It is taken for the agent's worktree only where all three hold at the address it sits at.
 A directory a deletion takes away while git is asked about it is none: another command's deletion,
 a person's, or the engine's own of an agent that only read once its work is over, which runs beside
