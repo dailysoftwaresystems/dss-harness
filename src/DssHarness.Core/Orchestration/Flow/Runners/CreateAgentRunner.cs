@@ -35,8 +35,9 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
     /// the step's <c>commit</c> names, as the engine filled it where the step started - as a step that works as it starts:
     /// its first, and every one that goes on with its work - made where it is not there, its earlier writes discarded where
     /// it is (<see cref="IAgentService.ReadyAsync"/>), so the tree the step reads is exactly what that commit holds - the
-    /// main checkout's at that moment, where the step names none. Null where it is; the step's ending, failed with why,
-    /// where it is not - a commit the repository does not hold among them, nothing of the tree changed.
+    /// main checkout's at that moment, where the step names none - and the agent's record names the attempt it was brought
+    /// for (<see cref="ReadiedFor"/>). Null where it is; the step's ending, failed with why, where it is not - a commit the
+    /// repository does not hold among them, nothing of the tree changed.
     /// </summary>
     /// <param name="run">The step that starts, its templates filled.</param>
     /// <param name="agent">The agent it works as.</param>
@@ -47,12 +48,25 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
 
         var (place, _) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
         var commit = run.Step.Commit;
-        var ready = await agents.ReadyAsync(new AgentReadyRequest(place.Repository, place.Run, agent, commit), cancellationToken).ConfigureAwait(false);
+        var ready = await agents.ReadyAsync(new AgentReadyRequest(place.Repository, place.Run, agent, commit, ReadiedFor(run)), cancellationToken).ConfigureAwait(false);
         var target = commit is null ? "the main checkout's HEAD" : "the commit its step names";
 
         return ready.Outcome.Succeeded
             ? null
             : FlowStepResult.Failed(ready.Outcome, $"the tree of agent '{agent}' of '{place.Run}', which only reads, was not brought to {target}: {ready.Outcome.Message}");
+    }
+
+    /// <summary>
+    /// The step attempt <paramref name="run"/> is, as a read-only agent's record names the attempt its tree was last brought
+    /// for (<see cref="AgentRecord.ReadiedFor"/>): its instance and its attempt, the same for every run of one attempt -
+    /// its start and each answer it goes on with.
+    /// </summary>
+    /// <param name="run">The step that starts.</param>
+    public static AgentReadiedFor ReadiedFor(FlowStepRun run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return new(run.Instance, run.Attempt);
     }
 
     /// <summary>

@@ -304,6 +304,71 @@ public sealed class FlowAdviceTests
     }
 
     /// <summary>
+    /// An advice works in the tree of the agent the asking step works in, and holds it while its runner runs, though the
+    /// asking step holds nothing while it waits: a step that works as the same agent - here one that goes on with the same
+    /// reading step's work, whose start brings that tree to the main checkout's HEAD - waits on the claim while the advice
+    /// runs, though the run's reasoning slots have room, and starts once the advice has ended, never under it.
+    /// </summary>
+    [Fact]
+    public async Task AnAdvice_HoldsTheTreeItWorksIn_SoAStepWorkingAsTheSameAgentStartsOnceItHasEnded()
+    {
+        var definition = Parse("""
+            name: flow
+            maxReasoningAgents: 4
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: again
+                type: reason
+                resume: think
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think]
+              - name: more
+                type: reason
+                resume: think
+                prompt: work.md
+                outputs: work.json
+                dependsOn: [think]
+            """);
+        var gate = new TaskCompletionSource<FlowAdvice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var advisor = new Advisor(_ => gate.Task);
+        var moreStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("again", FlowStepResult.AtLimit("turns", "12 turns") with { StoredConversation = true })
+            .On("more", _ =>
+            {
+                moreStarted.TrySetResult();
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), advisor: advisor);
+
+        var session = coordinator.RunAsync(Token);
+        await TestEventuallyAsync(() => advisor.Asked.Count == 1);
+
+        // The advice works in the agent think made, which more works as too: more is not started beside it.
+        _ = await Task.WhenAny(moreStarted.Task, Task.Delay(TimeSpan.FromSeconds(2), Token));
+
+        Assert.False(moreStarted.Task.IsCompleted, "'more' started while the advice ran in the tree it works in");
+        Assert.Equal((coordinator.Instances["think"].Made, "again"), (advisor.Asked.Single().Agent, advisor.Asked.Single().Instance));
+        Assert.Equal((FlowInstanceState.Paused, FlowInstanceState.NotStarted), (coordinator.Instances["again"].State, coordinator.Instances["more"].State));
+
+        gate.SetResult(new FlowAdvice("more", "the step was nearly done", null, Model: "claude-opus-5-5", Directory: "steps/again/advice/1"));
+        await moreStarted.Task.WaitAsync(Bound, Token);
+        var end = await session.WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["more"].State);
+        Assert.Equal(coordinator.Instances["think"].Made, coordinator.Instances["more"].WorksIn);
+    }
+
+    /// <summary>
     /// A question answered while its recommendation is still owed - deferred by a pause, or sought by a session a crash
     /// ended - says it is owed no longer: no advice is sought for a question that is answered.
     /// </summary>

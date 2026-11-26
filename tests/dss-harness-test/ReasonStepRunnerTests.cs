@@ -1084,6 +1084,63 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal([false, true, false], seen);
         Assert.Equal("The person answered:\ngo on", agents.Asked[1].Prompt);
         Assert.All(agents.Asked, asked => Assert.Equal(tree, asked.Workspace.WorkingDirectory));
+        Assert.Equal(new AgentReadiedFor("think", 2), kit.Record("reader").ReadiedFor);
+    }
+
+    /// <summary>
+    /// An answer that goes on with an attempt in a tree the agent's record says was last brought for another attempt -
+    /// another step working as the agent started while this one waited on its answer, for a waiting step holds no tree -
+    /// or for none, as a record an older tool wrote says, brings the tree to the main checkout's HEAD again, as a start
+    /// does: what either step wrote there is gone, the record names this attempt again, and the agent is told so at the
+    /// head of the message it goes on with.
+    /// </summary>
+    [Theory]
+    [InlineData("another step's start")]
+    [InlineData("a record that names none")]
+    public async Task AnAnswerThatGoesOnInATreeBroughtForAnotherSinceItWaited_BringsItThereAgain_AndTellsItsAgent(string since)
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var tree = kit.Worktree("reader");
+        var seen = new List<(bool Mine, bool Theirs)>();
+        var writes = "mine.txt";
+        agents.Answer = step =>
+        {
+            seen.Add((File.Exists(Path.Combine(step.Workspace.WorkingDirectory, "mine.txt")), File.Exists(Path.Combine(step.Workspace.WorkingDirectory, "theirs.txt"))));
+            OrchestrationKit.Write(step.Workspace.WorkingDirectory, writes, "scratch\n");
+            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "done");
+        };
+        var runner = Runner(kit, agents);
+
+        Assert.True((await runner.RunAsync(Run(kit, agent: "reader"), Token)).Passed);
+
+        // The main checkout moves on while the attempt waits, and its tree is brought elsewhere - or nothing tells who for.
+        OrchestrationKit.Write(kit.Main, "c.txt", "committed since\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "since", Token);
+        var head = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+
+        if (since == "another step's start")
+        {
+            writes = "theirs.txt";
+            Assert.True((await runner.RunAsync(Run(kit, agent: "reader") with { Instance = "other" }, Token)).Passed);
+            Assert.Equal(new AgentReadiedFor("other", 1), kit.Record("reader").ReadiedFor);
+        }
+        else
+        {
+            kit.Harness.OrchestrationStore.UpdateAgent(kit.Layout, "reader", current => current with { ReadiedFor = null });
+        }
+
+        Assert.True((await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "answer", "go on", "ask", Attempt: 1)]), Token)).Passed);
+
+        Assert.Equal((false, false), seen[^1]);
+        Assert.Equal(
+            $"While this step waited for its answer, your tree was brought to the main checkout's HEAD ({head}) again, for another step may have worked in it meanwhile: "
+                + "whatever you wrote there is gone, and the tree holds exactly what that commit holds.\n\nThe person answered:\ngo on",
+            agents.Asked[^1].Prompt);
+        Assert.Equal(head, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
+        Assert.Equal((head, new AgentReadiedFor("think", 1)), (kit.Record("reader").Base, kit.Record("reader").ReadiedFor));
+        Assert.Equal("committed since\n", OrchestrationKit.Read(tree, "c.txt"));
     }
 
     /// <summary>
@@ -1626,21 +1683,22 @@ public sealed class ReasonStepRunnerTests
         await kit.CreateReadingAgentAsync("reader");
         var runner = Runner(kit, agents);
 
+        // The attempt's own start, which brings the agent's tree for it: what goes on with it goes on in that tree.
+        await runner.RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.Equal("Plan the work.", agents.Asked[0].Prompt);
+
         await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "answer", "split the parser item in two", "ask", Attempt: 1)]), Token);
 
-        Assert.Equal("The person answered:\nsplit the parser item in two", agents.Asked[0].Prompt);
+        Assert.Equal("The person answered:\nsplit the parser item in two", agents.Asked[1].Prompt);
 
         await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "decide", null, "ask", Attempt: 1)]), Token);
 
-        Assert.Contains("leaves the questions to you", agents.Asked[1].Prompt, StringComparison.Ordinal);
+        Assert.Equal("The person leaves the questions to you: go on with what you recommended for each, record each under your assumptions, and finish the task.", agents.Asked[2].Prompt);
 
         await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "more", null, "turnLimit", Attempt: 1)]), Token);
 
-        Assert.Contains("allowed the step's turn bound once again", agents.Asked[2].Prompt, StringComparison.Ordinal);
-
-        await runner.RunAsync(Run(kit, agent: "reader"), Token);
-
-        Assert.Equal("Plan the work.", agents.Asked[3].Prompt);
+        Assert.Equal("The run's person allowed the step's turn bound once again. Go on with the task.", agents.Asked[3].Prompt);
 
         // An earlier attempt's answers are never served: each attempt is its own, and the second begins a fresh start
         // even where the first was answered.

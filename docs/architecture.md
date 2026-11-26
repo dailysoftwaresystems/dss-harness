@@ -1487,7 +1487,9 @@ outside its tree - `work/<agent>/` and `plans/<agent>/` - and a tree of its own,
 agent's tree (`IWorktreeService.CreateAtAsync`, a repository of its own borrowing the main checkout's objects,
 detached at the main checkout's HEAD, its commit kept alive by `WorktreeKeepalive`), never a second way of making
 trees. Its record says `"access": "read"` (`AgentRecord.Access`) beside the tree's `worktree`, `tree` and
-`worktreesRoot` and the commit it stands on as `base`; a record that says no access is an agent whose work is folded,
+`worktreesRoot` and the commit it stands on as `base`, and, once the engine has brought its tree for a step, the step
+attempt it was last brought for as `readiedFor` (`AgentRecord.ReadiedFor`: the instance and the attempt, which a record
+of an agent whose work is folded never names); a record that says no access is an agent whose work is folded,
 which is every record an older tool wrote of one and what the tool still writes for one, so those records read as they
 always did. The engine makes one for a read-only reason step, and nothing else does - the option's help says a person
 has no use for one by hand. As every step that works as it starts - each attempt of its first, and of each that goes
@@ -1502,9 +1504,14 @@ step names none - whatever the agent wrote there before; the record then names t
 git reads one in the main checkout before anything is held: one that names none the repository holds, blank among
 them, is refused with nothing changed and fails the step, never read as the main checkout's HEAD in its place. The key
 is a reading step's alone: the definition's check refuses it on a step that writes or works in an agent's worktree, by
-its own keys or by those of the step whose work it goes on with (`WorkflowValidator`). An attempt that goes on with an
-answer in its own conversation - a person's, a limit's `more` or `compact` - is the same start going on, and finds the
-tree as its attempt left it. A tree that is not there - a record an older tool wrote, saying `"access": "read"` and
+its own keys or by those of the step whose work it goes on with (`WorkflowValidator`). Before the bringing touches the
+tree the record names the attempt it is brought for (`AgentReadyRequest.For`, `CreateAgentRunner.ReadiedFor`), so one
+stopped part way never reads as the tree an earlier attempt left. An attempt that goes on with an answer in its own
+conversation - a person's, a limit's `more` or `compact` - is the same start going on, and finds the tree as its attempt
+left it, save where the record names another attempt - another step working as the agent started while this one
+waited, for a step that waits on a question holds no claim - or none, as a record an older tool wrote does: the tree is
+then brought there again as a start brings it, and the agent is told so at the head of the message it goes on with,
+where the tree stands and that what it wrote there is gone (`ReasonStepRunner.TreeBroughtAgain`). A tree that is not there - a record an older tool wrote, saying `"access": "read"` and
 naming no tree, or a making that failed - is made at the step's start, at the main checkout's HEAD by the one making,
 and brought on to the commit asked where that is another, and the record given its three facts; anything else at its
 path is refused, nothing touched. The agent may write its tree, where it builds and tests, and its
@@ -4354,7 +4361,13 @@ step whose work it goes on with, `FlowCoordinator.WorkingOf`): the start of a st
 reads resets that tree and its work writes it, so of two steps that go on with one reading step's work the second
 starts once the first has ended - two visits of one that goes on with its own, which work in the agent its first visit
 made, claiming that agent by the declaration before either is given it (`FlowCoordinator.ClaimedAgentOf`) - and no
-step's start discards another's scratch under it.
+step's start discards another's scratch under it. A reading step that begins work of its own is given its agent as it
+starts, and holds write on that agent's tree from then (`FlowCoordinator.ClaimsOf`, read again once `Start` names it),
+so what its attempt keeps held past its end names the tree too. A step that waits on a question holds nothing, so the
+second may start while the first waits - and the first's going on brings the tree there again; an advice of the run's
+advisor holds read on the tree it works in until its runner ends (`FlowClaims.OfAdvice`, the tree named as the asking
+step's own claims name it, `FlowCoordinator.AdvisedTreeOf`), so no step's start brings that tree elsewhere under the
+advice.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
 person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause

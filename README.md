@@ -2366,9 +2366,12 @@ repository or fails the step with nothing changed, and which a step that writes 
 refused - whatever it wrote there before discarded, so the step reads exactly what that commit holds, starts in it, and
 may write it and its work directory, never folded, and is served the codebase graph's view of that tree where it names
 a commit (the base's where it names none); an answer that goes on with an attempt finds the tree as
-the attempt left it; no two steps work in one agent's tree at once, for a reason step holds write on the tree of the
-agent it works in whatever its access - of two that go on with one step's work, two visits of one that goes on with
-its own among them, the second starts once the first has ended: the step's model resolved with its agent definition
+the attempt left it, unless another step working as the agent brought it elsewhere while the attempt waited, or nothing
+tells who it was last brought for: it is then brought there again as the attempt goes on, and its agent told that what
+it wrote there is gone; no two steps work in one agent's tree at once, for a reason step holds write on the tree of the
+agent it works in whatever its access, and an advice of the run's advisor holds the tree it works in while it runs - of
+two that go on with one step's work, two visits of one that goes on with its own among them, the second starts once the
+first has ended, or waits on a question with no advice on it still running, for a step that waits holds nothing: the step's model resolved with its agent definition
 below its own and its order built as
 entries of a model and one of its provider's keys, each entry's credential read from the slot; its prompt file read
 and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work

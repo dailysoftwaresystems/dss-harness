@@ -405,9 +405,10 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The README and the architecture say what a reason step holds of the tree of the agent it works in - write, whatever
-    /// its access, since the start of a step that works as an agent that only reads resets that tree and its work writes it
-    /// - and that of two steps that go on with one step's work, two visits of one that goes on with its own among them, the
-    /// second starts once the first has ended; the step types' table says it in the claim it carries.
+    /// its access, since the start of a step that works as an agent that only reads resets that tree and its work writes it,
+    /// from the moment its own agent is named - and that of two steps that go on with one step's work, two visits of one
+    /// that goes on with its own among them, the second starts once the first has ended or waits on a question, which holds
+    /// nothing, while an advice holds the tree it works in; the step types' table says it in the claim it carries.
     /// </summary>
     [Fact]
     public void TheDocuments_SayAReasonStepHoldsWriteOnTheTreeOfTheAgentItWorksIn_WhateverItsAccess()
@@ -415,8 +416,9 @@ public sealed partial class HelpTests
         Assert.Equal(["read main", "write the tree of the agent it works in"], WorkflowStepTypes.Find("reason")!.ClaimsOf);
         Assert.Contains(
             "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in "
-                + "whatever its access - of two that go on with one step's work, two visits of one that goes on with its own among "
-                + "them, the second starts once the first has ended:",
+                + "whatever its access, and an advice of the run's advisor holds the tree it works in while it runs - of two that go "
+                + "on with one step's work, two visits of one that goes on with its own among them, the second starts once the first "
+                + "has ended, or waits on a question with no advice on it still running, for a step that waits holds nothing:",
             Prose.Document("README.md"),
             StringComparison.Ordinal);
         Assert.Contains(
@@ -425,7 +427,42 @@ public sealed partial class HelpTests
                 + "that works as an agent that only reads resets that tree and its work writes it, so of two steps that go on with one "
                 + "reading step's work the second starts once the first has ended - two visits of one that goes on with its own, which "
                 + "work in the agent its first visit made, claiming that agent by the declaration before either is given it "
-                + $"(`{nameof(FlowCoordinator)}.ClaimedAgentOf`) - and no step's start discards another's scratch under it",
+                + $"(`{nameof(FlowCoordinator)}.ClaimedAgentOf`) - and no step's start discards another's scratch under it. A reading step "
+                + "that begins work of its own is given its agent as it starts, and holds write on that agent's tree from then "
+                + $"(`{nameof(FlowCoordinator)}.ClaimsOf`, read again once `Start` names it), so what its attempt keeps held past its end names "
+                + "the tree too. A step that waits on a question holds nothing, so the second may start while the first waits - and the "
+                + "first's going on brings the tree there again; an advice of the run's advisor holds read on the tree it works in until "
+                + $"its runner ends (`{nameof(FlowClaims)}.{nameof(FlowClaims.OfAdvice)}`, the tree named as the asking step's own claims name it, "
+                + $"`{nameof(FlowCoordinator)}.AdvisedTreeOf`), so no step's start brings that tree elsewhere under the advice.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README, the help and the architecture say what an answer that goes on with an attempt finds of the tree of an
+    /// agent that only reads: the tree as its attempt left it, unless another step's start brought it elsewhere while the
+    /// attempt waited, or nothing tells who it was last brought for - then it is brought there again, and its agent told.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAnAnswerThatGoesOnFindsItsTreeBroughtAgain_WhereAnotherStepBroughtItElsewhere()
+    {
+        Assert.Contains(
+            "an answer that goes on with an attempt finds the tree as the attempt left it, unless another step working as the agent "
+                + "brought it elsewhere while the attempt waited, or nothing tells who it was last brought for: it is then brought there "
+                + "again as the attempt goes on, and its agent told that what it wrote there is gone;",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An attempt that goes on with an answer in its own conversation - a person's, a limit's `more` or `compact` - is the same "
+                + "start going on, and finds the tree as its attempt left it, save where the record names another attempt - another step "
+                + "working as the agent started while this one waited, for a step that waits on a question holds no claim - or none, as a "
+                + "record an older tool wrote does: the tree is then brought there again as a start brings it, and the agent is told so at "
+                + "the head of the message it goes on with, where the tree stands and that what it wrote there is gone "
+                + $"(`{nameof(ReasonStepRunner)}.{nameof(ReasonStepRunner.TreeBroughtAgain)}`).",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"step attempt it was last brought for as `readiedFor` (`{nameof(AgentRecord)}.{nameof(AgentRecord.ReadiedFor)}`: the instance and the attempt,",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
     }
@@ -569,9 +606,10 @@ public sealed partial class HelpTests
                 + "step can go on with its work, its tree removed and nothing folded: a tree of its own, made as every agent's is, which the start of every step that works as it - each attempt of its first, and of each that goes on "
                 + "with its work - brings to the main checkout's HEAD then, or to the commit the step's commit names - a template filled as the step starts, whose value names a commit of the repository or fails the step with "
                 + "nothing changed, and a step that writes or works in an agent's worktree is refused one - whatever it wrote there before discarded, so the step reads exactly what that commit holds, starts in it, and may write "
-                + "it and its work directory, never folded, and is served the graph's view of that tree where it names a commit, the base's where it names none; an answer that goes on with an attempt finds the tree as the attempt left it; "
-                + "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in whatever its access - "
-                + "of two that go on with one step's work, two visits of one that goes on with its own among them, the second starts once the first has ended; "
+                + "it and its work directory, never folded, and is served the graph's view of that tree where it names a commit, the base's where it names none; an answer that goes on with an attempt finds the tree as the attempt left it, "
+                + "unless another step working as the agent brought it elsewhere while the attempt waited, or nothing tells who it was last brought for: it is then brought there again as the attempt goes on, and its agent told that what it wrote there is gone; "
+                + "no two steps work in one agent's tree at once, for a reason step holds write on the tree of the agent it works in whatever its access, and an advice of the run's advisor holds the tree it works in while it runs - "
+                + "of two that go on with one step's work, two visits of one that goes on with its own among them, the second starts once the first has ended, or waits on a question with no advice on it still running, for a step that waits holds nothing; "
                 + "the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
                 + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
                 + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "

@@ -142,6 +142,20 @@ public static class FlowClaims
         return claims;
     }
 
+    /// <summary>
+    /// The claims an asking of the run's advisor holds while its runner runs: read on the tree of the agent the asking step
+    /// works in, where the advice works and which it only reads - so no step's start brings that tree elsewhere, and no
+    /// step writes it, under the advice, while every step that only shares it runs beside - and nothing where the asking
+    /// step works in no agent, the advice then working in a directory of its own. The asking step holds nothing while it
+    /// waits on its question, the advice's claim apart.
+    /// </summary>
+    /// <param name="tree">
+    /// The tree of the agent the asking step works in, as the step's own claims name it - by the declaration, for a reading
+    /// step that goes on with its own work; null where it works in none.
+    /// </param>
+    public static IReadOnlyList<FlowClaim> OfAdvice(string? tree)
+        => tree is null ? [] : [new(tree, FlowClaimKind.Read)];
+
     /// <summary>The step's type, where it names one.</summary>
     private static WorkflowStepTypes.StepType? TypeOf(WorkflowStep step)
         => step.Type is null ? null : WorkflowStepTypes.Find(step.Type);

@@ -26,7 +26,26 @@ public sealed record AgentCreateRequest(string StartDirectory, string Orchestrat
 /// The commit the tree is brought to, as the step's <c>commit</c> was filled: one the main checkout's repository holds, read
 /// as git reads a commit; null for the main checkout's HEAD.
 /// </param>
-public sealed record AgentReadyRequest(string StartDirectory, string Orchestrator, string Agent, string? Commit = null);
+/// <param name="For">
+/// The step attempt the tree is brought for, recorded on the agent before the tree is touched
+/// (<see cref="AgentRecord.ReadiedFor"/>); null where it is brought for none the engine names.
+/// </param>
+public sealed record AgentReadyRequest(string StartDirectory, string Orchestrator, string Agent, string? Commit = null, AgentReadiedFor? For = null);
+
+/// <summary>
+/// One step attempt a read-only agent's tree is brought to the main checkout's HEAD, or to the commit its step names, for:
+/// the step's instance, as the run names it, and which attempt of it.
+/// </summary>
+/// <param name="Instance">The step's instance id.</param>
+/// <param name="Attempt">The attempt, from 1.</param>
+public sealed record AgentReadiedFor(string Instance, int Attempt)
+{
+    /// <summary>What is wrong with this record; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Instance) ? "it names no step"
+            : Attempt < 1 ? $"its attempt is {Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)}, and an attempt counts from 1"
+            : null;
+}
 
 /// <summary>What bringing a read-only agent's tree to the main checkout's HEAD, or to the commit asked, answered.</summary>
 /// <param name="Orchestrator">The orchestrator the agent belongs to.</param>
