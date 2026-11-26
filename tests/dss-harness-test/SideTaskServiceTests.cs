@@ -196,7 +196,20 @@ public sealed class SideTaskServiceTests
             var answered = 0;
             var message = run.UserPrompt;
             var written = new Queue<string>();
-            await using var later = run.Messages.ReadAllAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
+
+            // The next message posted, as the real client takes each: waited for, then taken; null once the messages ended.
+            async Task<string?> NextAsync()
+            {
+                while (await run.Messages.WaitToReadAsync(cancellationToken))
+                {
+                    if (run.Messages.TryTake(out var posted))
+                    {
+                        return posted;
+                    }
+                }
+
+                return null;
+            }
 
             // A chat's interrupt the launch is begun with, raised already, cuts what is under way as it begins - its first
             // message, written and not taken yet - as the real client's does: dropped, settled, and no turn answers it.
@@ -205,12 +218,12 @@ public sealed class SideTaskServiceTests
                 answered++;
                 await events.EmitAsync(new MessagesDropped(1, 0));
 
-                if (!await later.MoveNextAsync())
+                if (await NextAsync() is not { } first)
                 {
                     return Ended(AgentRunStatus.Completed, null);
                 }
 
-                message = later.Current;
+                message = first;
                 await events.EmitAsync(new MessageSent(message, AgentMessageKind.ChatMessage));
             }
 
@@ -283,13 +296,13 @@ public sealed class SideTaskServiceTests
                     continue;
                 }
 
-                if (!run.Chat || !await later.MoveNextAsync())
+                if (!run.Chat || await NextAsync() is not { } next)
                 {
                     break;
                 }
 
                 // Written to the launch as it comes, and said so the moment it is - as the real client says each message.
-                message = later.Current;
+                message = next;
                 await events.EmitAsync(new MessageSent(message, AgentMessageKind.ChatMessage));
             }
 

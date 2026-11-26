@@ -414,8 +414,9 @@ public sealed record AgentKey(string Name, string Value)
 /// </summary>
 public sealed class AgentMessages
 {
-    private readonly Channel<string> _messages = Channel.CreateUnbounded<string>(
-        new UnboundedChannelOptions { SingleReader = true });
+    // Read by more than one at a time: a client hands the launch what waits as its interrupt is raised, on the thread
+    // that raises it, while its own reader waits for the next message.
+    private readonly Channel<string> _messages = Channel.CreateUnbounded<string>();
 
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -436,17 +437,20 @@ public sealed class AgentMessages
 
     /// <summary>
     /// Takes the oldest message posted and not yet taken, without waiting: for a client that gives the agent what it was
-    /// told at the points its loop reaches, rather than as each is posted (<see cref="ReadAllAsync"/>).
+    /// told at the points its loop reaches, or as each is posted (<see cref="WaitToReadAsync"/>).
     /// </summary>
     /// <param name="message">The message; null where none waits.</param>
     /// <returns>Whether one waited.</returns>
     public bool TryTake([System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out string message) => _messages.Reader.TryRead(out message);
 
-    /// <summary>Each message the engine has told the agent, as it is told, until the run ends.</summary>
+    /// <summary>
+    /// Waits until a message is posted and not yet taken, for a client that gives the agent each message as it is posted
+    /// - taking what waits with <see cref="TryTake"/> - rather than at the points its loop reaches.
+    /// </summary>
     /// <param name="cancellationToken">Stops waiting.</param>
-    /// <returns>The messages, in the order they were posted.</returns>
-    public IAsyncEnumerable<string> ReadAllAsync(CancellationToken cancellationToken)
-        => _messages.Reader.ReadAllAsync(cancellationToken);
+    /// <returns>True once one waits; false once the messages were ended and every one was taken.</returns>
+    public ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken)
+        => _messages.Reader.WaitToReadAsync(cancellationToken);
 
     /// <summary>Ends the messages: no more will be posted, and the reader's wait ends.</summary>
     public void Complete()
@@ -478,11 +482,28 @@ public sealed class AgentTurnInterrupt
 
     private readonly TaskCompletionSource _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    /// <summary>Interrupts the agent's current turn.</summary>
-    public void Interrupt() => _asked.TrySetResult();
+    private readonly CancellationTokenSource _raised = new();
+
+    /// <summary>
+    /// Interrupts the agent's current turn: what <see cref="WhenAsked"/> was given runs first, on this thread, so the
+    /// interrupt reaches the client after every message posted before it and before any posted after.
+    /// </summary>
+    public void Interrupt()
+    {
+        _raised.Cancel();
+        _asked.TrySetResult();
+    }
 
     /// <summary>Completes once <see cref="Interrupt"/> is raised.</summary>
     public Task Asked => _asked.Task;
+
+    /// <summary>
+    /// Runs <paramref name="asked"/> as the interrupt is raised, on the thread that raises it - at once, on this one,
+    /// where it was raised already: for a client whose wire orders the interrupt among the messages posted to it.
+    /// </summary>
+    /// <param name="asked">What the client does with the interrupt; it must not throw.</param>
+    /// <returns>The registration, disposed once the client no longer serves the run: its disposal waits for a call under way.</returns>
+    public CancellationTokenRegistration WhenAsked(Action asked) => _raised.Token.Register(asked);
 }
 
 /// <summary>

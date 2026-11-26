@@ -4916,8 +4916,10 @@ on Claude Code its own `WebSearch`, kept in a side-task's
 messages the way its client goes on with any conversation: one launch held open where the
 client renders its conversations (Claude Code), the person's later messages reaching the agent through
 the channel a message to an agent at work uses, recorded as the person's (`ChatMessage`), the first
-interrupt cutting the turn alone and leaving the launch open, a message the interrupt dropped said to
-have been dropped, each turn of the launch written to `task.json` as it ends, and a launch that ends
+interrupt cutting the turn alone and leaving the launch open - reaching the launch after every line
+the person wrote before it and before any written after, for the client hands those lines on as the
+interrupt is raised, on the thread that raises it (`AgentTurnInterrupt.WhenAsked`) - a message the
+interrupt dropped said to have been dropped, each turn of the launch written to `task.json` as it ends, and a launch that ends
 by itself recorded and the lines it never answered sent again to a new one - counted by the client's
 own count of the messages its turns answered (`AgentRunResult.MessagesAnswered`), never by what was
 written, so a line taken by a turn that ended without answering is sent again. Such a launch is never

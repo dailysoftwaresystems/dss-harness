@@ -379,6 +379,9 @@ public sealed class ClaudeCodeClient(
         private CancellationToken _ending;
 
         private readonly Channel<Arrival> _arrivals = Channel.CreateUnbounded<Arrival>(new UnboundedChannelOptions { SingleReader = true });
+
+        /// <summary>Held while the engine's messages, their end and the run's interrupt are handed to the loop, so each reaches it in the order it was given.</summary>
+        private readonly Lock _handingOn = new();
         private readonly Channel<string> _input = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
         private readonly Dictionary<string, (string Tool, string Input, JsonNode? Asked, long Started)> _calls = new(StringComparer.Ordinal);
         private readonly Dictionary<int, string> _callAt = [];
@@ -550,11 +553,9 @@ public sealed class ClaudeCodeClient(
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
-            _ = run.Interrupt?.Asked.ContinueWith(
-                _ => _arrivals.Writer.TryWrite(new Arrival.TurnInterrupted()),
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            // The person's interrupt reaches the loop in the order they gave it: after each message they posted before it,
+            // handed on as it is raised, and before any posted after.
+            using var interrupted = run.Interrupt?.WhenAsked(Interrupted);
             var posting = PostAsync(ending.Token);
 
             // The launch's answer to the host's initialize request is waited on for as long as it takes - a first start
@@ -1745,12 +1746,40 @@ public sealed class ClaudeCodeClient(
         /// <summary>Hands each message the engine posts to the loop, until the launch ends; the end of the messages is the end of a chat's launch.</summary>
         private async Task PostAsync(CancellationToken cancellationToken)
         {
-            await foreach (var message in run.Messages.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            while (await run.Messages.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                lock (_handingOn)
+                {
+                    HandOnPosted();
+                }
+            }
+
+            lock (_handingOn)
+            {
+                _arrivals.Writer.TryWrite(new Arrival.ChatEnded());
+            }
+        }
+
+        /// <summary>
+        /// The run's interrupt raised, on the thread that raised it: the messages posted before it are handed to the loop
+        /// first, so the interrupt cuts what they queued rather than a message the launch was never given.
+        /// </summary>
+        private void Interrupted()
+        {
+            lock (_handingOn)
+            {
+                HandOnPosted();
+                _arrivals.Writer.TryWrite(new Arrival.TurnInterrupted());
+            }
+        }
+
+        /// <summary>Hands the loop each message posted and not yet taken, in order: under <see cref="_handingOn"/>, which keeps what reaches the loop in the order it was given.</summary>
+        private void HandOnPosted()
+        {
+            while (run.Messages.TryTake(out var message))
             {
                 _arrivals.Writer.TryWrite(new Arrival.Posted(message));
             }
-
-            _arrivals.Writer.TryWrite(new Arrival.ChatEnded());
         }
 
         /// <summary>
