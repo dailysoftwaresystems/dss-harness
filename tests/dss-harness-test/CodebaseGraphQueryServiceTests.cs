@@ -179,7 +179,7 @@ public sealed class CodebaseGraphQueryServiceTests
     [Fact]
     public async Task TheVerbsPage_AsksAnyPage_AndItsDocumentAnswersThePages()
     {
-        using var tree = await InitialisedTreeAsync(("src/Hub.cs", CodebaseGraphToolTests.HubFile(30)));
+        using var tree = await InitialisedTreeAsync(("src/Hub.cs", CodebaseGraphToolTests.HubFile(65)));
         var service = Service(tree);
         var graph = new CodebaseGraphQueries((await tree.ReadOnlyAsync())!).Graph;
 
