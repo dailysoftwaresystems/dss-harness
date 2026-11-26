@@ -118,7 +118,8 @@ public static partial class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "What it does not see. The credential slots and the tool's own state are never listed, so never served. A file "
+            "What it does not see. The credential slots, the tool's own state and the workflows' own files (.harness-config/workflows: "
+            + "the prompts, agents and schemas every step is given already, which a step's pack would otherwise match first) are never listed, so never served. A file "
             + $"with a NUL among its first {BinaryContent.Window.ToString("N0", CultureInfo.InvariantCulture)} bytes - git's own window - or a Git LFS pointer, is {CodeFileStates.Binary}; "
             + "every other file it claims is read whole, streamed, whatever its size - a view an earlier build left holding a file "
             + $"{CodeFileStates.TooLarge}, unread for its size, says so once at its next sync, which reads it; one that is neither UTF-8 nor UTF-16 by its mark, is named "
@@ -199,7 +200,8 @@ public static partial class HelpTopics
         AppendWrapped(
             builder,
             "A reason step is given, at its start, its context pack - the part of the graph its work touches, made from its view and what the step says alone, "
-            + "so the same step on the same tree is given the same pack. Its seeds are what its prompt names exactly - a symbol or a path in backquotes (a symbol several nodes the step may read carry seeding every one of them, however many, the weight of a name written shared among them), a qualified name or its last parts (Order.Total), "
+            + "so the same step on the same tree is given the same pack. Its task is what the run handed its prompt - the values the prompt was filled with: the request, the work item, "
+            + "the upstream outputs it reads, with a handoff - never the prompt's own words, which every run of the workflow is given alike. Its seeds are what that task names exactly - a symbol or a path in backquotes (a symbol several nodes the step may read carry seeding every one of them, however many, the weight of a name written shared among them), a qualified name or its last parts (Order.Total), "
             + $"a handle, a path:line as a stack frame or a compiler writes one - every site and home of the classes of the work item it is an instance of, where its prompt reads them ({{input.item.classes}}), each site's declaration at the weight of a node named and its file's declarations at a named file's where it names no symbol its file carries, so a fresh agent holds every site's declaration - the working sets it is given, the declarations of the files its writes covers, and every node its words match, each at its score's share of the best match's weight. "
             + "From all of them at once the walk goes best first over calls both ways, the type relations, tests and the types a node names, with no count of hops: each node is reached once, at its best score - its seed's weight "
             + $"halved at each edge, weighed by the edge's confidence ({string.Join(", ", CodeConfidences.All.Select(confidence => $"{confidence} {CodebaseContextPack.Confidence(confidence).ToString(CultureInfo.InvariantCulture)}"))}) "

@@ -163,7 +163,7 @@ public sealed class WorkflowStepTypesTests
 
         Assert.Equal(
             [
-                ("orient", "branch, baseBranch, startCommit, hasRemote, hasLegs, legCount, anchors, ciConfigured, hasMutations, tests, dirtyPaths, openAgents, inFlight"),
+                ("orient", "branch, baseBranch, startCommit, hasRemote, onForge, hasLegs, legCount, anchors, ciConfigured, hasMutations, tests, dirtyPaths, openAgents, inFlight"),
                 ("graphify-codebase", "graph, view, commit, dirty, files, extracted, reused, removed, nodes, edges, languages, skipped, seconds"),
                 ("reason", null),
                 ("build", "passed, exitCode, verdicts, red, runDirectory, isolation"),

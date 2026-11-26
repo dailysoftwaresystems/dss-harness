@@ -213,6 +213,21 @@ public static class FlowTemplate
     /// <see cref="PieceKind.Placeholder"/> piece for each skill, holding what its braces hold; null where it could not be.
     /// </returns>
     public static IReadOnlyList<Piece>? FillAroundSkills(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read, Func<string, string?>? spell, out string? problem)
+        => FillAroundSkills(template, read, spell, values: null, out problem);
+
+    /// <summary>
+    /// Fills <paramref name="template"/> as the overload beside it does, and adds to <paramref name="values"/> each value a
+    /// placeholder was filled with, in order - what the run handed the template, never its own words, nor a sentence
+    /// <paramref name="spell"/> gave for what left no output: a reason step's request, its work item and the upstream
+    /// outputs it reads, which its context pack is seeded from (<see cref="Codebase.ContextPackRequest.Prompt"/>).
+    /// </summary>
+    /// <param name="template">The template, as the definition spells it.</param>
+    /// <param name="read">Reads one path of a name, as the run's expressions read it.</param>
+    /// <param name="spell">What a placeholder that reads nothing is filled with, where what it names left no output; null where nothing is.</param>
+    /// <param name="values">Where each value filled in is added, in order; null where none is kept.</param>
+    /// <param name="problem">Why it could not be filled; null where it was.</param>
+    /// <returns>The pieces <see cref="FillAroundSkills(string, Func{FlowExpression.Path, FlowExpression.PathRead}, Func{string, string?}, out string?)"/> returns; null where it could not be filled.</returns>
+    public static IReadOnlyList<Piece>? FillAroundSkills(string template, Func<FlowExpression.Path, FlowExpression.PathRead> read, Func<string, string?>? spell, ICollection<string>? values, out string? problem)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(read);
@@ -276,7 +291,9 @@ public static class FlowTemplate
                     return null;
                 }
 
-                filled.Append(value.AsTemplateText());
+                var text = value.AsTemplateText();
+                filled.Append(text);
+                values?.Add(text);
             }
             catch (UnresolvedReadException unreadable)
             {

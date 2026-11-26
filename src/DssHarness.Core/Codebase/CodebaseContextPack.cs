@@ -41,8 +41,11 @@ public sealed record ContextPackWorked(string Id, bool Edited)
 /// <param name="Home">Whether the site is the class's one home.</param>
 public sealed record ContextPackClosure(string Path, string? Symbol, bool Home);
 
-/// <summary>What a step's context pack is made from, beside the view: its filled prompt, its read rule, and what the step says of its work.</summary>
-/// <param name="Prompt">The step's filled prompt: the request, the plan item, each upstream output it reads.</param>
+/// <summary>What a step's context pack is made from, beside the view: its task's text, its read rule, and what the step says of its work.</summary>
+/// <param name="Prompt">
+/// The step's task as its prompt was handed it: the request, the plan item, each upstream output it reads - the values
+/// its template was filled with, never the template's own words, which every run of the workflow is given alike.
+/// </param>
 /// <param name="MayRead">Whether the step's read rule lets a file be read, by its path relative to the tree: a node of a file it does not is left out, never named, and counted.</param>
 public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRead)
 {

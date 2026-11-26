@@ -256,7 +256,8 @@ public sealed class ReasonStepRunnerTests
             agent,
             Target: null,
             workedFrom,
-            Prompts: new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal) { ["prompt"] = Filled(prompt ?? string.Empty) })
+            Prompts: new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal) { ["prompt"] = Filled(prompt ?? string.Empty) },
+            PromptValues: new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["prompt"] = prompt is { Length: > 0 } ? [prompt] : [] })
         {
             GoesOnWith = goesOnWith ?? [],
         };
@@ -1871,6 +1872,35 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("tools", result.Graph["mode"]!.GetValue<string>());
         Assert.Equal("base", result.Graph["view"]!.GetValue<string>());
         Assert.Equal(WorkflowStep.GraphFromTask, result.Graph["from"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A reason step's pack is seeded from what the run handed its prompt - the values its template was filled with -
+    /// never from the template's own words, which every run of the workflow is given alike: the template here names the
+    /// Planner, which the tree declares, and the value it was filled with names the ledger alone, so the pack holds the
+    /// ledger and none of the Planner. Seeded from the whole filled prompt, the template's word was a seed.
+    /// </summary>
+    [Fact]
+    public async Task AStepsPack_IsSeededFromTheValuesItsPromptWasFilledWith_NeverTheTemplatesOwnWords()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit, (Path.Combine("docs", "ledger.md"), "# Ledger\n\nWhat was spent.\n"));
+        const string Template = "Before anything, read how the Planner plans; then do this: {task}";
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal) { ["task"] = JsonValue.Create("add a line to `docs/ledger.md`") };
+        var run = Graphing(kit, Graphed()) with
+        {
+            Prompts = new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal) { ["prompt"] = Filled(Template, values) },
+            PromptValues = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["prompt"] = ["add a line to `docs/ledger.md`"] },
+        };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);
+
+        Assert.True(result.Passed, result.Error);
+        var asked = agents.Asked.Single();
+        Assert.Contains("Before anything, read how the Planner plans", asked.Prompt, StringComparison.Ordinal);
+        Assert.Contains("docs/ledger.md", asked.Codebase, StringComparison.Ordinal);
+        Assert.DoesNotContain("Planner", asked.Codebase, StringComparison.Ordinal);
     }
 
     /// <summary>

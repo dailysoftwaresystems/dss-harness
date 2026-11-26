@@ -7212,6 +7212,7 @@ public sealed class FlowCoordinator
                 // that cannot be filled fails the step, as a template key's that breaks. A run held in memory alone
                 // reads no files: its runner is handed none, and refuses where it needs one.
                 var prompts = new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal);
+                var promptValues = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
                 if (step.Type == "reason" && _workflowFile is { } readFile)
                 {
@@ -7252,13 +7253,16 @@ public sealed class FlowCoordinator
                             read["classes"] = FlowValue.Of(declared);
                         }
 
-                        if (FlowTemplate.FillAroundSkills(raw, promptReader, name => Spelled(name, instance), out var promptBroken) is not { } promptPieces)
+                        var filledWith = new List<string>();
+
+                        if (FlowTemplate.FillAroundSkills(raw, promptReader, name => Spelled(name, instance), filledWith, out var promptBroken) is not { } promptPieces)
                         {
                             _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(promptKey, instance.Id, promptBroken!)), null, Attempt: attempt));
                             return;
                         }
 
                         prompts[promptKey] = promptPieces;
+                        promptValues[promptKey] = filledWith;
                     }
                 }
 
@@ -7280,7 +7284,7 @@ public sealed class FlowCoordinator
 
                 // The run's share of its dollars is reckoned here, as the run is built, under the grant that stands now.
                 instance.ShareGrant = _budgetGranted;
-                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text) with { Prompts = prompts.Count > 0 ? prompts : null, AnswerHolds = holds }, token).ConfigureAwait(false);
+                var result = await _runner.RunAsync(RunOf(instance, step, attempt, read, handoff?.Text) with { Prompts = prompts.Count > 0 ? prompts : null, PromptValues = prompts.Count > 0 ? promptValues : null, AnswerHolds = holds }, token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
             }

@@ -3411,7 +3411,8 @@ step is given to the runner of its type
 (`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
 holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. Those served
 are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
-`FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes` - and each fact by its owner
+`FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes`, the remote's forge
+among what it reads - and each fact by its owner
 (`LegSelection`, `TestInvocationResolver`, `AnchorCitationService.RootsOf`, `CiSettings.Unset`, `MutationService.Declares`,
 `OrchestrationRules.OpenAgents`, `TreeHolders`); `GraphifyCodebaseRunner` checks the graph's longest path against the
 run's directory and syncs the run's one codebase graph through `ICodebaseGraphService` (`Core.Codebase`, below);
@@ -4485,7 +4486,9 @@ holds every push step that names a remote to - through `IGitPublisher.PushAsync`
 `<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
 request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`) -
 or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
-address - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`, asked through `Waits` with no limit of its own and told every five minutes while it lasts), and none,
+address (`FlowCheckout.Forge`, read with the checkout; a remote whose address names none - a path on this machine, a
+`file://` address, a path on an ssh server - is refused, 13, by `FlowCheckout.NotOnForge`, and `orient.onForge` is the
+same fact, which the shipped flow's pull request and CI wait, and `orient.ciConfigured`, read) - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`, asked through `Waits` with no limit of its own and told every five minutes while it lasts), and none,
 leaving gh to read the remotes itself, where it cannot be told - against `FlowCheckout.BaseBranch`, its body the workflow's file the coordinator read and filled where the step
 started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
 to the step's directory; `FlowReports.LeftForAPerson` names each pull request the run opened or found, and each path
@@ -6104,9 +6107,11 @@ extractions take). A path the tool is given is the file the view holds by the tr
 offered and every call answers the sentence for a step that left no output. Every node line is `GraphLines.Of`'s, the tool's and the pack's alike.
 
 The context pack (`CodebaseContextPack`) is the part of the graph a step's work touches, made at its start
-from the view and what the step says alone (`ContextPackRequest`: its filled prompt, `writes`, the working sets it is
-given, its changes, its read rule and cap), so the same step on the same tree is given the same pack. Its seeds are what
-the prompt names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
+from the view and what the step says alone (`ContextPackRequest`: its task - what the run handed its prompt, the values
+`FlowTemplate.FillAroundSkills` filled it with, which the coordinator hands its runner as `FlowStepRun.PromptValues`
+beside the pieces, with a handoff, never the template's own words, which every run of the workflow is given alike -
+`writes`, the working sets it is given, its changes, its read rule and cap), so the same step on the same tree is given
+the same pack. Its seeds are what the task names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
 or its last parts, a handle, a `path:line` as a stack frame or a compiler writes one, the longest of an absolute or a
 foreign path's endings the view holds or the one file it holds that ends with it - each a weight of 4 (a name several readable nodes
 carry seeds every one of them, however many, sharing the 2 a name written weighs among them), a working set's nodes 4
@@ -6237,7 +6242,8 @@ are held in its `step.json` under `graph` and summed for the run's report (`Flow
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in
-memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`), the main checkout's run
+memory - with a read rule that refuses what no graph lists (`CodebaseGraphService.NeverListed`: the credential slots,
+the tool's own state and the workflows' own files, whose prompts a pack would match first), the main checkout's run
 and configuration wherever it is typed (`MainTree`); a misuse is told by `CodebaseGraphTool.Misused` before anything is
 read, and a view not made yet is said and the base answered; `--page` asks any page of the answer, its document answering
 the digest of the graph answered from (`CodebaseGraphQueries.Graph`), the page, the pages, the whole answer's total and the

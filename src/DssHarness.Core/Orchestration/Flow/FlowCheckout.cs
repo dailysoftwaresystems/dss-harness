@@ -21,6 +21,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// (<see cref="GitRemotes.ConventionalRemote"/>), else the only one there is; null where none is found.
 /// </param>
 /// <param name="RemoteDefault">The branch <paramref name="Remote"/> names its default, without the remote's name; null where it names none here.</param>
+/// <param name="Forge">
+/// The repository on a forge the address of <paramref name="Remote"/> names (<see cref="GitRemotes.ForgeAddress"/>); null
+/// where no remote is that one, or its address names none - a path on this machine, a <c>file://</c> address, a path on
+/// an ssh server - which no pull request is opened on and no CI is read from.
+/// </param>
 public sealed record FlowCheckout(
     string? Branch,
     string? Head,
@@ -29,10 +34,29 @@ public sealed record FlowCheckout(
     IReadOnlyList<string> Dirty,
     IReadOnlyList<string> Remotes,
     string? Remote,
-    string? RemoteDefault)
+    string? RemoteDefault,
+    GitForgeAddress? Forge = null)
 {
     /// <summary>Whether the repository has a remote at all.</summary>
     public bool HasRemote => Remotes.Count > 0;
+
+    /// <summary>
+    /// Whether the remote the run's branch goes to names a repository on a forge (<see cref="Forge"/>): where a pull
+    /// request is opened and CI is read, through the forge's tool. A remote that is a repository on this machine or a
+    /// path on an ssh server is pushed to, and has neither.
+    /// </summary>
+    public bool OnForge => Forge is not null;
+
+    /// <summary>
+    /// Why the remote the run's branch goes to has no pull requests, ending a sentence: no remote is that one
+    /// (<see cref="NoRemote"/>), or its address names no repository on a forge; null where it names one.
+    /// </summary>
+    public string? NotOnForge
+        => OnForge
+            ? null
+            : Remote is null || NotARemote(Remote) is not null
+                ? NoRemote
+                : $"remote '{Remote}' names no repository on a forge - its address is a path on this machine, a file:// address or a path on an ssh server, which takes a push and has no pull requests";
 
     /// <summary>
     /// Why no remote is the one the run's branch goes to, ending a sentence: the repository has none, or none is that
@@ -147,11 +171,16 @@ public sealed record FlowCheckout(
             ?? (remotes.Contains(GitRemotes.ConventionalRemote, StringComparer.Ordinal) ? GitRemotes.ConventionalRemote : remotes.Count == 1 ? remotes[0] : null);
 
         string? remoteDefault = null;
+        GitForgeAddress? forge = null;
 
-        if (remote is not null && remotes.Contains(remote, StringComparer.Ordinal)
-            && (await gitClient.DefaultBranchAsync(root, remote, cancellationToken).ConfigureAwait(false)).Reference is { } reference)
+        if (remote is not null && remotes.Contains(remote, StringComparer.Ordinal))
         {
-            remoteDefault = reference.StartsWith(remote + "/", StringComparison.Ordinal) ? reference[(remote.Length + 1)..] : reference;
+            if ((await gitClient.DefaultBranchAsync(root, remote, cancellationToken).ConfigureAwait(false)).Reference is { } reference)
+            {
+                remoteDefault = reference.StartsWith(remote + "/", StringComparison.Ordinal) ? reference[(remote.Length + 1)..] : reference;
+            }
+
+            forge = GitRemotes.ForgeAddress(await gitClient.UrlAsync(root, remote, cancellationToken).ConfigureAwait(false));
         }
 
         return new FlowCheckout(
@@ -162,6 +191,7 @@ public sealed record FlowCheckout(
             [.. status.SelectMany(entry => entry.Paths).Select(path => path.Text).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
             remotes,
             remote,
-            remoteDefault);
+            remoteDefault,
+            forge);
     }
 }

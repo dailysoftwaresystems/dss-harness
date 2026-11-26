@@ -163,6 +163,13 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// runner hands each skill over and never reads filled text as a template again. Null for every other step, and for a
 /// run held in memory alone, which reads no files.
 /// </param>
+/// <param name="PromptValues">
+/// For each of a reason step's <see cref="Prompts"/>, by its key, the values its placeholders were filled with, in order
+/// (<see cref="FlowTemplate.FillAroundSkills(string, Func{FlowExpression.Path, FlowExpression.PathRead}, Func{string, string?}, ICollection{string}, out string?)"/>):
+/// what the run handed the prompt - the request, the work item, the upstream outputs it reads - apart from the template's
+/// own words, which every run of the workflow is given alike. What its context pack is seeded from. Null where
+/// <see cref="Prompts"/> is.
+/// </param>
 /// <param name="BudgetLeftUsd">
 /// What is left of the run's budget in dollars before its reserve, as the attempt starts: a reason step's agent is held to
 /// it where it is less than its own bound, or where it names none (<see cref="FlowRunBudget.Bound"/>), so one long attempt
@@ -196,7 +203,8 @@ public sealed record FlowStepRun(
     string? PlanTold = null,
     IReadOnlyDictionary<string, IReadOnlyList<FlowTemplate.Piece>>? Prompts = null,
     double? BudgetLeftUsd = null,
-    string? Path = null)
+    string? Path = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? PromptValues = null)
 {
     /// <summary>
     /// Where the step is declared among the flow, which every reading of its declaration - the work it goes on with, the

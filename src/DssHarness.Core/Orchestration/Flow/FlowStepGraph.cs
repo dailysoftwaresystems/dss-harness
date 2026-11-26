@@ -112,7 +112,7 @@ public sealed class FlowStepGraph
     /// <param name="agent">The agent the step works as.</param>
     /// <param name="record">The agent's record, whose worktree names its view.</param>
     /// <param name="ground">The step's ground, whose capabilities name what the tool may do and whose rules every answer, the map's included, is held to.</param>
-    /// <param name="prompt">The step's filled prompt, the task text the pack is seeded from.</param>
+    /// <param name="prompt">The task text the pack is seeded from: what the run handed the step's prompt - its filled values, with a handoff - or the words an answer sends (<see cref="FlowStepRun.PromptValues"/>), never the template's own words.</param>
     /// <param name="mask">The secrets the run holds, as the step's records and answers are masked by: what the step's graph tool keeps of an answer holds none.</param>
     /// <param name="cancellationToken">Stops the reading of the view.</param>
     public static async Task<FlowStepGraph?> OfAsync(

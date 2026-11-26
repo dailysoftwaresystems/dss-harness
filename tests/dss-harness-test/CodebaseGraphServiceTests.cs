@@ -356,8 +356,9 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// What no implementation is ever given is never listed: the credential slots and the tool's own state, tracked or
-    /// not; nor what the repository ignores. And the tool's own state is no change of the tree.
+    /// What no implementation is ever given is never listed: the credential slots, the tool's own state and the
+    /// workflows' own files - the prompts every step is given - tracked or not; nor what the repository ignores. A runner
+    /// action beside them, the repository's own code, is graphed. And the tool's own state is no change of the tree.
     /// </summary>
     [Fact]
     public async Task TheCredentialSlotsAndTheToolsOwnState_AreNeverListed_NorAnIgnoredFile()
@@ -365,17 +366,21 @@ public sealed class CodebaseGraphServiceTests
         using var graph = await Graph.CreateAsync();
         graph.Write(".gitignore", "*.log\n");
         graph.Write(".harness-config/runner/.secrets/token", "secret\n");
+        graph.Write(".harness-config/workflows/flow/prompts/plan.toy", "class Prompted\n");
+        graph.Write(".harness-config/runner/actions/corpus/run.toy", "class Corpus\n");
         await graph.CommitAsync(force: ".harness-config/runner/.secrets/token");
         graph.Write(".harness-config/sshItems/host/id", "key\n");
+        graph.Write(".harness-config/workflows/flow/prompts/review.toy", "class Prompted\n");
         graph.Write(".m/worker/a.toy", "class Worker\n");
         graph.Write(".mutations/former/b.toy", "class FormerWorker\n");
         graph.Write("debug.log", "noise\n");
 
         var synced = await graph.SyncAsync();
 
-        Assert.Equal([".gitignore", "README.md"], graph.Manifest().Files.Keys);
+        Assert.Equal([".gitignore", ".harness-config/runner/actions/corpus/run.toy", "README.md"], graph.Manifest().Files.Keys);
         Assert.False(synced.Dirty);
-        Assert.DoesNotContain(graph.Symbols().Nodes, node => node.Id is "toy:Worker" or "toy:FormerWorker");
+        Assert.DoesNotContain(graph.Symbols().Nodes, node => node.Id is "toy:Worker" or "toy:FormerWorker" or "toy:Prompted");
+        Assert.Contains(HarnessLayout.WorkflowsDirectoryRelative, CodebaseGraphService.NeverListed(".worktrees"));
     }
 
     /// <summary>

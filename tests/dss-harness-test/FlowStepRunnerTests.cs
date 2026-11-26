@@ -141,6 +141,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Null(output["baseBranch"]);
         Assert.Equal("0123abcd", (string?)output["startCommit"]);
         Assert.False((bool)output["hasRemote"]!);
+        Assert.False((bool)output["onForge"]!);
         Assert.True((bool)output["hasLegs"]!);
         Assert.Equal(2, (int)output["legCount"]!);
         Assert.False((bool)output["anchors"]!);
@@ -154,12 +155,13 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal("""["loose.txt"]""", output["dirtyPaths"]!.ToJsonString());
         Assert.Equal("[]", output["openAgents"]!.ToJsonString());
         Assert.Equal("[]", output["inFlight"]!.ToJsonString());
-        Assert.Equal(output.Select(member => member.Key).Order(StringComparer.Ordinal), new[] { "anchors", "baseBranch", "branch", "ciConfigured", "dirtyPaths", "hasLegs", "hasMutations", "hasRemote", "inFlight", "legCount", "openAgents", "startCommit", "tests" });
+        Assert.Equal(output.Select(member => member.Key).Order(StringComparer.Ordinal), new[] { "anchors", "baseBranch", "branch", "ciConfigured", "dirtyPaths", "hasLegs", "hasMutations", "hasRemote", "inFlight", "legCount", "onForge", "openAgents", "startCommit", "tests" });
     }
 
     /// <summary>
     /// With a remote, the base branch is the pull request's base where the engine filled one, else the remote's default;
-    /// CI declared is then configured; anchors, mutation arms, the open agents of every run and who holds the main tree
+    /// CI declared is configured only where that remote names a repository on a forge, which a repository on this machine
+    /// does not, and CI is read through the forge; anchors, mutation arms, the open agents of every run and who holds the main tree
     /// are each said; the run's records naming no start commit, HEAD is the one.
     /// </summary>
     [Fact]
@@ -194,13 +196,19 @@ public sealed class FlowStepRunnerTests : IDisposable
         var head = (await harness.RunGitAsync(repository.Path, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
         var fromRemote = await Orient(harness).RunAsync(Run(OrientStep, repository.Path), Token);
         var fromPullRequest = await Orient(harness).RunAsync(Run(OrientStep, repository.Path, new Dictionary<string, FlowValue> { ["base"] = FlowValue.Of("release") }), Token);
+        await harness.RunGitAsync(repository.Path, ["remote", "set-url", "origin", "https://github.com/acme/widgets.git"], Token);
+        var onForge = await Orient(harness).RunAsync(Run(OrientStep, repository.Path), Token);
 
         Assert.True(fromRemote.Passed, fromRemote.Error);
         var output = fromRemote.Output!.AsObject();
         Assert.Equal("trunk", (string?)output["baseBranch"]);
         Assert.Equal(head, (string?)output["startCommit"]);
         Assert.True((bool)output["hasRemote"]!);
-        Assert.True((bool)output["ciConfigured"]!);
+        Assert.False((bool)output["onForge"]!);
+        Assert.False((bool)output["ciConfigured"]!);
+        Assert.True((bool)onForge.Output!["onForge"]!);
+        Assert.True((bool)onForge.Output!["ciConfigured"]!);
+        Assert.Equal("trunk", (string?)onForge.Output!["baseBranch"]);
         Assert.True((bool)output["anchors"]!);
         Assert.True((bool)output["hasMutations"]!);
         Assert.Equal("""[{"run":"r9","agent":"a4"}]""", output["openAgents"]!.ToJsonString());

@@ -470,14 +470,14 @@ steps:
   - name: pr
     type: pull-request
     dependsOn: [final-push]
-    when: 'orient.hasRemote'
+    when: 'orient.onForge'
     onFailure: recover
     title: '{intake.triage.title}'
     body: prompts/pr-body.md
   - name: checks
     type: ci-wait
     dependsOn: [pr]
-    when: 'orient.hasRemote && orient.ciConfigured'
+    when: 'orient.onForge && orient.ciConfigured'
     waitMinutes: 60
     answers:
       checksPending:
@@ -612,4 +612,4 @@ recover:
     - name: publish
       type: push
       dependsOn: [remedies]
-      when: "orient.hasRemote && !empty(pr.url) && diagnose.latest.course == 'fix'"
+      when: "orient.onForge && !empty(pr.url) && diagnose.latest.course == 'fix'"

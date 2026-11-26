@@ -577,7 +577,7 @@ public static class WorkflowStepTypes
 
     /// <summary>
     /// What an <c>orient</c> step answers: the run's branch and the one its pull request goes to, the commit it started
-    /// on, and what the repository has - a remote, legs and how each tests, anchors, CI, mutation arms - with what is
+    /// on, and what the repository has - a remote and whether it is on a forge, legs and how each tests, anchors, CI, mutation arms - with what is
     /// dirty, which agents are open and what is in flight.
     /// </summary>
     private static string OrientOutput => ObjectOf(
@@ -585,6 +585,7 @@ public static class WorkflowStepTypes
         ("baseBranch", TextOrNull),
         ("startCommit", Text),
         ("hasRemote", Flag),
+        ("onForge", Flag),
         ("hasLegs", Flag),
         ("legCount", WholeNumber),
         ("anchors", Flag),

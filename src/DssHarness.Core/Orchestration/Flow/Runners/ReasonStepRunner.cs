@@ -236,6 +236,7 @@ public sealed class ReasonStepRunner(
         string filled;
         string? session = null;
         IReadOnlyList<AgentSkill> skills = [];
+        var prompted = goingOn is { Compact: true } || resume is null ? "prompt" : "resumePrompt";
 
         if (goingOn is { Prompt: { } message })
         {
@@ -245,7 +246,7 @@ public sealed class ReasonStepRunner(
         {
             session = Guid.NewGuid().ToString("D");
 
-            var given = SkillBlocks(goingOn is { Compact: true } || resume is null ? readPrompt : resume, run, root.Agent ?? agent, ground.Capabilities, workspace, handed, resolution, session);
+            var given = SkillBlocks(resume is null || prompted == "prompt" ? readPrompt : resume, run, root.Agent ?? agent, ground.Capabilities, workspace, handed, resolution, session);
 
             if (given.Refused is { } refusedSkill)
             {
@@ -259,10 +260,16 @@ public sealed class ReasonStepRunner(
         // at the head of its prompt, and is spent once the prompt holds it.
         filled = WithHandoff(run.Handoff, filled);
 
-        // The step's serving of the run's codebase graph: its pack made from the filled prompt and given as the
-        // <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
+        // The step's serving of the run's codebase graph: its pack made from what the run handed the prompt and given as
+        // the <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
         // offered where its step says tools, its view the one the engine syncs at the step's start. A step whose mode is
-        // off is served nothing, and one whose graph cannot be served goes on without it.
+        // off is served nothing, and one whose graph cannot be served goes on without it. The pack is seeded from the
+        // values the prompt was filled with - the request, the work item, the upstream outputs it reads - with the
+        // handoff, or from the words an answer sends, never from the template's own words: every run of the workflow is
+        // given those alike, and a graph of a repository that holds a workflow's text would match them first.
+        var seeds = goingOn is { Prompt: { } answered }
+            ? answered
+            : string.Join("\n\n", (run.Handoff is { Length: > 0 } handoff ? [handoff] : Array.Empty<string>()).Concat(run.PromptValues?.GetValueOrDefault(prompted) ?? []));
         var mask = launch.Mask(context.Layout, providers, webMask);
         var stepGraph = graphService is null
             ? null
@@ -282,7 +289,7 @@ public sealed class ReasonStepRunner(
                 agent,
                 agentRecord,
                 ground,
-                filled,
+                seeds,
                 mask,
                 cancellationToken).ConfigureAwait(false);
 
