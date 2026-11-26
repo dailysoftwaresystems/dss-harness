@@ -1048,7 +1048,7 @@ public sealed class AnalyzeReportTests
             harness.FileSystem,
             harness.OrchestrationStore,
             harness.Identity,
-            new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient),
+            new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform),
             new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             new AskingRunner(),
             harness.OrchestrationLog,

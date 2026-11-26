@@ -333,11 +333,15 @@ public sealed record FlowAnswer(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Then);
 
 /// <summary>One value a run of the workflow is started with, or a workflow used as a step is handed.</summary>
-/// <param name="Name">The input's name, as <c>--input name=value</c> spells it, or as a <c>with:</c> value spells it.</param>
+/// <param name="Name">
+/// The input's name, as <c>--input name=value</c> spells it, or as a <c>with:</c> value spells it: apart from every other
+/// input's in more than case, since a run keeps a file input's copy in a directory of its name (<see cref="OrchestratorLayout.InputCopy"/>).
+/// </param>
 /// <param name="Description">What the value is for, shown when it is missing.</param>
 /// <param name="Kind">
-/// <c>text</c>, or <c>file</c>: a file inside the repository by its path from the root, committed or not, which the run
-/// copies as it starts and its steps read as that copy (<see cref="FlowInputs.AsRead"/>) - and, of a
+/// <c>text</c>, or <c>file</c>: a file inside the repository by its path from the root or an absolute one inside it,
+/// committed or not, decided as an agent's read of it is, which the run copies as it starts and its steps read as that
+/// copy (<see cref="FlowInputs.AsRead"/>) - and, of a
 /// workflow another uses as a step, also <c>value</c>: any typed value, read as an expression, and <c>step</c>: a name
 /// its steps say in <c>onFailure</c> or <c>then</c> through <c>{input.&lt;name&gt;}</c>, resolved in the caller.
 /// </param>
@@ -356,8 +360,9 @@ public sealed record FlowInput(
     public const string TextKind = "text";
 
     /// <summary>
-    /// The kind a file inside the repository is, named by its path from the root: of the run's own workflow, held to a file
-    /// there as the run starts, committed or not, and copied into the run's directory (<see cref="FlowInputs.OpenFiles"/>),
+    /// The kind a file inside the repository is, named by its path from the root or an absolute one inside it: of the run's
+    /// own workflow, held to a file there an agent may read as the run starts, committed or not, and copied into the run's
+    /// directory (<see cref="FlowInputs.OpenFiles"/>),
     /// a step reading the copy's path for it in every session (<see cref="FlowInputs.AsRead"/>); of a workflow used as a
     /// step, a path of that workflow's own directory, which the definition's check reads.
     /// </summary>

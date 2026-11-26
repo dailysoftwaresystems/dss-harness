@@ -217,7 +217,7 @@ public sealed class ImplementationFlowTests
             fileSystem,
             store,
             harness.Identity,
-            new FlowSessions(store, fileSystem, harness.Identity, harness.GitClient),
+            new FlowSessions(store, fileSystem, harness.Identity, harness.GitClient, harness.Platform),
             new WorkflowValidationService(harness.ContextLoader, fileSystem, harness.Platform, keys, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
             harness.OrchestrationLog,

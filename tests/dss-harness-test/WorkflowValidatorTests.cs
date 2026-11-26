@@ -3940,6 +3940,44 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// Two inputs whose names differ by case alone are refused, each group named whole, on every system alike - a run keeps
+    /// a file input's copy in a directory named for the input, and a file system that folds case holds one for both - while
+    /// names apart in more than case, and a param or an output named as an input is, are not.
+    /// </summary>
+    [Fact]
+    public void InputsWhoseNamesDifferByCaseAlone_AreRefused_EachGroupNamedWhole()
+    {
+        var problems = Problems(
+            """
+            name: default
+            inputs:
+              - name: plan
+                kind: file
+              - name: pLan
+                kind: file
+              - name: spec
+              - name: sPec
+              - name: spEC
+              - name: draft
+            params:
+              - name: spec
+            outputs:
+              - name: plan
+                from: 'orient.branch'
+            steps:
+              - name: orient
+                type: orient
+            """);
+
+        Assert.Equal(
+            [
+                "the inputs 'plan' and 'pLan' differ by case alone, and a run keeps a file input's copy in a directory named for the input, which a file system that folds case - Windows', macOS's - holds once for both; name them apart",
+                "the inputs 'spec' and 'sPec' and 'spEC' differ by case alone, and a run keeps a file input's copy in a directory named for the input, which a file system that folds case - Windows', macOS's - holds once for both; name them apart",
+            ],
+            problems);
+    }
+
+    /// <summary>
     /// A budget counts at least one amount, and every amount it gives is above zero - a zero beside another amount would
     /// pause the run before it began as surely as a zero alone.
     /// </summary>

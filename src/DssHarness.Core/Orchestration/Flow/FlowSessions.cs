@@ -43,13 +43,15 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="fileSystem">Reads the runs' directories.</param>
 /// <param name="identity">This process, and how another's liveness is told.</param>
 /// <param name="git">Reads what the main tree holds otherwise than its HEAD, which says whether a run's folds are committed.</param>
+/// <param name="platform">The platform, whose spellings of a path a run's own file input is refused as an agent's read is (<see cref="FlowInputs.OpenFiles"/>).</param>
 /// <param name="clock">When the run's record, its first status and its owner are written.</param>
-public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSystem, IProcessIdentity identity, IGitClient git, TimeProvider? clock = null)
+public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSystem, IProcessIdentity identity, IGitClient git, IHostPlatform platform, TimeProvider? clock = null)
 {
     private readonly OrchestrationStore _store = store ?? throw new ArgumentNullException(nameof(store));
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     private readonly IProcessIdentity _identity = identity ?? throw new ArgumentNullException(nameof(identity));
     private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
+    private readonly IHostPlatform _platform = platform ?? throw new ArgumentNullException(nameof(platform));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>
@@ -75,7 +77,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
     /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
     /// process. Before anything of the run is made, each of the run's own inputs of the kind <c>file</c> that is not empty
-    /// is held to a file inside the repository and opened (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
+    /// is held to a file inside the repository an agent may read, decided as an agent's read of it is, and opened
+    /// (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
     /// made each is copied into the run's inputs (<see cref="OrchestratorLayout.InputsDirectory"/>) before its record is
     /// written; the context keeps the values as they were given. Once the test for another unfinished run - the last look
     /// at a live owner - has passed, and before anything of the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
@@ -99,7 +102,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">
     /// Another run of the repository is unfinished, the sweep keeps a record whose session holds this very process, the name
-    /// is taken, <paramref name="refusal"/> refuses it, or a file input names no file inside the repository
+    /// is taken, <paramref name="refusal"/> refuses it, or a file input names no file inside the repository an agent may read
     /// (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
@@ -139,9 +142,10 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             var run = OrchestratorLayout.Of(layout, name);
 
-            // The files the run's own file inputs name, opened before anything of the run is made: one that names no file
-            // inside the repository refuses the start, and the bytes the run keeps are those of the very file checked.
-            using var files = FlowInputs.OpenFiles(_fileSystem, definition, FlowInputs.Resolve(definition, inputs), layout.MainCheckoutRoot);
+            // The files the run's own file inputs name, opened before anything of the run is made, each decided as an agent's
+            // read of it is - every agent of the run reads the copy: one that names no file inside the repository an agent
+            // may read refuses the start, and the bytes the run keeps are those of the very file decided, read as opened.
+            using var files = FlowInputs.OpenFiles(_fileSystem, _platform, definition, FlowInputs.Resolve(definition, inputs), layout.MainCheckoutRoot);
 
             // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
             // life, its artifacts, kept for the run's life and copied wherever asked, and its inputs, where each file a

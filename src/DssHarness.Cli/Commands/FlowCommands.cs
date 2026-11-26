@@ -60,7 +60,7 @@ internal static class RunOrchestratorCommand
     private static readonly Option<string[]> InputOption = new("--input")
     {
         HelpName = "k=v",
-        Description = "An input the run is started with, as name=value; name=@<file> gives a text input the text of a file, read relative to --directory, and a file input names a file inside the repository by its path from the root, which the run copies as it starts. Once for each input.",
+        Description = "An input the run is started with, as name=value; name=@<file> gives a text input the text of a file, read relative to --directory, and a file input names a file inside the repository by its path from the root or an absolute one inside it, decided as an agent's read of it is, which the run copies as it starts. Once for each input.",
     };
 
     internal static Command Create()
