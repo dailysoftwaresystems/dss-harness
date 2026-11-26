@@ -156,15 +156,16 @@ internal static class Containment
     /// killed, and the system is read again round by round until a round takes none
     /// (<see cref="HoldDescendants"/>): each round holds every process it names in the session - or the
     /// group - and every child of a process held, so what a member outside the group started after the
-    /// first reading goes too, and asks again one it names whose session or group cannot be asked yet,
-    /// until it can be or is named no more. Each reading is made in place - the system's own listing of
+    /// first reading goes too; one whose session or group cannot be asked - in its creation, or in its
+    /// exit - is not taken for a member, and one in its creation is reached as its held parent's child, or
+    /// once all is killed. Each reading is made in place - the system's own listing of
     /// every process with its parent (<see cref="ProcessEnds.Parents"/>), each one's session or group
     /// asked of it by its id - never through a program, nor anything else between the hold and the kill:
     /// on macOS, for as long as a child of a process stands stopped, that process's runtime spins over
     /// reaping its children, holding the lock every start of a program takes, and the group held here may
     /// hold this very process's child - a reading through <c>ps</c> then never began, and the group stood
     /// held for good, every start of every other operation of the process waiting behind it. This very
-    /// process is never held, nor anything below it. Each is kept by its id and start read while it is
+    /// process is never held, nor walked below. Each is kept by its id and start read while it is
     /// held, then killed - the group as one first, while it stands, so a member no reading showed goes
     /// with it, and every other by its own id (<see cref="HeldStill.Kill"/>) - and waited for
     /// (<see cref="EndedProcesses.GoneAsync"/>); once all of it has gone the system is read again the same
@@ -338,18 +339,17 @@ internal static class Containment
                 Found: true,
                 group
                     ? $"the system's table of every process could not be read again once {held} had been asked to end: "
-                        + "its group and what the first reading found of its tree were ended, and what was started meanwhile outside the group was not reached"
+                        + "its group and what the first reading found of its tree were ended, and not all that was started meanwhile outside the group was reached"
                     : $"the system's table of every process could not be read again once {held} had been asked to end: "
-                        + "its group and what the first reading found in the session and its tree were ended, and what was started meanwhile outside the group was not reached");
+                        + "its group and what the first reading found in the session and its tree were ended, and not all that was started meanwhile outside the group was reached");
         }
 
-        // Whether a process the system lists is in what the leader leads, as its session - or its group - says: not where it
-        // has ended, a zombie among them, and not known yet where no process answers to its id - one the system lists in its
-        // creation - which is asked again.
-        bool? Membership(int process)
-            => calls.LedBy(process, group) is not { } of
-                ? ProcessGoing.HasEnded(process) ? false : null
-                : of == leader && !ProcessGoing.HasEnded(process);
+        // Whether a process the system lists is in what the leader leads, as its session - or its group - says, and has not
+        // ended, a zombie among them. One whose session or group cannot be asked - any process of the machine in its creation
+        // or its exit, as macOS answers for one - is none: never waited on, while the group stands held. One of the run's in
+        // its creation is its held parent's child, asked again as a child no process answers for is, or stands in the
+        // session once all is killed, which is read again.
+        bool Membership(int process) => In(process) && !ProcessGoing.HasEnded(process);
     }
 
     /// <summary>
@@ -978,9 +978,9 @@ internal static class Containment
     /// <param name="ended">What keeps each process killed, and lists a group's members.</param>
     /// <param name="failed">Where a process that could not be held is said; <see langword="null"/> where nothing is said.</param>
     /// <param name="spared">
-    /// The process never held, nor anything below it: this very process, where a session's end walks what it holds and
-    /// reads what each holds below it. <see langword="null"/> where nothing is spared - a tree's end, which refuses a tree
-    /// that holds this process before it holds anything.
+    /// The process never held, nor walked below: this very process, where a session's end walks what it holds and reads
+    /// what each holds below it. <see langword="null"/> where nothing is spared - a tree's end, which refuses a tree that
+    /// holds this process before it holds anything.
     /// </param>
     private sealed class HeldStill(Posix calls, EndedProcesses ended, List<Exception>? failed, int? spared = null)
     {
@@ -1144,19 +1144,22 @@ internal static class Containment
     /// </para>
     /// <para>
     /// Where <paramref name="member"/> is given - a session's end - each round also holds every process the reading names
-    /// that it says is in what the end holds, and walks on from it, and asks again one it cannot tell yet, as a child no
-    /// process answers for. What <paramref name="holding"/> spares is never held, nor walked below.
+    /// that it says is in what the end holds, and walks on from it - one no process answers the hold for asked again, as a
+    /// child is. What <paramref name="holding"/> spares is never held, nor walked below.
     /// </para>
     /// </remarks>
     /// <param name="holding">What is held, the root among it.</param>
     /// <param name="root">The root's id, which the wait is told by.</param>
     /// <param name="member">
     /// Whether a process the reading names is in what the end holds - its session, or its group - and so held whoever its
-    /// parent; <see langword="null"/> where that cannot be told yet. None where only the tree is held.
+    /// parent. None where only the tree is held.
     /// </param>
     /// <param name="failed">Where a table that cannot be read is said; <see langword="null"/> where its caller says it.</param>
-    /// <returns>Whether the table could be read; where it could not, nothing was held.</returns>
-    private static bool HoldDescendants(HeldStill holding, int root, Func<int, bool?>? member = null, List<Exception>? failed = null)
+    /// <returns>
+    /// Whether the table could be read in every round; where a round's could not, what the rounds before it held stays held,
+    /// and nothing was walked from that round on.
+    /// </returns>
+    private static bool HoldDescendants(HeldStill holding, int root, Func<int, bool>? member = null, List<Exception>? failed = null)
     {
         var held = holding.Processes;
         var askedAgain = false;
@@ -1184,26 +1187,17 @@ internal static class Containment
                     // What the end holds whoever its parent: each process the reading names in it, walked on from as a child is.
                     foreach (var (id, _) in listed)
                     {
-                        if (member is null || holding.Tried(id))
+                        if (member is null || holding.Tried(id) || !member(id))
                         {
                             continue;
                         }
 
-                        switch (member(id))
+                        switch (holding.Hold(id))
                         {
-                            case true:
-                                switch (holding.Hold(id))
-                                {
-                                    case HoldAnswer.Held:
-                                        walking.Enqueue(id);
-                                        break;
-                                    case HoldAnswer.NoneAnswered:
-                                        unanswered = true;
-                                        break;
-                                }
-
+                            case HoldAnswer.Held:
+                                walking.Enqueue(id);
                                 break;
-                            case null:
+                            case HoldAnswer.NoneAnswered:
                                 unanswered = true;
                                 break;
                         }
@@ -1873,18 +1867,6 @@ internal static class Containment
 
         /// <summary>The group <paramref name="process"/> is in, by its leader's id; -1 where it cannot be told.</summary>
         public int GroupOf(int process) => _groupOf(process);
-
-        /// <summary>
-        /// The session - or, where <paramref name="group"/>, the group - <paramref name="process"/> is in, by its leader's id;
-        /// -1 where it cannot be told, and <see langword="null"/> where no process answers to its id: gone, or one the system
-        /// lists that cannot be asked yet.
-        /// </summary>
-        public int? LedBy(int process, bool group)
-        {
-            var of = group ? _groupOf(process) : _sessionOf(process);
-
-            return of == -1 && Marshal.GetLastPInvokeError() == NoSuchProcess ? null : of;
-        }
 
         /// <summary>Takes <paramref name="name"/> from the environment a program this process becomes is handed; 0 where it is gone, -1 where it could not be taken.</summary>
         public int Unset(string name) => _unset(name);

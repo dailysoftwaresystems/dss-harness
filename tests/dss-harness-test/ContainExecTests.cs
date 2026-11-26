@@ -2037,7 +2037,8 @@ public sealed class ContainExecTests
     /// A process of a group's tree that left the group - here into a group of its own - and refuses to be asked to end is
     /// still ended by the group's end, on Linux and macOS: the first reading finds it in the standing leader's tree, and once
     /// the group is held it is told from a later process given its id by its start, read in place as that reading was
-    /// taken - no listing of the group or the session names it any more.
+    /// taken. No listing of every process read after the first names it here - none could tell it, below a leader that may
+    /// have gone, from a later holder of its id - so its start alone reaches it.
     /// </summary>
     [Fact]
     public async Task AProcessOfAGroupsTreeThatLeftTheGroupAndRefusesToEnd_IsEndedByItsStart()
@@ -2070,7 +2071,7 @@ public sealed class ContainExecTests
                 TimeSpan.Zero,
                 _ => { },
                 TimeProvider.System,
-                ProcessEnds.Machine,
+                new Hiding(holder.Id),
                 group: true).WaitAsync(LongBound, cancellationToken);
 
             Assert.Equal(new HeldEnding(Found: true, null), ending);
@@ -2103,8 +2104,10 @@ public sealed class ContainExecTests
         Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is Linux's and macOS's; Windows ends a job.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
         var start = TestHost.StartOf(Child(
-            "lead-then", "group", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "sleep", "300000"));
+            "lead-then", "group", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
         var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
 
         start.RedirectStandardOutput = true;
@@ -2153,8 +2156,10 @@ public sealed class ContainExecTests
         Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is Linux's and macOS's; Windows ends a job.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
         var start = TestHost.StartOf(Child(
-            "lead-then", "group", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "sleep", "300000"));
+            "lead-then", "group", "spawn-holder", "ignore-term", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
         var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
 
         start.RedirectStandardOutput = true;
@@ -2205,8 +2210,10 @@ public sealed class ContainExecTests
         Assert.SkipWhen(OperatingSystem.IsWindows(), "a session is Linux's and macOS's; Windows ends a job.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
         var start = TestHost.StartOf(Child(
-            "lead-then", "session", "spawn-holder", "sleep", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "sleep", "300000"));
+            "lead-then", "session", "spawn-holder", "sleep", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "ignore-hup-and-sleep", "300000", ready));
         var (child, grandchild) = (LearnedProcess.None, LearnedProcess.None);
 
         start.RedirectStandardOutput = true;
@@ -2246,7 +2253,9 @@ public sealed class ContainExecTests
 
     /// <summary>
     /// The two holders <paramref name="leader"/> says - its child, which leads a group of its own, and that child's child,
-    /// in its parent's group - whichever line came first, once both stand where they put themselves.
+    /// in its parent's group, refusing a hangup - whichever line came first, once both stand where they put themselves. The
+    /// grandchild refuses a hangup: the system hangs up a group orphaned while a member of it is stopped, and the child is
+    /// held still as its own parent is killed, which would end the grandchild with nothing of the harness's reaching it.
     /// </summary>
     private static async Task<(LearnedProcess Child, LearnedProcess Grandchild)> TwoHoldersAsync(Process leader, CancellationToken cancellationToken)
     {
@@ -2328,7 +2337,7 @@ public sealed class ContainExecTests
                         "never" => UnreadableTable.Unreached("its group was ended", group: true),
                         "ended" => UnreadableTable.Unreached("its group had already ended", group: true),
                         _ => "the system's table of every process could not be read again once the process group a child apart from the terminal led had been asked "
-                            + "to end: its group and what the first reading found of its tree were ended, and what was started meanwhile outside the group was not reached",
+                            + "to end: its group and what the first reading found of its tree were ended, and not all that was started meanwhile outside the group was reached",
                     }),
                 ending);
             Assert.True(group.WaitForExit(LongBound), $"the group {group.Id} outlived its end");
@@ -3156,6 +3165,12 @@ public sealed class ContainExecTests
 
             return Volatile.Read(ref _killed) == 0 ? listed?.Where(process => process.Id != late).ToList() : listed;
         }
+    }
+
+    /// <summary>The machine's ends, but for every listing of every process, which lacks the process <paramref name="hidden"/> names.</summary>
+    private sealed class Hiding(int hidden) : ProcessEnds
+    {
+        public override IReadOnlyList<(int Id, int Parent)>? Parents() => base.Parents()?.Where(process => process.Id != hidden).ToList();
     }
 
     /// <summary>The machine's ends, but for the system's listing of every process, which cannot be read.</summary>

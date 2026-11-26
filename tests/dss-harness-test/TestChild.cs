@@ -581,8 +581,8 @@ internal static class TestChild
         using var holder = StartInheriting(arguments[2], arguments[3..]);
 
         // A holder that leaves this group or session is named once it has, so a test acting on
-        // its id acts on a process that stands apart; one that refuses to be asked to end, once it
-        // has said it refuses, so this process's end never asks it first; and one that makes a late
+        // its id acts on a process that stands apart; one that refuses to be asked to end - or a
+        // hangup - once it has said it refuses, so this process's end never asks it first; and one that makes a late
         // process, once it runs its own code, so a stop made as soon as it is named finds it waiting
         // to be asked - never still starting, when a stop's end of the console it was started into,
         // this process's, ends it before it can make anything (on Windows).
@@ -590,7 +590,7 @@ internal static class TestChild
         {
             "own-group-and-sleep" or "own-group-note-term-and-sleep" => getpgid(holder.Id) == holder.Id,
             "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
-            "ignore-term-and-sleep" => File.Exists(arguments[4]),
+            "ignore-term-and-sleep" or "ignore-hup-and-sleep" => File.Exists(arguments[4]),
             "deny-terminate" or "deny-everything" => File.Exists(arguments[4]),
             "spawn-late-holder" => File.Exists(arguments[4]),
             _ => true,

@@ -279,12 +279,14 @@ What still stands is held still before it is killed: the group as one, each memb
 reading still that very process - known by its id and its start read as that reading was taken - and
 then, round by round until a round takes none, every process the system names in the session, or the
 group, and every child of a process held, so what a member outside the group started after the first
-reading goes too; one named whose session or group cannot be asked yet is asked again. The system is
+reading goes too; one whose session or group cannot be asked - in its creation or its exit, anywhere on
+the machine - is never waited on, one of the run's in its creation reached as its held parent's child
+or once all is killed. The system is
 read in place - its own listing of every process with its parent - never through a program: on macOS,
 for as long as a child of a process stands stopped, that process's runtime spins over reaping its
 children and holds the lock every start of a program takes, so a reading through `ps` there, with the
 group - which may hold the process's own child - held, never began, and every start of the process
-waited behind it. The process running the end is never held, nor anything below it. Once all it
+waited behind it. The process running the end is never held, nor walked below. Once all it
 killed has gone the system is read again the same way, and what stands in the session, or the group,
 is held and killed in turn until a look finds none: a child whose creation was under way as its parent
 was held joins the listing only after the last round, and its parent's kill ends that call or leaves
