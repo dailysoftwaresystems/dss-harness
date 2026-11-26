@@ -98,7 +98,14 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
   kept for the conversation's life and put away when it ends, the work it goes on from read nearest first, and an
   answer kept under another state - the graph moved, the file changed - never given for this one (`IKeptFreshness`). A
   text file's pages (`TextPages`) are laid by streaming the file once and keep only the byte offsets where pages begin;
-  a page is read by seeking to its own, so a two-gigabyte log costs a page's memory.
+  a page is read by seeking to its own, so a two-gigabyte log costs a page's memory. A text laid with the blocks its
+  writer kept beside it (`TextBlocks`: each block's head, the lines after it and its end by the bytes the file holds them
+  at, read a line at a time in the same pass, then the digest of the bytes they were written beside) gives a page that
+  begins inside a block the block's head again first, its mark naming where the file holds the head
+  (`TextPageMark.Head`), said as going on and counting nothing, by the one rule a page laid in memory gives a result's
+  block's head again by (`Paging.HoldsAgain`: only where the room left beside it holds the least piece of what follows,
+  `Pieces.Least`, so no page passes its room); blocks that are not the text's - another schema's, out of order, past its
+  end, or written beside bytes it no longer holds - give it none, and its pages are laid as its lines alone.
 - `Walks\`: a walk on an explicit stack or queue that keeps a set of what it met (`Walk`); a memo that answers each key
   once from its dependencies' answers, and a key met again while it is being answered by the cycle's own rule (`Memo`);
   answers made once where making one asks for others as it is made, through any store sharing its makings, a memo
@@ -3169,7 +3176,12 @@ at a time: its pages laid by `Pages\TextPages` - the file streamed once, in cons
 a page given in pieces by the one rule `Pages\Paging` cuts a piece by - and only where each page begins kept, by
 `Pages\KeptAnswers` in the step's `graph-pages/` beside the graph's pages (`PageKey.OfCall`, a key the graph's
 never is), for the conversation's life; a file that changed since its pages were laid is laid again, the page
-saying so (`TextPages.Relaid`). `read_result` reads too a message a compaction gave by reference
+saying so (`TextPages.Relaid`). A writer of an answer says which of its lines head a block and which belong to one
+(`ResultLines.HeadAsync`, `ResultLines.BlockLineAsync`), and an answer past a page keeps its blocks beside its file in
+the same pass (`TextBlocks.FileOf`, ended by the digest of the file's bytes), so every page of a result - its first in
+the call's own answer and each `read_result` gives - is laid with them by the one path a result's pages are laid by
+(`KeptResults.ResultLaidAsync`), and a page that begins inside a block gives its head again; a file viewed is never laid
+with blocks, whatever is beside it. `read_result` reads too a message a compaction gave by reference
 (`StoredStream.MessageText`, by the id `StoredStream.MessageId` gives it) and the continuation
 record (`KeptResults.ContinuationId`), and a call's result file is named by `PageKey.OfCall` of its
 whole id.
@@ -6356,8 +6368,10 @@ declaration's line, as `GraphLines.Of` names a node, the innermost a type, a mem
 (`GraphFileDeclarations.Holding`, by `CodebaseGraphQueries.AtLine`; a namespace or a project heads no hit), its hits and
 their context lines indented beneath it, the separator between two of its hits indented with them and the line said again
 only where a hit outside it came between; a hit outside every declaration, or of a file the graph does not parse, is
-written as it is, and a step with no graph answers as it always has. The answer is written a line at a time and paged as
-every answer is, by `read_result`, each line whole. A range of `view_file` (`AgentToolRuntime.RangeAsync`) is headed
+written as it is, and a step with no graph answers as it always has. The answer is written a line at a time - the
+declaration's line a block's head (`ResultLines.HeadAsync`), each line beneath it a line of its block - and paged as
+every answer is, by `read_result`, each line whole, a page that begins among a declaration's lines beginning with its line
+again (`TextBlocks`). A range of `view_file` (`AgentToolRuntime.RangeAsync`) is headed
 (`AgentToolRuntime.RangeDeclarations`) by the declarations the lines it gives meet (`GraphFileDeclarations.Meeting`), each
 joining the head once a line given reaches its first line, the head held with the lines within a page's room
 (`KeptResults.Room`) - the lines stopping, the first always given, where the two would pass it, the rest asked for by its

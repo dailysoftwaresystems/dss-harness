@@ -196,7 +196,7 @@ public sealed partial class AgentToolRuntime
     /// <exception cref="AgentReadRefusedException">The open file stands where the reader may not read.</exception>
     /// <exception cref="InvalidDataException">The file does not read as text.</exception>
     private Task<(TextPagesKept Kept, string? Note)> ViewedAsync(string full, CancellationToken cancellationToken)
-        => _results.LaidAsync(full, PageKey.Of(AgentTools.ViewFile, new JsonObject { ["path"] = full }), $"{AgentTools.ViewFile} {Said(full)}", numbered: true, OpenToView, cancellationToken);
+        => _results.LaidAsync(full, PageKey.Of(AgentTools.ViewFile, new JsonObject { ["path"] = full }), $"{AgentTools.ViewFile} {Said(full)}", numbered: true, OpenToView, blocked: false, cancellationToken);
 
     /// <summary>A file a view reads opened as itself, where it stands decided again as a read before a byte is read (<see cref="AgentFiles.OpenedOrRefused"/>).</summary>
     private Stream OpenToView(string file) => _host.Files.OpenedOrRefused(file, opened => OpenedPlace(opened, write: false).Denied);
@@ -438,7 +438,8 @@ public sealed partial class AgentToolRuntime
     /// of it by <c>read_result</c>. Where the run has a graph, a hit inside a declaration of a file the graph parsed is
     /// written under that declaration's line, as the graph names a node, as the file stands now
     /// (<see cref="CodebaseGraphTool.DeclarationsAsync"/>), so the agent knows the declaration and the lines to read next
-    /// without a view; a line each, paged as every line of the answer is.
+    /// without a view; a line each, paged as every line of the answer is, a page that begins among a declaration's lines
+    /// giving its line again first (<see cref="ResultLines.HeadAsync"/>).
     /// </summary>
     private async Task<Answer> SearchAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
@@ -492,7 +493,9 @@ public sealed partial class AgentToolRuntime
         // the innermost that holds the hit's line, as the file stands now - its line said as the graph names a node, the
         // declaration's hits and their context indented beneath it; a hit outside every declaration is shown as it is. Hits
         // come file by file, each file's in its order, so one file's declarations are read at its first hit and held while
-        // its hits are written, and a declaration is said again only where a hit outside it came between.
+        // its hits are written, and a declaration is said again only where a hit outside it came between. The declaration's
+        // line heads a block of the answer and the lines beneath it are the block's (ResultLines.HeadAsync), so a page of
+        // the answer that begins among them gives the declaration's line again first.
         string? file = null;
         GraphFileDeclarations? declarations = null;
         string? under = null;
@@ -511,11 +514,14 @@ public sealed partial class AgentToolRuntime
 
             var card = declarations?.Holding(hit.Line);
             var opens = card is not null && !string.Equals(card.Id, under, StringComparison.Ordinal);
-            var indent = card is null ? string.Empty : "  ";
+
+            // A line of the hit, beneath its declaration's line where it is inside one: a line of that block.
+            ValueTask Beneath(string line) => card is null ? lines.LineAsync(line, token) : lines.BlockLineAsync("  " + line, token);
 
             if (context > 0 && any)
             {
-                await lines.LineAsync(opens ? "--" : indent + "--", token).ConfigureAwait(false);
+                // The separator before a declaration's line is no line of its block.
+                await (opens ? lines.LineAsync("--", token) : Beneath("--")).ConfigureAwait(false);
             }
 
             any = true;
@@ -523,19 +529,19 @@ public sealed partial class AgentToolRuntime
 
             if (opens)
             {
-                await lines.LineAsync(GraphLines.Of(card!), token).ConfigureAwait(false);
+                await lines.HeadAsync(GraphLines.Of(card!), token).ConfigureAwait(false);
             }
 
             foreach (var line in hit.Before)
             {
-                await lines.LineAsync($"{indent}{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
+                await Beneath($"{said}-{Count(line.Line)}- {line.Text}").ConfigureAwait(false);
             }
 
-            await lines.LineAsync($"{indent}{said}:{Count(hit.Line)}: {hit.Text}", token).ConfigureAwait(false);
+            await Beneath($"{said}:{Count(hit.Line)}: {hit.Text}").ConfigureAwait(false);
 
             foreach (var line in hit.After)
             {
-                await lines.LineAsync($"{indent}{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
+                await Beneath($"{said}-{Count(line.Line)}- {line.Text}").ConfigureAwait(false);
             }
         }
 

@@ -13,8 +13,9 @@ namespace DssHarness.Tests;
 /// a file of hundreds of megabytes with a line of tens of them in a bounded heap; the page of a line found by its number;
 /// a file that changed since its pages were laid laid again, the page saying so; the pages an answer laid in memory of the
 /// same lines gives, in every encoding a text is read in, its lines cut as a file's are, numbered or not, a line wider than
-/// a page in pieces never inside a surrogate pair; its empty lines kept; and a file that is no text refused as the text
-/// rule refuses it.
+/// a page in pieces never inside a surrogate pair; its empty lines kept; a file that is no text refused as the text
+/// rule refuses it; and a text laid with its writer's blocks giving a page that begins inside one its head again, within
+/// the page's room, where the blocks are the text's.
 /// </summary>
 /// <remarks>Measured alone (<see cref="MemoryMeasured"/>): the heap one of them is held to is the process's.</remarks>
 [Collection(MemoryMeasured.Name)]
@@ -330,6 +331,263 @@ public sealed class TextPagesTests
             Assert.True(EncodedText.Read(bytes).Binary, name);
             Assert.Equal($"'{path}' is binary: {EncodedText.BinaryWhy}", refused.Message);
         }
+    }
+
+    /// <summary>
+    /// A text laid with the blocks its writer kept beside it gives each page that begins inside a block the block's head
+    /// first, said as going on and counting nothing, charged to the page's room - numbered as its line where the pages are -
+    /// and the page after the block's lines goes on as its lines alone: the first page, and a page that begins at a head,
+    /// are as the text laid as its lines alone gives them, every line is given once, and no page passes its room.
+    /// </summary>
+    [Fact]
+    public async Task APageThatBeginsInsideABlock_GivesItsHeadAgainFirst_WithinItsRoom()
+    {
+        using var temp = new TempDirectory();
+        var path = WriteBlocked(temp, "blocked.txt", BlockedLines);
+        var lines = BlockedLines.Select(line => line.Text).ToList();
+
+        foreach (var numbered in new[] { false, true })
+        {
+            var (kept, problem) = await LayBlocked(path, PageRoom.Least, numbered);
+            var pages = await AllPages(kept, numbered);
+            var plain = await AllPages(await Lay(path, PageRoom.Least, numbered), numbered);
+            string Line(int line) => numbered ? $"{line.ToString(CultureInfo.InvariantCulture)}\t{lines[line - 1]}" : lines[line - 1];
+            var again = (numbered ? "1\t" : string.Empty) + HeadOne + " … goes on";
+
+            Assert.Null(problem);
+            Assert.Equal(
+                [
+                    $"page 1 of 4 · 14 results · ask again with page: 2 for the next\n{Line(1)}\n{Line(2)}\n{Line(3)}\n{Line(4)}",
+                    $"page 2 of 4 · 14 results · ask again with page: 3 for the next\n{again}\n{Line(5)}\n{Line(6)}\n{Line(7)}",
+                    $"page 3 of 4 · 14 results · ask again with page: 4 for the next\n{again}\n{Line(8)}\n{Line(9)}\n{Line(10)}",
+                    $"page 4 of 4 · the last\n{Line(11)}\n{Line(12)}\n{Line(13)}\n{Line(14)}",
+                ],
+                pages.Select(page => page.Text));
+            Assert.Equal([null, new TextPageHead(0, 40, 1), new TextPageHead(0, 40, 1), null], kept.Marks.Select(mark => mark.Head));
+
+            // The head given again counts nothing - the header's results are the text's lines - and every line counts once.
+            Assert.Equal([(again, 0), (again, 0)], pages.SelectMany(page => page.Entries).Where(entry => entry.Text == again).Select(entry => (entry.Text, entry.Counts)));
+            Assert.Equal(Enumerable.Range(1, 14).Select(Line), pages.SelectMany(page => page.Entries).Where(entry => entry.Counts > 0).Select(entry => entry.Text));
+            Assert.All(pages, page => Assert.InRange(page.Entries.Sum(entry => entry.Text.Length + 1), 1, PageRoom.Least));
+
+            // The first page is the one the text's lines alone give.
+            Assert.Equal(plain[0].Text, pages[0].Text);
+        }
+    }
+
+    /// <summary>
+    /// A head is given again only where the page's room holds it beside the least piece of the line it goes on with: a head
+    /// whose saying again leaves that much is given, the line after it beside it; one that leaves less is not, and the page
+    /// begins with the line - so the head given again never takes a page past its room.
+    /// </summary>
+    [Fact]
+    public async Task AHeadGivenAgain_IsHeldBesideTheLeastPieceOfWhatFollows()
+    {
+        using var temp = new TempDirectory();
+
+        // Said again, a head of 240 characters costs 251 of the page's 256 - five left, the least piece of a line; one of 244
+        // costs 255. Each ends the first page, after a line of no block.
+        var held = new string('h', 240);
+        var unheld = new string('u', 244);
+
+        var (given, _) = await LayBlocked(WriteBlocked(temp, "held.txt", [("plain 0001", 'n'), (held, 'h'), ("abcd", 'b'), ("efgh", 'b')]), PageRoom.Least, numbered: false);
+        var (dropped, _) = await LayBlocked(WriteBlocked(temp, "unheld.txt", [("plain 0001", 'n'), (unheld, 'h'), ("abcd", 'b'), ("efgh", 'b')]), PageRoom.Least, numbered: false);
+        var givenPages = await AllPages(given, numbered: false);
+        var droppedPages = await AllPages(dropped, numbered: false);
+
+        Assert.Equal(
+            [
+                $"page 1 of 3 · 4 results · ask again with page: 2 for the next\nplain 0001\n{held}",
+                $"page 2 of 3 · 4 results · ask again with page: 3 for the next\n{held} … goes on\nabcd",
+                $"page 3 of 3 · the last\n{held} … goes on\nefgh",
+            ],
+            givenPages.Select(page => page.Text));
+        Assert.Equal(
+            [
+                $"page 1 of 2 · 4 results · ask again with page: 2 for the next\nplain 0001\n{unheld}",
+                "page 2 of 2 · the last\nabcd\nefgh",
+            ],
+            droppedPages.Select(page => page.Text));
+        Assert.All(givenPages.Concat(droppedPages), page => Assert.InRange(page.Entries.Sum(entry => entry.Text.Length + 1), 1, PageRoom.Least));
+    }
+
+    /// <summary>
+    /// Blocks that are no blocks of the text give it no head - its pages are those its lines alone give - and say why: blocks
+    /// written beside the text before it changed, a block past its end, blocks of another schema, cut short before their
+    /// digest or inside their last line, out of the text's order, a head that is no one line of the text, a line after
+    /// the digest, and a line that does not read.
+    /// </summary>
+    [Fact]
+    public async Task BlocksThatAreNoBlocksOfTheText_GiveItNoHead_AndSayWhy()
+    {
+        using var temp = new TempDirectory();
+        var path = WriteBlocked(temp, "blocked.txt", BlockedLines);
+        var blocksFile = TextBlocks.FileOf(path);
+        var written = File.ReadAllLines(blocksFile);
+        var plain = (await AllPages(await Lay(path, PageRoom.Least), numbered: false)).Select(page => page.Text).ToList();
+        var length = new FileInfo(path).Length;
+
+        // The two blocks as the writer wrote them: the first's head at the text's first byte, the second's ending with it.
+        Assert.Equal(
+            ["{\"schema\":1}", "{\"head\":0,\"body\":41,\"next\":529}", $"{{\"head\":590,\"body\":631,\"next\":{length}}}", $"{{\"digest\":\"{FileContentHash.Of(File.ReadAllBytes(path))}\"}}"],
+            written);
+
+        foreach (var (name, blocks, why) in new (string, string, string?)[]
+        {
+            ("changed", string.Join('\n', written) + "\n", null),
+            ("past the end", string.Join('\n', [written[0], written[1], $"{{\"head\":590,\"body\":631,\"next\":{length + 1}}}", written[3]]) + "\n", "a block goes on past the text's end"),
+            ("another schema", string.Join('\n', ["{\"schema\":2}", .. written[1..]]) + "\n", "their schema is 2, and this build reads 1"),
+            ("no digest", string.Join('\n', written[..3]) + "\n", "they end before the digest of the text they are of"),
+            ("cut short", string.Join('\n', written), "their last line is cut short"),
+            ("out of order", string.Join('\n', [written[0], written[1], "{\"head\":500,\"body\":631,\"next\":700}", written[3]]) + "\n", "their blocks follow one another in the text, each its head and then the lines of it"),
+            ("no one line", string.Join('\n', [written[0], "{\"head\":0,\"body\":20,\"next\":529}", .. written[2..]]) + "\n", "a block's head is no one line of the text"),
+            ("after the digest", string.Join('\n', [.. written, written[1]]) + "\n", "a line follows the digest they end with"),
+            ("no block", string.Join('\n', [written[0], "{\"head\":0}", .. written[2..]]) + "\n", "a line between their schema and their digest is a block"),
+        })
+        {
+            File.WriteAllText(blocksFile, blocks);
+
+            // The text changed since its blocks were written: one character of a block's line, its length the same.
+            var text = File.ReadAllText(path);
+            File.WriteAllText(path, name == "changed" ? text.Replace("  hit 06 b", "  hit 06 c", StringComparison.Ordinal) : text);
+
+            var (kept, problem) = await LayBlocked(path, PageRoom.Least, numbered: false);
+            var expected = name == "changed" ? (await AllPages(await Lay(path, PageRoom.Least), numbered: false)).Select(page => page.Text).ToList() : plain;
+
+            Assert.Equal(why, problem);
+            Assert.Equal(expected, (await AllPages(kept, numbered: false)).Select(page => page.Text));
+            Assert.All(kept.Marks, mark => Assert.Null(mark.Head));
+
+            File.WriteAllText(path, text);
+        }
+
+        // A line of them that is no JSON does not read, and says so as the reader does.
+        File.WriteAllText(blocksFile, string.Join('\n', [written[0], "not a block", .. written[2..]]) + "\n");
+        var (unread, unreadWhy) = await LayBlocked(path, PageRoom.Least, numbered: false);
+
+        Assert.StartsWith("a line of theirs does not read: ", unreadWhy, StringComparison.Ordinal);
+        Assert.Equal(plain, (await AllPages(unread, numbered: false)).Select(page => page.Text));
+    }
+
+    /// <summary>
+    /// The pages a build of the earlier schema kept of a result - laid on the same bytes, naming no block's head - read as
+    /// none: the result is laid again with its blocks, and its page that begins inside a block gives the head again.
+    /// </summary>
+    [Fact]
+    public async Task PagesKeptUnderTheEarlierSchema_AreLaidAgain_WithTheResultsBlocks()
+    {
+        using var temp = new TempDirectory();
+        var file = AgentCallRecords.ResultFile(temp.Path, "toolu_old");
+        var head = "decl Long " + new string('h', 30);
+        var body = Enumerable.Range(1, 600).Select(at => $"  hit {at:D4} " + new string('b', 49)).ToList();
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        WriteBlocked(file, [(head, 'h'), .. body.Select(line => (line, 'b'))]);
+
+        // What a build of schema 1 kept: the same bytes' pages, laid as the result's lines alone.
+        var earlier = await TextPages.LayAsync(Disk, file, PageKey.OfCall("toolu_old"), "read_result toolu_old", KeptResults.Room, numbered: false, Token) with { Schema = 1 };
+        var store = Path.Combine(temp.Path, Core.Orchestration.OrchestratorLayout.StepPagesDirectoryName);
+        Directory.CreateDirectory(store);
+
+        using (var packed = new System.IO.Compression.GZipStream(File.Create(Path.Combine(store, PageKey.OfCall("toolu_old") + KeptAnswers.Extension)), System.IO.Compression.CompressionLevel.Optimal))
+        {
+            System.Text.Json.JsonSerializer.Serialize(packed, earlier, TextPagesKept.Contract);
+        }
+
+        var second = await KeptResults.Of(Disk, temp.Path).ReadAsync("toolu_old", 2, Token);
+
+        Assert.Equal($"its schema is 1, and this build reads {TextPagesKept.CurrentSchema}", earlier.Problem());
+        Assert.Equal(["page 2 of 2 · the last", $"{head} … goes on"], second!.Text.Split('\n')[..2]);
+    }
+
+    /// <summary>
+    /// The lines of the text the block tests lay: a head of 40 characters and eight lines of its block, a line of none, a
+    /// second head and three lines of its block, its last the text's - each line but a head 60 characters.
+    /// </summary>
+    private static readonly (string Text, char Role)[] BlockedLines =
+    [
+        (HeadOne, 'h'),
+        .. Enumerable.Range(2, 8).Select(line => (Sixty("  hit", line, 'b'), 'b')),
+        (Sixty("outside", 10, 'p'), 'n'),
+        ("decl two " + new string('h', 31), 'h'),
+        .. Enumerable.Range(12, 3).Select(line => (Sixty("  hit", line, 'b'), 'b')),
+    ];
+
+    /// <summary>The first block's head: 40 characters.</summary>
+    private const string HeadOne = "decl one hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh";
+
+    /// <summary>A line of sixty characters: <paramref name="what"/>, its number, and a run of <paramref name="letter"/>.</summary>
+    private static string Sixty(string what, int line, char letter)
+    {
+        var said = $"{what} {line:D2} ";
+        return said + new string(letter, 60 - said.Length);
+    }
+
+    /// <summary>
+    /// Writes the text of <paramref name="lines"/> - each a line of no block (<c>n</c>), a block's head (<c>h</c>) or a line of
+    /// the block the last head opened (<c>b</c>) - as a writer of them writes it: joined by line feeds, none after the last, its
+    /// blocks beside it where the file holds each, ended by the digest of the file's bytes. The file's path.
+    /// </summary>
+    private static string WriteBlocked(TempDirectory temp, string name, IReadOnlyList<(string Text, char Role)> lines)
+    {
+        var path = temp.Combine(name);
+        WriteBlocked(path, lines);
+        return path;
+    }
+
+    /// <summary>Writes the text of <paramref name="lines"/> and its blocks at <paramref name="path"/>, as <see cref="WriteBlocked(TempDirectory, string, IReadOnlyList{ValueTuple{string, char}})"/> does.</summary>
+    internal static void WriteBlocked(string path, IReadOnlyList<(string Text, char Role)> lines)
+    {
+        var bytes = Encoding.UTF8.GetBytes(string.Join('\n', lines.Select(line => line.Text)));
+        var blocks = new List<TextBlock>();
+        (long Head, long Body, bool Lines)? open = null;
+        long offset = 0;
+
+        foreach (var (text, role) in lines)
+        {
+            var begins = offset;
+            offset += Encoding.UTF8.GetByteCount(text) + 1;
+
+            if (role != 'b' && open is { Lines: true } ended)
+            {
+                blocks.Add(new TextBlock(ended.Head, ended.Body, begins));
+            }
+
+            open = role switch
+            {
+                'h' => (begins, offset, false),
+                'b' => open!.Value with { Lines = true },
+                _ => null,
+            };
+        }
+
+        if (open is { Lines: true } last)
+        {
+            blocks.Add(new TextBlock(last.Head, last.Body, offset - 1));
+        }
+
+        File.WriteAllBytes(path, bytes);
+
+        using var stream = File.Create(TextBlocks.FileOf(path));
+        var writer = new TextBlocks.Writer(stream);
+
+        foreach (var block in blocks)
+        {
+            writer.Add(block);
+        }
+
+        writer.End(FileContentHash.Of(bytes));
+    }
+
+    /// <summary>The pages of the text at <paramref name="path"/>, laid at <paramref name="room"/> with the blocks beside it, and why they gave it none where they did not.</summary>
+    private static async Task<(TextPagesKept Kept, string? Problem)> LayBlocked(string path, int room, bool numbered)
+    {
+        using var blocks = TextBlocks.Read(Disk, path);
+
+        Assert.NotNull(blocks);
+
+        var kept = await TextPages.LayAsync(Disk.OpenRead, path, PageKey.OfCall("toolu_t"), "read_result toolu_t", room, numbered, blocks, Token);
+
+        return (kept, blocks.Problem);
     }
 
     /// <summary>The pages of the text at <paramref name="path"/>, laid at <paramref name="room"/> for a call of these tests.</summary>

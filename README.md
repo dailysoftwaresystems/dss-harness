@@ -1701,8 +1701,9 @@ and counted, never read; its `max_results` is refused, naming `page`. In a step 
 graph the reads answer from it, so the step learns the structure in the calls it makes anyway: each
 hit `search_files` finds inside a declaration of a file the graph parsed is given under that
 declaration's line - its handle, kind, signature and `path:start-end #hash`, the innermost that holds
-the hit - with its hits and their context indented beneath it, a range `view_file` gives is headed by
-the declarations its lines meet, each checked against the file as it stands, and where the step's
+the hit - with its hits and their context indented beneath it, a page of the answer that begins among
+them beginning with the declaration's line again, marked `… goes on` and counted as no result, a range
+`view_file` gives is headed by the declarations its lines meet, each checked against the file as it stands, and where the step's
 reads are narrowed (`graphReads: narrow`, the default) a whole `view_file` of a file the graph parsed
 over 200 lines is answered with the file's outline in its place, with how to read its lines - no
 wasted turn (`help codebase-graph`). A replace or an insert needs
@@ -1745,7 +1746,10 @@ too a message of the agent's a compaction gave by reference, by the id the compa
 (`message-` and its text's digest), from the step's stored stream, and the continuation record the
 conversation began with by `continuation-record`. Its
 pages are laid once from the file, kept in the step's `graph-pages/` for the conversation's life,
-and laid again, saying so, where the file changed since.
+and laid again, saying so, where the file changed since; a result whose lines head blocks - a search's
+hits beneath their declaration's line - keeps them beside its file (`.blocks.jsonl`), written with it
+and read only while its bytes are the ones they were written beside, and a page that begins inside
+one begins with its head again, said as going on, counted as no result and held within the page.
 
 The loop the `claude-api` and `glm` clients share (`ToolLoop`) runs a step of either over the
 provider each gives it - the Claude API's and Z.AI's below. A turn is one answer of the agent's - a

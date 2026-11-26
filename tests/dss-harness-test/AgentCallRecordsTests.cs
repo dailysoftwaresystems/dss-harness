@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
@@ -10,7 +11,7 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// What a step's calls leave beside its stored stream, on every client: a denial's line and event, a request of the web's
-/// lines and event, a result longer than a page kept whole and given as its first page.
+/// lines and event, a result longer than a page kept whole and given as its first page, and the blocks its lines headed kept beside it.
 /// </summary>
 public sealed class AgentCallRecordsTests : IDisposable
 {
@@ -133,6 +134,9 @@ public sealed class AgentCallRecordsTests : IDisposable
             Assert.Null(long_.Text);
             Assert.Equal(AgentCallRecords.ResultFile(run.StepDirectory, "long"), long_.File);
             Assert.Equal(string.Join('\n', lines.Select(line => line.Replace("hunter2", "***", StringComparison.Ordinal))), File.ReadAllText(long_.File!));
+
+            // Its lines headed no block, so none is kept beside it.
+            Assert.False(File.Exists(DssHarness.Core.Pages.TextBlocks.FileOf(long_.File!)));
         }
 
         // One abandoned before its end leaves no file.
@@ -145,6 +149,94 @@ public sealed class AgentCallRecordsTests : IDisposable
         }
 
         Assert.False(File.Exists(AgentCallRecords.ResultFile(run.StepDirectory, "abandoned")));
+    }
+
+    /// <summary>
+    /// An answer whose lines head blocks keeps them beside its file once it passes a page: each block whose head a line of it
+    /// followed, where the file holds its head, the line after its head and the line after its last - the answer's end for
+    /// the last block - counted in the masked lines' bytes, then the digest of the file's bytes; a head no line of its block
+    /// followed is no block. One that fits a page keeps no file and no blocks, one abandoned leaves neither, and a line of a
+    /// block with no head before it is refused.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWhoseLinesHeadBlocks_KeepsThemBesideItsFile_WhereTheFileHoldsEach()
+    {
+        using var records = Records(out _, out var run, new Masking("hunter2", "***"));
+        var token = TestContext.Current.CancellationToken;
+        var many = Enumerable.Range(0, 3_000).Select(at => $"  hit {at} hunter2 é").ToList();
+        List<(string Text, char Role)> lines =
+        [
+            ("before the blocks", 'n'),
+            ("décl one 😀", 'h'),
+            .. many.Select(line => (line, 'b')),
+            ("outside", 'n'),
+            ("decl two", 'h'),
+            ("  two's line", 'b'),
+            ("decl alone", 'h'),
+            ("decl three", 'h'),
+            ("  three's last line", 'b'),
+        ];
+
+        async Task WriteAsync(ResultLines into, IEnumerable<(string Text, char Role)> written)
+        {
+            foreach (var (text, role) in written)
+            {
+                await (role switch { 'h' => into.HeadAsync(text, token), 'b' => into.BlockLineAsync(text, token), _ => into.LineAsync(text, token) });
+            }
+        }
+
+        await using (var blocked = records.Lines("blocked"))
+        {
+            await WriteAsync(blocked, lines);
+            await blocked.EndAsync();
+
+            var masked = lines.Select(line => line.Text.Replace("hunter2", "***", StringComparison.Ordinal)).ToList();
+            var starts = new List<long> { 0 };
+
+            foreach (var line in masked)
+            {
+                starts.Add(starts[^1] + Encoding.UTF8.GetByteCount(line) + 1);
+            }
+
+            var length = starts[^1] - 1;
+            int At(string text) => lines.FindIndex(line => line.Text == text);
+
+            Assert.Equal(string.Join('\n', masked), File.ReadAllText(blocked.File!));
+            Assert.Equal(
+                [
+                    "{\"schema\":1}",
+                    $"{{\"head\":{starts[1]},\"body\":{starts[2]},\"next\":{starts[At("outside")]}}}",
+                    $"{{\"head\":{starts[At("decl two")]},\"body\":{starts[At("decl two") + 1]},\"next\":{starts[At("decl alone")]}}}",
+                    $"{{\"head\":{starts[At("decl three")]},\"body\":{starts[At("decl three") + 1]},\"next\":{length}}}",
+                    $"{{\"digest\":\"{FileContentHash.Of(File.ReadAllBytes(blocked.File!))}\"}}",
+                ],
+                File.ReadAllLines(DssHarness.Core.Pages.TextBlocks.FileOf(blocked.File!)));
+        }
+
+        // One that fits a page is given whole: no file, and no blocks beside one.
+        await using (var short_ = records.Lines("short"))
+        {
+            await WriteAsync(short_, [("decl", 'h'), ("  its line", 'b')]);
+            await short_.EndAsync();
+
+            Assert.Equal(("decl\n  its line", (string?)null), (short_.Text, short_.File));
+            Assert.False(File.Exists(DssHarness.Core.Pages.TextBlocks.FileOf(AgentCallRecords.ResultFile(run.StepDirectory, "short"))));
+        }
+
+        // One abandoned before its end leaves neither its file nor its blocks.
+        await using (var abandoned = records.Lines("abandoned"))
+        {
+            await WriteAsync(abandoned, lines);
+        }
+
+        Assert.False(File.Exists(AgentCallRecords.ResultFile(run.StepDirectory, "abandoned")));
+        Assert.False(File.Exists(DssHarness.Core.Pages.TextBlocks.FileOf(AgentCallRecords.ResultFile(run.StepDirectory, "abandoned"))));
+
+        await using var headless = records.Lines("headless");
+        await headless.LineAsync("of no block", token);
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(async () => await headless.BlockLineAsync("  of a block", token));
+
+        Assert.Equal("A line of a block follows its head, and no block is open: the line written last is of none.", refused.Message);
     }
 
     /// <summary>A denial is a line of denials.jsonl and an event, masked, its source as the event names it.</summary>

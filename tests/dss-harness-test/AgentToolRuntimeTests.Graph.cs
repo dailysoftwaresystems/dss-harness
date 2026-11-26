@@ -7,8 +7,9 @@ using DssHarness.Core.Pages;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The codebase graph inside the reads an agent already makes: a search's hits under the declarations they are in, a
-/// range headed by the declarations it meets - each as the file stands now - and the tools saying so in a graph step.
+/// The codebase graph inside the reads an agent already makes: a search's hits under the declarations they are in - a page
+/// of the answer that begins among a declaration's hits headed by its line again - a range headed by the declarations it
+/// meets - each as the file stands now - and the tools saying so in a graph step.
 /// </summary>
 public sealed partial class AgentToolRuntimeTests
 {
@@ -144,13 +145,15 @@ public sealed partial class AgentToolRuntimeTests
 
     /// <summary>
     /// A search whose grouped answer passes a page is kept whole and given a page at a time by read_result, as every search
-    /// is: each page begins with 'page k of n', each holds whole lines, and the pages together hold every declaration's
-    /// line and every hit beneath it once and in order - nothing dropped.
+    /// is: each page begins with 'page k of n', each holds whole lines, a page that begins at a hit beneath a declaration
+    /// begins with the declaration's line again, said as going on, and one that begins at a declaration's line begins with
+    /// it alone - and the pages together hold every declaration's line and every hit beneath it once and in order, nothing
+    /// dropped.
     /// </summary>
     [Fact]
     public async Task AGroupedSearchLongerThanAPage_IsGivenWholeByPage_EveryHeaderAndHitOnce()
     {
-        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Many.cs", ManyMembers(800)));
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Many.cs", ManyMembers(1600, varied: true)));
         var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
         var graphed = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, queries), []);
         var text = File.ReadAllLines(Path.Combine(tree.Tree, "src", "Many.cs"));
@@ -159,13 +162,14 @@ public sealed partial class AgentToolRuntimeTests
 
         var found = await Call(graphed, AgentTools.SearchFiles, "grouped", ("pattern", "=> "), ("glob", "src/Many.cs"));
 
-        Assert.Equal(800, members.Count);
+        Assert.Equal(1600, members.Count);
         Assert.Equal(AgentCallRecords.ResultFile(_step, "grouped"), found.File);
         Assert.Equal(string.Join('\n', expected), File.ReadAllText(found.File!));
 
         var header = found.Text.Split('\n')[0];
         var pages = int.Parse(header.Split(' ')[3], CultureInfo.InvariantCulture);
         var given = found.Text.Split('\n').Skip(1).ToList();
+        var inside = new List<bool>();
 
         Assert.Equal($"page 1 of {pages.ToString(CultureInfo.InvariantCulture)} · {expected.Count.ToString(CultureInfo.InvariantCulture)} results · ask read_result with id: 'grouped', page: 2 for the next · the whole is '{found.File}'", header);
         Assert.InRange(pages, 2, int.MaxValue);
@@ -173,12 +177,101 @@ public sealed partial class AgentToolRuntimeTests
         for (var page = 2; page <= pages; page++)
         {
             var next = (await Call(graphed, AgentTools.ReadResult, $"read_{page.ToString(CultureInfo.InvariantCulture)}", ("id", "grouped"), ("page", page))).Text.Split('\n');
+            var lines = next.Skip(1).ToList();
+
+            // Each declaration holds one hit: a page that begins at a hit begins inside the group the page before ended with
+            // the line of, and gives that line again first.
+            inside.Add(expected[given.Count].StartsWith("  ", StringComparison.Ordinal));
+
+            if (inside[^1])
+            {
+                Assert.Equal($"{expected[given.Count - 1]} … goes on", lines[0]);
+                lines.RemoveAt(0);
+            }
 
             Assert.StartsWith($"page {page.ToString(CultureInfo.InvariantCulture)} of {pages.ToString(CultureInfo.InvariantCulture)} · ", next[0], StringComparison.Ordinal);
-            given.AddRange(next.Skip(1));
+            Assert.InRange(next.Sum(line => line.Length + 1) - 1, 1, PageRoom.ModelAnswer);
+            given.AddRange(lines);
         }
 
         Assert.Equal(expected, given);
+
+        // Pages begin both ways: at a hit beneath a declaration, and at a declaration's line.
+        Assert.Contains(true, inside);
+        Assert.Contains(false, inside);
+    }
+
+    /// <summary>
+    /// A search whose hits beneath one declaration pass a page gives each page after the first the declaration's line
+    /// again, exactly, said as going on before the hits it goes on with - counted as no result, each page within a page of
+    /// an answer - and every hit once and in order across the pages; the same search in a step with no graph gives its hits
+    /// as they are, page by page, with no declaration's line and no blocks kept beside its result.
+    /// </summary>
+    [Fact]
+    public async Task AGroupedSearchWhoseHitsPassAPage_GivesTheirDeclarationsLineAgainOnEveryLaterPage()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Long.cs", LongMember(1500)));
+        var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
+        var graphed = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, queries), []);
+        var plain = OverTree(tree, graph: null);
+        var text = File.ReadAllLines(Path.Combine(tree.Tree, "src", "Long.cs"));
+        var sum = Declared(queries, "Demo.Long.Sum");
+        var hits = Enumerable.Range(0, text.Length).Where(at => text[at].Contains("// tally", StringComparison.Ordinal)).Select(at => $"src/Long.cs:{(at + 1).ToString(CultureInfo.InvariantCulture)}: {text[at]}").ToList();
+
+        async Task<List<string[]>> PagesAsync(AgentToolRuntime runtime, string id)
+        {
+            var first = await Call(runtime, AgentTools.SearchFiles, id, ("pattern", "tally"), ("glob", "src/Long.cs"));
+            var pages = new List<string[]> { first.Text.Split('\n') };
+            var count = int.Parse(pages[0][0].Split(' ')[3], CultureInfo.InvariantCulture);
+
+            Assert.Equal(AgentCallRecords.ResultFile(_step, id), first.File);
+
+            for (var page = 2; page <= count; page++)
+            {
+                pages.Add((await Call(runtime, AgentTools.ReadResult, $"{id}_{page.ToString(CultureInfo.InvariantCulture)}", ("id", id), ("page", page))).Text.Split('\n'));
+            }
+
+            return pages;
+        }
+
+        var grouped = await PagesAsync(graphed, "long");
+        var again = $"{GraphLines.Of(sum)} … goes on";
+
+        Assert.Equal(1500, hits.Count);
+        Assert.InRange(grouped.Count, 3, int.MaxValue);
+        Assert.StartsWith($"page 1 of {grouped.Count.ToString(CultureInfo.InvariantCulture)} · 1501 results · ", grouped[0][0], StringComparison.Ordinal);
+        Assert.Equal(GraphLines.Of(sum), grouped[0][1]);
+        Assert.All(grouped.Skip(1), page => Assert.Equal(again, page[1]));
+        Assert.All(grouped, page => Assert.InRange(page.Sum(line => line.Length + 1) - 1, 1, PageRoom.ModelAnswer));
+        Assert.Equal([GraphLines.Of(sum), .. hits.Select(hit => "  " + hit)], grouped.SelectMany((page, at) => page.Skip(at == 0 ? 1 : 2)));
+        Assert.True(File.Exists(TextBlocks.FileOf(AgentCallRecords.ResultFile(_step, "long"))));
+
+        var ungrouped = await PagesAsync(plain, "long_plain");
+
+        Assert.StartsWith($"page 1 of {ungrouped.Count.ToString(CultureInfo.InvariantCulture)} · 1500 results · ", ungrouped[0][0], StringComparison.Ordinal);
+        Assert.Equal(hits, ungrouped.SelectMany(page => page.Skip(1)));
+        Assert.False(File.Exists(TextBlocks.FileOf(AgentCallRecords.ResultFile(_step, "long_plain"))));
+    }
+
+    /// <summary>
+    /// A file viewed is laid as its lines alone, whatever blocks are kept beside it: a view's page that begins among lines
+    /// a blocks file names as a block's gives no head again - the rule is a call's result's, never a file's.
+    /// </summary>
+    [Fact]
+    public async Task AViewOfAFile_GivesNoHeadAgain_WhateverBlocksAreKeptBesideIt()
+    {
+        var lines = Enumerable.Range(1, 1000).Select(at => $"  indented line {at.ToString("D4", CultureInfo.InvariantCulture)} " + new string('i', 30)).ToList();
+        Write("notes/indented.txt", string.Empty);
+        TextPagesTests.WriteBlocked(Path.Combine(_worktree, "notes", "indented.txt"), [("the head", 'h'), .. lines.Select(line => (line, 'b'))]);
+
+        var runtime = Open();
+        var first = (await Call(runtime, AgentTools.ViewFile, ("path", "notes/indented.txt"))).Text.Split('\n');
+        var second = (await Call(runtime, AgentTools.ViewFile, ("path", "notes/indented.txt"), ("page", 2))).Text.Split('\n');
+        var shown = first.Length - 1;
+
+        Assert.Equal("page 2 of 2 · the last", second[0]);
+        Assert.Equal($"{(shown + 1).ToString(CultureInfo.InvariantCulture)}\t{lines[shown - 1]}", second[1]);
+        Assert.Equal(1001, shown + second.Length - 1);
     }
 
     /// <summary>
@@ -254,7 +347,19 @@ public sealed partial class AgentToolRuntimeTests
     /// <summary>The node the view holds by <paramref name="qualified"/>, its one declaration.</summary>
     private static GraphCard Declared(CodebaseGraphQueries view, string qualified) => Assert.IsType<GraphResolve.Found>(view.Resolve(qualified)).Card;
 
-    /// <summary>A C# class of <paramref name="count"/> one-line members, each its own line: a file of many declarations, <paramref name="count"/> and five lines.</summary>
-    private static string ManyMembers(int count)
-        => "namespace Demo;\n\npublic static class Many\n{\n" + string.Concat(Enumerable.Range(0, count).Select(at => $"    public static int M{at.ToString("D3", CultureInfo.InvariantCulture)}() => {at.ToString(CultureInfo.InvariantCulture)};\n")) + "}\n";
+    /// <summary>A C# class whose one member, Sum, holds <paramref name="count"/> lines that each say 'tally': a declaration of many hits.</summary>
+    private static string LongMember(int count)
+        => "namespace Demo;\n\npublic static class Long\n{\n    public static int Sum()\n    {\n        var total = 0;\n"
+            + string.Concat(Enumerable.Range(1, count).Select(at => $"        total += 1; // tally {at.ToString("D4", CultureInfo.InvariantCulture)}\n"))
+            + "        return total;\n    }\n}\n";
+
+    /// <summary>
+    /// A C# class of <paramref name="count"/> one-line members, each its own line: a file of many declarations,
+    /// <paramref name="count"/> and five lines - their names, where <paramref name="varied"/>, of lengths that vary, so the
+    /// pages of a search of them end after either line of a member's.
+    /// </summary>
+    private static string ManyMembers(int count, bool varied = false)
+        => "namespace Demo;\n\npublic static class Many\n{\n"
+            + string.Concat(Enumerable.Range(0, count).Select(at => $"    public static int M{at.ToString("D3", CultureInfo.InvariantCulture)}{(varied ? new string('v', at % 13) : string.Empty)}() => {at.ToString(CultureInfo.InvariantCulture)};\n"))
+            + "}\n";
 }

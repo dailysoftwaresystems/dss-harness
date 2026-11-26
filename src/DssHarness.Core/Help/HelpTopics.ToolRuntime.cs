@@ -101,7 +101,8 @@ public static partial class HelpTopics
             + "and the reads it makes already answer from the graph, so the step learns "
             + "the structure in the calls it makes anyway: search_files gives each hit inside a declaration of a file the graph "
             + "parsed under that declaration's line - handle, kind, signature and path:start-end #hash, as the graph names a node, "
-            + "the innermost that holds the hit - its hits and their context indented beneath it, a hit outside every declaration "
+            + "the innermost that holds the hit - its hits and their context indented beneath it, a page of the answer that "
+            + "begins among them beginning with the declaration's line again, said as going on and counted as no result, a hit outside every declaration "
             + "as it is, and a range of view_file is headed by the declarations its lines meet, the head held within the page "
             + "with the lines, each declaration checked against the file as it stands - read again where one moved, one whose "
             + "lines the file no longer holds left out. Its graphReads narrow (the default) answers a whole view_file - one "
@@ -133,6 +134,9 @@ public static partial class HelpTopics
             + $"step's stored stream, and the continuation record the conversation began with by '{Agents.Runtime.KeptResults.ContinuationId}'. "
             + "Its pages are laid once from the file, kept in the step's "
             + $"{OrchestratorLayout.StepPagesDirectoryName}/ for the conversation's life, and laid again, saying so, where the file "
-            + "changed since.";
+            + "changed since; a result whose lines head blocks - a search's hits beneath their declaration's line - keeps them "
+            + $"beside its file ({Pages.TextBlocks.Extension}), written with it and read only while its bytes are the ones they were written "
+            + "beside, and a page that begins inside one begins with its head again, said as going on, counted as no result and "
+            + "held within the page.";
     }
 }

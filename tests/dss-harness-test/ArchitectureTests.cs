@@ -492,6 +492,7 @@ public sealed class ArchitectureTests
         [@"DssHarness.Core\Agents\Runtime\CodebaseGraphTool.cs|MostCharacters"] = "paging: PageRoom.GraphAnswer, the graph answer's page size",
         [@"DssHarness.Core\Codebase\GraphPages.cs|LeastRoom"] = "paging: PageRoom.Least, the least a page is given",
         [@"DssHarness.Core\Pages\PageRoom.cs|Least"] = "paging: the least a page is given",
+        [@"DssHarness.Core\Pages\Pieces.cs|Least"] = "paging: the room the least piece of an entry takes, which a head given again leaves so no page passes its room",
         [@"DssHarness.Core\Sync\SyncServe.cs|MostFilesInABatch"] = "partition: files cross in batches, every one of them",
         [@"DssHarness.Core\Web\Index\SitemapFill.cs|MostStaleLines"] = "compaction: fill.jsonl is written anew once its stale lines outnumber those kept, never emptied",
 

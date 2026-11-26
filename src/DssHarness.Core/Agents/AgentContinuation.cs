@@ -193,7 +193,7 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
         }
 
         var results = KeptResults.Of(_fileSystem, stepDirectory);
-        var (kept, _) = await results.LaidAsync(file, PageKey.OfCall(KeptResults.ContinuationId), $"{AgentTools.ReadResult} {KeptResults.ContinuationId}", numbered: false, _fileSystem.OpenRead, cancellationToken).ConfigureAwait(false);
+        var (kept, _) = await results.ResultLaidAsync(KeptResults.ContinuationId, cancellationToken).ConfigureAwait(false);
 
         if (kept.Marks.Count == 1)
         {
