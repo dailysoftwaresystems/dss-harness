@@ -29,9 +29,8 @@ permissions:
 jobs:
   deal:
     # The run's one deal: every runner's shards, from one file of times a runner, before any shard
-    # starts. Were each shard to deal itself, as it once did, it would read whichever times another
-    # shard of the same run had just saved, and two shards of one runner could each be dealt a
-    # class, or neither. "Re-run failed jobs" runs a failed shard on the classes it failed on: a job
+    # starts. A shard that dealt itself would read whichever times another shard of the same run
+    # had just saved, and two shards of one runner could each be dealt a class, or neither. "Re-run failed jobs" runs a failed shard on the classes it failed on: a job
     # that succeeded is not run again, and its outputs and artifacts stand for every attempt after.
     name: deal
     runs-on: ubuntu-latest

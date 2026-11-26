@@ -11,9 +11,9 @@ public sealed class TestMatrixTests
     /// <summary>
     /// Every shard of a run runs the classes the run's one deal handed it: the deal job, which the matrix needs, deals
     /// every runner's shards before any starts and gives the matrix as its output, and a shard reads its classes from
-    /// that deal, never from a dealing or a listing of its own. Each shard once dealt itself from whichever times
-    /// another shard of the same run had just saved, and two shards of one runner dealt from different numbers ran a
-    /// class twice, or never, while the check went green; a failed shard run again dealt itself anew.
+    /// that deal, never from a dealing or a listing of its own. A shard that deals itself reads whichever times another
+    /// shard of the same run has just saved, so two shards of one runner dealt from different numbers run a class
+    /// twice, or never, while the check goes green, and a failed shard run again deals itself anew.
     /// </summary>
     [Fact]
     public void EveryShard_RunsTheClassesTheRunsOneDealHandedIt()
@@ -89,8 +89,8 @@ public sealed class TestMatrixTests
 
     /// <summary>
     /// No awk of the matrix's is handed a value through <c>-v</c>, which reads the escapes in it: on Windows the runner's
-    /// temporary directory, <c>D:\a\_temp</c>, came through as <c>D:</c>, a bell and <c>_temp</c>, the files under it were
-    /// never read, and every class weighed alike while nothing said so. Each file reaches awk as an operand, which it opens
+    /// temporary directory, <c>D:\a\_temp</c>, comes through as <c>D:</c>, a bell and <c>_temp</c>, the files under it are
+    /// never read, and every class weighs alike while nothing says so. Each file reaches awk as an operand, which it opens
     /// as named and fails on where it cannot, and each number through its environment.
     /// </summary>
     [Fact]
