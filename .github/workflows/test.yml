@@ -196,11 +196,12 @@ jobs:
           times="$RUNNER_TEMP/test-times/times.txt"
           [ -f "$times" ] || : > "$times"
 
-          awk -v weights="$RUNNER_TEMP/test-weights.txt" -v times="$times" '
-            BEGIN {
-              while ((getline line < weights) > 0) { split(line, field, " "); held[field[2]] = field[1] }
-              while ((getline line < times) > 0) { split(line, field, " "); took[field[2]] = field[1] }
-            }
+          # Every file reaches awk as an operand, which it opens as named and fails on where it cannot, and every number
+          # through its environment: never through -v, which reads the escapes in a value - on Windows D:\a\_temp came
+          # through as D:, a bell and _temp, and a file that is not there reads as empty.
+          awk '
+            FILENAME == ARGV[1] { held[$2] = $1; next }
+            FILENAME == ARGV[2] { took[$2] = $1; next }
             { classes[++n] = $0 }
             END {
               for (i = 1; i <= n; i++) if (classes[i] in took) { seconds += took[classes[i]]; counted += held[classes[i]] + 1 }
@@ -209,9 +210,9 @@ jobs:
                 class = classes[i]
                 printf "%.3f %s\n", (class in took ? took[class] : (held[class] + 1) * rate), class
               }
-            }' "$RUNNER_TEMP/test-classes.txt" \
+            }' "$RUNNER_TEMP/test-weights.txt" "$times" "$RUNNER_TEMP/test-classes.txt" \
             | LC_ALL=C sort -k1,1nr -k2,2 \
-            | awk -v n="$SHARDS" -v i="$SHARD" '{
+            | awk 'BEGIN { n = ENVIRON["SHARDS"] + 0; i = ENVIRON["SHARD"] + 0 } {
                 least = 1
                 for (s = 2; s <= n; s++) if (load[s] < load[least]) least = s
                 load[least] += $1
@@ -250,13 +251,12 @@ jobs:
           times="$RUNNER_TEMP/test-times/times.txt"
           [ -f "$report" ] && [ -f "$times" ] || exit 0
 
-          # The report is one line of XML: each test case's class and seconds, summed by class.
-          tr '<' '\n' < "$report" | awk -v times="$times" -v classes="$RUNNER_TEMP/test-classes.txt" -v weights="$RUNNER_TEMP/test-weights.txt" '
-            BEGIN {
-              while ((getline line < classes) > 0) listed[line] = 1
-              while ((getline line < weights) > 0) { split(line, field, " "); held[field[2]] = field[1] }
-              while ((getline line < times) > 0) { split(line, field, " "); took[field[2]] = field[1] }
-            }
+          # The report is one line of XML: each test case's class and seconds, summed by class. The files reach awk as
+          # operands, as the Test step's do, and the report last, on its input.
+          tr '<' '\n' < "$report" | awk '
+            FILENAME == ARGV[1] { listed[$0] = 1; next }
+            FILENAME == ARGV[2] { held[$2] = $1; next }
+            FILENAME == ARGV[3] { took[$2] = $1; next }
             /^testcase / {
               if (!match($0, / time="[^"]*"/)) next
               seconds = substr($0, RSTART + 7, RLENGTH - 8)
@@ -268,7 +268,7 @@ jobs:
             END {
               for (class in fresh) took[class] = held[class] > ran[class] ? fresh[class] * held[class] / ran[class] : fresh[class]
               for (class in took) if (class in listed) printf "%.3f %s\n", took[class], class
-            }' | LC_ALL=C sort -k2,2 > "$times.next"
+            }' "$RUNNER_TEMP/test-classes.txt" "$RUNNER_TEMP/test-weights.txt" "$times" - | LC_ALL=C sort -k2,2 > "$times.next"
 
           mv "$times.next" "$times"
           echo "kept=true" >> "$GITHUB_OUTPUT"
