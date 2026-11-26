@@ -49,8 +49,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
 /// <param name="graphSyncs">
-/// The engine's own syncs of a run's graph, for the view of a reader's own tree once it is brought to the commit its step
-/// names (<see cref="FlowGraphSyncs.ReadiedAsync"/>); null where none is given, and no such view is synced.
+/// The engine's own syncs of a run's graph, for the view of a reader's own tree once it is brought to the main checkout's
+/// HEAD or the commit its step names, or found as the attempt an answer goes on with left it
+/// (<see cref="FlowGraphSyncs.ReadiedAsync"/>); null where none is given, and no such view is synced.
 /// </param>
 /// <param name="tests">Tests the legs, for the measure tool the step's agent is given where the repository declares legs and the agent runs commands.</param>
 /// <param name="children">Records in the step's directory the group of what a measure call's legs start bound, while anything is in it.</param>
@@ -145,13 +146,14 @@ public sealed class ReasonStepRunner(
             }
 
             agentRecord = store.ReadAgent(layout, agent)!;
+        }
 
-            // A tree brought to the commit the step names holds what that commit holds, not what the base does: its own view
-            // is the one the step is served, synced now that the tree stands there - the step's start came before.
-            if (graphSyncs is not null && FlowGraphSyncs.ViewsOwnTree(agentRecord, run.Step))
-            {
-                await graphSyncs.ReadiedAsync(run, agent, cancellationToken).ConfigureAwait(false);
-            }
+        // A reader's tree holds what the commit it was brought to holds, not what the main checkout does - and, for an attempt
+        // an answer goes on with, what that attempt wrote there since: its own view is the one the step is served, synced now
+        // that the tree stands where the step reads it - the step's start came before.
+        if (graphSyncs is not null && FlowGraphSyncs.ViewsOwnTree(agentRecord, run.Step))
+        {
+            await graphSyncs.ReadiedAsync(run, agent, cancellationToken).ConfigureAwait(false);
         }
 
         if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })

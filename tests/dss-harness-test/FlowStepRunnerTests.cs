@@ -341,9 +341,10 @@ public sealed class FlowStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A reason step's start syncs its view through the dispatcher before its runner is asked - its agent's, the base for
-    /// one that reads, none for an agent the run has no record of - where the run has a graph, each a line of the sync log
-    /// naming the step's start; a run with no graph has none made.
+    /// A reason step's start syncs its view through the dispatcher before its runner is asked - its agent's worktree's, none
+    /// for an agent that only reads, whose own tree's view is synced once its runner readied the tree, and none for an agent
+    /// the run has no record of - where the run has a graph, each a line of the sync log naming the step's start; a run with
+    /// no graph has none made.
     /// </summary>
     [Fact]
     public async Task AReasonStepsStart_SyncsItsView_WhereTheRunHasAGraph()
@@ -372,21 +373,26 @@ public sealed class FlowStepRunnerTests : IDisposable
 
         var lines = File.ReadAllLines(kit.Layout.GraphSyncFile).Select(line => JsonNode.Parse(line)!).Select(line => ((string?)line["view"], (string?)line["why"]));
 
-        Assert.Equal([("base", "test"), ("ag", "think:start"), ("base", "think:start")], lines);
+        Assert.Equal([("base", "test"), ("ag", "think:start")], lines);
         Assert.Contains("b.txt", kit.Harness.OrchestrationStore.ReadGraphView(kit.Layout, "ag")!.Files.Keys);
+
+        // The reader's start synced nothing - the base among it, which is not the tree it reads: the person's edit of the
+        // main checkout is in no record yet.
         Assert.Equal(
-            (await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "a.txt"], Token)).StandardOutput.Trim(),
+            (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD:a.txt"], Token)).StandardOutput.Trim(),
             kit.Harness.OrchestrationStore.ReadGraphManifest(kit.Layout)!.Files["a.txt"].Blob);
+        Assert.False(File.Exists(kit.Layout.GraphViewFile("reader")));
     }
 
     /// <summary>
-    /// A reason step whose agent only reads and that names the commit its tree starts at is synced nothing at its start -
-    /// its tree stands as the agent's last step left it until the step's runner brings it to that commit - and its own
-    /// tree's view once the tree is readied there, a line of the sync log naming the agent; a step that names no commit is
-    /// readied no view, and its start syncs the base as every reader's does.
+    /// A reason step whose agent only reads is synced nothing at its start - its tree stands as the agent's last step left
+    /// it until the step's runner brings it to the main checkout's HEAD, or to the commit the step names - and its own
+    /// tree's view once the tree is readied there, a line of the sync log naming the agent, whether its step names a commit
+    /// or not; never the base, which its tree is not. A step of another type that works as the reader is synced the base
+    /// at its start, for no runner of its readies the tree. Red with a reader whose step names no commit served the base.
     /// </summary>
     [Fact]
-    public async Task AReaderWhoseStepNamesACommit_IsSyncedItsOwnTreesView_OnlyOnceItsTreeIsReadied()
+    public async Task AReadersOwnTreesView_IsSyncedOnlyOnceItsTreeIsReadied_WhetherItsStepNamesACommitOrNot()
     {
         var temp = new TempDirectory();
         _made.Add(temp);
@@ -401,23 +407,26 @@ public sealed class FlowStepRunnerTests : IDisposable
         IReadOnlyList<(string?, string?)> Lines()
             => [.. File.ReadAllLines(kit.Layout.GraphSyncFile).Select(line => JsonNode.Parse(line)!).Select(line => ((string?)line["view"], (string?)line["why"]))];
 
+        await syncs.AtStartAsync(plain, Token);
         await syncs.AtStartAsync(atCommit, Token);
 
         Assert.Equal([("base", "test")], Lines());
         Assert.False(File.Exists(kit.Layout.GraphViewFile("reader")));
 
-        await syncs.ReadiedAsync(atCommit, "reader", Token);
-
-        Assert.Equal([("base", "test"), ("reader", "think:start")], Lines());
-        Assert.True(File.Exists(kit.Layout.GraphViewFile("reader")));
-
         await syncs.ReadiedAsync(plain, "reader", Token);
 
         Assert.Equal([("base", "test"), ("reader", "think:start")], Lines());
+        Assert.True(File.Exists(kit.Layout.GraphViewFile("reader")));
+        PathAssert.Same(kit.Record("reader").WorktreePath(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main))!, kit.Harness.OrchestrationStore.ReadGraphView(kit.Layout, "reader")!.Tree);
 
-        await syncs.AtStartAsync(plain, Token);
+        await syncs.ReadiedAsync(atCommit, "reader", Token);
 
-        Assert.Equal([("base", "test"), ("reader", "think:start"), ("base", "think:start")], Lines());
+        Assert.Equal([("base", "test"), ("reader", "think:start"), ("reader", "think:start")], Lines());
+
+        // A closure check working as the reader readies no tree: its start syncs the base.
+        await syncs.AtStartAsync(plain with { Step = new WorkflowStep { Name = "close", Type = "class-closure" }, Instance = "close" }, Token);
+
+        Assert.Equal([("base", "test"), ("reader", "think:start"), ("reader", "think:start"), ("base", "close:start")], Lines());
     }
 
     /// <summary>

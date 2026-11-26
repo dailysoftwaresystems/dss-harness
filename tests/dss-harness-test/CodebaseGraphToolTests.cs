@@ -585,6 +585,32 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
+    /// A body naming declarations of two files whose lines moved since the view was read has the graph check both files
+    /// again in one check - never a check a file, each of which costs a whole view - and serves each declaration as it is
+    /// now, from the view that check left. Red with each moved declaration's file checked again as it is met.
+    /// </summary>
+    [Fact]
+    public async Task ABodyOfDeclarationsInSeveralMovedFiles_ChecksThemAgainInOneCheck()
+    {
+        using var tree = await TreeAsync();
+        var queries = await QueriesAsync(tree);
+        var checks = new List<IReadOnlyList<string>>();
+        var tool = Tool(tree, queries, checks: checks);
+        var diameter = ((GraphResolve.Found)queries.Resolve("Demo.Circle.Diameter")).Card;
+
+        tree.Write("src/Geometry.cs", "// moved\n// down\n" + File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs")));
+        tree.Write("src/Shapes.cs", "// moved\n" + File.ReadAllText(Path.Combine(tree.Tree, "src", "Shapes.cs")));
+
+        var served = (await AskAsync(tool, """{"op":"body","symbols":["Twice","Diameter"]}""")).Text.Split('\n');
+
+        Assert.Equal([["src/Geometry.cs", "src/Shapes.cs"]], checks);
+        Assert.Equal("8257a8 Demo.Geometry.Twice src/Geometry.cs:18-21 #aac0401c", served[0]);
+        Assert.Equal("20\t        return Total([shape, shape]);", served[3]);
+        Assert.Equal($"{diameter.Handle} Demo.Circle.Diameter src/Shapes.cs:18-21 #{diameter.Hash}", served[5]);
+        Assert.Equal("20\t        return radius * 2;", served[8]);
+    }
+
+    /// <summary>
     /// <c>edit</c> replaces a node's lines where the hash given is its hash now, in one write that keeps the file's
     /// encoding, its line endings and whether it ends with a newline, extracts it again and answers the new card.
     /// </summary>
@@ -1965,8 +1991,12 @@ public sealed partial class CodebaseGraphToolTests
     private static string LongClass(string name, int lines)
         => $"namespace Demo;\n\npublic static class {name}\n{{\n" + string.Concat(Enumerable.Range(0, lines).Select(at => $"    // line {at}\n")) + "}\n";
 
-    /// <summary>The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing a file again where <paramref name="sync"/>.</summary>
-    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null, Func<GraphTextPages?>? pack = null, Func<GraphTextPages?>? changes = null, Func<int, GraphMapPage>? map = null)
+    /// <summary>
+    /// The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing files again
+    /// where <paramref name="sync"/> - each check it makes, by the files it names, added to <paramref name="checks"/> where
+    /// one is given.
+    /// </summary>
+    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null, Func<GraphTextPages?>? pack = null, Func<GraphTextPages?>? changes = null, Func<int, GraphMapPage>? map = null, List<IReadOnlyList<string>>? checks = null)
     {
         var never = CodebaseGraphService.NeverListed(tree.WorktreesRoot);
 
@@ -1977,7 +2007,12 @@ public sealed partial class CodebaseGraphToolTests
             ConfinedPaths.Within(tree.Harness.FileSystem, tree.Harness.Platform, queries.Tree),
             path =>!PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),
             mayWrite ?? (_ => AgentPolicyAnswer.Allow),
-            sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
+            sync ? async (paths, _) =>
+                {
+                    checks?.Add([.. paths]);
+                    return new CodebaseGraphQueries((await tree.CheckAsync(null, null, [.. paths])).Read);
+                }
+                : null,
             near is null ? null : () => near,
             pages,
             mask,

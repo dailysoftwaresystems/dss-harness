@@ -422,7 +422,12 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
             return new WorkingSetNode(touch.Id, uses, touch.Times, card.Handle, card.Path, card.Start, card.End, card.Hash);
         }
 
-        /// <summary>The file the view holds that a call's path names - Claude Code's <c>file_path</c>, the runtime's <c>path</c>, relative to the tree or under it - or null where it names none.</summary>
+        /// <summary>
+        /// The file the view holds that a call's path names - Claude Code's <c>file_path</c>, the runtime's <c>path</c>, relative
+        /// to the tree or under it - by the one rule a file is matched to a view (<see cref="CodebaseGraphQueries.PathOf"/>): the
+        /// view is of the tree the step read, so a path of another tree - the main checkout's, read by a reader beside its own -
+        /// names none.
+        /// </summary>
         private string? Held(JsonObject input, string tool)
         {
             if (Text(input, ClaudeCodeTools.Find(tool)?.Tool.Subject ?? "path") is not { } written
@@ -435,7 +440,7 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
 
             try
             {
-                relative = AgentPolicy.Beneath(view.Tree, Path.Combine(view.Tree, written), pathComparison);
+                relative = view.PathOf(Path.Combine(view.Tree, written), pathComparison);
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
             {

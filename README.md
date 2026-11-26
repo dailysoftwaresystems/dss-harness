@@ -1705,7 +1705,8 @@ hit `search_files` finds inside a declaration of a file the graph parsed is give
 declaration's line - its handle, kind, signature and `path:start-end #hash`, the innermost that holds
 the hit - with its hits and their context indented beneath it, a page of the answer that begins among
 them beginning with the declaration's line again, marked `… goes on` and counted as no result, a range
-`view_file` gives is headed by the declarations its lines meet, each checked against the file as it stands, and where the step's
+`view_file` gives is headed by the declarations its lines meet - a head that passes a page with the range's first line given with
+it a page at a time by `read_result`, never over a page - each checked against the file as it stands, and where the step's
 reads are narrowed (`graphReads: narrow`, the default) a whole `view_file` of a file the graph parsed
 over 200 lines is answered with the file's outline in its place, with how to read its lines - no
 wasted turn (`help codebase-graph`). A replace or an insert needs
@@ -2366,8 +2367,8 @@ then - or to the commit the step's `commit` names, a template filled as the step
 commit the run began on, for the shipped flow's triage of a pre-existing issue), whose value names a commit of the
 repository or fails the step with nothing changed, and which a step that writes or works in an agent's worktree is
 refused - whatever it wrote there before discarded, so the step reads exactly what that commit holds, starts in it, and
-may write it and its work directory, never folded, and is served the codebase graph's view of that tree where it names
-a commit (the base's where it names none); an answer that goes on with an attempt finds the tree as
+may write it and its work directory, never folded, and is served the codebase graph's view of that tree; an answer that
+goes on with an attempt finds the tree as
 the attempt left it; no two steps work in one agent's tree at once, for a reason step holds write on the tree of the
 agent it works in whatever its access - of two that go on with one step's work, two visits of one that goes on with
 its own among them, the second starts once the first has ended: the step's model resolved with its agent definition

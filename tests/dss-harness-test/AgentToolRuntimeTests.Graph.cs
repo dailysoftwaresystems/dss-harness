@@ -77,6 +77,46 @@ public sealed partial class AgentToolRuntimeTests
     }
 
     /// <summary>
+    /// A search whose hits fall in several files whose declarations moved since the view was read - edits no sync followed -
+    /// has the graph check those files again in one check, never one a file, each of which would cost a whole view, and
+    /// still gives every hit under its declaration as the files stand now, file by file in the listing's order, a file that
+    /// did not move among them. Red with each moved file checked again at its first hit.
+    /// </summary>
+    [Fact]
+    public async Task ASearchMeetingSeveralMovedFiles_ChecksThemAgainInOneCheck_AndGivesEachHitAsTheFilesStandNow()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        var checks = new List<IReadOnlyList<string>>();
+        var tool = CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree), checks: checks);
+        var graphed = Narrowing(tree, tool, []);
+
+        foreach (var file in new[] { "Geometry.cs", "Shapes.cs" })
+        {
+            var full = Path.Combine(tree.Tree, "src", file);
+            File.WriteAllText(full, "// formatted\n" + File.ReadAllText(full));
+        }
+
+        var found = await Call(graphed, AgentTools.SearchFiles, ("pattern", "return"), ("path", "src"));
+
+        string Hit(string file, int line) => $"src/{file}:{line.ToString(CultureInfo.InvariantCulture)}: {File.ReadAllLines(Path.Combine(tree.Tree, "src", file))[line - 1]}";
+        string Head(string qualified) => GraphLines.Of(Declared(tool.Queries, qualified));
+
+        Assert.Equal([["src/Geometry.cs", "src/Shapes.cs"]], checks);
+        Assert.True(found.Ok, found.Text);
+        Assert.Equal(
+            string.Join('\n', [
+                Head("Demo.Geometry.Total"), "  " + Hit("Geometry.cs", 14),
+                Head("Demo.Geometry.Twice"), "  " + Hit("Geometry.cs", 19),
+                Head("Demo.Circle.Area"), "  " + Hit("Shapes.cs", 15),
+                Head("Demo.Circle.Diameter"), "  " + Hit("Shapes.cs", 20),
+                Head("Demo.Generated.Square.Area"), "  " + Hit("Shapes.g.cs", 8)]),
+            found.Text);
+
+        // The heads are the lines the files hold now: each declaration one line down.
+        Assert.Equal((18, 21), (Declared(tool.Queries, "Demo.Circle.Diameter").Start, Declared(tool.Queries, "Demo.Circle.Diameter").End));
+    }
+
+    /// <summary>
     /// In a step that has a graph, a range of a file the graph parsed is headed by the declarations its lines meet - those
     /// that hold them among them, each named as the graph names a node - before the lines a step with no graph is given;
     /// a range that meets none, and a range of a file the graph does not parse, is given as it is.
@@ -115,6 +155,38 @@ public sealed partial class AgentToolRuntimeTests
     }
 
     /// <summary>
+    /// A read is matched to the graph's view by the tree that view is of, never by the tree the run works in: a run working
+    /// in another tree - a copy of the view's, as a reader's own tree is of the main checkout - is given no declarations for
+    /// its own copy of a file the view holds, whose lines the view says nothing of, and is given them for the view's tree's
+    /// file it reads beside it. Red with a read matched to the tree the run works in.
+    /// </summary>
+    [Fact]
+    public async Task ARead_IsMatchedToTheGraphsView_ByTheTreeTheViewIsOf_NeverTheTreeTheRunWorksIn()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        using var other = new TempDirectory();
+        var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
+        var tool = CodebaseGraphToolTests.Tool(tree, queries);
+        var geometry = Path.Combine(tree.Tree, "src", "Geometry.cs");
+        other.WriteFile(Path.Combine("src", "Geometry.cs"), File.ReadAllText(geometry));
+        var graphed = OverTree(tree, new AgentGraphSupport(tool, _ => { }, Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true), workingIn: other.Path);
+
+        var own = await Call(graphed, AgentTools.ViewFile, ("path", "src/Geometry.cs"), ("start_line", 15), ("end_line", 19));
+        var beside = await Call(graphed, AgentTools.ViewFile, ("path", geometry), ("start_line", 15), ("end_line", 19));
+
+        Assert.Equal(("src/Geometry.cs", (string?)null), (tool.PathOf(geometry), tool.PathOf(other.Combine("src", "Geometry.cs"))));
+        Assert.True(own.Ok, own.Text);
+        Assert.StartsWith("15\t\n16\t    public static double Twice(IShape shape)\n", own.Text, StringComparison.Ordinal);
+        Assert.Equal(
+            string.Join('\n', [
+                AgentToolRuntime.RangeDeclarations,
+                "  " + GraphLines.Of(Declared(queries, "Demo.Geometry")),
+                "  " + GraphLines.Of(Declared(queries, "Demo.Geometry.Twice")),
+                own.Text]),
+            beside.Text);
+    }
+
+    /// <summary>
     /// A range whose head of declarations would take the page past its room gives its lines only as far as the head and
     /// they fit, the first always given, and says where to ask again - its head naming exactly the declarations the lines
     /// given meet - so no answer passes a page however many declarations a range meets.
@@ -141,6 +213,63 @@ public sealed partial class AgentToolRuntimeTests
         Assert.InRange(last, 2, 804);
         Assert.InRange(headed.Length, 1, PageRoom.ModelAnswer);
         Assert.Equal(string.Join('\n', [AgentToolRuntime.RangeDeclarations, .. met.Select(card => "  " + GraphLines.Of(card)), given, rest]), headed);
+    }
+
+    /// <summary>
+    /// A range of one line that 800 declarations begin on - a file written on one line, as a bundled one is - has a head
+    /// that alone passes a page: it is charged to the room on the first line too, and never sent over it - the head and the
+    /// line are the call's answer, kept whole and given a page at a time by read_result, each page within a page's room,
+    /// a page that begins among the declarations giving the head's line again, said as going on - and the pages together
+    /// hold the head's line, every declaration once and in order, and the line. Red with the first line given whatever its
+    /// head, which sends the whole as one page several times a page's room.
+    /// </summary>
+    [Fact]
+    public async Task ARangeWhoseHeadAlonePassesAPage_IsPagedByReadResult_NeverSentOverTheRoom()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Bundle.cs", OneLineMembers(800)));
+        var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
+        var graphed = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, queries), []);
+        var plain = OverTree(tree, graph: null);
+        var met = queries.OutlineFile("src/Bundle.cs")!.Where(card => CodeNodeKinds.Declarations.Contains(card.Kind)).ToList();
+        var line = (await Call(plain, AgentTools.ViewFile, ("path", "src/Bundle.cs"), ("start_line", 1), ("end_line", 1))).Text;
+        List<string> expected = [AgentToolRuntime.RangeDeclarations, .. met.Select(card => "  " + GraphLines.Of(card)), line];
+
+        var found = await Call(graphed, AgentTools.ViewFile, "bundle", ("path", "src/Bundle.cs"), ("start_line", 1), ("end_line", 1));
+
+        // Every declaration begins on the line, and their head alone is more than a page.
+        Assert.Equal(801, met.Count);
+        Assert.All(met, card => Assert.Equal(1, card.Start));
+        Assert.InRange(met.Sum(card => GraphLines.Of(card).Length + 3), PageRoom.ModelAnswer + 1, int.MaxValue);
+        Assert.True(found.Ok, found.Text);
+        Assert.Equal(AgentCallRecords.ResultFile(_step, "bundle"), found.File);
+        Assert.Equal(string.Join('\n', expected), File.ReadAllText(found.File!));
+
+        var first = found.Text.Split('\n');
+        var pages = int.Parse(first[0].Split(' ')[3], CultureInfo.InvariantCulture);
+        List<string> given = [.. first.Skip(1)];
+
+        Assert.Equal($"page 1 of {pages.ToString(CultureInfo.InvariantCulture)} · {expected.Count.ToString(CultureInfo.InvariantCulture)} results · ask read_result with id: 'bundle', page: 2 for the next · the whole is '{found.File}'", first[0]);
+        Assert.InRange(pages, 2, int.MaxValue);
+        Assert.InRange(found.Text.Length, 1, PageRoom.ModelAnswer);
+
+        for (var page = 2; page <= pages; page++)
+        {
+            var next = (await Call(graphed, AgentTools.ReadResult, $"bundle_{page.ToString(CultureInfo.InvariantCulture)}", ("id", "bundle"), ("page", page))).Text;
+            var lines = next.Split('\n').Skip(1).ToList();
+
+            Assert.InRange(next.Length, 1, PageRoom.ModelAnswer);
+
+            // A page that begins among the declarations begins with the head's line again, said as going on.
+            if (expected[given.Count].StartsWith("  ", StringComparison.Ordinal))
+            {
+                Assert.Equal($"{AgentToolRuntime.RangeDeclarations} … goes on", lines[0]);
+                lines.RemoveAt(0);
+            }
+
+            given.AddRange(lines);
+        }
+
+        Assert.Equal(expected, given);
     }
 
     /// <summary>
@@ -332,6 +461,10 @@ public sealed partial class AgentToolRuntimeTests
             $"A range of `view_file` (`{nameof(AgentToolRuntime)}.RangeAsync`) is headed (`{nameof(AgentToolRuntime)}.{nameof(AgentToolRuntime.RangeDeclarations)}`) by the declarations the lines it gives meet (`{nameof(GraphFileDeclarations)}.{nameof(GraphFileDeclarations.Meeting)}`)",
             architecture,
             StringComparison.Ordinal);
+        Assert.Contains(
+            $"declarations at its first hit, as its lines confirm them alone (`{nameof(CodebaseGraphTool)}.{nameof(CodebaseGraphTool.ConfirmedDeclarationsAsync)}`) - hits come file by file, each file's in order - and where a file's moved, writes nothing more and only finds the rest: every moved file of the call is checked again in one check (`{nameof(CodebaseGraphTool)}.{nameof(CodebaseGraphTool.ReadAgainAsync)}`)",
+            architecture,
+            StringComparison.Ordinal);
         Assert.Contains($"`{nameof(AgentTools)}.{nameof(AgentTools.InAGraphStep)}` says so in the two tools' own descriptions where the step's graph was built.", architecture, StringComparison.Ordinal);
         Assert.Contains(
             $"over `{nameof(CodebaseGraphTool)}.{nameof(CodebaseGraphTool.NarrowLines)}` lines with the file's outline in its place (`{nameof(CodebaseGraphTool)}.{nameof(CodebaseGraphTool.WholeReadAsync)}`)",
@@ -352,6 +485,12 @@ public sealed partial class AgentToolRuntimeTests
         => "namespace Demo;\n\npublic static class Long\n{\n    public static int Sum()\n    {\n        var total = 0;\n"
             + string.Concat(Enumerable.Range(1, count).Select(at => $"        total += 1; // tally {at.ToString("D4", CultureInfo.InvariantCulture)}\n"))
             + "        return total;\n    }\n}\n";
+
+    /// <summary>A C# class of <paramref name="count"/> members written whole on its file's one line, as a bundled file is: every declaration begins on line 1.</summary>
+    private static string OneLineMembers(int count)
+        => "namespace Demo; public static class Bundle { "
+            + string.Concat(Enumerable.Range(0, count).Select(at => $"public static int M{at.ToString("D3", CultureInfo.InvariantCulture)}()=>{at.ToString(CultureInfo.InvariantCulture)}; "))
+            + "}\n";
 
     /// <summary>
     /// A C# class of <paramref name="count"/> one-line members, each its own line: a file of many declarations,

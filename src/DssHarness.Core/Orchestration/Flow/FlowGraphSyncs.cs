@@ -10,8 +10,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// The syncs of a run's codebase graph the engine makes of its own, each under the claim its step already holds and none a
 /// step: the view of a step that reads it where it starts (<see cref="FlowStepRunners.ReadsViewAtStart"/>) - the agent's
-/// it works in, the base for one that reads - and the view of a reader's own tree once its runner brought it to the commit
-/// its step names (<see cref="ReadiedAsync"/>); the base by the paths the run's folds changed that the graph has not taken
+/// worktree it works in - and the view of the own tree of an agent that only reads once its step's runner brought that
+/// tree to the main checkout's HEAD or to the commit the step names, or found it as the attempt an answer goes on with left
+/// it (<see cref="ReadiedAsync"/>); the base by the paths the run's folds changed that the graph has not taken
 /// yet, after each fold and deletion and before its next attempt does anything; the target's view after a refresh or a
 /// rebase, where it has one; the view of a leg step's tree checked by the files its red legs' digests name, which their
 /// places' declarations are read from (<see cref="DeclarationsAsync"/>); and the view of each agent that is no longer live
@@ -51,9 +52,10 @@ public sealed class FlowGraphSyncs(
 
     /// <summary>
     /// The commit a step's tree's work started from, which change-first compares the tree with: an agent's worktree's base
-    /// as its record says it - where its worktree was made, or where its last refresh or rebase brought it - and for the
-    /// main checkout, which an agent that reads and a step with no agent work in, the commit the run started from. Null
-    /// where neither is recorded: a worktree not made yet, a run started beside the tree's history.
+    /// as its record says it - where its worktree was made, or where its last refresh or rebase brought it - and for the tree
+    /// of an agent that only reads, which holds what the main checkout committed or the commit its step names, and the main
+    /// checkout, which a step with no agent works in, the commit the run started from. Null where neither is recorded: a
+    /// worktree not made yet, a run started beside the tree's history.
     /// </summary>
     /// <param name="agent">The record of the agent the step works in; null for a step with none.</param>
     /// <param name="startCommit">The commit the run started from, as its records keep it; null where they name none.</param>
@@ -91,9 +93,10 @@ public sealed class FlowGraphSyncs(
 
     /// <summary>
     /// The worktree whose view <paramref name="agent"/>'s steps are served and synced, as <paramref name="step"/> asks it:
-    /// its own, where its record names one; null for an agent that only reads - whose view is the base, its own tree being
-    /// the main checkout's HEAD as each of its steps starts and never synced as a view - but where the step names the commit
-    /// its tree starts at (<see cref="ViewsOwnTree"/>), and null for one whose worktree its record does not place.
+    /// its own, where its record names one - the tree of an agent that only reads as well, for the step that readies it and
+    /// reads it (<see cref="ViewsOwnTree"/>), so every agent with a tree of its own is served the view of the tree it reads;
+    /// null for an agent that only reads on any other step, whose tree stands as its last step left it - the base is its
+    /// view there - and for one whose worktree its record does not place.
     /// </summary>
     /// <param name="agent">The agent's name.</param>
     /// <param name="record">The agent's record.</param>
@@ -109,10 +112,13 @@ public sealed class FlowGraphSyncs(
 
     /// <summary>
     /// Whether <paramref name="step"/>, working as the agent <paramref name="record"/> is of, is served the view of that agent's
-    /// own tree though the agent only reads: a reason step that names the commit its tree starts at (<c>commit</c>), whose
-    /// tree then holds what that commit holds rather than what the base does - so the graph it is served, the answers of its
-    /// reads among them, is of the tree it reads. Such a view is synced once the step's runner brought the tree to the commit
-    /// (<see cref="ReadiedAsync"/>), never at the step's start before it.
+    /// own tree though the agent only reads: a reason step, whose runner brings that tree to the main checkout's HEAD - or to
+    /// the commit the step names (<c>commit</c>) - before anything of the step reads it, so the tree holds what that commit
+    /// holds and never the main checkout's uncommitted changes, nor a fold that landed since; the graph it is served - the
+    /// declarations, outlines and narrowing of its reads among it, and the working set its reads are placed by - is of that
+    /// tree, never of the main checkout beside it. Such a view is synced once the step's runner readied the tree - or found
+    /// it as the attempt an answer goes on with left it, what that attempt wrote there among it (<see cref="ReadiedAsync"/>) -
+    /// never at the step's start before it, when the tree may stand as the agent's last step left it.
     /// </summary>
     /// <param name="record">The record of the agent the step works as.</param>
     /// <param name="step">The step, its templates filled.</param>
@@ -121,16 +127,16 @@ public sealed class FlowGraphSyncs(
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(step);
 
-        return record.Reads && step is { Type: "reason", Commit: not null };
+        return record.Reads && step is { Type: "reason" };
     }
 
     /// <summary>
     /// A step that reads the graph's view starts - a reason step, or a class-closure check
-    /// (<see cref="FlowStepRunners.ReadsViewAtStart"/>): its view is synced by a whole listing - the agent's it works in,
-    /// the base for one that reads - where the run has a graph, so a person's change of the main tree and the agent's own
-    /// work since its last step are in what it is served, or what it judges. A step that views its own tree though its
-    /// agent only reads (<see cref="ViewsOwnTree"/>) is synced by <see cref="ReadiedAsync"/> instead, once its tree stands
-    /// at the commit it names: here it would be synced as the agent's last step left it.
+    /// (<see cref="FlowStepRunners.ReadsViewAtStart"/>): its view is synced by a whole listing - the agent's worktree it
+    /// works in, the base for a step of no agent's - where the run has a graph, so the agent's own work since its last step
+    /// is in what it is served, or what it judges. A step whose agent only reads views its own tree
+    /// (<see cref="ViewsOwnTree"/>) and is synced by <see cref="ReadiedAsync"/> instead, once its tree stands where the step
+    /// reads it: here it may still stand as the agent's last step left it.
     /// </summary>
     /// <param name="run">The step's run.</param>
     /// <param name="cancellationToken">Stops the sync, and the step with it.</param>
@@ -162,10 +168,13 @@ public sealed class FlowGraphSyncs(
     }
 
     /// <summary>
-    /// The tree of <paramref name="agent"/>, an agent that only reads, was brought to the commit <paramref name="run"/>'s step
-    /// names (<see cref="ViewsOwnTree"/>): that tree's own view is synced by a whole listing, held against the base as every
-    /// agent's view is, where the run has a graph - so what the step is served is the tree it reads, as that commit holds
-    /// it. Nothing where the step views no tree of its own.
+    /// The tree of <paramref name="agent"/>, an agent that only reads, stands where <paramref name="run"/>'s step reads it
+    /// (<see cref="ViewsOwnTree"/>) - brought to the main checkout's HEAD or to the commit the step names, or as the attempt
+    /// an answer goes on with left it: that tree's own view is synced by a whole
+    /// listing, held against the base as every agent's view is - each file whose extract the base or an earlier sync of the
+    /// view made read again by none, and the view linked from the base's link, so the sync costs what the tree holds
+    /// otherwise than the base - where the run has a graph: what the step is served is the tree it reads, as it stands.
+    /// Nothing where the step views no tree of its own.
     /// </summary>
     /// <param name="run">The step's run, its templates filled.</param>
     /// <param name="agent">The agent it works as.</param>
@@ -405,9 +414,9 @@ public sealed class FlowGraphSyncs(
     }
 
     /// <summary>
-    /// One sync of the view of <paramref name="agent"/>'s worktree - the base where it names none, or its agent reads only,
-    /// but for a step that views the reader's own tree (<see cref="ViewsOwnTree"/>) - where the run has a graph and the agent
-    /// is live, after the views of agents no longer live are dropped; one that fails is said, and never fails the step.
+    /// One sync of the view of <paramref name="agent"/>'s worktree - the base where it names none, or its agent reads only
+    /// on a step that does not view the reader's own tree (<see cref="ViewsOwnTree"/>) - where the run has a graph and the
+    /// agent is live, after the views of agents no longer live are dropped; one that fails is said, and never fails the step.
     /// </summary>
     /// <param name="run">The step's run.</param>
     /// <param name="place">The run's place.</param>
@@ -418,8 +427,9 @@ public sealed class FlowGraphSyncs(
     /// <param name="cancellationToken">Stops the sync.</param>
     /// <param name="again">What a sync that failed is taken up by, as its warning says.</param>
     /// <param name="readied">
-    /// Whether the reader's tree was just brought to the commit its step names (<see cref="ReadiedAsync"/>): that tree's own
-    /// view is synced then, and only then - at any other moment it stands as the agent's last step left it.
+    /// Whether the reader's tree was just found standing where its step reads it - brought to the main checkout's HEAD or
+    /// the commit its step names, or as the attempt an answer goes on with left it (<see cref="ReadiedAsync"/>): that tree's
+    /// own view is synced then, and only then - before it, the tree may stand as the agent's last step left it.
     /// </param>
     /// <returns>
     /// Whether the sync was made and went through: a sync by paths of a graph whose manifest does not read takes nothing,
@@ -454,9 +464,8 @@ public sealed class FlowGraphSyncs(
         {
             if (agent is not null)
             {
-                // An agent that only reads is served the base, its tree never synced as a view of its own - but for a step
-                // that names the commit its tree starts at, whose own tree's view is synced once its runner brought the tree
-                // there, and only then.
+                // An agent that only reads is served its own tree's view on the step that readies it, synced once its
+                // runner found the tree where the step reads it, and only then; on any other step its view is the base.
                 switch (store.ReadAgent(layout, agent))
                 {
                     case { State: AgentStates.Live } record when ViewsOwnTree(record, run.Step) != readied:

@@ -6000,12 +6000,17 @@ at all fails the sync. Extraction runs on one of every
 An agent's view is its worktree listed the same way and held against the base - the main checkout's manifest, synced
 first where the run has none - as the overlay of each file the worktree holds otherwise and each of the base's it does
 not hold, the digest of the base it stands on with it: a file whose extract the base or an earlier sync of the view made
-is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads,
-which is served the base: its own tree, the main checkout's HEAD as each of its steps starts, is never synced as a view
-(`FlowGraphSyncs.WorktreeOf`) - but by a step that names the commit its tree starts at (`commit`), whose tree then
-holds that commit and not the base: that tree's own view is the one it is served (`FlowGraphSyncs.ViewsOwnTree`),
-synced by a whole listing once the step's runner brought the tree there (`FlowGraphSyncs.ReadiedAsync`) and never at
-the step's start before it, when the tree stands as the agent's last step left it. Each tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
+is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads.
+Every agent with a tree of its own is served the view of the tree it reads (`FlowGraphSyncs.WorktreeOf`): an agent that
+only reads as well, whose tree holds what the main checkout committed - or the commit its step names (`commit`) - and not
+the main checkout's uncommitted changes nor a fold landed since, so its reason step is served its own tree's view
+(`FlowGraphSyncs.ViewsOwnTree`), synced by a whole listing once the step's runner brought the tree there - or, for an
+attempt an answer goes on with (`ReasonStepRunner.GoingOnOf`), found it as that attempt left it, what it wrote there among
+it (`FlowGraphSyncs.ReadiedAsync`) - held against the base, so it reads only what differs - and never at the step's start
+before it, when the tree may stand as the agent's last step left it. What its reads are told of a file, their narrowing and
+the working set its reads are placed by are then of the tree it reads: one rule matches a file to the view, relative to
+the tree the view is of (`CodebaseGraphQueries.PathOf`, which `CodebaseGraphTool.PathOf` and `FullOf` and the working
+set read), so a file of the main checkout a reader reads beside its tree is no file of its view. Each tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
 as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
 (`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it
 again under its gate with no file read, from the earlier manifest it stood on, until a newer sync of the base holds them
@@ -6039,7 +6044,8 @@ where nothing changed; a process begun again links its first sync whole, from th
 The engine syncs on its own, through `FlowGraphSyncs`, only where the run has a graph and under the claim its step already
 holds: `FlowStepRunners` syncs the view of a step that reads it where it starts (`FlowStepRunners.ReadsViewAtStart`: a
 reason step, and a `class-closure` check, which reads what the worktree still declares) - its agent's, the one the step it
-goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), the base for one that reads; `fold` and
+goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), and a reader's own tree's once
+its runner readied the tree or found it as the attempt an answer goes on with left it, never at its start; `fold` and
 `delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
 (`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
 fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one
@@ -6249,7 +6255,10 @@ answer ends with (`AgentSearch.LeftOut`), through the read rule the tool is hand
 node, edge and hit of a file it refuses; a path or a `path:line`
 is searched for by no word. `body` reads a node's lines fresh - a type's members' bodies left out unless `full`, each
 member's signature line kept - and where its hash moved since the view was read, has the file checked again before
-serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`); `edit`,
+serving it, where the tool may sync, the node looked for again in the same file (`CodebaseGraphQueries.Part`) - every
+moved file of the call in one check, never a check a file (`CodebaseGraphTool.ExtractedAgainAsync`, the one owner of a
+check the tool makes again, which hands the check every file it names), so a call pays for the files it checks and one
+view however many it meets; `edit`,
 one at a time, writes a node's lines through `EditedText.ReplaceLines` only where the hash given is its hash now
 (optimistic concurrency) - a node spread over files in the part that hash names - after the write rule the tool is
 handed, keeping the file's encoding, endings and final newline, and answers the card the file's new extract gives. Every
@@ -6392,7 +6401,11 @@ as a body's is and each declaration's hash checked against the lines it spans no
 moved, where the tool may check it, the tool answering from the view that leaves - and a declaration whose lines the file
 still does not hold as the graph read them (an extraction that could not be made) left out and counted, so no span or hash
 given stands for lines the file does not hold. `search_files` (`AgentToolRuntime.SearchAsync`) reads a file's
-declarations at its first hit - hits come file by file, each file's in order - and writes each hit inside one under that
+declarations at its first hit, as its lines confirm them alone (`CodebaseGraphTool.ConfirmedDeclarationsAsync`) - hits
+come file by file, each file's in order - and where a file's moved, writes nothing more and only finds the rest: every
+moved file of the call is checked again in one check (`CodebaseGraphTool.ReadAgainAsync`), the answer begun again and the
+files that held a hit searched again, so a search pays for the files that moved and one view, never a view a file, and
+its hits still stand under the declarations as the files stand now, in the listing's order. It writes each hit inside one under that
 declaration's line, as `GraphLines.Of` names a node, the innermost a type, a member or a section that holds the hit's line
 (`GraphFileDeclarations.Holding`, by `CodebaseGraphQueries.AtLine`; a namespace or a project heads no hit), its hits and
 their context lines indented beneath it, the separator between two of its hits indented with them and the line said again
@@ -6402,9 +6415,12 @@ declaration's line a block's head (`ResultLines.HeadAsync`), each line beneath i
 every answer is, by `read_result`, each line whole, a page that begins among a declaration's lines beginning with its line
 again (`TextBlocks`). A range of `view_file` (`AgentToolRuntime.RangeAsync`) is headed
 (`AgentToolRuntime.RangeDeclarations`) by the declarations the lines it gives meet (`GraphFileDeclarations.Meeting`), each
-joining the head once a line given reaches its first line, the head held with the lines within a page's room
-(`KeptResults.Room`) - the lines stopping, the first always given, where the two would pass it, the rest asked for by its
-next start as any is. `AgentTools.InAGraphStep` says so in the two tools' own descriptions where the step's graph was
+joining the head once a line given reaches its first line, the head charged with the lines to a page's room
+(`KeptResults.Room`), the first line's among them - the lines stopping where the two would pass it, the rest asked for by
+its next start as any is, and a head that passes the room with the first line written with that line as the call's
+answer a line at a time, the head a block (`AgentToolRuntime.PagedRangeAsync`), kept and given a page at a time by
+`read_result` as every answer longer than a page is, so no range is sent over a page however many declarations begin on
+its first line. `AgentTools.InAGraphStep` says so in the two tools' own descriptions where the step's graph was
 built. Its reads narrowed (`graphReads: narrow`, the default) answer a whole `view_file` of a file the view holds as parsed
 over `CodebaseGraphTool.NarrowLines` lines with the file's outline in its place (`CodebaseGraphTool.WholeReadAsync`): a line
 saying how to read its lines - a range, a page, a body, or `wholeFile` with why - then the outline as `outline` with its
@@ -6442,8 +6458,9 @@ gone). A reason step that has a graph writes both files as it ends (`FlowStepGra
 the view at the step's end, its `graph.jsonl` and its stored stream) and its pack is given the seeds; its `graph.jsonl`
 holds a line for each launch's first message, written as the message is and before any line of that launch's calls
 (`GraphPromptLine`: the pushed map's tokens and the pushed pack's seeds, nodes, tokens and what was left out, or the tokens of the
-changes a conversation gone on with was told in their place, or why no pack was given - `FlowStepGraph.NoPackPushed` for
-a step at `tools` that pushes none), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
+changes a conversation gone on with was told in their place, or why no pack was given, by one rule (`FlowStepGraph.NoPackOf`) -
+`FlowStepGraph.NoPackHeld` where the pack made held nothing, said first, since such a step is offered no `pack` to ask,
+and `FlowStepGraph.NoPackPushed` for a step at `tools` that pushes none), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
 one for each escape of its narrowing and each whole read the narrowing answered with the file's outline
 (`GraphEscapeLine`, `GraphOutlinedLine`: the file, its lines, what reading it whole would have cost and what the outline
 cost) - a line an earlier build wrote of a read the narrowing refused (`GraphDeniedLine`) still read, and counted in no

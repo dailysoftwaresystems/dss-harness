@@ -125,6 +125,11 @@ public sealed class ReasonStepRunnerTests
         return (kit, runner);
     }
 
+    /// <summary>
+    /// The runner over the kit, its agents <paramref name="agents"/> - and, where it is given the graph service, the engine's
+    /// own syncs of the kit's graph unless a test gives its own, as the engine's registrations give them, so a step whose
+    /// agent only reads is synced the view of its own tree once that tree is readied, as the engine syncs it.
+    /// </summary>
     private static ReasonStepRunner Runner(OrchestrationKit kit, IAgentRunner agents, ClaudeCodeUpdateService? updates = null, DssHarness.Core.Agents.Isolation.IAgentIsolation? isolation = null, DssHarness.Core.Codebase.ICodebaseGraphService? graphService = null, MeasuredTests? tests = null, FlowGraphSyncs? graphSyncs = null)
         => new(
             kit.Harness.ContextLoader,
@@ -143,7 +148,7 @@ public sealed class ReasonStepRunnerTests
             kit.Harness.GitClient,
             updates,
             graphService,
-            graphSyncs: graphSyncs);
+            graphSyncs: graphSyncs ?? (graphService is null ? null : kit.Harness.GraphSyncs));
 
     /// <summary>
     /// The kit's configuration with one leg declared, of the configuration <c>debug</c>: what a step's measure tool is
@@ -2237,7 +2242,7 @@ public sealed class ReasonStepRunnerTests
         var mapTokens = DssHarness.Core.Codebase.EstimatedTokens.Of(map.Text);
         var packTokens = DssHarness.Core.Codebase.EstimatedTokens.Of(pack.Text);
 
-        Assert.Equal(("tools", "base", WorkflowStep.GraphFromTask), (graph["mode"]!.GetValue<string>(), graph["view"]!.GetValue<string>(), graph["from"]!.GetValue<string>()));
+        Assert.Equal(("tools", "a9", WorkflowStep.GraphFromTask), (graph["mode"]!.GetValue<string>(), graph["view"]!.GetValue<string>(), graph["from"]!.GetValue<string>()));
         Assert.Equal(0, graph["mapTokens"]!.GetValue<int>());
         Assert.Equal("""{"seeds":0,"nodes":0,"tokens":0,"used":0}""", graph["pack"]!.ToJsonString());
         Assert.Equal($$$"""{"map":{"pages":1,"tokens":{{{mapTokens}}}},"pack":{"pages":1,"tokens":{{{packTokens}}},"nodes":{{{pack.Facts.Listed.Count}}},"used":0}}""", graph["pulled"]!.ToJsonString());
@@ -2399,6 +2404,56 @@ public sealed class ReasonStepRunnerTests
         var pack = await PulledPackAsync(asked);
         Assert.Contains("src/Planner.cs", pack, StringComparison.Ordinal);
         Assert.DoesNotContain("Scheduler", pack, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A reason step whose agent only reads - its step naming no commit - is served the graph's view of its own tree, never
+    /// the base's: the main checkout holds thirty lines more at the head of the file the step reads, uncommitted and in the
+    /// base, and the step's tool is of the reader's tree, maps that tree's file to its view and the main checkout's to none,
+    /// and gives the file's declarations at the lines the reader's file holds them; and its working set places the step's
+    /// read of those lines by the tree it read. Red with a reader served the base unless its step names a commit.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatOnlyReads_IsServedTheViewOfItsOwnTree_NeverTheMainCheckouts()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+
+        // The person's edit of the main checkout, uncommitted: every line of the Planner thirty lines down, the base synced on it.
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Planner.cs"), string.Concat(Enumerable.Repeat("// the person's note\n", 30)) + PlannerSource);
+        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+
+        DssHarness.Core.Agents.Runtime.GraphFileDeclarations? declared = null;
+        (string? Own, string? Main) mapped = default;
+
+        agents.Works = async step =>
+        {
+            var tool = step.Graph!.Tool!;
+            mapped = (tool.PathOf(Path.Combine(step.Workspace.WorkingDirectory, "src", "Planner.cs")), tool.PathOf(Path.Combine(kit.Main, "src", "Planner.cs")));
+            declared = await tool.DeclarationsAsync("src/Planner.cs", Token);
+
+            // The step views lines 5-8 of its own Planner - the Plan method there - as its stored stream keeps the call.
+            var stream = StoredStream.Open(kit.Harness.FileSystem, kit.Layout.InstanceDirectory("think", "a9"), new Masking());
+            await stream.EmitAsync(new ToolCallStarted("v1", DssHarness.Core.Agents.Runtime.AgentTools.ViewFile, AgentToolRunner.Harness));
+            await stream.EmitAsync(new ToolCallFinished("v1", true, TimeSpan.Zero, """{"path":"src/Planner.cs","start_line":5,"end_line":8}""", "5\t    public int Plan()\n6\t    {\n7\t        return 1;\n8\t    }"));
+            stream.Dispose();
+        };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(), prompt: "Plan the work on the Planner."), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal("a9", result.Graph!["view"]!.GetValue<string>());
+
+        var asked = agents.Asked.Single();
+        PathAssert.Same(asked.Workspace.WorkingDirectory, asked.Graph!.Tool!.Queries.Tree);
+        Assert.Equal(("src/Planner.cs", (string?)null), mapped);
+        var plan = Assert.Single(declared!.Cards, card => card.Name == "Plan");
+        Assert.Equal((5, 8), (plan.Start, plan.End));
+
+        var set = kit.Harness.OrchestrationStore.ReadWorkingSet(kit.Layout.InstanceDirectory("think", "a9"))!;
+        var read = Assert.Single(set.Nodes, node => node.Uses.Contains(DssHarness.Core.Codebase.WorkingSetUses.Read));
+        Assert.Equal(("src/Planner.cs", (int?)5, (int?)8), (read.Path, read.Start, read.End));
     }
 
     /// <summary>
@@ -3108,7 +3163,9 @@ public sealed class ReasonStepRunnerTests
     /// <summary>
     /// An answer that goes on with a stored conversation of the attempt - one whose first message held the run's map ahead
     /// of the pack - of a step that pushes its pack is told what changed of the codebase against that pack: the
-    /// declarations that moved since, with their new range and hash, and the nodes of its own pack it was not given. The
+    /// declarations that moved since, with their new range and hash, and the nodes of its own pack it was not given - moved in
+    /// the reader's own tree as the attempt left it, whose view is synced as the answer goes on, so they are of the tree the
+    /// answer reads (red with a going-on reader's view never synced). The
     /// step carries the pack beside the changes, for a launch that begins its own conversation is given it; this one goes
     /// on, so its line says it was told the changes and no map and no pack, as its figures do.
     /// </summary>
@@ -3140,10 +3197,9 @@ public sealed class ReasonStepRunnerTests
         await stream.EmitAsync(new RunFinished(AgentRunStatus.Completed));
         stream.Dispose();
 
-        // The tree moves under it: Plan shifts two lines down, and the graph is synced again.
-        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Planner.cs"), "namespace Demo;\n\npublic sealed class Planner\n{\n    // a line that moves what follows it\n    // and one more\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
-        await kit.Harness.CommitAllAsync(kit.Main, "moved", Token);
-        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+        // The tree moves under it: the attempt the answer goes on with shifted Plan two lines down in the reader's own tree,
+        // which the reader's view is synced by as the answer goes on.
+        MovePlanInReadersTree(kit);
 
         var run = Graphing(kit, Graphed(think: "    graphPromptTokens: 3000\n"), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "go on", "ask", Attempt: 1)] };
 
@@ -3170,8 +3226,19 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal((0, 0, told), (result.Graph!["mapTokens"]!.GetValue<int>(), result.Graph["pack"]!["nodes"]!.GetValue<int>(), result.Graph["changesTokens"]!.GetValue<int>()));
     }
 
-    private static async Task<DssHarness.Core.Codebase.CodebaseGraphQueries> CodebaseGraphQueriesOf(DssHarness.Core.Codebase.ICodebaseGraphService graph, OrchestratorLayout layout)
-        => new(await graph.ReadOnlyAsync(layout, null, Token) ?? throw new Xunit.Sdk.XunitException("the run's graph did not read"));
+    /// <summary>
+    /// Plan shifted two lines down in the own tree of the reader <c>a9</c>, as an attempt of its writes its scratch: what an
+    /// answer that goes on with that attempt finds, and the reader's view is synced by - never the main checkout's.
+    /// </summary>
+    private static void MovePlanInReadersTree(OrchestrationKit kit)
+        => OrchestrationKit.Write(
+            kit.Record("a9").WorktreePath(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main))!,
+            Path.Combine("src", "Planner.cs"),
+            "namespace Demo;\n\npublic sealed class Planner\n{\n    // a line that moves what follows it\n    // and one more\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
+
+    /// <summary>The run's graph as <paramref name="view"/> holds it - the base where it names none.</summary>
+    private static async Task<DssHarness.Core.Codebase.CodebaseGraphQueries> CodebaseGraphQueriesOf(DssHarness.Core.Codebase.ICodebaseGraphService graph, OrchestratorLayout layout, string? view = null)
+        => new(await graph.ReadOnlyAsync(layout, view, Token) ?? throw new Xunit.Sdk.XunitException("the run's graph did not read"));
 
     /// <summary>
     /// Step <c>think</c>'s own stream as the engine stored it, for agent <c>a9</c>: one run of each launch - its session,
@@ -3223,10 +3290,9 @@ public sealed class ReasonStepRunnerTests
         var launch = AgentRuns.Of(kit.Layout.InstanceDirectory("think", "a9"), kit.Main) with { UserPrompt = "the task" };
         await StoredLaunchesAsync(kit, (false, AgentPromptParts.FirstMessage(launch with { Map = "the run's map", Codebase = held }, newConversation: true)));
 
-        // The tree moves under it: Plan shifts two lines down, and the graph is synced again.
-        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Planner.cs"), "namespace Demo;\n\npublic sealed class Planner\n{\n    // a line that moves what follows it\n    // and one more\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
-        await kit.Harness.CommitAllAsync(kit.Main, "moved", Token);
-        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+        // The tree moves under it: the attempt the answer goes on with shifted Plan two lines down in the reader's own tree,
+        // which the reader's view is synced by as the answer goes on.
+        MovePlanInReadersTree(kit);
 
         var run = Graphing(kit, Graphed(think: "    graphPromptTokens: 60\n"), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "yes", "ask", Attempt: 1)] };
 
@@ -3309,17 +3375,15 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal(new GraphPromptLine(0, 0, 0, 0, 0, FlowStepGraph.NoPackPushed), Assert.Single(LinesOf(kit, "think")));
 
         // Another step's conversation, which an earlier launch pushed a pack to - Plan's line where it stood - and Plan
-        // moves two lines down.
+        // moves two lines down in the reader's own tree, as that launch left it.
         await StoredLaunchesAsync(kit, "again", (false, AgentPromptParts.FirstMessage(launch with { Codebase = DssHarness.Core.Codebase.GraphLines.Of(plan) }, newConversation: true)));
-        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Planner.cs"), "namespace Demo;\n\npublic sealed class Planner\n{\n    // a line that moves what follows it\n    // and one more\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
-        await kit.Harness.CommitAllAsync(kit.Main, "moved", Token);
-        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+        MovePlanInReadersTree(kit);
 
         var told = await runner.RunAsync(Graphing(kit, Graphed(), instance: "again", made: false, prompt: "Plan the work on the Planner.") with { Answers = [answered] }, Token);
 
         Assert.True(told.Passed, told.Error);
 
-        var moved = Assert.IsType<DssHarness.Core.Codebase.GraphResolve.Found>((await CodebaseGraphQueriesOf(kit.Harness.CodebaseGraph, kit.Layout)).Resolve("Plan")).Card;
+        var moved = Assert.IsType<DssHarness.Core.Codebase.GraphResolve.Found>((await CodebaseGraphQueriesOf(kit.Harness.CodebaseGraph, kit.Layout, "a9")).Resolve("Plan")).Card;
         Assert.Equal($"1 declaration the conversation held: 1 moved or changed, 0 removed\n{DssHarness.Core.Codebase.GraphLines.Of(moved)}", agents.Asked[1].CodebaseChanges);
         Assert.Equal(string.Empty, agents.Asked[1].Codebase);
 

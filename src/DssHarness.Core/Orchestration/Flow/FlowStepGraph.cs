@@ -16,8 +16,9 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// A reason step's serving of the run's codebase graph: the view the engine syncs at the step's start - the agent's it
-/// works in, the base for one that reads - read whole, every call of the graph service made through a request of that
+/// A reason step's serving of the run's codebase graph: the view of the tree its agent reads - its worktree, the tree of an
+/// agent that only reads as well, synced at the step's start or once that tree was readied - read whole, every call of the
+/// graph service made through a request of that
 /// view (<see cref="FlowGraphSyncs.RequestOf"/>); its context pack made at its start and the run's repository map of its
 /// ground of reads - made once for each ground the run's steps share, from the base as it stands when the first graphed
 /// reason step of that ground is given its prompt, and read as it is by every one after. Pull, not push: a step at
@@ -57,6 +58,19 @@ public sealed class FlowStepGraph
 
     /// <summary>Why a launch was given no pack, where it began from the engine's compaction of the conversation.</summary>
     public const string NoPackCompacted = "the launch began from the engine's compaction record, which holds no map and no pack";
+
+    /// <summary>
+    /// Why a launch of a step whose pack pages are <paramref name="tokens"/> - <paramref name="pushed"/> of them pushed - is
+    /// given no pack, the one place it is decided: <see cref="NoPackAsked"/> where no pack is made; <see cref="NoPackHeld"/>
+    /// where the pack made held nothing, said before anything else, for its step is offered no <c>pack</c> to ask either; and
+    /// <see cref="NoPackPushed"/> where the pack holds pages and the step pushes none, which it asks of the tool. Null where
+    /// page 1 of a pack that holds something is pushed.
+    /// </summary>
+    /// <param name="tokens">The size of a page of the step's pack; 0 where none is made.</param>
+    /// <param name="pushed">The size of page 1 pushed into the first message; 0 where none is.</param>
+    /// <param name="held">Whether the pack made holds a page.</param>
+    internal static string? NoPackOf(int tokens, int pushed, bool held)
+        => tokens == 0 ? NoPackAsked : !held ? NoPackHeld : pushed == 0 ? NoPackPushed : null;
 
     /// <summary>
     /// Whether <paramref name="ex"/> is a record of the step's graph the disk would not keep or give back - a write or a
@@ -200,10 +214,11 @@ public sealed class FlowStepGraph
         Execution.ILineMask? mask,
         CancellationToken cancellationToken)
     {
-        // The view the step is served: the agent's where it has a worktree, the base where it reads - its own tree's where
-        // the step names the commit that tree starts at (FlowGraphSyncs.ViewsOwnTree). The engine syncs it at the step's
-        // start (FlowGraphSyncs.AtStartAsync), or once its tree stands at that commit (FlowGraphSyncs.ReadiedAsync); what
-        // is read here is what that left, and every call made of the
+        // The view the step is served: its agent's own tree's - its worktree, or the tree of an agent that only reads
+        // (FlowGraphSyncs.ViewsOwnTree), at the main checkout's HEAD or the commit the step names - the base where its record
+        // places no tree. The engine syncs it at the step's start (FlowGraphSyncs.AtStartAsync), or once a reader's tree was
+        // readied or found as the attempt an answer goes on with left it (FlowGraphSyncs.ReadiedAsync); what is read here is
+        // what that left, and every call made of the
         // service for the step - its changes, a check of a file the tool makes again - acts on the tree that view is of.
         // The run's one shape, the same its syncs are made under (FlowUse.GraphOf).
         var worktree = FlowGraphSyncs.WorktreeOf(agent, record, context.Layout, run.Step);
@@ -293,7 +308,7 @@ public sealed class FlowStepGraph
                     ChangesUnread = changesUnread,
                 })
             : null;
-        var noPack = tokens == 0 ? NoPackAsked : pushed == 0 ? NoPackPushed : pack is not { Text.Length: > 0 } ? NoPackHeld : null;
+        var noPack = NoPackOf(tokens, pushed, held: pack is { Text.Length: > 0 });
         var served = new FlowStepGraph(mode, from, read.View, tokens, pushed > 0, map, mapPages, pack, missing: null, noPack, store, output, directory, run.Instance)
         {
             view = queries,
@@ -315,7 +330,7 @@ public sealed class FlowStepGraph
                 ConfinedPaths.Within(fileSystem, platform, tree),
                 path => Readable(path) && !PathPatterns.Matches(never, path, platform.PathComparison),
                 path => policy.Write(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar))),
-                async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
+                async (paths, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, paths, token).ConfigureAwait(false)).Read),
                 near: () => served.made?.Near,
                 pages: PagesOf(fileSystem, layout, run, directory, ground),
                 mask: mask,

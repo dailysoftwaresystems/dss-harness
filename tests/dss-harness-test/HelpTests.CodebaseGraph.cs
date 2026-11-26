@@ -65,22 +65,26 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The codebase-graph topic says what view an agent that only reads is served: the base, its own tree never synced as a
-    /// view - but by a step that names the commit its tree starts at, whose tree holds that commit and not the base, and
-    /// whose own tree's view is synced once the tree stands there, and served.
+    /// The codebase-graph topic says what view an agent that only reads is served: its own tree's, never the base's - the
+    /// tree at the main checkout's HEAD or the commit its step names, synced once the step's start brought it there, or as
+    /// the attempt an answer goes on with left it - so
+    /// what its reads are told of a file, their narrowing and its working set are of the tree it reads.
     /// </summary>
     [Fact]
-    public void TheCodebaseGraphTopic_SaysAReaderWhoseStepNamesACommit_IsServedItsOwnTreesView()
+    public void TheCodebaseGraphTopic_SaysAReader_IsServedItsOwnTreesView()
     {
         var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
 
         Assert.Contains(
             Prose.Words(
-                "An agent that only reads is served the base: its own tree, brought to the main checkout's HEAD as each of its steps starts, is never synced as a view - but by a "
-                + "step that names the commit its tree starts at (commit, 'help workflows'), whose tree then holds that commit and not the base: that tree's own view is synced, "
-                + "by a whole listing held against the base, once the tree stands there, and served."),
+                "An agent that only reads is served the view of its own tree too, never the base's: its tree holds what the main checkout committed - or the commit its step "
+                + "names (commit, 'help workflows') - and not the main checkout's uncommitted changes, so its reason step's view is synced, by a whole listing held against the "
+                + "base, once the step's start brought the tree there - or, for an attempt an answer goes on with, found it as that attempt left it, what it wrote there "
+                + "among it - and served - the declarations its reads are given, their narrowing and its working set all of the tree it "
+                + "reads; a read of the main checkout beside it is of no file the view holds."),
             prose,
             StringComparison.Ordinal);
+        Assert.DoesNotContain("is served the base", prose, StringComparison.Ordinal);
     }
 
     /// <summary>
