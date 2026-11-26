@@ -104,7 +104,8 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A step whose graph is tools - a graphify-codebase step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the operations its agent's capabilities give, edit among them where it may write, and its context pack in its first message, after the run's map", prose, StringComparison.Ordinal);
-        Assert.Contains("its graphReads narrow (the default) denies a whole view_file - one naming no page and no range - of a file the graph parsed over 200 lines, saying the way to the graph instead - a range, a page, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with the lines the graph read it as, a path it holds no parsed file at refused as a misuse", prose, StringComparison.Ordinal);
+        Assert.Contains("and the reads it makes already answer from the graph, so the step learns the structure in the calls it makes anyway: search_files gives each hit inside a declaration of a file the graph parsed under that declaration's line - handle, kind, signature and path:start-end #hash, as the graph names a node, the innermost that holds the hit - its hits and their context indented beneath it, a hit outside every declaration as it is, and a range of view_file is headed by the declarations its lines meet, the head held within the page with the lines, each declaration checked against the file as it stands - read again where one moved, one whose lines the file no longer holds left out.", prose, StringComparison.Ordinal);
+        Assert.Contains($"Its graphReads narrow (the default) answers a whole view_file - one naming no page and no range - of a file the graph parsed over {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NarrowLines} lines with the file's outline in its place - a line saying how to read its lines by range or by page, ask a body, or lift the narrowing, then every declaration with its span and its hash as the file stands, paged as every answer is - no view an edit may follow; a range, a page, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with the lines the graph read it as, a path it holds no parsed file at refused as a misuse - each call, escape and outlined read a line of the step's graph.jsonl", prose, StringComparison.Ordinal);
         Assert.Contains("an edit it made is a write, alone in its turn and counted among the files written; a wholeFile is alone in its turn too, for the reads beside it are narrowed by what it lifts, the graph's other reads running with the other reads. The step's view is synced after each write - by the paths it wrote, a directory moved or deleted by every file beneath it - and whole after each command, on every client, and the graph tool answers from what each sync leaves.", prose, StringComparison.Ordinal);
     }
 
@@ -141,6 +142,15 @@ public sealed partial class HelpTests
                 + "`search_files` matches is given, with as many lines of context as are asked - each file beneath the directory searched decided as its own "
                 + "read, so one that holds a credential slot (the main checkout holds the tool's own) is searched with the slot's files left out and "
                 + "counted, never read; its `max_results` is refused, naming `page`.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "In a step that has a codebase graph the reads answer from it, so the step learns the structure in the calls it makes anyway: each hit "
+                + "`search_files` finds inside a declaration of a file the graph parsed is given under that declaration's line - its handle, kind, "
+                + "signature and `path:start-end #hash`, the innermost that holds the hit - with its hits and their context indented beneath it, a range "
+                + "`view_file` gives is headed by the declarations its lines meet, each checked against the file as it stands, and where the step's "
+                + $"reads are narrowed (`graphReads: narrow`, the default) a whole `view_file` of a file the graph parsed over {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NarrowLines} "
+                + "lines is answered with the file's outline in its place, with how to read its lines - no wasted turn (`help codebase-graph`).",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(

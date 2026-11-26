@@ -1914,12 +1914,12 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// The narrowing of whole reads (<c>graphReads: narrow</c>): a file the view holds as parsed over
-    /// <see cref="CodebaseGraphTool.NarrowLines"/> lines is denied with the way to the graph, a shorter one or one the
-    /// view does not parse passes, a file the graph is not sure of passes as an escape <c>lowConfidence</c>, and a
-    /// <c>wholeFile</c> lifts the narrowing for its file for the rest of the step.
+    /// <see cref="CodebaseGraphTool.NarrowLines"/> lines is narrowed - answered with its outline, the line said first saying
+    /// how to read its lines - a shorter one or one the view does not parse passes, a file the graph is not sure of passes
+    /// as an escape <c>lowConfidence</c>, and a <c>wholeFile</c> lifts the narrowing for its file for the rest of the step.
     /// </summary>
     [Fact]
-    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsDeniedWithTheWayToTheGraph_UnlessTheGraphIsUnsureOrAWholeFileLiftedIt()
+    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsNarrowed_UnlessTheGraphIsUnsureOrAWholeFileLiftedIt()
     {
         var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
         var small = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 20).Select(at => $"// line {at} of the small file")]) + "\n";
@@ -1929,7 +1929,7 @@ public sealed partial class CodebaseGraphToolTests
 
         Assert.True(tool.WholeRead("src/Big.cs", 224).Narrowed);
         Assert.Equal(
-            "'src/Big.cs' is 224 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
+            "'src/Big.cs' is 224 lines and in the codebase graph, so its outline is given in place of the whole file: read the lines you need with start_line and end_line, or the file a page at a time with page, ask graph's body for a declaration by its handle, or, if you need the file whole, say why with graph's wholeFile",
             tool.WholeRead("src/Big.cs", 224).Text);
         Assert.False(tool.WholeRead("src/Small.cs", 23).Narrowed);
         Assert.Null(tool.WholeRead("src/Small.cs", 23).Escape);

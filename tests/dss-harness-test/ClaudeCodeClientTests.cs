@@ -667,13 +667,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A whole <c>view_file</c> of a file the graph holds parsed over the narrowing bound is denied on Claude Code as it is
-    /// on the APIs (<c>graphReads: narrow</c>) - the tool runtime serving it narrows it, with the same words, recorded as
-    /// every denial is and as a line of the step's graph; a ranged read of the same file passes, and a file the graph is
-    /// not sure of passes whole, an escape <c>lowConfidence</c> recorded.
+    /// A whole <c>view_file</c> of a file the graph holds parsed over the narrowing bound is answered with the file's
+    /// outline on Claude Code as it is on the APIs (<c>graphReads: narrow</c>) - the tool runtime serving it narrows it,
+    /// with the same words, recorded as a line of the step's graph and denied nothing; a ranged read of the same file
+    /// passes, and a file the graph is not sure of passes whole, an escape <c>lowConfidence</c> recorded.
     /// </summary>
     [Fact]
-    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsDeniedOnClaudeCode_AsViewFileIsOnTheAPIs()
+    public async Task AWholeReadOfAParsedFileOverNarrowLines_IsAnsweredWithItsOutlineOnClaudeCode_AsViewFileIsOnTheAPIs()
     {
         using var kit = new Kit();
         var big = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
@@ -702,21 +702,25 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
-        // The whole read was denied with the way to the graph, the same words as on the APIs, and recorded as every
-        // denial is; the ranged read of the same file and the whole read of a file the graph is not sure of passed.
-        var denied = sink.Of<PermissionDenied>().ToList();
-        var narrow = Assert.Single(denied, denial => denial.Rule == "graphReads: narrow");
-        Assert.Equal(
-            "'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile",
-            narrow.Reason);
+        // The whole read was answered with the file's outline, the same words as on the APIs, and recorded so - nothing
+        // denied; the ranged read of the same file and the whole read of a file the graph is not sure of passed.
+        Assert.Empty(sink.Of<PermissionDenied>());
 
-        var deniedLine = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphDeniedLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphDeniedLine>()));
-        Assert.Equal(("src/Big.cs", 222), (deniedLine.Path, deniedLine.Lines));
+        var outline = tool.Queries.OutlineFile("src/Big.cs")!;
+        Assert.Equal(
+            string.Join('\n', [
+                "'src/Big.cs' is 222 lines and in the codebase graph, so its outline is given in place of the whole file: read the lines you need with start_line and end_line, or the file a page at a time with page, ask graph's body for a declaration by its handle, or, if you need the file whole, say why with graph's wholeFile",
+                $"outline of src/Big.cs ({DssHarness.Core.Output.ReportText.Counted(outline.Count, "declaration")}):",
+                .. outline.Select(DssHarness.Core.Codebase.GraphLines.Of)]),
+            sink.Of<ToolCallFinished>().First().Result);
+
+        var outlinedLine = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphOutlinedLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphOutlinedLine>()));
+        Assert.Equal(("src/Big.cs", 222), (outlinedLine.Path, outlinedLine.Lines));
 
         var escaped = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>()));
         Assert.Equal(("src/Generated.g.cs", DssHarness.Core.Agents.Runtime.GraphEscapeLine.LowConfidence), (escaped.Path, escaped.Escape));
 
-        Assert.Equal([false, true, true], sink.Of<ToolCallFinished>().Select(call => call.Ok));
+        Assert.Equal([true, true, true], sink.Of<ToolCallFinished>().Select(call => call.Ok));
         Assert.Equal(3, result.ToolCalls);
     }
 

@@ -137,7 +137,9 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
     /// <summary>
     /// The whole-file reads <paramref name="stream"/> holds, on every client's form of them as the working set reads its
     /// calls - Claude Code's <c>Read</c> with neither an offset nor a limit, the runtime's <c>view_file</c> with neither a
-    /// start nor an end line - how many, and the estimated tokens of what they gave.
+    /// page nor a start nor an end line, whose answer gave the file's lines, numbered as a read gives them - how many, and
+    /// the estimated tokens of what they gave. A page of a file is no whole read, and a whole read the narrowing answered
+    /// with the file's outline gave none of its lines: the step's figures count that apart (<c>outlinedReads</c>).
     /// </summary>
     /// <param name="stream">The step's stored stream, every attempt's.</param>
     public static (int Count, int Tokens) WholeFileReads(IReadOnlyList<AgentEvent> stream)
@@ -150,7 +152,8 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
         foreach (var call in AgentStreamCalls.Of(stream))
         {
             if (call.Tool is ClaudeCodeTools.Read or AgentTools.ViewFile
-                && call.Input["offset"] is null && call.Input["limit"] is null && call.Input["start_line"] is null && call.Input["end_line"] is null)
+                && call.Input["offset"] is null && call.Input["limit"] is null && call.Input["page"] is null && call.Input["start_line"] is null && call.Input["end_line"] is null
+                && NumberedLine().IsMatch(call.Result))
             {
                 count++;
                 tokens += EstimatedTokens.Of(call.Result);

@@ -22,7 +22,9 @@ public sealed partial class AgentToolRuntime
     /// <c>view_file</c>: a file's numbered lines a page at a time - the pages laid once by streaming the file through its
     /// decided open, and any page read by seeking to its mark (<see cref="TextPages"/>), so a file of any size, and a line
     /// of any width, is reachable page by page in the memory of a page - or the lines from a start to an end, within the
-    /// page that holds the start, and how to ask for the rest; its digest recorded for an edit. A directory's entries.
+    /// page that holds the start, headed by the declarations they meet where the run's graph parsed the file, and how to ask
+    /// for the rest; its digest recorded for an edit. A whole read the graph's narrowing takes is answered with the file's
+    /// outline. A directory's entries.
     /// </summary>
     private async Task<Answer> ViewAsync(JsonObject input, CancellationToken cancellationToken)
     {
@@ -97,14 +99,14 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed(SaidIn(ex, full));
         }
 
-        // A whole read of a parsed file the graph holds is narrowed (graphReads: narrow): denied with the way to the
-        // graph, let by as an escape where the graph is not sure of the file or a wholeFile lifted it - each escape and
-        // each denial a line of the run's graph lines, the denial recorded as every denial is. A read denied shows the
-        // agent nothing, so it is neither a view an edit may follow nor a read of the run's. A page or a range is no
+        // A whole read of a parsed file the graph holds is narrowed (graphReads: narrow): answered with the file's outline
+        // in its place, let by as an escape where the graph is not sure of the file or a wholeFile lifted it - each escape
+        // and each outline given a line of the run's graph lines. An outline shows the agent the file's declarations and
+        // none of its lines, so it is neither a view an edit may follow nor a read of the run's. A page or a range is no
         // whole read.
-        if (start is null && end is null && page is null && Narrowed(path, full, kept.Lines, TokensOf(full)) is { } narrowed)
+        if (start is null && end is null && page is null && await OutlinedAsync(full, kept.Lines, TokensOf(full), cancellationToken).ConfigureAwait(false) is { } outlined)
         {
-            return Answer.Refused(path, narrowed);
+            return Answer.Done(outlined);
         }
 
         // What an edit is checked against: the file as it was when its pages were laid, whatever part of it was viewed.
@@ -120,7 +122,7 @@ public sealed partial class AgentToolRuntime
         {
             return start is null && end is null
                 ? await PageOfAsync(kept, page ?? 1, note, cancellationToken).ConfigureAwait(false)
-                : await RangeAsync(full, kept, start ?? 1, end, note, cancellationToken).ConfigureAwait(false);
+                : await RangeAsync(full, kept, start ?? 1, end, note, await DeclarationsAsync(full, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
         }
         catch (AgentReadRefusedException moved)
         {
@@ -133,37 +135,31 @@ public sealed partial class AgentToolRuntime
     }
 
     /// <summary>
-    /// What a whole read of the file at <paramref name="full"/> is under the narrowing of reads, where the run is given a
-    /// graph that narrows (<c>graphReads: narrow</c>): the refusal, recorded as every denial is, where the graph holds
-    /// the file as parsed and it is over <see cref="CodebaseGraphTool.NarrowLines"/> lines; an escape let by, recorded,
-    /// where the graph is not sure of the file; null where the read passes plainly - a range, a page, a search and a write
-    /// are never narrowed, and neither is a file the graph does not parse.
+    /// What a whole read of the file at <paramref name="full"/> is answered with under the narrowing of reads, where the run
+    /// is given a graph that narrows (<c>graphReads: narrow</c>): the file's outline in its place, recorded as a line of the
+    /// run's graph with what it cost and what the whole read would have, where the graph holds the file as parsed and it is
+    /// over <see cref="CodebaseGraphTool.NarrowLines"/> lines (<see cref="CodebaseGraphTool.WholeReadAsync"/>); null where the
+    /// read passes - an escape let by, recorded, where the graph is not sure of the file, and plainly else. A range, a page,
+    /// a search and a write are never narrowed, and neither is a file the graph does not parse.
     /// </summary>
-    /// <param name="path">The file as the agent's tool asked it.</param>
     /// <param name="full">The file, absolute.</param>
     /// <param name="lines">How many lines the file holds, as a view counts them.</param>
     /// <param name="tokens">The file's estimated tokens.</param>
-    private AgentPolicyAnswer.Denied? Narrowed(string path, string full, long lines, int tokens)
+    /// <param name="cancellationToken">Stops the reading of the outline.</param>
+    private async Task<string?> OutlinedAsync(string full, long lines, int tokens, CancellationToken cancellationToken)
     {
-        if (_run.Graph is not { Narrow: true, Tool: { } tool } graph)
-        {
-            return null;
-        }
-
-        var tree = _run.Workspace.Worktree ?? _run.Workspace.MainCheckout;
-
-        if (AgentPolicy.Beneath(tree, full, _host.Platform.PathComparison) is not { } relative)
+        if (_run.Graph is not { Narrow: true, Tool: { } tool } graph || GraphPathOf(full) is not { } relative)
         {
             return null;
         }
 
         var counted = (int)Math.Min(lines, int.MaxValue);
-        var whole = tool.WholeRead(relative, counted);
+        var whole = await tool.WholeReadAsync(relative, counted, cancellationToken).ConfigureAwait(false);
 
         if (whole.Narrowed)
         {
-            graph.Recorded?.Invoke(new GraphDeniedLine(whole.Path ?? relative, counted, tokens));
-            return new AgentPolicyAnswer.Denied("graphReads: narrow", AgentPolicySource.Builtin, whole.Text);
+            graph.Recorded?.Invoke(new GraphOutlinedLine(whole.Path ?? relative, counted, tokens, EstimatedTokens.Of(whole.Text)));
+            return whole.Text;
         }
 
         if (whole.Escape is { } escape)
@@ -173,6 +169,23 @@ public sealed partial class AgentToolRuntime
 
         return null;
     }
+
+    /// <summary>
+    /// The declarations of the file at <paramref name="full"/> as it stands now, where the run is given a graph that holds
+    /// it as a file it parsed (<see cref="CodebaseGraphTool.DeclarationsAsync"/>) - what a range of it is named by and a
+    /// search's hits in it are shown under; null where the run has no graph, the file is outside the tree it works in, or
+    /// the graph parsed no such file.
+    /// </summary>
+    /// <param name="full">The file, absolute.</param>
+    /// <param name="cancellationToken">Stops the reading of the file.</param>
+    private async Task<GraphFileDeclarations?> DeclarationsAsync(string full, CancellationToken cancellationToken)
+        => _run.Graph is { Tool: { } tool } && GraphPathOf(full) is { } relative
+            ? await tool.DeclarationsAsync(relative, cancellationToken).ConfigureAwait(false)
+            : null;
+
+    /// <summary>The file at <paramref name="full"/> as the run's graph names it - relative to the tree the run works in, with forward separators - where it is beneath it; null else.</summary>
+    private string? GraphPathOf(string full)
+        => AgentPolicy.Beneath(_run.Workspace.Worktree ?? _run.Workspace.MainCheckout, full, _host.Platform.PathComparison);
 
     /// <summary>
     /// The pages of the file at <paramref name="full"/> as a view gives them, numbered: those kept for it where it stands
@@ -196,12 +209,19 @@ public sealed partial class AgentToolRuntime
         return answer.Refusal is null ? Answer.Page(answer.Text) : Answer.Failed(answer.Text);
     }
 
+    /// <summary>What heads the declarations a range of a file meets, where the run's graph holds the file as parsed.</summary>
+    internal const string RangeDeclarations = "[the codebase graph's declarations these lines meet:]";
+
     /// <summary>
     /// The lines of a file from <paramref name="first"/> to <paramref name="end"/> - as far as its last where no end is
     /// given - within the page that holds the first (<see cref="TextPages.PageOfLine"/>), numbered, and how to ask for the
-    /// rest: the next start, or the next page where the page ends inside a line wider than its room.
+    /// rest: the next start, or the next page where the page ends inside a line wider than its room. Where the run's graph
+    /// holds the file as parsed, the <paramref name="declarations"/> the lines given meet head them, each as the graph names
+    /// a node - its handle, kind, signature and <c>path:start-end #hash</c> - so the agent can ask a body of one, or read the
+    /// lines beside it, exactly; the head is held within the page's room with the lines (<see cref="KeptResults.Room"/>), the
+    /// lines stopping, the first always given, where the two would pass it, and the rest asked for as any is.
     /// </summary>
-    private async Task<Answer> RangeAsync(string full, TextPagesKept kept, long first, long? end, string? note, CancellationToken cancellationToken)
+    private async Task<Answer> RangeAsync(string full, TextPagesKept kept, long first, long? end, string? note, GraphFileDeclarations? declarations, CancellationToken cancellationToken)
     {
         if (first > kept.Lines)
         {
@@ -221,6 +241,13 @@ public sealed partial class AgentToolRuntime
             builder.Append('[').Append(note).Append("]\n");
         }
 
+        // The declarations the lines may meet, in the order they begin, each said as the graph names a node: one joins the
+        // head once a line given reaches its first line, so the head names those the lines given meet, and no other.
+        var cards = declarations?.Meeting(first, last) ?? [];
+        var meeting = cards.Select(card => "  " + GraphLines.Of(card)).ToList();
+        var given = new StringBuilder();
+        var joined = 0;
+        var headCost = 0;
         var shown = first - 1;
         var goesOn = false;
 
@@ -239,10 +266,40 @@ public sealed partial class AgentToolRuntime
                 break;
             }
 
-            builder.Append(entries[at].Text).Append('\n');
+            var joins = joined;
+            var headed = headCost;
+
+            while (joins < meeting.Count && cards[joins].Start <= line)
+            {
+                headed += meeting[joins].Length + 1;
+                joins++;
+            }
+
+            // A line the page's room no longer holds beside the head and the lines before it is asked for again: the page's
+            // own lines fit its room, so a range with no head is given as its page holds it.
+            if (headed > 0 && shown >= first && headed + given.Length + entries[at].Text.Length + 1 > KeptResults.Room)
+            {
+                break;
+            }
+
+            joined = joins;
+            headCost = headed;
+            given.Append(entries[at].Text).Append('\n');
             shown = line;
             goesOn = cut && at == entries.Count - 1;
         }
+
+        if (joined > 0)
+        {
+            builder.Append(RangeDeclarations).Append('\n');
+
+            foreach (var said in meeting.Take(joined))
+            {
+                builder.Append(said).Append('\n');
+            }
+        }
+
+        builder.Append(given);
 
         if (goesOn)
         {
@@ -378,7 +435,10 @@ public sealed partial class AgentToolRuntime
     /// <c>search_files</c>: every line under a directory a pattern matches - the pattern matched in time linear in each
     /// line (<see cref="LinearRegex"/>), every file read whatever its size, a line at a time - written into the call's
     /// answer as each hit is found, with as many lines of context around it as are asked: a page of it given, every page
-    /// of it by <c>read_result</c>.
+    /// of it by <c>read_result</c>. Where the run has a graph, a hit inside a declaration of a file the graph parsed is
+    /// written under that declaration's line, as the graph names a node, as the file stands now
+    /// (<see cref="CodebaseGraphTool.DeclarationsAsync"/>), so the agent knows the declaration and the lines to read next
+    /// without a view; a line each, paged as every line of the answer is.
     /// </summary>
     private async Task<Answer> SearchAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
@@ -428,27 +488,54 @@ public sealed partial class AgentToolRuntime
         await using var lines = _records.Lines(callId);
         var any = false;
 
+        // Where the run has a graph, each hit inside a declaration of a file it parsed is shown under that declaration -
+        // the innermost that holds the hit's line, as the file stands now - its line said as the graph names a node, the
+        // declaration's hits and their context indented beneath it; a hit outside every declaration is shown as it is. Hits
+        // come file by file, each file's in its order, so one file's declarations are read at its first hit and held while
+        // its hits are written, and a declaration is said again only where a hit outside it came between.
+        string? file = null;
+        GraphFileDeclarations? declarations = null;
+        string? under = null;
+
         async ValueTask Found(AgentSearchHit hit, CancellationToken token)
         {
-            var said = Said(Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar)));
+            var full = Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar));
+            var said = Said(full);
+
+            if (_run.Graph is { Tool: not null } && !string.Equals(file, hit.Path, StringComparison.Ordinal))
+            {
+                file = hit.Path;
+                declarations = await DeclarationsAsync(full, token).ConfigureAwait(false);
+                under = null;
+            }
+
+            var card = declarations?.Holding(hit.Line);
+            var opens = card is not null && !string.Equals(card.Id, under, StringComparison.Ordinal);
+            var indent = card is null ? string.Empty : "  ";
 
             if (context > 0 && any)
             {
-                await lines.LineAsync("--", token).ConfigureAwait(false);
+                await lines.LineAsync(opens ? "--" : indent + "--", token).ConfigureAwait(false);
             }
 
             any = true;
+            under = card?.Id;
+
+            if (opens)
+            {
+                await lines.LineAsync(GraphLines.Of(card!), token).ConfigureAwait(false);
+            }
 
             foreach (var line in hit.Before)
             {
-                await lines.LineAsync($"{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
+                await lines.LineAsync($"{indent}{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
             }
 
-            await lines.LineAsync($"{said}:{Count(hit.Line)}: {hit.Text}", token).ConfigureAwait(false);
+            await lines.LineAsync($"{indent}{said}:{Count(hit.Line)}: {hit.Text}", token).ConfigureAwait(false);
 
             foreach (var line in hit.After)
             {
-                await lines.LineAsync($"{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
+                await lines.LineAsync($"{indent}{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
             }
         }
 

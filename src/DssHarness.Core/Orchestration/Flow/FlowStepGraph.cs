@@ -499,9 +499,10 @@ public sealed class FlowStepGraph
     /// <summary>
     /// What the step's graph gave and what it saved, said as its <c>step.json</c> holds it: its mode, its view, what the map
     /// and the pack - or the changes in their place - its last launch was given cost, how many of the pack's nodes the step
-    /// then used, what the tool served, and what the agent still read whole, counted from its <c>graph.jsonl</c> and its
-    /// stored stream. Its working set is written beside its output first (<c>working-set.json</c>), the seeds of the packs
-    /// of the steps after it.
+    /// then used, what the tool served, what the agent still read whole, and the whole reads the narrowing answered with an
+    /// outline - how many, what reading them whole would have cost and what the outlines cost (<c>outlinedReads</c>) -
+    /// counted from its <c>graph.jsonl</c> and its stored stream. Its working set is written beside its output first
+    /// (<c>working-set.json</c>), the seeds of the packs of the steps after it.
     /// </summary>
     /// <param name="graph">The one graph service every graph is read and written by, for the view as it stands at the step's end.</param>
     /// <param name="fileSystem">The file system the files the step wrote are read on, as it left them.</param>
@@ -561,7 +562,7 @@ public sealed class FlowStepGraph
 
         var calls = held.OfType<GraphCallLine>().ToList();
         var escapes = held.OfType<GraphEscapeLine>().ToList();
-        var denied = held.OfType<GraphDeniedLine>().ToList();
+        var outlined = held.OfType<GraphOutlinedLine>().ToList();
         var whole = CodebaseWorkingSet.WholeFileReads(stream);
         var prompted = PromptLineOf(given ?? AgentCodebaseGiven.None);
         var used = prompted.Nodes == 0 || Pack is null ? 0 : working.Nodes.Count(node => !node.Gone && Pack.Nodes.Contains(node.Id, StringComparer.Ordinal));
@@ -594,7 +595,12 @@ public sealed class FlowStepGraph
                 ["count"] = whole.Count,
                 ["tokens"] = whole.Tokens,
             },
-            ["deniedReads"] = denied.Count,
+            ["outlinedReads"] = new JsonObject
+            {
+                ["count"] = outlined.Count,
+                ["tokens"] = outlined.Sum(line => line.Tokens),
+                ["outlineTokens"] = outlined.Sum(line => line.OutlineTokens),
+            },
             ["escapes"] = new JsonObject
             {
                 ["count"] = escapes.Count,

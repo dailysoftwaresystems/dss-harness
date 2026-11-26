@@ -205,6 +205,13 @@ public sealed partial class AgentToolRuntime : IDisposable
         // side-task's lock (Locks), and a wholeFile, which changes what the reads beside it are answered, stands alone (Alone).
         if (run.Graph is { } graph)
         {
+            // Where the graph was built, the reads that answer from it say how: a range headed by its declarations, a
+            // search's hits under theirs, a narrowed whole read answered with the file's outline.
+            if (graph.Tool is not null)
+            {
+                tools = [.. AgentTools.InAGraphStep(tools, graph.Narrow)];
+            }
+
             var operations = graph.Operations ?? CodebaseGraphTool.Operations(write: true, narrow: false);
             tools.Add(new AgentToolDefinition(
                 AgentGraphSupport.ToolName,

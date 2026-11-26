@@ -6276,15 +6276,36 @@ side-task alike, a page the disk will not give back said with why. Every step of
 the same first page - the prefix a client caches never moves - and a step given the tool asks the rest of it as
 `graph`'s `map` with page. One wording of a page's last line serves the map's every step, with the tool and without
 it: it says the rest is on the pages after it, which a step whose graph is tools asks the graph for, never how this
-step asks for it, for the map is one file every step of the ground reads and no step's kind is written into it. Its reads
-narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on every client - Claude
-Code's served by the engine's tool server - of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
-the refusal; a range, a search and a write pass; a file the graph is not sure of
-(`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`)
-passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file the view
-holds as parsed for the rest of the step, an escape `stated` with the agent's reason and the lines and tokens the view
-read the file as - a path it holds no parsed file at a usage line, nothing read. A read the narrowing denies is no view
-an edit may follow, nor a read of the run's.
+step asks for it, for the map is one file every step of the ground reads and no step's kind is written into it.
+The graph lives inside the reads such a step already makes, on every client - Claude Code's served by the engine's tool
+server - for every view is a turn and every turn reads the conversation again: the graph saves only where it costs no call
+of its own. The tool owns what those reads are told of a file, `CodebaseGraphTool.DeclarationsAsync`: the file's
+declarations (`GraphFileDeclarations`) where the view holds it as parsed and the step's reads reach it, the file read fresh
+as a body's is and each declaration's hash checked against the lines it spans now - the file extracted again where one
+moved, where the tool may check it, the tool answering from the view that leaves - and a declaration whose lines the file
+still does not hold as the graph read them (an extraction that could not be made) left out and counted, so no span or hash
+given stands for lines the file does not hold. `search_files` (`AgentToolRuntime.SearchAsync`) reads a file's
+declarations at its first hit - hits come file by file, each file's in order - and writes each hit inside one under that
+declaration's line, as `GraphLines.Of` names a node, the innermost a type, a member or a section that holds the hit's line
+(`GraphFileDeclarations.Holding`, by `CodebaseGraphQueries.AtLine`; a namespace or a project heads no hit), its hits and
+their context lines indented beneath it, the separator between two of its hits indented with them and the line said again
+only where a hit outside it came between; a hit outside every declaration, or of a file the graph does not parse, is
+written as it is, and a step with no graph answers as it always has. The answer is written a line at a time and paged as
+every answer is, by `read_result`, each line whole. A range of `view_file` (`AgentToolRuntime.RangeAsync`) is headed
+(`AgentToolRuntime.RangeDeclarations`) by the declarations the lines it gives meet (`GraphFileDeclarations.Meeting`), each
+joining the head once a line given reaches its first line, the head held with the lines within a page's room
+(`KeptResults.Room`) - the lines stopping, the first always given, where the two would pass it, the rest asked for by its
+next start as any is. `AgentTools.InAGraphStep` says so in the two tools' own descriptions where the step's graph was
+built. Its reads narrowed (`graphReads: narrow`, the default) answer a whole `view_file` of a file the view holds as parsed
+over `CodebaseGraphTool.NarrowLines` lines with the file's outline in its place (`CodebaseGraphTool.WholeReadAsync`): a line
+saying how to read its lines - a range, a page, a body, or `wholeFile` with why - then the outline as `outline` with its
+path gives it, every declaration as the file stands, all of it, paged as every answer is - so the step learns the
+structure in the call it read by, and no turn is spent on a refusal; a range, a page, a search and a write pass; a file the
+graph is not sure of (`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its
+references `candidates`) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file
+the view holds as parsed for the rest of the step, an escape `stated` with the agent's reason and the lines and tokens the
+view read the file as - a path it holds no parsed file at a usage line, nothing read. An outline shows the agent the file's
+declarations and none of its lines: it is no view an edit may follow, nor a read of the run's.
 The working set (`CodebaseWorkingSet`) is what a reason step that has a graph worked with, kept in its
 directory as `working-set.json` (`OrchestrationStore.WriteWorkingSet`): each node it edited, served, read or found
 (`WorkingSetUses`), with how often it was touched and its handle, file, lines and hash at the step's end - every one,
@@ -6311,12 +6332,16 @@ the view at the step's end, its `graph.jsonl` and its stored stream) and its pac
 holds a line for each launch's first message, written as the message is and before any line of that launch's calls
 (`GraphPromptLine`: the map's tokens and the pack's seeds, nodes, tokens and what was left out, or the tokens of the
 changes a conversation gone on with was told in their place, or why no pack was given), one line for each call of the tool (`GraphCallLine`, with its answer's estimated tokens and its text hits), and
-one for each escape of its narrowing and each whole read the narrowing refused (`GraphEscapeLine`, `GraphDeniedLine`),
-and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used, `changesTokens` (the
-three its last launch was given), calls, served tokens, bodies, text hits, edits made and refused, whole-file reads
-counted from the stored stream on every client's form as the working set reads its calls
-(`CodebaseWorkingSet.WholeFileReads`), denied reads and escapes -
-are held in its `step.json` under `graph` and summed for the run's report (`FlowReports`).
+one for each escape of its narrowing and each whole read the narrowing answered with the file's outline
+(`GraphEscapeLine`, `GraphOutlinedLine`: the file, its lines, what reading it whole would have cost and what the outline
+cost) - a line an earlier build wrote of a read the narrowing refused (`GraphDeniedLine`) still read, and counted in no
+figure - and its figures - mode, view, `mapTokens`, the pack with how many of its nodes the step then used,
+`changesTokens` (the three its last launch was given), calls, served tokens, bodies, text hits, edits made and refused,
+whole-file reads counted from the stored stream on every client's form as the working set reads its calls - neither a
+page nor a range, its answer the file's numbered lines, so an outline given is none (`CodebaseWorkingSet.WholeFileReads`)
+- the outlined reads (`outlinedReads`: how many, `tokens` what reading them whole would have cost, `outlineTokens` what
+the outlines given in their place cost) and escapes - are held in its `step.json` under `graph` and summed for the run's
+report (`FlowReports`).
 `query-codebase-graph` (`CodebaseGraphQueryService`) runs its read operations by hand on the base or an agent's view
 through `ICodebaseGraphService.ReadOnlyAsync` - the records as they stand on disk, no gate, no sync, nothing written, a
 view linked in memory from the base's files and its record, and a link result another linker made linked again in

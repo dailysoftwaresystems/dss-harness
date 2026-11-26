@@ -3207,8 +3207,9 @@ public sealed class ReasonStepRunnerTests
 
     /// <summary>
     /// What the agent still read whole is counted on every client's form of a read, as the working set reads its calls:
-    /// Claude Code's Read with neither an offset nor a limit as much as view_file with neither a start nor an end - a
-    /// ranged read of either is no whole read.
+    /// Claude Code's Read with neither an offset nor a limit as much as view_file with neither a page nor a start nor an end,
+    /// whose answer gave the file's numbered lines - a ranged read of either, a page of a file and a whole read the
+    /// narrowing answered with the file's outline are no whole reads.
     /// </summary>
     [Fact]
     public async Task EveryClientsWholeFileRead_IsCountedInTheStepsFigures()
@@ -3219,18 +3220,21 @@ public sealed class ReasonStepRunnerTests
         var directory = kit.Layout.InstanceDirectory("think", "a9");
         Directory.CreateDirectory(directory);
         var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
-        var calls = new (string Id, string Tool, string Input)[]
+        const string Outlined = "'src/Planner.cs' is 300 lines and in the codebase graph, so its outline is given in place of the whole file: read the lines you need with start_line and end_line\noutline of src/Planner.cs (1 declaration(s)):\n0a1b2c type public sealed class Planner | src/Planner.cs:3-300 #0a1b2c3d";
+        var calls = new (string Id, string Tool, string Input, string Result)[]
         {
-            ("1", ClaudeCodeTools.Read, "{\"file_path\":\"src/Planner.cs\"}"),
-            ("2", ClaudeCodeTools.Read, "{\"file_path\":\"src/Planner.cs\",\"offset\":2,\"limit\":3}"),
-            ("3", AgentTools.ViewFile, "{\"path\":\"src/Planner.cs\"}"),
-            ("4", AgentTools.ViewFile, "{\"path\":\"src/Planner.cs\",\"start_line\":2}"),
+            ("1", ClaudeCodeTools.Read, "{\"file_path\":\"src/Planner.cs\"}", "1\tnamespace Demo;"),
+            ("2", ClaudeCodeTools.Read, "{\"file_path\":\"src/Planner.cs\",\"offset\":2,\"limit\":3}", "1\tnamespace Demo;"),
+            ("3", AgentTools.ViewFile, "{\"path\":\"src/Planner.cs\"}", "1\tnamespace Demo;"),
+            ("4", AgentTools.ViewFile, "{\"path\":\"src/Planner.cs\",\"start_line\":2}", "1\tnamespace Demo;"),
+            ("5", AgentTools.ViewFile, "{\"path\":\"src/Planner.cs\",\"page\":2}", "1\tnamespace Demo;"),
+            ("6", AgentTools.ViewFile, "{\"path\":\"src/Planner.cs\"}", Outlined),
         };
 
-        foreach (var (id, tool, input) in calls)
+        foreach (var (id, tool, input, answer) in calls)
         {
             await stream.EmitAsync(new ToolCallStarted(id, tool, AgentToolRunner.ClaudeCode));
-            await stream.EmitAsync(new ToolCallFinished(id, true, TimeSpan.Zero, input, "1\tnamespace Demo;"));
+            await stream.EmitAsync(new ToolCallFinished(id, true, TimeSpan.Zero, input, answer));
         }
 
         stream.Dispose();
@@ -3240,5 +3244,29 @@ public sealed class ReasonStepRunnerTests
         Assert.True(result.Passed, result.Error);
         Assert.Equal(2, result.Graph!["wholeFileReads"]!["count"]!.GetValue<int>());
         Assert.Equal(2 * DssHarness.Core.Codebase.EstimatedTokens.Of("1\tnamespace Demo;"), result.Graph["wholeFileReads"]!["tokens"]!.GetValue<int>());
+    }
+
+    /// <summary>
+    /// The whole reads the narrowing answered with an outline are counted apart in the step's figures, from its
+    /// graph.jsonl: how many, what reading them whole would have cost and what the outlines given in their place cost - and
+    /// a read an earlier build denied, which still reads, is counted in no figure.
+    /// </summary>
+    [Fact]
+    public async Task TheWholeReadsAnsweredWithAnOutline_AreCountedApartInTheStepsFigures()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        var directory = kit.Layout.InstanceDirectory("think", "a9");
+        Directory.CreateDirectory(directory);
+        kit.Harness.OrchestrationStore.AppendGraphStepLine(directory, new GraphOutlinedLine("src/Planner.cs", 300, 2500, 120));
+        kit.Harness.OrchestrationStore.AppendGraphStepLine(directory, new GraphOutlinedLine("src/Other.cs", 240, 1800, 90));
+        kit.Harness.OrchestrationStore.AppendGraphStepLine(directory, new GraphDeniedLine("src/Older.cs", 260, 2100));
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed()), Token);
+
+        Assert.True(result.Passed, result.Error);
+        Assert.Equal("""{"count":2,"tokens":4300,"outlineTokens":210}""", result.Graph!["outlinedReads"]!.ToJsonString());
+        Assert.Null(result.Graph["deniedReads"]);
     }
 }
