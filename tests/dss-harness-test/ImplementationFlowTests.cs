@@ -109,7 +109,11 @@ public sealed class ImplementationFlowTests
         {
             using var bare = new TempDirectory();
             await harness.RunGitAsync(bare.Path, ["init", "--quiet", "--bare", "."], Token);
-            await harness.RunGitAsync(temp.Path, ["remote", "add", "origin", bare.Path], Token);
+
+            // The remote names a repository on a forge, as the shipped flow's pull request and CI ask (orient.onForge), and
+            // takes its pushes in a repository on this machine: nothing the run does reaches a forge.
+            await harness.RunGitAsync(temp.Path, ["remote", "add", "origin", "https://github.com/acme/widgets.git"], Token);
+            await harness.RunGitAsync(temp.Path, ["remote", "set-url", "--push", "origin", bare.Path], Token);
             await harness.RunGitAsync(temp.Path, ["push", "--quiet", "origin", "HEAD:trunk"], Token);
             await harness.RunGitAsync(temp.Path, ["remote", "set-head", "origin", "trunk"], Token);
         }
