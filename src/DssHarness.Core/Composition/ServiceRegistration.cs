@@ -125,7 +125,18 @@ public static class ServiceRegistration
         services.AddSingleton(provider => origin.ServesAnotherMachine
             ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
             : HomeShorthand.None);
-        services.AddSingleton<IHarnessOutput>(output ?? (provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>(), operation, options.Parent)));
+        var written = output ?? (provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>(), operation, options.Parent));
+
+        // Asked for its output logs, the operation's every line is kept as its console writes it, for the zip to hold.
+        if (options.OutputLogs is not null)
+        {
+            services.AddSingleton(provider => new OutputCapture(verbose, provider.GetRequiredService<HomeShorthand>()));
+            services.AddSingleton<IHarnessOutput>(provider => new CapturedHarnessOutput(written(provider), provider.GetRequiredService<OutputCapture>()));
+        }
+        else
+        {
+            services.AddSingleton<IHarnessOutput>(written);
+        }
 
         // A wait a rename makes on a file another program holds is told to the running operation's teller, looked up as
         // each wait tells: the output itself reads the file system (its home shorthand), so the file system never asks
@@ -184,7 +195,29 @@ public static class ServiceRegistration
         // given to the runner of its type, registered here as its slice lands; a step of a type none serves yet is
         // refused, saying so: a run that says what it cannot do, never one that passes a step over.
         services.AddSingleton<FlowSessions>();
+        services.AddSingleton<FlowRunReached>();
         services.AddSingleton<IFlowService, FlowService>();
+
+        // A run command's output logs, where its front end asked for them: the zip is named in every document it answers with.
+        services.AddSingleton(provider => new FlowOutputLogs(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IRepositoryLocator>(),
+            provider.GetRequiredService<IHarnessContextLoader>(),
+            provider.GetRequiredService<OrchestrationStore>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IProcessContext>(),
+            provider.GetRequiredService<IToolIdentityProvider>(),
+            provider.GetRequiredService<AgentKeyStore>(),
+            provider.GetRequiredService<Agents.Isolation.IAgentIsolation>(),
+            provider.GetRequiredService<FlowRunReached>(),
+            provider.GetService<OutputCapture>(),
+            provider.GetRequiredService<TimeProvider>()));
+
+        if (options.OutputLogs is not null)
+        {
+            services.AddSingleton<IDocumentFacts>(provider => provider.GetRequiredService<FlowOutputLogs>());
+        }
+
         services.AddSingleton<PlanValidator>();
         services.AddSingleton<CreateAgentRunner>();
         services.AddSingleton<ReasonStepRunner>();

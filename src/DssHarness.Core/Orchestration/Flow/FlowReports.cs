@@ -97,6 +97,9 @@ public sealed record FlowRunResult(
 /// </summary>
 public static class FlowReports
 {
+    /// <summary>The member of a command's document that names every record it wrote or took, by what it is (<see cref="FlowRecordPath.What"/>).</summary>
+    public const string RecordsMember = "records";
+
     /// <summary>Writes the report of a session, markdown and one JSON document beside it.</summary>
     /// <param name="fileSystem">Writes the two files, atomically.</param>
     /// <param name="source">The run's records as the session left them, and the thresholds every report of the run is computed by - read by the one place that reads them for every report of a run.</param>
@@ -178,7 +181,7 @@ public static class FlowReports
                 ["handoffs"] = new JsonArray([.. result.Handoffs.Select(HandoffOf)]),
                 ["leftForAPerson"] = new JsonArray([.. result.LeftForAPerson.Select(line => JsonValue.Create(line))]),
                 ["spent"] = result.Spent is { } spent ? SpentOf(spent) : null,
-                ["records"] = records,
+                [RecordsMember] = records,
                 ["named"] = named,
             });
     }

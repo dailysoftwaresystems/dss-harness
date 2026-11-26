@@ -32,6 +32,33 @@ namespace DssHarness.Core.Help;
 
 public static partial class HelpTopics
 {
+    /// <summary>What the orchestrators topic says of a session's output logs (<see cref="FlowOutputLogs"/>), held to the code by its tests.</summary>
+    internal static string OutputLogsSaid
+        => $"Output logs. {FlowService.RunCommand}, {FlowService.ResumeCommand} and {FlowService.AnswerCommand} given "
+            + $"{FlowOutputLogs.Option} <file> write one zip at <file> - read from the directory the shell stands in - holding "
+            + "everything needed to understand the run and to put right what it met; given none, they write none, and no "
+            + "configuration key asks for it. It is written at every end of the command - done, failed, paused on a question, "
+            + "stopped, refused before a run was reached or after, a failure the command caught - whole each time, through a file "
+            + "beside it that then replaces it, so a resumed run's zip holds the whole run and a crash never leaves half a zip; "
+            + $"and it is named as every record of a run is, the last line naming them ({FlowOutputLogs.Record}: <file>) and "
+            + $"{FlowReports.RecordsMember}.{FlowOutputLogs.Record} in --json. A path that is a directory, inside "
+            + $"{HarnessLayout.OrchestratorsDirectoryName}/, or in a directory that cannot be made is refused "
+            + $"({HarnessExit.Refused}) before anything runs, nothing started. The zip holds {FlowOutputLogs.RunFolder}/ - the run's "
+            + $"whole directory, its folders kept - {FlowOutputLogs.ConfigName}, the configuration the run was read with, and "
+            + $"{FlowOutputLogs.ManifestName}, the place to start reading: what was run and the command line, the build and the "
+            + "system, how the command ended and why, the run's name, workflow, state and open questions, the command's own "
+            + "output - its --json document, and every line it wrote - every entry with its size, and what was left out and "
+            + "why. Left out, each named: every link and junction, never followed, for one could lead outside the run; every key "
+            + "store and dotenv file at any depth, and the shared copy of one an agent was handed; the run's "
+            + $"{HarnessLayout.OrchestratorTempDirectoryName}/; the caches of its codebase graph made again from the tree "
+            + $"({string.Join(", ", FlowOutputLogs.GraphCaches.Select(cache => $"{OrchestratorLayout.GraphDirectoryName}/{cache}"))}); "
+            + "and each agent's worktree, which is outside the run. No secret value lands in it: every byte of it is held to the "
+            + "mask the run's records are held to - every secret the configuration appoints that the key slot answers - the "
+            + "command line and the output among it. Nothing is capped or dropped: a file that could not be read whole is said "
+            + "so. A zip that could not be written is said in its place and named nowhere, and the command's code stands - save "
+            + $"a defect of this tool's, which ends it as one does ({HarnessExit.InternalError}). A command line the parser "
+            + "refuses writes none, for no command began.";
+
     private static string RenderOrchestrators()
     {
         var builder = new StringBuilder();
@@ -136,9 +163,10 @@ public static partial class HelpTopics
         builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--steps] [--questions] [--json]");
         builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
         builder.AppendLine($"  {command} {FlowService.RunCommand} <workflow> [--run <name>] [--input <k=v>]... [--json]");
-        builder.AppendLine($"  {command} {FlowService.ResumeCommand} <run> [--json]");
+        builder.AppendLine($"      [{FlowOutputLogs.Option} <file>]");
+        builder.AppendLine($"  {command} {FlowService.ResumeCommand} <run> [--json] [{FlowOutputLogs.Option} <file>]");
         builder.AppendLine($"  {command} {FlowService.AnswerCommand} <run> <answer> [--question <id>] [--text <text> | --text-file <file>]");
-        builder.AppendLine("      [--again] [--json]");
+        builder.AppendLine($"      [--again] [--json] [{FlowOutputLogs.Option} <file>]");
         builder.AppendLine($"  {command} {FlowService.PauseCommand} <run> [--all] [--json]");
         builder.AppendLine($"  {command} {FlowService.StopCommand} <run> [--now] [--json]");
         builder.AppendLine($"  {command} {FlowService.ReadReportCommand} <run> [--steps <instance>...] [--by step|agent|model|provider|type]");
@@ -259,6 +287,8 @@ public static partial class HelpTopics
             + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. The steps served so "
             + $"far are {string.Join(", ", FlowStepRunners.Served)} ('{ToolPackage.Command} help workflows'): a step of any other type "
             + "fails, saying no runner serves its type.");
+        builder.AppendLine();
+        AppendWrapped(builder, OutputLogsSaid);
         builder.AppendLine();
         AppendWrapped(
             builder,

@@ -51,4 +51,13 @@ public sealed record SessionOptions
     /// outer operation has already taken its ends runs its own at once.
     /// </summary>
     public bool DefersCommandEnd { get; init; }
+
+    /// <summary>
+    /// The output logs the operation is asked to write - one zip of its run's records, the configuration and its own
+    /// output, rewritten whole at every end (<see cref="Orchestration.Flow.FlowOutputLogs"/>) - as its front end was asked
+    /// for them; <see langword="null"/> for none. Taken by the commands that drive a session of a run alone
+    /// (<see cref="Orchestration.Flow.FlowOutputLogs.Commands"/>): a session of any other is refused
+    /// (<see cref="InvalidOperationException"/>).
+    /// </summary>
+    public OutputLogsRequest? OutputLogs { get; init; }
 }
