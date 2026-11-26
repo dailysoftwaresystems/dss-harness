@@ -3038,7 +3038,7 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Paused, end.Status);
             Assert.Equal(FlowInstanceState.Done, coordinator.Instances["recover"].State);
             Assert.Equal(
-                "what was there before: fixed - a broken test (src/Parser.cs)",
+                "what was there before: triage: fixed - a broken test (src/Parser.cs)",
                 coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
         }
 

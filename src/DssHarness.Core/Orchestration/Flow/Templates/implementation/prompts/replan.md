@@ -44,7 +44,7 @@ what it reuses, creates and replaces true of the plan as it now is.
 ## What the recovery is fixing
 
 Every issue that was there before the run that the run has taken, each with its id, what became of it (listed, being
-fixed or fixed), its title and where; empty where none is:
+fixed or fixed, alone or with the issue whose root cause it shares), its title and where; empty where none is:
 
 {run.preExisting}
 

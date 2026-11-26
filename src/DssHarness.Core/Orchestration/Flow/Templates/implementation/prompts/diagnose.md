@@ -20,10 +20,16 @@ run, proven on the base commit `{orient.startCommit}`, to fix at its root. Read 
 - What it is: {source.title}. {source.description}
 - Where: {source.where}
 - Its proof: {source.proof}
+- The issues whose triages found they share its root cause, joined to it, which this visit's fix settles too - each
+  with its id, title, description, where and proof; empty where none is: {source.joined}
+- Where its own triage joined it to another issue whose fix was already being diagnosed, that fix is done: the issue,
+  the visit that fixed it and the remedy items that visit built - start from the tree they left; empty otherwise:
+  {source.joinedTo}
 
 Its course is fix, or person where the fix needs what only a person can give; never retry, since nothing failed, and
 never report it in `preExisting` again. The
-first statement of each item's definition of done is then that the proof no longer shows the issue.
+first statement of each item's definition of done is then that the proof no longer shows the issue - nor the proof of
+any issue joined to it.
 
 This is the recovery's first visit for this step. Should what you decide not put it right - the step fails again, or
 the work you set out fails - you are asked again, with what happened, and you go on from here.

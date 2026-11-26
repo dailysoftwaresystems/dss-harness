@@ -2,7 +2,8 @@ What you decided last time did not put the failure of `{source.step}` right. Eit
 again, or the work you set out - a remedy built, tested, folded or reviewed - failed on its way. This is the
 recovery's visit {visit} for this step; it goes on until the step passes, so find what is still wrong. Where
 `{source.step}` is `triage-pre-existing-issue`, the failure is the issue you were given, and it passes once its proof
-no longer shows it.
+no longer shows it - nor the proof of any issue joined to it, which this visit's fix settles too; empty where none is:
+{source.joined}
 
 ## The failure as it now stands
 

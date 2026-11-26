@@ -2517,9 +2517,13 @@ change does not touch that blocks nothing: owed the run's next round, sized - it
 be built, what measured first, an answer whose size names no file refused - never holding the round
 it came from; see the routing paragraph below), `list` (added, proven, to the run's
 `pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
-kept whole), `duplicate` (naming in `duplicates` the listed issue it
-repeats) or `unproven`; an answer whose course is none of the five, or whose issue to list or send
-to the next round does not read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
+kept whole), `duplicate` (naming in `duplicates` the issue it
+repeats), `unproven`, or `join` (naming in `joins` an issue taken before its own, being triaged or being fixed, whose
+root cause its own shares; see the paragraph on joins below); an answer whose course is none of the six, whose issue to
+list or send to the next round does not read back, or that names an issue it may not (`FlowCoordinator.NamedIssueRefusal`:
+for `duplicates` or `joins`, a triage instance not taken before its own, so no two issues ever name each other and both
+vanish; for `joins`, too, an id that names no issue the run has taken, or one whose issue had ended without a fix before
+this triage began), fails the triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
 one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
 of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
@@ -2534,9 +2538,14 @@ steps the one issue stopped side by side, each reporting it before its fix, each
 none spending another's bound - and keeps the list; `issue` is read only by the
 triage and the recovery, and `source` by them and by a handler. A reason step that names a triage is told, where it starts, every issue the
 run holds then (`FlowPreExistingReport.Known`, the part `<pre-existing>` wraps at the end of its prompt, read from
-`FlowCoordinator.IssuesHeld`): the tally's lines as `{run.preExisting}` words them, a duplicate left out, and each
-issue whose triage has not ended, being triaged - so a repeat it would word its own way, which `HolderOf` cannot
-match, is reported again only where it stops its own work, and raises no triage only to be merged as a duplicate.
+`FlowCoordinator.IssuesHeld`): the tally's lines as `{run.preExisting}` words them - each `<id>: <what became of it> -
+<title> (<where>)`, the id a listed issue's `pe-<n>`, one owed the next round's `nx-<n>`, and every other's its triage
+instance's (`FlowCoordinator.Said`) - a duplicate left out, and each issue whose triage has not ended, being triaged,
+with its triage's id - so a repeat it would word its own way, which `HolderOf` cannot match, is reported again only
+where it stops its own work, and raises no triage only to be merged as a duplicate. A triage is told the same where it
+starts, its own issue left out, with the ids of those it may join (`JoinableBy`: each taken before its own, being
+triaged or being fixed - `MayStillFix`), so it names the issue it repeats, or the one whose root cause it shares, by the
+id the run gave it.
 
 An issue a triage sends to fix is the recovery's at once, its visit beside any other at work (`FlowCoordinator.FixOf`):
 only one that a step of a visit reported waits, for that visit to end - the recovery never calls itself (V50) - and one
@@ -2557,6 +2566,30 @@ names the fix, `the fix of '<title>' (<visit>), which holds <paths>` (`FlowWaits
 says it among what the run waits for. An item that has begun goes on - its fold and its reconcile meet the fix as any two
 changes meet. The planner's prompts and the self-audit say the same: an issue `{run.preExisting}` lists as being fixed is
 the recovery's, and no work item fixes it or rewrites its lines.
+
+An issue whose triage answers `join` takes no visit of its own: it goes with the fix of the issue it joined, read from
+the run's state alone (`FlowCoordinator.JoiningOf`, over the joins `_joined` keeps in the order they ended), through
+that one's own join where it joined another in its turn and has no fix of its own (`RootOf`). Where the issue it joined
+is still being triaged it waits for that triage, and goes with its fix should it send one; with a visit of that fix
+whose diagnosis - its first step to begin - began after the join ended, in the run's own order, or has not begun
+(`IsWith`), the visit's steps read it in `{source.joined}` (each issue joined with its id, title, description, where
+and proof) and the visit's end settles it: fixed with that issue, a step it stopped run again as the issue it joined
+would be (`RunTheReporterAgain`, which reads the visits that fixed each issue, `FixesOf`, and sends a reporter no
+redirect the run owes resets already). A join that came while a visit of that fix was diagnosing waits for that visit
+to end and then, once it fixed the issue, takes a visit of its own (`SettleJoins`, a step of every pass, `FixOf`), whose
+steps read in `{source.joinedTo}` what that visit did - the issue it joined, by its id, title and where, the visit, and
+the remedy items its checks read. Where the issue it joined ends without a fix - listed, owed the next round,
+unproven, a duplicate, a triage that failed, was skipped or never ran, or a fix given up - the joined issue is triaged
+again on its own: `SettleJoins` raises a triage of the same step for it, as its reporter's report raised the first, the
+records saying why, and its join holds the issue no more (`HoldsIssue`); a triage that began after that issue had
+ended so is refused a join to it, so the same join is never made twice. A visit fixes every issue that goes with it
+(`IssuesFixedBy`): a fix sent for one of them waits for it as for its own (`FixWaitsFor`), and a report of one met after
+it ended counts against the issue's own bound (`MetAfterItsFix`). Each visit is admitted against the run's own limits,
+as every step is. The tally keeps a joined issue in the place it was taken, its state read where the fix it joined
+stands (`StateOf`): `joined to <id>` while that issue is triaged, `being fixed with <id>`, `fixed with <id>`, `being
+fixed after <id>` while it waits for a visit it did not go with, then `being fixed` and `fixed` with a visit of its own,
+and left out once it is triaged again; the run's counts take `fixed with` as fixed. An issue joined to a fix at work
+holds its own `where` as an issue being fixed does, under the visit that fixes it or that it waits for (`IssueHolds`).
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help

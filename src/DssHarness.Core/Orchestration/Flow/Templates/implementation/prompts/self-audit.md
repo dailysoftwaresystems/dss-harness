@@ -83,7 +83,7 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 {run.nextRound}
 
 - Every issue that was there before the run that the run has taken, each with its id, what became of it (listed,
-  being fixed or fixed), its title and where; empty where none is:
+  being fixed or fixed, alone or with the issue whose root cause it shares), its title and where; empty where none is:
 
 {run.preExisting}
 

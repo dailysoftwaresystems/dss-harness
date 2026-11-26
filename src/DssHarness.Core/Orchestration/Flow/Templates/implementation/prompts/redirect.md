@@ -5,6 +5,9 @@ The person you asked has answered, with what the run is to do about the failure 
 Take their answer as the decision it is, and say again what puts the failure right, in its light. Check what their
 answer says of the cause before you build on it: the cause and the evidence are what you read or ran, not their words.
 
+Where the failure is an issue that was there before the run, the issues joined to it share its root cause, and what you
+give settles them too - each with its id, title, description, where and proof; empty where none is: {source.joined}
+
 - **fix**, where their answer leads to a change the run makes: the work items, at most four, each sized to one
   builder's cycle, with the paths it owns, the tests that show the failure is gone - or, where no test can, why in
   noTests - and its definition of done, of which the first statement is that `{source.step}` would now pass. Each item

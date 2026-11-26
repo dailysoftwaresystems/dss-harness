@@ -2154,6 +2154,7 @@ public sealed class ImplementationFlowTests
                             ["critical"] = false,
                             ["why"] = "a defect in code the run's change does not touch that blocks nothing",
                             ["duplicates"] = "",
+                            ["joins"] = "",
                             ["proof"] = new JsonObject
                             {
                                 ["kind"] = "read",

@@ -3,6 +3,9 @@ them was built. Its problems:
 
 {remedy-check.problems}
 
+Where the failure is an issue that was there before the run, the issues joined to it share its root cause, and the
+items settle them too - each with its id, title, description, where and proof; empty where none is: {source.joined}
+
 Settle each of them, and say again what puts the failure right. The items you give now are checked once more and then
 built as they stand, so give items the check passes: each named in lowercase letters, digits and single hyphens, with
 the paths it owns - no file under two items - and every path it reuses there in the tree; each that changes a decision
