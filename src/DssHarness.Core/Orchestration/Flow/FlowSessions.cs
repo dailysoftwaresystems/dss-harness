@@ -77,8 +77,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
     /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
     /// process. Before anything of the run is made, each of the run's own inputs of the kind <c>file</c> that is not empty
-    /// is held to a file inside the repository an agent may read, decided as an agent's read of it is, and opened
-    /// (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
+    /// is held to a file inside the repository an agent may read, decided as an agent's read of it is on
+    /// <paramref name="inputGround"/>, and opened (<see cref="FlowInputs.OpenFiles"/>), and once its directory is
     /// made each is copied into the run's inputs (<see cref="OrchestratorLayout.InputsDirectory"/>) before its record is
     /// written; the context keeps the values as they were given. Once the test for another unfinished run - the last look
     /// at a live owner - has passed, and before anything of the run is written, every run of the repository is swept (<paramref name="sweep"/>), and a start where it keeps a
@@ -90,6 +90,10 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <param name="definition">The workflow, as it was read.</param>
     /// <param name="sweep">Sweeps every run of the repository, as <c>list-orchestrator</c> does, inside the section.</param>
     /// <param name="command">The command starting the run, which a refusal says to run from outside.</param>
+    /// <param name="inputGround">
+    /// The ground every file input of the run is decided on: an agent's read of the main checkout, as the configuration the
+    /// run starts under makes it (<see cref="Agents.Policy.AgentStepGround.OfFileInputs"/>).
+    /// </param>
     /// <param name="wantedName">The name <c>--run</c> gave, or null for the next r&lt;N&gt;.</param>
     /// <param name="inputs">The values the run is started with, by input name.</param>
     /// <param name="startCommit">The commit the run starts from; null where it starts beside the tree's history.</param>
@@ -102,14 +106,16 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">
     /// Another run of the repository is unfinished, the sweep keeps a record whose session holds this very process, the name
-    /// is taken, <paramref name="refusal"/> refuses it, or a file input names no file inside the repository an agent may read
-    /// (<see cref="HarnessExit.Refused"/>).
+    /// is taken, <paramref name="refusal"/> refuses it, a file input names no file inside the repository an agent may read,
+    /// or the run's places or a file input's copy could not be made - what the start had made of the run then taken back,
+    /// and said (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
         HarnessLayout layout,
         WorkflowDefinition definition,
         Func<ChildSweep> sweep,
         string command,
+        Agents.Policy.AgentPolicyGround inputGround,
         string? wantedName = null,
         IReadOnlyDictionary<string, string>? inputs = null,
         string? startCommit = null,
@@ -121,6 +127,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(sweep);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(inputGround);
 
         var differing = await DifferingAsync(layout, leavingOut: null, cancellationToken).ConfigureAwait(false);
 
@@ -145,17 +152,29 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             // The files the run's own file inputs name, opened before anything of the run is made, each decided as an agent's
             // read of it is - every agent of the run reads the copy: one that names no file inside the repository an agent
             // may read refuses the start, and the bytes the run keeps are those of the very file decided, read as opened.
-            using var files = FlowInputs.OpenFiles(_fileSystem, _platform, definition, FlowInputs.Resolve(definition, inputs), layout.MainCheckoutRoot);
+            using var files = FlowInputs.OpenFiles(_fileSystem, _platform, definition, FlowInputs.Resolve(definition, inputs), inputGround);
 
             // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
             // life, its artifacts, kept for the run's life and copied wherever asked, and its inputs, where each file a
             // file input names is copied before the run's record is written, so a run that has a record has its copies -
-            // all taken away with the run.
-            _fileSystem.CreateDirectory(run.Directory);
-            _fileSystem.CreateDirectory(run.TempDirectory);
-            _fileSystem.CreateDirectory(run.ArtifactsDirectory);
-            _fileSystem.CreateDirectory(run.InputsDirectory);
-            files.Keep(_fileSystem, run);
+            // all taken away with the run. A place or a copy that cannot be made takes back what was made before it and
+            // refuses the start: no directory is left holding no run's record, which a later start of that name is
+            // refused over.
+            try
+            {
+                _fileSystem.CreateDirectory(run.Directory);
+                _fileSystem.CreateDirectory(run.TempDirectory);
+                _fileSystem.CreateDirectory(run.ArtifactsDirectory);
+                _fileSystem.CreateDirectory(run.InputsDirectory);
+                files.Keep(_fileSystem, run);
+            }
+            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+            {
+                var why = ex is HarnessException ? ex.Message : $"the places of run '{name}' could not be made: {ex.Message.TrimEnd('.')}";
+
+                throw new HarnessException(HarnessExit.Refused, $"{why}; {Unmade(run)} No run was started.", ex);
+            }
+
             _store.WriteOrchestrator(
                 run,
                 new OrchestratorRecord
@@ -167,7 +186,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                     CreatedAt = _clock.GetUtcNow(),
                 });
 
-            var context = FlowRunContext.Of(name, definition, inputs, startCommit, branch, _clock.GetUtcNow());
+            var context = FlowRunContext.Of(name, definition, inputs, startCommit, branch, _clock.GetUtcNow(), inputCopies: true);
             new WorkflowStatusWriter(_store, run, context).Write(
                 new FlowSnapshot(
                     FlowRunStatus.Running,
@@ -185,6 +204,25 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             return (run, context);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Takes back what a start that did not get as far as its record made of <paramref name="run"/> - its directory, which
+    /// the start found not there, and everything in it - and says so, as a refusal's clause after its cause: removed, or
+    /// left where it could not be, naming it and what to do.
+    /// </summary>
+    /// <param name="run">The run the start was making.</param>
+    private string Unmade(OrchestratorLayout run)
+    {
+        try
+        {
+            _fileSystem.DeleteDirectory(run.Directory);
+            return $"what the start had made of run '{run.Name}' was removed.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"what the start had made of run '{run.Name}', '{run.Directory}', could not be removed ({ex.Message.TrimEnd('.')}): remove it, for a run of that name is refused while it stands.";
+        }
     }
 
     /// <summary>

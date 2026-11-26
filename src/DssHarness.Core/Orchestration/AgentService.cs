@@ -402,7 +402,7 @@ public sealed class AgentService(
             // Its record and its two directories are written, and its tree is made as the start of each of its steps makes
             // one that is not there: by the one making of every agent's tree, at the main checkout's HEAD. The log line is
             // the last of it.
-            var made = await ReadyTreeAsync(context, layout, _store.ReadAgent(layout, agent)!, CreateCommand, commit: null, asked: null, cancellationToken).ConfigureAwait(false);
+            var made = await ReadyTreeAsync(context, layout, _store.ReadAgent(layout, agent)!, CreateCommand, commit: null, asked: null, readiedFor: null, cancellationToken).ConfigureAwait(false);
 
             if (made.Facts is not AgentReady ready)
             {
@@ -4392,7 +4392,7 @@ public sealed class AgentService(
         }
 
         return UseCaseResult<AgentReady>.From(
-            _log.Record(layout, record.Name, ReadyLine, await ReadyTreeAsync(context, layout, record, ReadyLine, commit, request.Commit, cancellationToken).ConfigureAwait(false)));
+            _log.Record(layout, record.Name, ReadyLine, await ReadyTreeAsync(context, layout, record, ReadyLine, commit, request.Commit, request.For, cancellationToken).ConfigureAwait(false)));
     }
 
     /// <summary>
@@ -4401,9 +4401,11 @@ public sealed class AgentService(
     /// making of every agent's tree (<see cref="IWorktreeService.CreateAtAsync"/>), at the main checkout's HEAD, and brought
     /// on to the commit asked where that is another - else, where its repository stands there, brought to that commit with
     /// whatever the agent wrote there before discarded (<see cref="BringToAsync"/>); anything else there is refused, nothing
-    /// read, written or removed. Its record then names the tree and the commit it stands on - a record an older tool wrote,
-    /// naming no tree, is given the tree's three facts - and the answer carries <see cref="AgentReady"/> facts. Once the
-    /// making or the bringing has begun it is never interrupted.
+    /// read, written or removed. Before the making or the bringing touches the tree its record names the step attempt it is
+    /// brought for (<see cref="AgentRecord.ReadiedFor"/>), so one stopped part way is never read as the tree an earlier
+    /// attempt left; it then names the tree and the commit it stands on - a record an older tool wrote, naming no tree, is
+    /// given the tree's three facts - and the answer carries <see cref="AgentReady"/> facts. Once the making or the
+    /// bringing has begun it is never interrupted.
     /// </summary>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="layout">The agent's orchestrator.</param>
@@ -4411,8 +4413,9 @@ public sealed class AgentService(
     /// <param name="command">What the hold names as holding the tree.</param>
     /// <param name="commit">The commit the tree is brought to, as the main checkout's repository resolved the one asked; null for the main checkout's HEAD.</param>
     /// <param name="asked">The commit asked, as it was named; null where none was.</param>
+    /// <param name="readiedFor">The step attempt the tree is brought for; null where none is named.</param>
     /// <param name="cancellationToken">Stops the hold's taking, and the asking of what is at the tree's path.</param>
-    private async Task<CommandOutcome> ReadyTreeAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string command, string? commit, string? asked, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> ReadyTreeAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string command, string? commit, string? asked, AgentReadiedFor? readiedFor, CancellationToken cancellationToken)
     {
         var main = context.Layout.MainCheckoutRoot;
         var address = WorktreeAddress.Nested(record.Orchestrator, record.Name);
@@ -4439,9 +4442,15 @@ public sealed class AgentService(
             string stands;
             bool made;
 
+            // Who the tree is brought for is the record's before anything of the tree is touched: a making or a bringing
+            // stopped part way leaves no record that names the attempt before it as the one the tree stands for.
+            void BroughtFor() => _store.UpdateAgent(layout, record.Name, current => current with { ReadiedFor = readiedFor });
+
             switch (standing.Kind)
             {
                 case Standing.Gone:
+                    BroughtFor();
+
                     // Never interrupted from here: git killed part way through making a tree leaves one half made.
                     var created = await _worktrees.CreateAtAsync(main, address, CancellationToken.None).ConfigureAwait(false);
 
@@ -4471,6 +4480,8 @@ public sealed class AgentService(
                     break;
 
                 case Standing.Registered:
+                    BroughtFor();
+
                     var (brought, failure) = await BringToAsync(main, address, path, commit).ConfigureAwait(false);
 
                     if (failure is not null)

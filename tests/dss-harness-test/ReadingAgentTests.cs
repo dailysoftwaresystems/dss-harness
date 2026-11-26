@@ -369,6 +369,31 @@ public sealed class ReadingAgentTests
     }
 
     /// <summary>
+    /// Its record names the step attempt its tree was last brought for, as the bringing asked - the attempt an answer that
+    /// goes on with it reads to tell whether another step's start brought the tree elsewhere since - and a bringing for no
+    /// step the engine names leaves the record naming none, so no attempt ever takes that tree for the one it left.
+    /// </summary>
+    [Fact]
+    public async Task ReadyingIt_RecordsTheStepAttemptItsTreeWasBroughtFor_AndNoneWhereItWasBroughtForNone()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("a7");
+
+        Assert.Null(kit.Record("a7").ReadiedFor);
+
+        var forAnAttempt = await kit.Harness.AgentService.ReadyAsync(new AgentReadyRequest(kit.Main, OrchestrationKit.Orchestrator, "a7", For: new AgentReadiedFor("audit", 2)), Token);
+
+        Assert.Equal(HarnessExit.Success, forAnAttempt.Outcome.ExitCode);
+        Assert.Equal(new AgentReadiedFor("audit", 2), kit.Record("a7").ReadiedFor);
+
+        var forNone = await kit.Harness.AgentService.ReadyAsync(new AgentReadyRequest(kit.Main, OrchestrationKit.Orchestrator, "a7"), Token);
+
+        Assert.Equal(HarnessExit.Success, forNone.Outcome.ExitCode);
+        Assert.Null(kit.Record("a7").ReadiedFor);
+    }
+
+    /// <summary>
     /// A commit asked that names none the repository holds - an id no object has, a name no ref has, a blank one - is
     /// refused before anything is held, saying what it named: the tree stands as it stood, what the agent wrote there kept,
     /// and the record and the log are as they were. It is never read as the main checkout's HEAD in its place.

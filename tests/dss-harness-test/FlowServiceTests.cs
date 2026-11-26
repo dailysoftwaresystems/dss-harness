@@ -3069,7 +3069,71 @@ public sealed class FlowServiceTests
         Assert.Equal(["read", "again"], reasoned.Select(asked => asked.Step.Name));
         Assert.All(reasoned, asked => Assert.Equal($"Read the plan at {copy}.\n", FlowTemplate.Joined(asked.Prompts!["prompt"])));
         Assert.Equal("the plan as it was given\n", File.ReadAllText(copy));
-        Assert.Equal("notes/plan.md", repository.Harness.OrchestrationStore.ReadFlow(run)!.Inputs["plan"]);
+        Assert.Equal(("notes/plan.md", true), (repository.Harness.OrchestrationStore.ReadFlow(run)!.Inputs["plan"], repository.Harness.OrchestrationStore.ReadFlow(run)!.InputCopies));
+    }
+
+    /// <summary>
+    /// A run an older build made kept no copy of its file inputs, and its records say nothing of copies: resumed by this
+    /// build, its steps read each file input as it was given - as that build handed it to them - never the path of a copy
+    /// that was never made, and nothing is copied for it now. A run this build makes says, in its records, that it keeps
+    /// its copies, and reads them in every session.
+    /// </summary>
+    [Fact]
+    public async Task ARunAnOlderBuildMadeWithAFileInput_IsResumedReadingTheInputAsGiven_NeverACopyThatWasNeverMade()
+    {
+        var (repository, service, runner) = await AmendedAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: read
+                type: reason
+                agent: planner
+                prompt: read.md
+                outputs: update.json
+              - name: hold
+                type: orient
+                dependsOn: [read]
+              - name: again
+                type: reason
+                agent: planner
+                prompt: read.md
+                outputs: update.json
+                dependsOn: [hold]
+            """);
+        using var disposed = repository;
+        repository.Tree.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/read.md", "Read the plan at {input.plan}.\n");
+        runner.Holds("hold", new TaskCompletionSource().Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: ["plan=notes/plan.md"], json: false, cancellationToken: Token);
+
+        await runner.WaitStartedAsync("hold");
+        Assert.Equal(HarnessExit.Success, (await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Cancelled, (await driving.WaitAsync(Bound, Token)).ExitCode);
+
+        // The run as an older build left it: no copies, and records that say nothing of them.
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        Assert.True(store.ReadFlow(run)!.InputCopies);
+        Assert.Contains("\"inputCopies\": true", File.ReadAllText(run.FlowFile), StringComparison.Ordinal);
+
+        store.WriteFlow(run, store.ReadFlow(run)! with { InputCopies = null });
+        Directory.Delete(run.InputsDirectory, recursive: true);
+
+        Assert.DoesNotContain("inputCopies", File.ReadAllText(run.FlowFile), StringComparison.Ordinal);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(resumed.ExitCode == HarnessExit.Success, $"{resumed.Message} {string.Join(" | ", resumed.Details ?? [])}");
+
+        var again = runner.Asked.Last(asked => asked.Step.Name == "again");
+
+        Assert.Equal("Read the plan at notes/plan.md.\n", FlowTemplate.Joined(again.Prompts!["prompt"]));
+        Assert.False(Directory.Exists(run.InputsDirectory));
+        Assert.Null(store.ReadFlow(run)!.InputCopies);
     }
 
     /// <summary>
@@ -3109,6 +3173,103 @@ public sealed class FlowServiceTests
         }
 
         Assert.Empty(runner.Started);
+    }
+
+    /// <summary>
+    /// A start's file input is decided as an agent's read of it is, on the ground the configuration gives every agent: a
+    /// file inside the repository that a place agentPolicy.hiddenPlaces names holds, or that a Read restriction of the
+    /// configuration's refuses, is refused (13) as an agent's read of it would be, naming the input and the path and saying
+    /// no run was started - nothing of the run made and nothing copied, for every agent of the run would read the copy.
+    /// </summary>
+    [Fact]
+    public async Task AStartWhoseFileInputAnAgentsReadIsRefused_IsRefused_ByAHiddenPlaceOrARestrictionOfTheConfiguration()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: one
+                type: orient
+            """);
+        using var disposed = repository;
+        var keys = Path.Combine(repository.Path, "deploy", "keys");
+        // The configuration the repository was made with, its agents kept from a place inside it and from a path's reads.
+        repository.Harness.WriteConfig(repository.Path, new HarnessConfig
+        {
+            Workflows = [Workflow],
+            AgentPolicy = new AgentPolicyConfig { HiddenPlaces = [$"{keys}{Path.DirectorySeparatorChar}"], Restrictions = ["Read(private/**)"] },
+        });
+        repository.Tree.WriteFile(Path.Combine("deploy", "keys", "id.txt"), "a key kept out of every agent's reach\n");
+        repository.Tree.WriteFile(Path.Combine("private", "plan.md"), "a plan no agent may read\n");
+
+        foreach (var (value, why) in new[]
+        {
+            ("deploy/keys/id.txt", $"'{Path.Combine(keys, "id.txt")}' lies in a place the user keeps credentials in: no file tool of an agent reads or writes one"),
+            ("private/plan.md", $"'{Path.Combine(repository.Path, "private", "plan.md")}' is denied by Read(private/**), a restriction of agentPolicy.restrictions"),
+        })
+        {
+            var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: [$"plan={value}"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(
+                (HarnessExit.Refused, $"input 'plan' is '{value}', which is refused as an agent's read of it would be: {why}; a file input names a file inside the repository that an agent may read, by its path from the repository's root ('{repository.Path}') or an absolute one inside it, and the run keeps a copy of it from its start. No run was started."),
+                (refused.ExitCode, refused.Message));
+            Assert.False(Directory.Exists(RunOf(repository).Directory), $"'{value}' made nothing of the run");
+        }
+
+        Assert.Empty(runner.Started);
+    }
+
+    /// <summary>
+    /// A start whose file input's copy cannot be made - a full disk - answers the command as every refused start does, the
+    /// person's exit and the --json one alike: refused (13), naming the input and why and saying no run was started, with
+    /// what the start had made of the run taken back - never a defect's exit, and never a directory left holding no record.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStartWhoseFileInputsCopyCannotBeMade_IsRefused_OnEveryExit_NothingOfTheRunLeft(bool json)
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: one
+                type: orient
+            """);
+        using var disposed = repository;
+        var run = RunOf(repository);
+        var service = Service(repository.Harness, runner, fileSystem: new FullInputs(repository.Harness.FileSystem, run.InputsDirectory));
+
+        repository.Tree.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+
+        var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["plan=notes/plan.md"], json, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"input 'plan' is 'notes/plan.md', and the copy the run keeps of it could not be made: {FullInputs.Said}; what the start had made of run 'r1' was removed. No run was started."),
+            (refused.ExitCode, refused.Message));
+        Assert.False(Directory.Exists(run.Directory), "the start left a directory of the run it did not make");
+        Assert.Empty(runner.Started);
+    }
+
+    /// <summary>A file system whose every whole write beneath <paramref name="under"/> fails as a full disk's does.</summary>
+    private sealed class FullInputs(IFileSystem inner, string under) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the full disk says.</summary>
+        public const string Said = "There is not enough space on the disk";
+
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            if (path.StartsWith(under + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new IOException($"{Said}.");
+            }
+
+            base.WriteAtomic(path, write);
+        }
     }
 
     /// <summary><c>--now</c> is refused for an engine on another machine: nothing here can end its process, and a process of this machine that carries its id is never ended for it.</summary>
@@ -4664,7 +4825,7 @@ public sealed class FlowServiceTests
         var harness = new HarnessFactory();
         var layout = new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform);
-        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, cancellationToken: Token);
+        var (run, context) = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, FlowSessionsTests.InputGround(layout), cancellationToken: Token);
 
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, run, context))
         {

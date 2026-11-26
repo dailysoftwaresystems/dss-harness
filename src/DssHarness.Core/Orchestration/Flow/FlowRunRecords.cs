@@ -72,6 +72,12 @@ public interface IFlowRecords
 /// <param name="StartCommit">The commit the run started from; null where it started beside the tree's history.</param>
 /// <param name="Branch">The branch the run started on.</param>
 /// <param name="StartedAt">When the run began.</param>
+/// <param name="InputCopies">
+/// Whether the run keeps a copy of each file its own inputs of the kind <c>file</c> named, made as it was created
+/// (<see cref="FlowSessions.CreateAsync"/>) - which every run this build makes does, and its records say - so its steps
+/// read each such input as its copy (<see cref="FlowInputs.AsRead"/>). False for a run an older build made, which kept
+/// none: its steps read each file input as it was given, as they did when it began.
+/// </param>
 public sealed record FlowRunContext(
     string Run,
     WorkflowDefinition Definition,
@@ -79,7 +85,8 @@ public sealed record FlowRunContext(
     IReadOnlyDictionary<string, string> Inputs,
     string? StartCommit,
     string? Branch,
-    DateTimeOffset StartedAt)
+    DateTimeOffset StartedAt,
+    bool InputCopies = false)
 {
     /// <summary>What a run is, from the definition it runs: its digest is of the definition as this build freezes it.</summary>
     /// <param name="run">The run's name.</param>
@@ -88,7 +95,8 @@ public sealed record FlowRunContext(
     /// <param name="startCommit">The commit the run started from; null where it started beside the tree's history.</param>
     /// <param name="branch">The branch the run started on.</param>
     /// <param name="startedAt">When the run began.</param>
-    public static FlowRunContext Of(string run, WorkflowDefinition definition, IReadOnlyDictionary<string, string>? inputs = null, string? startCommit = null, string? branch = null, DateTimeOffset? startedAt = null)
+    /// <param name="inputCopies">Whether the run keeps a copy of each file its own file inputs named (<see cref="InputCopies"/>).</param>
+    public static FlowRunContext Of(string run, WorkflowDefinition definition, IReadOnlyDictionary<string, string>? inputs = null, string? startCommit = null, string? branch = null, DateTimeOffset? startedAt = null, bool inputCopies = false)
         => new(
             run,
             definition ?? throw new ArgumentNullException(nameof(definition)),
@@ -96,11 +104,13 @@ public sealed record FlowRunContext(
             inputs ?? new Dictionary<string, string>(),
             startCommit,
             branch,
-            startedAt ?? DateTimeOffset.UtcNow);
+            startedAt ?? DateTimeOffset.UtcNow,
+            inputCopies);
 
     /// <summary>
     /// What a run is as a resume takes it up: everything its state in one file says of it - the digest it began with,
-    /// never one worked out again, its values, its commit and branch, and when it began - with the definition it froze.
+    /// never one worked out again, its values, its commit and branch, when it began, and whether it keeps its file inputs'
+    /// copies, which a file an older build wrote does not say, for that build kept none - with the definition it froze.
     /// </summary>
     /// <param name="definition">The definition as it ran, read from <c>definition.json</c>.</param>
     /// <param name="file">The run's state in one file.</param>
@@ -109,7 +119,7 @@ public sealed record FlowRunContext(
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(file);
 
-        return new(file.Run, definition, file.DefinitionDigest, file.Inputs, file.StartCommit, file.Branch, file.StartedAt);
+        return new(file.Run, definition, file.DefinitionDigest, file.Inputs, file.StartCommit, file.Branch, file.StartedAt, file.InputCopies == true);
     }
 
     /// <summary>
@@ -605,7 +615,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             _context.Branch,
             snapshot.Pause,
             snapshot.Redirects,
-            snapshot.Hold);
+            snapshot.Hold,
+            _context.InputCopies ? true : null);
     }
 
     /// <summary>One step's own record, from the coordinator's snapshot of it.</summary>

@@ -39,6 +39,42 @@ public sealed class AgentStepGroundTests
     }
 
     /// <summary>
+    /// A run's own file input is decided on an agent's read of the main checkout, built by the one builder of an agent's
+    /// ground: the main checkout its one root and its working directory, nothing written, and every place no agent's read
+    /// reaches as on every agent's ground - the main checkout's credential slots, the Claude Code directories, the places
+    /// the user keeps credentials in - and the configuration's restrictions, so a file input names nothing an agent of the
+    /// run could not read, yet every agent reads its copy.
+    /// </summary>
+    [Fact]
+    public void AFileInputsGround_IsAnAgentsReadOfTheMainCheckout_WithEveryPlaceNoAgentsReadReaches()
+    {
+        var config = new HarnessConfig { AgentPolicy = new AgentPolicyConfig { Restrictions = ["Read(private/**)"] } };
+        IReadOnlyList<string> claude = ["C:/home/.claude"];
+        IReadOnlyList<DssHarness.Core.Agents.Isolation.HiddenPlace> credentials = [new("C:/source/repo/deploy/keys", Directory: true)];
+
+        var ground = AgentStepGround.OfFileInputs(config, "C:/source/repo", claude, credentials);
+        var agents = AgentStepGround.Of(
+            config,
+            definition: null,
+            Step(),
+            new AgentWorkspace(null, "C:/source/repo/.orchestrators/r1/work/a1", "C:/source/repo", [], "C:/source/repo/.orchestrators/r1/work/a1", "C:/source/repo/.orchestrators/r1"),
+            webSearchGiven: false,
+            claude,
+            credentials,
+            readsOnly: true);
+
+        Assert.Equal("C:/source/repo", ground.WorkingDirectory);
+        Assert.Equal((0, 0), (ground.ReadRoots.Count, ground.WritableRoots.Count));
+        Assert.Null(ground.RunDirectory);
+        Assert.Equal(agents.SlotDirectories, ground.SlotDirectories);
+        Assert.Equal(agents.ClaudeCodeDirectories, ground.ClaudeCodeDirectories);
+        Assert.Equal(agents.CredentialPlaces, ground.CredentialPlaces);
+        Assert.Equal(agents.Restrictions, ground.Restrictions);
+        Assert.Equal([new AgentRestriction("Read(private/**)", AgentPolicySource.Config)], ground.Restrictions);
+        Assert.Contains(AgentCapability.Read, ground.Capabilities);
+    }
+
+    /// <summary>
     /// A read-only agent works in a tree of its own: it starts there and writes it and its work directory - whatever its
     /// definition's <c>writes</c> says, for its tree is scratch nothing folds, where it builds and tests - and reads the
     /// main checkout beside it, whose run records and logs it is pointed at, and the run's inputs; its trees are its own and

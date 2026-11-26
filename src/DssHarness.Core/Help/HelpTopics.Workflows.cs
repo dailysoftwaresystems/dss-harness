@@ -97,8 +97,10 @@ public static partial class HelpTopics
         builder.AppendLine("input of the kind file naming a file inside the repository by its path from the root or an");
         builder.AppendLine($"absolute one inside it, committed or not, which the run copies into its own {HarnessLayout.OrchestratorInputsDirectoryName}/<input>/");
         builder.AppendLine("as it starts, decided as an agent's read of it is (one that names none, or that leads out");
-        builder.AppendLine("of the repository or into a credential slot - by its own path or a link on its way - is");
-        builder.AppendLine($"refused, {HarnessExit.Refused}, no run started) and read through the file as it was opened, so a link");
+        builder.AppendLine("of the repository, into a credential slot, a place the user keeps credentials in -");
+        builder.AppendLine("agentPolicy.hiddenPlaces among them - or a Claude Code directory, by its own path or a link");
+        builder.AppendLine($"on its way, or whose read agentPolicy.restrictions refuse, is refused, {HarnessExit.Refused}, no run");
+        builder.AppendLine("started) and read through the file as it was opened, so a link");
         builder.AppendLine("put on its way since reaches nothing: every step of every session reads that copy for it");
         builder.AppendLine("- {input.<name>} the copy's path - whatever became of the file since, and every agent of");
         builder.AppendLine("the run reads it, wherever its own tree was cut from; params - its own knobs, defaulted in");
@@ -385,9 +387,13 @@ public static partial class HelpTopics
             + "agent's worktree is refused one - whatever it wrote there before discarded, so the step reads exactly what that "
             + "commit holds, starts in it, and may write it and its work directory, never folded, and is served the graph's view "
             + "of that tree; an answer that goes on with an "
-            + "attempt finds the tree as the attempt left it; no two steps work in one agent's tree at once, for a reason step holds "
-            + "write on the tree of the agent it works in whatever its access - of two that go on with one step's work, two visits "
-            + "of one that goes on with its own among them, the second starts once the first has ended; the step's model resolved with its agent definition below its own and its order built "
+            + "attempt finds the tree as the attempt left it, unless another step working as the agent brought it elsewhere while "
+            + "the attempt waited, or nothing tells who it was last brought for: it is then brought there again as the attempt goes "
+            + "on, and its agent told that what it wrote there is gone; no two steps work in one agent's tree at once, for a reason "
+            + "step holds write on the tree of the agent it works in whatever its access, and an advice of the run's advisor holds "
+            + "the tree it works in while it runs - of two that go on with one step's work, two visits of one that goes on with its "
+            + "own among them, the second starts once the first has ended, or waits on a question with no advice on it still "
+            + "running, for a step that waits holds nothing; the step's model resolved with its agent definition below its own and its order built "
             + "as entries of a model and one of its provider's keys, each entry's credential read from the slot "
             + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an "
             + "expression read there too - the names it yielded narrowing what it may write as a written-out list does - "

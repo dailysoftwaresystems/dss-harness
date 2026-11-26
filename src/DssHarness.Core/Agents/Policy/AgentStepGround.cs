@@ -135,6 +135,37 @@ public static class AgentStepGround
         };
     }
 
+    /// <summary>
+    /// The ground a run's own file input is decided on (<see cref="FlowInputs.OpenFiles"/>): an agent's read of the main
+    /// checkout, for every agent of the run reads the copy - the ground of a run of no tree, definition or step of its own
+    /// over the main checkout (<see cref="Of"/>), so every place no agent's read reaches is unreached here as it is there:
+    /// every credential slot of the main checkout, every Claude Code directory, every place the user keeps credentials in -
+    /// <c>agentPolicy.hiddenPlaces</c> among them, inside the repository or not - and every read the configuration's
+    /// <c>agentPolicy.restrictions</c> refuse. Its one root is the main checkout, for a file input names a file inside the
+    /// repository - every root an agent's own of the run's directory lies inside it - and nothing is written on it.
+    /// </summary>
+    /// <param name="config">The configuration the run starts under.</param>
+    /// <param name="mainCheckout">The main checkout's root, which each file input is read from.</param>
+    /// <param name="claudeDirectories">Every Claude Code directory a client of this run uses, and the tool's own (<see cref="ReasonLaunch.ClaudeDirectories"/>).</param>
+    /// <param name="credentialPlaces">Every place the user keeps credentials in on this machine (<see cref="ReasonLaunch.CredentialPlaces"/>).</param>
+    public static AgentPolicyGround OfFileInputs(HarnessConfig config, string mainCheckout, IReadOnlyList<string> claudeDirectories, IReadOnlyList<Isolation.HiddenPlace> credentialPlaces)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mainCheckout);
+
+        var read = Of(
+            config,
+            definition: null,
+            new WorkflowStep { Name = "inputs", Type = "reason" },
+            new AgentWorkspace(Worktree: null, WorkDirectory: mainCheckout, MainCheckout: mainCheckout, ExtraRoots: [], WorkingDirectory: mainCheckout, RunDirectory: mainCheckout),
+            webSearchGiven: false,
+            claudeDirectories,
+            credentialPlaces,
+            readsOnly: true);
+
+        // A decision and no run: no run's directory, and nothing held of it.
+        return read with { ReadRoots = [], WritableRoots = [], RunDirectory = null };
+    }
+
     /// <summary>The paths a writing step may write, as its <c>writes</c> name them; null where it narrows nothing.</summary>
     /// <param name="step">The step.</param>
     private static IReadOnlyList<string>? WritesOf(WorkflowStep step)

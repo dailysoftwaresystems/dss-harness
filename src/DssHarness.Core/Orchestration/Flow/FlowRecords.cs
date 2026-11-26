@@ -514,6 +514,11 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// The plan update the run is held for, and when it was taken; null where none is under way. While it holds, nothing
 /// is started outside the scope the update is planned in.
 /// </param>
+/// <param name="InputCopies">
+/// True where the run keeps a copy of each file its own inputs of the kind <c>file</c> named, made as it was created -
+/// every run this build makes - which its steps read for those inputs in every session (<see cref="FlowRunContext.InputCopies"/>);
+/// left out by a run an older build made, which kept none, and whose steps read each file input as it was given.
+/// </param>
 public sealed record FlowFile(
     int Schema,
     string Run,
@@ -530,7 +535,8 @@ public sealed record FlowFile(
     string? Branch = null,
     FlowPauseRecord? Pause = null,
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
-    FlowHoldRecord? Hold = null)
+    FlowHoldRecord? Hold = null,
+    bool? InputCopies = null)
 {
     /// <summary>
     /// The steps the file holds running that are no group's own record, by instance: once a pause is complete, the

@@ -155,6 +155,15 @@ public sealed record AgentRecord
     public string? Base { get; init; }
 
     /// <summary>
+    /// For an agent that only reads, the step attempt its tree was last brought to the main checkout's HEAD - or to the
+    /// commit its step names - for (<see cref="AgentReadyRequest.For"/>), written before the bringing touches the tree: an
+    /// attempt that goes on after an answer reads it to tell whether another step's start brought the tree elsewhere while
+    /// it waited, and brings it there again where one did - or where this says none, as a record an older tool wrote does,
+    /// for then nothing tells. Null for an agent whose work is folded, whose tree is never brought anywhere.
+    /// </summary>
+    public AgentReadiedFor? ReadiedFor { get; init; }
+
+    /// <summary>
     /// The commit a move of its base goes to, written before the move writes anything into its worktree and gone once
     /// <see cref="Base"/> names it: present, a move stopped part way, which only rebase-agent finishes. Null otherwise.
     /// </summary>
@@ -311,6 +320,12 @@ public sealed record AgentRecord
         }
         else
         {
+            // Only the tree of an agent that only reads is ever brought anywhere for a step.
+            if (ReadiedFor is { } readied)
+            {
+                return $"its work is folded, and it records its tree as brought for '{readied.Instance}'";
+            }
+
             if (Worktree is null)
             {
                 return "it records no worktree, and an agent whose work is folded has one of its own";
@@ -334,6 +349,11 @@ public sealed record AgentRecord
             ?? (WorktreesRoot is { } under ? OrchestrationRules.RelativePathProblem(under, "its worktrees root") : null)) is { } problem)
         {
             return problem;
+        }
+
+        if (ReadiedFor?.Problem() is { } readiedFor)
+        {
+            return $"the step its tree was last brought for: {readiedFor}";
         }
 
         if (Moving is not null && (Base is null || Moving == Base))

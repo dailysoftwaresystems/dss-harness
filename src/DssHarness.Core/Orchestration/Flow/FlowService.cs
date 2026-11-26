@@ -328,6 +328,16 @@ public sealed class FlowService(
         FlowRunContext runContext;
         IReadOnlyDictionary<string, IReadOnlyList<string>>? named = null;
 
+        // Every agent of the run reads a file input's copy, so each is decided as an agent's read of it is: on the ground
+        // the one builder of an agent's ground builds for it, under this configuration and this machine's places no agent
+        // reaches.
+        var launch = new ReasonLaunch(_fileSystem, _platform, keyStore, updates, isolation);
+        var inputGround = Agents.Policy.AgentStepGround.OfFileInputs(
+            context.Config,
+            context.Layout.MainCheckoutRoot,
+            launch.ClaudeDirectories(context.Config, context.Layout),
+            launch.CredentialPlaces(context.Config));
+
         try
         {
             (layout, runContext) = await _sessions.CreateAsync(
@@ -335,13 +345,15 @@ public sealed class FlowService(
                 workflow,
                 EveryRun(context, RunCommand),
                 RunCommand,
+                inputGround,
                 run,
                 given,
                 checkout.Head,
                 checkout.Branch,
                 refusal: name =>
                 {
-                    var (refused, lists) = Start(checkout, workflow, FlowInputs.AsRead(workflow, resolved, OrchestratorLayout.Of(context.Layout, name)), name);
+                    // The run this start makes keeps its file inputs' copies, as every run this build makes does.
+                    var (refused, lists) = Start(checkout, workflow, FlowInputs.AsRead(workflow, resolved, OrchestratorLayout.Of(context.Layout, name), copies: true), name);
                     named = lists;
                     return refused ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files);
                 },
@@ -366,7 +378,7 @@ public sealed class FlowService(
             context,
             layout,
             RunCommand,
-            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, FlowInputs.AsRead(workflow, resolved, layout), layout.Name, out _)),
+            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, FlowInputs.AsRead(workflow, resolved, layout, runContext.InputCopies), layout.Name, out _)),
             () =>
             {
                 WorkflowCache.OfRun(_fileSystem, layout).Keep(check.Remotes);
@@ -1720,13 +1732,14 @@ public sealed class FlowService(
             // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
             // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the
             // configuration's runners say a run of it writes there. The inputs are what the run's steps read - a file
-            // input the copy the run made of it as it started - in every session alike; its records keep them as given.
+            // input the copy the run made of it as it started, where its records say it keeps one, else as given - in
+            // every session alike; its records keep them as given.
             var coordinator = new FlowCoordinator(
                 definition,
                 _runner,
                 new ConfiguredRunnerFacts(context.Config),
                 _clock,
-                FlowInputs.AsRead(definition, runContext.Inputs, layout),
+                FlowInputs.AsRead(definition, runContext.Inputs, layout, runContext.InputCopies),
                 records,
                 resume,
                 layout.Name,

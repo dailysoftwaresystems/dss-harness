@@ -223,7 +223,8 @@ public sealed class OrchestrationStoreTests
     /// <summary>
     /// A record that says it only reads names its tree - a repository of its own at its address, the worktrees root it was
     /// made under - with the three together, or, written by an older tool before such an agent had a tree, none of them nor
-    /// a base; it never records a move of a base, nor a session. A record that says nothing - which is every record an
+    /// a base; it never records a move of a base, nor a session, and the step its tree was last brought for is a step's
+    /// attempt, counted from 1. A record that says nothing - which is every record an
     /// older tool wrote of an agent whose work is folded - holds all of its worktree's members. Each is refused where it is
     /// not so. An <c>access</c> that names no kind of agent is refused on any record, never read as the default kind.
     /// </summary>
@@ -238,6 +239,8 @@ public sealed class OrchestrationStoreTests
     [InlineData("a session", "it only reads, and records the session 'sess1'")]
     [InlineData("an access no agent has", "its access is 'banana', and an agent's is 'read' or 'write'")]
     [InlineData("closed with no closing", "it is closed, and records no closing, or records a deletion")]
+    [InlineData("a tree brought for no attempt", "the step its tree was last brought for: its attempt is 0, and an attempt counts from 1")]
+    [InlineData("a tree brought for no step", "the step its tree was last brought for: it names no step")]
     public async Task ARecordThatReads_HoldingWhatSuchAnAgentNeverHolds_IsRefused(string what, string why)
     {
         using var temp = new TempDirectory();
@@ -260,6 +263,8 @@ public sealed class OrchestrationStoreTests
             "what a move of its base removed" => text.Replace("{", "{\n  \"movingRemoved\": [ \"a.txt\" ],", StringComparison.Ordinal),
             "a session" => text.Replace("{", "{\n  \"session\": \"sess1\",", StringComparison.Ordinal),
             "closed with no closing" => text.Replace("\"state\": \"live\"", "\"state\": \"closed\"", StringComparison.Ordinal),
+            "a tree brought for no attempt" => text.Replace("{", "{\n  \"readiedFor\": { \"instance\": \"think\", \"attempt\": 0 },", StringComparison.Ordinal),
+            "a tree brought for no step" => text.Replace("{", "{\n  \"readiedFor\": { \"instance\": \" \", \"attempt\": 1 },", StringComparison.Ordinal),
             _ => text.Replace("\"access\": \"read\"", "\"access\": \"banana\"", StringComparison.Ordinal),
         });
 
@@ -296,12 +301,14 @@ public sealed class OrchestrationStoreTests
 
     /// <summary>
     /// A record that does not say it only reads names its worktree and the root it was made under, which were
-    /// members of the type before there was another kind and are now its own to require.
+    /// members of the type before there was another kind and are now its own to require; and it names no step its tree
+    /// was brought for, for only the tree of an agent that only reads is ever brought anywhere.
     /// </summary>
     [Theory]
     [InlineData("worktree", "it records no worktree, and an agent whose work is folded has one of its own")]
     [InlineData("worktrees root", "it records no worktrees root, and an agent whose work is folded was made under one")]
-    public async Task ARecordThatWrites_MissingItsWorktreeOrItsRoot_IsRefused(string what, string why)
+    [InlineData("a tree brought for a step", "its work is folded, and it records its tree as brought for 'think'")]
+    public async Task ARecordThatWrites_MissingItsWorktreeOrItsRoot_OrNamingAStepItsTreeWasBroughtFor_IsRefused(string what, string why)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -313,6 +320,7 @@ public sealed class OrchestrationStoreTests
         File.WriteAllText(file, what switch
         {
             "worktree" => text.Replace($"  \"worktree\": \"{record.Worktree}\",\n", string.Empty, StringComparison.Ordinal),
+            "a tree brought for a step" => text.Replace("{", "{\n  \"readiedFor\": { \"instance\": \"think\", \"attempt\": 1 },", StringComparison.Ordinal),
             _ => text.Replace($"  \"worktreesRoot\": \"{record.WorktreesRoot}\",\n", string.Empty, StringComparison.Ordinal),
         });
 

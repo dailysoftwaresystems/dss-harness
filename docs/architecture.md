@@ -1487,7 +1487,9 @@ outside its tree - `work/<agent>/` and `plans/<agent>/` - and a tree of its own,
 agent's tree (`IWorktreeService.CreateAtAsync`, a repository of its own borrowing the main checkout's objects,
 detached at the main checkout's HEAD, its commit kept alive by `WorktreeKeepalive`), never a second way of making
 trees. Its record says `"access": "read"` (`AgentRecord.Access`) beside the tree's `worktree`, `tree` and
-`worktreesRoot` and the commit it stands on as `base`; a record that says no access is an agent whose work is folded,
+`worktreesRoot` and the commit it stands on as `base`, and, once the engine has brought its tree for a step, the step
+attempt it was last brought for as `readiedFor` (`AgentRecord.ReadiedFor`: the instance and the attempt, which a record
+of an agent whose work is folded never names); a record that says no access is an agent whose work is folded,
 which is every record an older tool wrote of one and what the tool still writes for one, so those records read as they
 always did. The engine makes one for a read-only reason step, and nothing else does - the option's help says a person
 has no use for one by hand. As every step that works as it starts - each attempt of its first, and of each that goes
@@ -1502,9 +1504,14 @@ step names none - whatever the agent wrote there before; the record then names t
 git reads one in the main checkout before anything is held: one that names none the repository holds, blank among
 them, is refused with nothing changed and fails the step, never read as the main checkout's HEAD in its place. The key
 is a reading step's alone: the definition's check refuses it on a step that writes or works in an agent's worktree, by
-its own keys or by those of the step whose work it goes on with (`WorkflowValidator`). An attempt that goes on with an
-answer in its own conversation - a person's, a limit's `more` or `compact` - is the same start going on, and finds the
-tree as its attempt left it. A tree that is not there - a record an older tool wrote, saying `"access": "read"` and
+its own keys or by those of the step whose work it goes on with (`WorkflowValidator`). Before the bringing touches the
+tree the record names the attempt it is brought for (`AgentReadyRequest.For`, `CreateAgentRunner.ReadiedFor`), so one
+stopped part way never reads as the tree an earlier attempt left. An attempt that goes on with an answer in its own
+conversation - a person's, a limit's `more` or `compact` - is the same start going on, and finds the tree as its attempt
+left it, save where the record names another attempt - another step working as the agent started while this one
+waited, for a step that waits on a question holds no claim - or none, as a record an older tool wrote does: the tree is
+then brought there again as a start brings it, and the agent is told so at the head of the message it goes on with,
+where the tree stands and that what it wrote there is gone (`ReasonStepRunner.TreeBroughtAgain`). A tree that is not there - a record an older tool wrote, saying `"access": "read"` and
 naming no tree, or a making that failed - is made at the step's start, at the main checkout's HEAD by the one making,
 and brought on to the commit asked where that is another, and the record given its three facts; anything else at its
 path is refused, nothing touched. The agent may write its tree, where it builds and tests, and its
@@ -4359,7 +4366,13 @@ step whose work it goes on with, `FlowCoordinator.WorkingOf`): the start of a st
 reads resets that tree and its work writes it, so of two steps that go on with one reading step's work the second
 starts once the first has ended - two visits of one that goes on with its own, which work in the agent its first visit
 made, claiming that agent by the declaration before either is given it (`FlowCoordinator.ClaimedAgentOf`) - and no
-step's start discards another's scratch under it.
+step's start discards another's scratch under it. A reading step that begins work of its own is given its agent as it
+starts, and holds write on that agent's tree from then (`FlowCoordinator.ClaimsOf`, read again once `Start` names it),
+so what its attempt keeps held past its end names the tree too. A step that waits on a question holds nothing, so the
+second may start while the first waits - and the first's going on brings the tree there again; an advice of the run's
+advisor holds read on the tree it works in until its runner ends (`FlowClaims.OfAdvice`, the tree named as the asking
+step's own claims name it, `FlowCoordinator.AdvisedTreeOf`), so no step's start brings that tree elsewhere under the
+advice.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
 person gave - both through one record, `updates.json` (`Flow\FlowUpdates.cs`: its entries `u<n>` by order taken, cause
@@ -4683,18 +4696,29 @@ to the path budget of its agents' worktrees - what each worktree's own check cou
 (`WorktreeRoom`), with the copies and workers its leg steps keep inside them (`FlowRunPaths`) - opens the file each of
 the run's own inputs of the kind `file` names where its value, given or its default, is not empty - a path from the
 main checkout's root or an absolute one inside it, read from the main checkout as it stands, committed or not, and
-decided as an agent's read of it over the main checkout alone would be, since every agent of the run reads the copy:
-held to the main checkout by where it leads, every link on its way followed - the file's own and a directory's above
-it (`ConfinedPaths`) - kept from every credential slot of the tool (`AgentPolicy`), and read through the file as it
+decided as an agent's read of it is, since every agent of the run reads the copy - on the ground the one builder of an
+agent's ground builds for it (`AgentStepGround.OfFileInputs`: an agent's read of the main checkout under the
+configuration the run starts under, never a ground built by hand beside it): held to the main checkout by where it
+leads, every link on its way followed - the file's own and a directory's above it (`ConfinedPaths`) - kept from every
+place no agent's read reaches - every credential slot of the tool, every Claude Code directory and every place the user
+keeps credentials in, `agentPolicy.hiddenPlaces` among them - and from every read `agentPolicy.restrictions` refuse
+(`AgentPolicy`), and read through the file as it
 was opened, where it stands decided again before a byte passes (`AgentFiles.OpenDecided`), so a link put on its way
 since reaches nothing; anything else refused (13), naming the input and the path, no run started
 (`FlowInputs.OpenFiles`) - makes the run's directory and copies each file into it, `inputs/<input>/<the file's name>`
 (`OrchestratorLayout.InputCopy`), before it makes the run's record, its status and its owner
-(`.orchestrators/<run>.owner.json`), and leaves the section. What a step reads for such an input - `{input.<name>}`
+(`.orchestrators/<run>.owner.json`), and leaves the section. The file's bytes are first read there: a place of the
+run or a copy that cannot be made - a file on a share gone, a locked range, a full disk - takes back what the start had
+made of the run, or says what it could not, and refuses the start (13), naming the input and why and that no run was
+started (`FlowInputFiles.Keep`, `FlowSessions.CreateAsync`), so no directory is left holding no run's record, which a
+start of that name would be refused over. What a step reads for such an input - `{input.<name>}`
 in every prompt and every expression, and a pull request's base - is the copy's full path (`FlowInputs.AsRead`, the
 one owner of what a step reads for an input, which every session hands the engine), so every step of every session,
 a resume's included, reads the file the run was started with, whatever the person did to it since; the run's records
-keep the value as it was given. Every agent of the run reads the run's `inputs/` as a root of its own
+keep the value as it was given. That the run keeps its copies is a fact of its own, recorded as it is made
+(`FlowRunContext.InputCopies`, `flow.json`'s `inputCopies`) and read back by every session: a run an older build made
+kept none and its `flow.json` says nothing of them, so its steps read each file input as it was given, as that build
+handed it to them, never the path of a copy that was never made. Every agent of the run reads the run's `inputs/` as a root of its own
 (`AgentStepGround`): an untracked or uncommitted file is in no agent's tree - a write agent's worktree is cut from the
 run's start commit, and an agent that only reads has its tree brought to the main checkout's HEAD - and reaches both
 alike. A used workflow's file input is no such thing: it names a file of that workflow's own directory, which the

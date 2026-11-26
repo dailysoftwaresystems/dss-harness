@@ -137,8 +137,14 @@ public sealed class ReasonStepRunner(
         // its work: brought to the main checkout's HEAD, or to that commit, now, whatever it wrote there before discarded,
         // and made where it is not there, before anything of the step reads it. An attempt that goes on with an answer in
         // its own conversation - a person's, a limit's more or compact - is the same start going on, and finds the tree as
-        // its attempt left it.
-        if (agentRecord.Reads && GoingOnOf(run) is null)
+        // its attempt left it: save where the agent's record names another attempt as the one its tree was last brought
+        // for - another step working as the agent started while this one waited, for a step that waits on its answer holds
+        // no tree - or names none, as a record an older tool wrote does. Then the tree is brought there again, as the start
+        // brings it, and the agent is told so in the message it goes on with: what it wrote there is gone.
+        var goingOn = GoingOnOf(run);
+        string? broughtAgain = null;
+
+        if (agentRecord.Reads && (goingOn is null || agentRecord.ReadiedFor != CreateAgentRunner.ReadiedFor(run)))
         {
             if (await create.ReadyAsync(run, agent, cancellationToken).ConfigureAwait(false) is { } unready)
             {
@@ -146,6 +152,11 @@ public sealed class ReasonStepRunner(
             }
 
             agentRecord = store.ReadAgent(layout, agent)!;
+
+            if (goingOn is not null)
+            {
+                broughtAgain = TreeBroughtAgain(run.Step.Commit, agentRecord.Base!);
+            }
         }
 
         // A reader's tree holds what the commit it was brought to holds, not what the main checkout does - and, for an attempt
@@ -270,7 +281,6 @@ public sealed class ReasonStepRunner(
         // step goes on with earlier work and names one, in its place. An attempt that goes on with an answer - a
         // person's answer to what its agent asked, a limit's `more` or `compact` - sends the answer as its message in
         // the attempt's own conversation instead, and no skill is handed again.
-        var goingOn = GoingOnOf(run);
 
         // The prompt the attempt sends: an answer that goes on with this attempt sends its own message - the person's
         // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
@@ -311,6 +321,13 @@ public sealed class ReasonStepRunner(
             }
 
             (filled, skills) = (given.Prompt!, given.Skills);
+        }
+
+        // An attempt that goes on in a tree brought there again since it waited is told so first, before what it goes on
+        // with: whatever it remembers writing there is gone.
+        if (broughtAgain is not null)
+        {
+            filled = $"{broughtAgain}\n\n{filled}";
         }
 
         // The handoff the attempt is given - a stop wrote it, or a limit the attempt before this one reached - stands
@@ -826,6 +843,17 @@ public sealed class ReasonStepRunner(
 
     /// <summary>The tag the handoff's part of a prompt is wrapped in, as the first user message wraps its own parts.</summary>
     public const string HandoffTag = "handoff";
+
+    /// <summary>
+    /// What an agent that only reads is told as its attempt goes on after an answer in a tree brought there again - another
+    /// step worked as the agent while the attempt waited, or nothing told who the tree was last brought for: where the tree
+    /// now stands, and that what the agent wrote there is gone.
+    /// </summary>
+    /// <param name="named">The commit the step's <c>commit</c> names, as the engine filled it; null where it names none, and the tree stands on the main checkout's HEAD.</param>
+    /// <param name="commit">The commit the tree was brought to, exactly as committed.</param>
+    public static string TreeBroughtAgain(string? named, string commit)
+        => $"While this step waited for its answer, your tree was brought to {(named is null ? "the main checkout's HEAD" : "the commit your step names")} "
+            + $"({commit}) again, for another step may have worked in it meanwhile: whatever you wrote there is gone, and the tree holds exactly what that commit holds.";
 
     /// <summary>
     /// What this attempt goes on with, where its answers gave it something to: the last answer of this attempt's
