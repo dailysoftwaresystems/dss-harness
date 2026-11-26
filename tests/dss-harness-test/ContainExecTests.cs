@@ -2033,6 +2033,120 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A process of a group's tree that left the group - here into a group of its own - and refuses to be asked to end is
+    /// still ended by the group's end, on Linux and macOS: the first reading finds it in the standing leader's tree, and once
+    /// the group is held it is told from a later process given its id by its start, read in place as that reading was
+    /// taken - no listing of the group or the session names it any more.
+    /// </summary>
+    [Fact]
+    public async Task AProcessOfAGroupsTreeThatLeftTheGroupAndRefusesToEnd_IsEndedByItsStart()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is Linux's and macOS's; Windows ends a job.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var ready = temp.Combine("ready");
+        var start = TestHost.StartOf(Child("lead-then", "group", "spawn-holder", "sleep", "300000", "lead-then", "group", "ignore-term-and-sleep", "300000", ready));
+        var holder = LearnedProcess.None;
+
+        start.RedirectStandardOutput = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            var said = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+
+            holder = LearnedProcess.In(said ?? string.Empty, "holder=") ?? LearnedProcess.None;
+
+            Assert.True(
+                Until(() => GroupOf(leader.Id) == leader.Id && GroupOf(holder.Id) == holder.Id && File.Exists(ready)),
+                $"the leader {leader.Id} never led a group with its holder {holder} in a group of its own refusing to be asked to end: '{said}'");
+
+            var ending = await Containment.EndSessionAsync(
+                leader.Id,
+                ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()).ReadAsync,
+                TimeSpan.Zero,
+                _ => { },
+                TimeProvider.System,
+                ProcessEnds.Machine,
+                group: true).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(holder.AwaitGone(), $"the holder {holder}, in the group's tree, outlived the group's end");
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its group's end");
+        }
+        finally
+        {
+            holder.TryEnding();
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A session's end holds what a member started before its own hold, on Linux and macOS: the system is read again until a
+    /// reading holds nothing new. Here the leader's child and its child each lead a group of their own in the leader's
+    /// session; the process table is read as before either started, and the first listing of every process lacks one of
+    /// them - as one started by the other after that listing was read would be. That listing holds the other, so the next
+    /// finds the one it lacked, which is held and ended with the rest; read once, it was left running.
+    /// </summary>
+    [Fact]
+    public async Task ASessionsEnd_HoldsWhatAMemberStartedBeforeItsOwnHold_ReadingTheSystemUntilNothingNewIsHeld()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a session is Linux's and macOS's; Windows ends a job.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var start = TestHost.StartOf(Child(
+            "lead-then", "session", "spawn-holder", "sleep", "300000", "lead-then", "group", "spawn-holder", "sleep", "300000", "lead-then", "group", "sleep", "300000"));
+        var child = LearnedProcess.None;
+        var grandchild = LearnedProcess.None;
+
+        start.RedirectStandardOutput = true;
+
+        using var leader = Process.Start(start)!;
+
+        try
+        {
+            var first = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+            var second = await leader.StandardOutput.ReadLineAsync(cancellationToken).AsTask().WaitAsync(LongBound, cancellationToken);
+
+            child = LearnedProcess.In(first ?? string.Empty, "holder=") ?? LearnedProcess.None;
+            grandchild = LearnedProcess.In(second ?? string.Empty, "holder=") ?? LearnedProcess.None;
+
+            Assert.True(
+                Until(() => getsid(leader.Id) == leader.Id && GroupOf(child.Id) == child.Id && GroupOf(grandchild.Id) == grandchild.Id),
+                $"the leader {leader.Id} never led a session holding {child} and {grandchild}, each leading a group of its own: '{first}', '{second}'");
+
+            var ending = await Containment.EndSessionAsync(
+                leader.Id,
+                new Unseen(ProcessTableFactory.Create(new HostPlatform(), ContainingRunner()), [child.Id, grandchild.Id]).ReadAsync,
+                TimeSpan.Zero,
+                _ => { },
+                TimeProvider.System,
+                new ListedLate(grandchild.Id)).WaitAsync(LongBound, cancellationToken);
+
+            Assert.Equal(new HeldEnding(Found: true, null), ending);
+            Assert.True(child.AwaitGone(), $"the child {child}, in the session, outlived the session's end");
+            Assert.True(grandchild.AwaitGone(), $"the grandchild {grandchild}, missing from the first listing of every process, outlived the session's end");
+            Assert.True(leader.WaitForExit(LongBound), $"the leader {leader.Id} outlived its session's end");
+        }
+        finally
+        {
+            grandchild.TryEnding();
+            child.TryEnding();
+
+            if (!leader.HasExited)
+            {
+                leader.Kill();
+            }
+        }
+    }
+
+    /// <summary>
     /// A process group a sweep ends where the process table cannot be read is ended by its id, which needs no table, and
     /// says what was not reached as a group's: where the table cannot be read at all, and where it reads but the system's
     /// own listing of every process cannot be read again once the group was asked to end and held. One already ended, its
@@ -2078,7 +2192,7 @@ public sealed class ContainExecTests
                         "never" => UnreadableTable.Unreached("its group was ended", group: true),
                         "ended" => UnreadableTable.Unreached("its group had already ended", group: true),
                         _ => "the system's table of every process could not be read again once the process group a child apart from the terminal led had been asked "
-                            + "to end: its group was ended, and what of its tree had left the group was not reached",
+                            + "to end: its group and what the first reading found of its tree were ended, and what was started meanwhile outside the group was not reached",
                     }),
                 ending);
             Assert.True(group.WaitForExit(LongBound), $"the group {group.Id} outlived its end");
@@ -2827,7 +2941,8 @@ public sealed class ContainExecTests
     /// <summary>
     /// The machine's process table as <paramref name="inner"/> reads it, every start dated in the reverse of the order the
     /// processes started in - each child before its parent - as a clock stepped back between their starts would date them:
-    /// one start to each process, the same in every reading, so a process is told from a later holder of its id as before.
+    /// one start to each process, the same in every reading, so a tree read through it still joins each child to its
+    /// parent by the parent the system names.
     /// </summary>
     private sealed class StartsReversed(IProcessTable inner) : IProcessTable
     {
@@ -2842,6 +2957,36 @@ public sealed class ContainExecTests
                     StartedUtc = process.StartedUtc is { } started ? new DateTimeOffset(DateTimeOffset.MaxValue.UtcTicks - started.UtcTicks, TimeSpan.Zero) : null,
                 })],
             };
+        }
+    }
+
+    /// <summary>
+    /// The machine's process table as <paramref name="inner"/> reads it, without the processes <paramref name="unseen"/>
+    /// names - as a reading taken before they started would be.
+    /// </summary>
+    private sealed class Unseen(IProcessTable inner, IReadOnlyList<int> unseen) : IProcessTable
+    {
+        public async Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            var reading = await inner.ReadAsync(cancellationToken);
+
+            return reading with { Processes = [.. reading.Processes.Where(process => !unseen.Contains(process.Id))] };
+        }
+    }
+
+    /// <summary>
+    /// The machine's ends, but for the first listing of every process, which lacks the process <paramref name="late"/>
+    /// names - as one started after that listing was read would be.
+    /// </summary>
+    private sealed class ListedLate(int late) : ProcessEnds
+    {
+        private int _listings;
+
+        public override IReadOnlyList<int>? Every()
+        {
+            var every = base.Every();
+
+            return Interlocked.Increment(ref _listings) == 1 ? every?.Where(id => id != late).ToList() : every;
         }
     }
 

@@ -152,9 +152,11 @@ internal static class Containment
     /// asked goes too; a process the first reading found is killed only where it is still that very
     /// process, its start read as the first reading was taken, so an id given to another process
     /// meanwhile is left alone. Each is held still (SIGSTOP) as it is found - the group as one before
-    /// the system is read again - so none starts another or goes before it is killed. That reading is
-    /// made in place - the system's own listing of every process (<see cref="ProcessEnds.Every"/>), each
-    /// one's session or group asked of it by its id - never through a program, nor anything else between
+    /// the system is read again - so none starts another or goes before it is killed, and the system is
+    /// read again until a reading holds nothing new: one found in the session but not held yet - one in a
+    /// group of its own there - may start another before its own hold, which the next reading finds in the
+    /// session. Each reading is made in place - the system's own listing of every process
+    /// (<see cref="ProcessEnds.Every"/>), each one's session or group asked of it by its id - never through a program, nor anything else between
     /// the hold and the kill: on macOS, for as long as a child of a process stands stopped, that process's
     /// runtime spins over reaping its children, holding the lock every start of a program takes, and the
     /// group held here may hold this very process's child - a reading through <c>ps</c> then never began,
@@ -281,35 +283,47 @@ internal static class Containment
         // Read in place while the group is held: nothing is started between the hold and the kill.
         HeldEnding HeldAgain()
         {
-            if (ends.Every() is not { } again)
-            {
-                // Still a member of the session - or the group - is still one of the run's, whoever its
-                // parent: only what left it can no longer be told from another process under the same id.
-                foreach (var member in members.Where(member => In(member.Id)))
-                {
-                    _ = holding.Hold(member.Id);
-                }
+            // Known by id and start alone: a process handed to another parent, or one that became another program, is
+            // still the one the first reading found - and is held whether or not the system can be listed again.
+            var stillKnown = known.Where(member => Identity.IsSame(member.Id, member.Stamp!)).Select(member => member.Id).ToHashSet();
 
-                return new HeldEnding(
-                    Found: true,
-                    group
-                        ? $"the system's table of every process could not be read again once {held} had been asked to end: "
-                            + "its group was ended, and what of its tree had left the group was not reached"
-                        : $"the system's table of every process could not be read again once {held} had been asked to end: "
-                            + "its group and what the first reading found still in the session were ended, and what was started meanwhile outside the group, "
-                            + "and what of its tree had left the session, was not reached");
-            }
-
-            // Known by id and start alone: a process handed to another parent, or one that became
-            // another program, is still the one the first reading found.
-            var stillKnown = known.Where(member => again.Contains(member.Id) && Identity.IsSame(member.Id, member.Stamp!)).Select(member => member.Id).ToHashSet();
-
-            foreach (var id in again.Where(id => stillKnown.Contains(id) || In(id)))
+            foreach (var id in stillKnown)
             {
                 _ = holding.Hold(id);
             }
 
-            return new HeldEnding(Found: true, null);
+            while (true)
+            {
+                if (ends.Every() is not { } again)
+                {
+                    // Still a member of the session - or the group - is still one of the run's, whoever its parent.
+                    foreach (var member in members.Where(member => In(member.Id)))
+                    {
+                        _ = holding.Hold(member.Id);
+                    }
+
+                    return new HeldEnding(
+                        Found: true,
+                        group
+                            ? $"the system's table of every process could not be read again once {held} had been asked to end: "
+                                + "its group and what the first reading found of its tree were ended, and what was started meanwhile outside the group was not reached"
+                            : $"the system's table of every process could not be read again once {held} had been asked to end: "
+                                + "its group and what the first reading found in the session and its tree were ended, and what was started meanwhile outside the group was not reached");
+                }
+
+                var before = holding.Processes.Count;
+
+                foreach (var id in again.Where(id => !holding.Tried(id) && In(id)))
+                {
+                    _ = holding.Hold(id);
+                }
+
+                // Every reading holds what it finds before the next is read; one that holds nothing new found all there was.
+                if (holding.Processes.Count == before)
+                {
+                    return new HeldEnding(Found: true, null);
+                }
+            }
         }
     }
 
