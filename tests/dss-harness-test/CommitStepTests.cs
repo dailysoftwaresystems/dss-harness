@@ -335,6 +335,33 @@ public sealed class CommitStepTests
     }
 
     /// <summary>
+    /// The repository's commit hooks still run under the git the tool starts untranslated, and inherit its locale: a
+    /// pre-commit hook runs, sees <c>LC_ALL=C</c>, and the commit is made.
+    /// </summary>
+    [Fact]
+    public async Task ACommitsHooks_RunAndInheritTheUntranslatedLocale()
+    {
+        using var temp = new TempDirectory();
+        using var seen = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        _ = await FoldedAsync(kit, "fold", ("a.txt", "folded\n"));
+        var hook = Path.Combine(kit.Main, ".git", "hooks", "pre-commit");
+        var said = seen.Combine("locale.txt");
+        File.WriteAllText(hook, $"#!/bin/sh\nprintf '%s' \"$LC_ALL\" > '{said.Replace('\\', '/')}'\n");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hook, File.GetUnixFileMode(hook) | UnixFileMode.UserExecute);
+        }
+
+        var ended = await Runner(kit).RunAsync(Run(kit, Step(), "fold"), Token);
+
+        Assert.True(ended.Passed, ended.Error);
+        Assert.Equal(GitOwnSettings.Locale, File.ReadAllText(said));
+        Assert.Equal(FlowCommitEntry.Committed, kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits[0].State);
+    }
+
+    /// <summary>
     /// A staged set an attempt before left - cut off after its commit was made - is settled as committed where HEAD moved
     /// and holds it, and the step is done with that commit, making none.
     /// </summary>

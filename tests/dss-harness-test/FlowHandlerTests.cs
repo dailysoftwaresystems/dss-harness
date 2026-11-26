@@ -1553,6 +1553,9 @@ public sealed class FlowHandlerRecordsTests
 
         public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
             => inner.AffectedTests(entries);
+
+        public void Flush()
+            => inner.Flush();
     }
 
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time.</summary>

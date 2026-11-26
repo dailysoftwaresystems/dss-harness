@@ -209,6 +209,134 @@ public sealed class FlowCoordinatorTests
         }
     }
 
+    /// <summary>A run's records that keep, in order, the kind of each event written and each flush the engine asks of them.</summary>
+    private sealed class Passes : IFlowRecords
+    {
+        private readonly List<string> _log = [];
+        private readonly TaskCompletionSource _flushed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Each event's kind and each flush (<c>flush</c>), in the order the engine asked them.</summary>
+        public IReadOnlyList<string> Log
+        {
+            get
+            {
+                lock (_log)
+                {
+                    return [.. _log];
+                }
+            }
+        }
+
+        /// <summary>Completes at the first flush.</summary>
+        public Task Flushed => _flushed.Task;
+
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            lock (_log)
+            {
+                _log.Add(instance is null ? FlowEvent.KindOf(kind) : $"{FlowEvent.KindOf(kind)} {instance} {to}");
+            }
+        }
+
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+        {
+        }
+
+        public void Updates(FlowUpdatesFile updates)
+        {
+        }
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+        }
+
+        public void Flush()
+        {
+            lock (_log)
+            {
+                _log.Add("flush");
+            }
+
+            _ = _flushed.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// A run's events are put on the disk as each pass of the engine's loop ends - before it waits on what it started, its
+    /// writes of the pass written before the flush - and as its session ends, however it ends: done, failed, asking, paused
+    /// or stopped, each session's last record its end's, and nothing written after the flush that follows it.
+    /// </summary>
+    [Theory]
+    [InlineData("done")]
+    [InlineData("failed")]
+    [InlineData("asking")]
+    [InlineData("paused")]
+    [InlineData("stopped")]
+    public async Task ARunsEvents_AreOnTheDiskAsEachPassEnds_AndAsItsSessionEndsHoweverItEnds(string end)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: build
+              - name: after
+                type: orient
+                dependsOn: [work]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("work");
+        var records = new Passes();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("work").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await records.Flushed.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The pass that started the step ended before the engine waited on it: what it wrote was flushed with it.
+        var firstPass = records.Log.TakeWhile(entry => entry != "flush").ToList();
+
+        Assert.Equal("sessionBegan", firstPass[0]);
+        Assert.Equal("step work Running", firstPass[^1]);
+
+        FlowRunStatus expected;
+
+        switch (end)
+        {
+            case "done":
+                gate.Done();
+                expected = FlowRunStatus.Done;
+                break;
+            case "failed":
+                gate.Fail(HarnessExit.CommandFailed, "it broke");
+                expected = FlowRunStatus.Failed;
+                break;
+            case "asking":
+                gate.Ask("choice", "Which way?", "left", "right");
+                expected = FlowRunStatus.Paused;
+                break;
+            case "paused":
+                coordinator.RequestPause("interrupt");
+                gate.Done();
+                expected = FlowRunStatus.Paused;
+                break;
+            default:
+                coordinator.RequestStop();
+                gate.Done();
+                expected = FlowRunStatus.Stopped;
+                break;
+        }
+
+        var ended = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var log = records.Log;
+
+        Assert.Equal(expected, ended.Status);
+        Assert.Equal(["sessionEnded", "flush"], log.Skip(log.Count - 2));
+
+        // Every event of the session was flushed by a pass's end: none was left waiting for a flush that never came.
+        Assert.Equal("flush", log[^1]);
+    }
+
     /// <summary>Steps ready at once start in a fixed order: declaration order, then instance id.</summary>
     [Fact]
     public async Task StepsReadyAtOnce_StartInDeclarationOrderThenInstanceId()

@@ -1719,6 +1719,10 @@ public sealed class FlowService(
         var inbox = answered?.Inbox is not null;
         var offered = new Offered();
 
+        // The session holds its run from here to its end: what it finds of where its trees are, and of the machine's gh
+        // login, it finds once, for every layer its work passes through.
+        using var session = EngineSession.Begin();
+
         // What the session says before anything else: a dead owner it reclaimed, or what a start could not hold its
         // checkout to.
         if (opening is not null)

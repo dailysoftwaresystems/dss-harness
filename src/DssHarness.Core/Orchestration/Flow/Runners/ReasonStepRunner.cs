@@ -39,7 +39,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="keys">The slot the entry's keys are read from.</param>
 /// <param name="gh">Runs <c>gh</c>, for a web-search source the machine's login reads.</param>
 /// <param name="harnessOutput">Writes output the copies of a continuation record name, and says a write of a measure call's ledger the file system refused as its legs' run went.</param>
-/// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
+/// <param name="clock">Tells the week a balanced key's spend is counted for, and when the machine's gh login's expiry has come.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
 /// <param name="gitClient">
 /// Asks git, for the paths an agent's worktree holds that no fold has taken, and for what it holds untracked as a step whose
@@ -140,11 +140,13 @@ public sealed class ReasonStepRunner(
         // its attempt left it: save where the agent's record names another attempt as the one its tree was last brought
         // for - another step working as the agent started while this one waited, for a step that waits on its answer holds
         // no tree - or names none, as a record an older tool wrote does. Then the tree is brought there again, as the start
-        // brings it, and the agent is told so in the message it goes on with: what it wrote there is gone.
+        // brings it, and the agent is told so in the message it goes on with: what it wrote there is gone. A start whose
+        // record names this very attempt finds its tree made for it a moment ago, at the main checkout's HEAD, by the making
+        // above (CreateAgentRunner.MakeAsync) - an attempt starts once - and brings it nowhere again.
         var goingOn = GoingOnOf(run);
         string? broughtAgain = null;
 
-        if (agentRecord.Reads && (goingOn is null || agentRecord.ReadiedFor != CreateAgentRunner.ReadiedFor(run)))
+        if (agentRecord.Reads && agentRecord.ReadiedFor != CreateAgentRunner.ReadiedFor(run))
         {
             if (await create.ReadyAsync(run, agent, cancellationToken).ConfigureAwait(false) is { } unready)
             {
@@ -223,7 +225,7 @@ public sealed class ReasonStepRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, string.Join("; ", noLongerReads));
         }
 
-        var (webSearch, webMask) = await WebSearchOf(context, providers, sources, root, cancellationToken).ConfigureAwait(false);
+        var (webSearch, webMask, logins) = await WebSearchOf(context, providers, sources, root, cancellationToken).ConfigureAwait(false);
 
         // What the step's agent is handed to read - its skills, its continuation record's copies - the tool writes in the
         // launch's own directory, which no command of the agent's writes, and the agent reads as a root of its own.
@@ -347,7 +349,17 @@ public sealed class ReasonStepRunner(
         var seeds = goingOn is { Prompt: { } answered }
             ? answered
             : string.Join("\n\n", (run.Handoff is { Length: > 0 } handoff ? [handoff] : Array.Empty<string>()).Concat(run.PromptValues?.GetValueOrDefault(prompted) ?? []));
-        var mask = launch.Mask(context.Layout, providers, webMask);
+        var began = launch.Mask(context.Layout, providers, webMask);
+        Execution.ILineMask? mask = began;
+
+        // A step whose search sends the machine's gh login keeps its mask open to the login read again while it runs: a
+        // token read for a host that refused the one the step began with, or for an expiry that came, is held by the mask
+        // every record of the step is kept through before it is sent.
+        if (webSearch is not null && logins is not null)
+        {
+            (webSearch, mask) = webSearch.Renewing(began, logins, context.Layout);
+        }
+
         var stepGraph = graphService is null
             ? null
             : await FlowStepGraph.OfAsync(
@@ -1005,16 +1017,20 @@ public sealed class ReasonStepRunner(
     /// <param name="sources">The configuration's web search, already read and held to V55's names by the caller.</param>
     /// <param name="step">The step at the root of the step's chain of work (<see cref="ResumeChain.Root"/>), whose <c>search</c> picks its sources.</param>
     /// <param name="cancellationToken">Stops the reading of keys.</param>
-    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask)> WebSearchOf(HarnessContext context, AgentProviders providers, Web.Search.WebSearchSources sources, WorkflowStep step, CancellationToken cancellationToken)
+    private async Task<(AgentWebSearch? Search, Runners.ActionValues? Mask, Ci.GhLogins? Logins)> WebSearchOf(HarnessContext context, AgentProviders providers, Web.Search.WebSearchSources sources, WorkflowStep step, CancellationToken cancellationToken)
     {
         if (sources.Chosen(step.Search) is not [_, ..] chosen)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
-        var read = await new Web.Search.WebSearchKeys(keys, gh).ReadAsync(context.Layout, providers.Appointed(), chosen, cancellationToken).ConfigureAwait(false);
+        // The machine's gh logins as the session holds them, read once in it: the keys are read of them, and the step's
+        // search renews by them.
+        var reader = new Web.Search.WebSearchKeys(keys, gh, clock);
+        var logins = reader.Logins();
+        var read = await reader.ReadAsync(context.Layout, providers.Appointed(), chosen, cancellationToken, logins).ConfigureAwait(false);
 
-        return (AgentWebSearch.Of(sources, step.Search, read), Web.Search.WebSearchKeys.Mask(chosen, read));
+        return (AgentWebSearch.Of(sources, step.Search, read), Web.Search.WebSearchKeys.Mask(chosen, read), logins);
     }
 
     /// <summary>

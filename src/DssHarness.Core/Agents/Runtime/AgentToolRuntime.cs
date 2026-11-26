@@ -255,6 +255,7 @@ public sealed partial class AgentToolRuntime : IDisposable
                 new SearchRecords(this))
             {
                 Stall = run.Limits.StallSeconds is { } stall and > 0 ? TimeSpan.FromSeconds(stall) : null,
+                Renewal = search.Renewal,
 
                 // Told where the running operation says everything else, looked up as each wait tells.
                 Tell = static told => Waits.Told(told),

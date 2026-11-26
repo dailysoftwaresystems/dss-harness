@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Git;
@@ -65,8 +66,26 @@ public static class WorktreeRoom
         ArgumentException.ThrowIfNullOrWhiteSpace(checkout);
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
 
-        var files = await gitClient.ListFilesAtCommitAsync(checkout, commit, cancellationToken).ConfigureAwait(false);
+        // A commit's files are what its id names, whichever tree asks: an engine's session lists each commit once, for
+        // every tree it makes at it (EngineSession).
+        var measured = Execution.EngineSession.Of(() => new Measured());
 
-        return files.Select(file => file.Text.Length).DefaultIfEmpty(0).Max();
+        if (measured is not null && measured.TryGetValue(commit, out var known))
+        {
+            return known;
+        }
+
+        var files = await gitClient.ListFilesAtCommitAsync(checkout, commit, cancellationToken).ConfigureAwait(false);
+        var deepest = files.Select(file => file.Text.Length).DefaultIfEmpty(0).Max();
+
+        if (measured is not null)
+        {
+            measured[commit] = deepest;
+        }
+
+        return deepest;
     }
+
+    /// <summary>The deepest path of each commit an engine's session listed, by the commit's id.</summary>
+    private sealed class Measured() : ConcurrentDictionary<string, int>(StringComparer.Ordinal);
 }

@@ -789,8 +789,7 @@ public interface IGitClient
 
     /// <summary>
     /// Runs a git subcommand that reaches a remote - a listing of its refs, a fetch - with <paramref name="values"/> set in
-    /// its environment, where a credential is handed and no command line carries it, its messages in git's own words
-    /// untranslated, and no limit of time: a transfer of any size runs until it ends, or until it is stopped. It runs
+    /// its environment, where a credential is handed and no command line carries it, and no limit of time: a transfer of any size runs until it ends, or until it is stopped. It runs
     /// none of the repository's hooks.
     /// </summary>
     /// <param name="directory">The directory git runs in.</param>

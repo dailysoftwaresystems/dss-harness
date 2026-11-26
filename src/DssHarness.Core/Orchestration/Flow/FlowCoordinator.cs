@@ -1385,6 +1385,11 @@ public sealed class FlowCoordinator
 
                 break;
             }
+
+            // The last pass ended: what it wrote is on the disk before the session waits for what it leaves running. A
+            // session left by a failure never flushes on its way out, where a flush's own failure would hide the one
+            // leaving: what its last pass wrote is put on the disk by the records' close (FlowRunRecords).
+            EndThePass();
         }
         finally
         {
@@ -1414,8 +1419,20 @@ public sealed class FlowCoordinator
         }
 
         _last = Finish();
+
+        // The session's end is a pass's end: its record on the disk before the session answers.
+        EndThePass();
         return _last;
     }
+
+    /// <summary>
+    /// The end of a pass of the loop, for the run's records: every line written since the last pass ended is put on the
+    /// disk, at once (<see cref="IFlowRecords.Flush"/>). A pass ends where the loop waits on anything - the next thing the
+    /// run learns (<see cref="WaitNextAsync"/>), the handoff turns of a pause or of a plan update - and the session ends
+    /// with one, however it ends in order: done, failed, paused or stopped. So a power loss loses at most the last pass's
+    /// lines, and an end of the engine's process none, for each line is the system's as it is written.
+    /// </summary>
+    private void EndThePass() => _records?.Flush();
 
     /// <summary>
     /// A session's start where the run goes on, made before anything runs: what a pause, a stop or a crash stopped runs
@@ -1648,7 +1665,8 @@ public sealed class FlowCoordinator
         if (handingOff.Count > 0)
         {
             // All the turns at once, each bounded; what each spent is counted, for the budget counts a handoff turn
-            // as it counts the attempt it ends.
+            // as it counts the attempt it ends. The pause's record so far is on the disk before the turns are waited for.
+            EndThePass();
             var turns = handingOff.Select(each => HandoffTurnAsync(each.Instance, HandoffSecondsOf(each.Instance), each.Asked)).ToList();
             var accounts = await Task.WhenAll(turns).ConfigureAwait(false);
 
@@ -4925,6 +4943,8 @@ public sealed class FlowCoordinator
 
         if (handingOff.Count > 0)
         {
+            // What the update has recorded so far is on the disk before its handoff turns are waited for.
+            EndThePass();
             var accounts = await Task.WhenAll(handingOff.Select(each => HandoffTurnAsync(each.Member, HandoffSecondsOf(each.Member), each.Asked))).ConfigureAwait(false);
 
             for (var at = 0; at < handingOff.Count; at++)
@@ -11386,6 +11406,9 @@ public sealed class FlowCoordinator
     /// <summary>Waits for the next thing the run learns - a completion, an event of a leg, a retry's time coming, or the budget's tick - and takes it. One read of the channel is kept open across the waits a retry's turn takes, so no message is read by a wait that no longer stands.</summary>
     private async Task WaitNextAsync(CancellationToken cancellationToken)
     {
+        // The pass ends here: what it wrote is on the disk before anything is waited for.
+        EndThePass();
+
         // A read cancelled by a session's end is dropped, not kept: the next session arms its own.
         if (_pending is { IsCanceled: true } or { IsFaulted: true })
         {

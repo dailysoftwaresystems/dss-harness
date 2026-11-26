@@ -57,6 +57,16 @@ public interface IFlowRecords
     /// </summary>
     /// <param name="recorded">Every name the run's steps hold, and every name the session gave.</param>
     string NameAgent(IReadOnlyCollection<string> recorded) => OrchestrationRules.NextAgentName(recorded);
+
+    /// <summary>
+    /// Puts every line of the run's events written since the last flush on the disk (<see cref="FlowEventLog.Flush"/>): the
+    /// engine asks it once per pass, as the pass ends - before it waits on anything - and as its session ends, however it
+    /// ends, so a power loss loses at most the last pass's lines and an end of the engine's process none. A run held in
+    /// memory alone has nothing to flush.
+    /// </summary>
+    void Flush()
+    {
+    }
 }
 
 /// <summary>
@@ -693,7 +703,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         return _layout.InstanceDirectory(step.Instance, step.Agent);
     }
 
-    /// <summary>Closes the run's records: its event log, its last line whole.</summary>
+    /// <inheritdoc/>
+    public void Flush() => _events.Flush();
+
+    /// <summary>Closes the run's records: its event log, every line on the disk and its last line whole.</summary>
     public void Dispose() => _events.Dispose();
 
     /// <summary>Writes one step's own files: its output, validated, then its record, in the step's own directory.</summary>

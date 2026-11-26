@@ -257,7 +257,8 @@ public sealed class AgentService(
     /// <summary>
     /// Creates an agent, of either kind: with a worktree of its own whose work is folded, or - where
     /// <paramref name="readsOnly"/> is set - one that only reads, which the engine makes for a read-only reason step and
-    /// nothing else does: a tree of its own as well, made by the same making, at the main checkout's HEAD.
+    /// nothing else does: a tree of its own as well, made by the same making, at the main checkout's HEAD, for the step
+    /// attempt <paramref name="readiedFor"/> names where it names one.
     /// </summary>
     private async Task<CommandOutcome> CreateAsync(
         string startDirectory,
@@ -267,7 +268,8 @@ public sealed class AgentService(
         bool empty,
         string? session,
         bool readsOnly,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AgentReadiedFor? readiedFor = null)
     {
         if (readsOnly && empty)
         {
@@ -402,7 +404,7 @@ public sealed class AgentService(
             // Its record and its two directories are written, and its tree is made as the start of each of its steps makes
             // one that is not there: by the one making of every agent's tree, at the main checkout's HEAD. The log line is
             // the last of it.
-            var made = await ReadyTreeAsync(context, layout, _store.ReadAgent(layout, agent)!, CreateCommand, commit: null, asked: null, readiedFor: null, cancellationToken).ConfigureAwait(false);
+            var made = await ReadyTreeAsync(context, layout, _store.ReadAgent(layout, agent)!, CreateCommand, commit: null, asked: null, readiedFor, cancellationToken).ConfigureAwait(false);
 
             if (made.Facts is not AgentReady ready)
             {
@@ -4333,7 +4335,8 @@ public sealed class AgentService(
                 request.Empty,
                 request.Session,
                 request.ReadsOnly,
-                cancellationToken).ConfigureAwait(false));
+                cancellationToken,
+                request.ReadiedFor).ConfigureAwait(false));
     }
 
     /// <inheritdoc cref="IAgentService.ReadyAsync(AgentReadyRequest, CancellationToken)"/>

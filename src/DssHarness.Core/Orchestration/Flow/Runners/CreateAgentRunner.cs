@@ -135,9 +135,14 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
         }
 
         // None, and it is made; one there, whole, is answered as already made where it is what the step asked for, and
-        // refused, saying what it is, where it is not. A whole one is never handed anything again.
+        // refused, saying what it is, where it is not. A whole one is never handed anything again. A reader's tree is made
+        // at the main checkout's HEAD for the attempt that makes it, where that is where its step reads - its step naming
+        // no commit - so the attempt's start finds it brought there already (ReadyAsync), and brings it nowhere again.
         var created = await agents.CreateAsync(
-            new AgentCreateRequest(place.Repository, place.Run, made.Name, model, Empty: record is null && empty, Session: null, ReadsOnly: readsOnly),
+            new AgentCreateRequest(place.Repository, place.Run, made.Name, model, Empty: record is null && empty, Session: null, ReadsOnly: readsOnly)
+            {
+                ReadiedFor = readsOnly && run.Step.Commit is null ? ReadiedFor(run) : null,
+            },
             cancellationToken).ConfigureAwait(false);
 
         return created.Outcome.Succeeded

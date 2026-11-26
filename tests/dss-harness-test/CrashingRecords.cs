@@ -72,4 +72,13 @@ internal sealed class CrashingRecords(IFlowRecords inner, Func<FlowUpdatesFile, 
             inner.AffectedTests(entries);
         }
     }
+
+    /// <inheritdoc/>
+    public void Flush()
+    {
+        if (!_ended)
+        {
+            inner.Flush();
+        }
+    }
 }

@@ -198,12 +198,11 @@ public sealed partial class GitClient
         // The paths travel on standard input, after the commit and the line that ends the commits, so no list of them
         // outgrows a command line; a path that cannot be a line of it is named as an argument instead.
         var result = asArguments
-            ? await RunCoreAsync(directory, [.. walk, tip, "--", .. paths], echoOutput: false, untranslated: false, cancellationToken).ConfigureAwait(false)
+            ? await RunCoreAsync(directory, [.. walk, tip, "--", .. paths], echoOutput: false, cancellationToken).ConfigureAwait(false)
             : await RunCoreAsync(
                     directory,
                     [.. walk, "--stdin"],
                     echoOutput: false,
-                    untranslated: false,
                     indexFile: null,
                     $"{tip}\n--\n{string.Join('\n', paths)}\n",
                     cancellationToken)
@@ -585,7 +584,7 @@ public sealed partial class GitClient
             await File.WriteAllTextAsync(lines, string.Concat(declared.Select(path => Declaration(path.Key, path.Value) + '\n')), cancellationToken).ConfigureAwait(false);
 
             var blob = (await HashAsync(directory, [lines], new Hashing(Written: true, Filtered: false, Store: own), what, cancellationToken).ConfigureAwait(false))[0];
-            var tree = await RunCoreAsync(directory, ["mktree"], echoOutput: false, untranslated: false, indexFile: null, $"100644 blob {blob}\t{AttributesFile}\n", cancellationToken, objects: own)
+            var tree = await RunCoreAsync(directory, ["mktree"], echoOutput: false, indexFile: null, $"100644 blob {blob}\t{AttributesFile}\n", cancellationToken, objects: own)
                 .ConfigureAwait(false);
 
             Ensure(tree, what);
@@ -891,7 +890,6 @@ public sealed partial class GitClient
                 scratch,
                 [$"--git-dir={gitDirectory}", "unpack-file", blob],
                 echoOutput: false,
-                untranslated: false,
                 indexFile: null,
                 standardInput: null,
                 cancellationToken,
@@ -937,7 +935,6 @@ public sealed partial class GitClient
                 directory,
                 ["cat-file", "--batch-check=%(objecttype) %(objectsize)"],
                 echoOutput: false,
-                untranslated: false,
                 indexFile: null,
                 string.Concat(objects.Select(name => name + "\n")),
                 cancellationToken)

@@ -119,53 +119,66 @@ public sealed record AgentRepositoryMark(string MainCheckout, string Agent)
             return "is not there";
         }
 
-        var main = await gitClient.GetMainWorktreeAsync(MainCheckout, cancellationToken).ConfigureAwait(false);
-
-        if (main is null)
+        // A main checkout the engine's session located already is one: no bare repository and no agent's repository, which
+        // names another (SessionTrees.IsMainCheckout) - what the three questions below ask, answered by the session.
+        if (SessionTrees.OfSession(platform.PathComparison)?.IsMainCheckout(MainCheckout) is not true)
         {
-            return "is no repository's main checkout";
+            var main = await gitClient.GetMainWorktreeAsync(MainCheckout, cancellationToken).ConfigureAwait(false);
+
+            if (main is null)
+            {
+                return "is no repository's main checkout";
+            }
+
+            if (main.IsBare)
+            {
+                return "is a bare repository, which has no checkout";
+            }
+
+            if (!PathContainment.AreSame(main.Path, MainCheckout, platform.PathComparison))
+            {
+                return $"is no main checkout: git answers for it with '{ReportText.Printable(main.Path)}'";
+            }
+
+            if (await ReadAsync(gitClient, fileSystem, MainCheckout, cancellationToken).ConfigureAwait(false) is not null)
+            {
+                return "is itself an agent's repository";
+            }
         }
 
-        if (main.IsBare)
-        {
-            return "is a bare repository, which has no checkout";
-        }
-
-        if (!PathContainment.AreSame(main.Path, MainCheckout, platform.PathComparison))
-        {
-            return $"is no main checkout: git answers for it with '{ReportText.Printable(main.Path)}'";
-        }
-
-        if (await ReadAsync(gitClient, fileSystem, MainCheckout, cancellationToken).ConfigureAwait(false) is not null)
-        {
-            return "is itself an agent's repository";
-        }
-
-        var objects = await ObjectsOfAsync(gitClient, MainCheckout, cancellationToken).ConfigureAwait(false);
+        var objects = await ObjectsOfAsync(gitClient, platform, MainCheckout, cancellationToken).ConfigureAwait(false);
 
         return await BorrowsAsync(gitClient, platform, tree, objects, cancellationToken).ConfigureAwait(false)
             ? null
             : $"does not lend it its objects: '{ReportText.Printable(objects)}' is not among the object directories git reads there";
     }
 
-    /// <summary>The object directory of the repository whose checkout is <paramref name="mainCheckout"/>, as git spells it: absolute.</summary>
+    /// <summary>
+    /// The object directory of the repository whose checkout is <paramref name="mainCheckout"/>, as git spells it: absolute -
+    /// asked once in an engine's session, which keeps it (<see cref="SessionTrees.ObjectsAsync"/>).
+    /// </summary>
     /// <param name="gitClient">Asks git.</param>
+    /// <param name="platform">How paths compare.</param>
     /// <param name="mainCheckout">The checkout.</param>
     /// <param name="cancellationToken">Stops git.</param>
     /// <exception cref="HarnessException">git could not say (<see cref="HarnessExit.CommandFailed"/>).</exception>
-    public static async Task<string> ObjectsOfAsync(IGitClient gitClient, string mainCheckout, CancellationToken cancellationToken)
+    public static Task<string> ObjectsOfAsync(IGitClient gitClient, IHostPlatform platform, string mainCheckout, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(gitClient);
+        ArgumentNullException.ThrowIfNull(platform);
 
-        var asked = await gitClient
-            .RunAsync(mainCheckout, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        return SessionTrees.ObjectsAsync(mainCheckout, platform.PathComparison, async () =>
+        {
+            var asked = await gitClient
+                .RunAsync(mainCheckout, ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
 
-        return asked.Succeeded && asked.OutputLines is [var common]
-            ? common + "/objects"
-            : throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"Where the repository of '{ReportText.Printable(mainCheckout)}' keeps its objects could not be read: {asked.FailureMessage.TrimEnd('.')}.");
+            return asked.Succeeded && asked.OutputLines is [var common]
+                ? common + "/objects"
+                : throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"Where the repository of '{ReportText.Printable(mainCheckout)}' keeps its objects could not be read: {asked.FailureMessage.TrimEnd('.')}.");
+        });
     }
 
     /// <summary>

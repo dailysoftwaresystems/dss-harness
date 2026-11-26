@@ -12,7 +12,8 @@ namespace DssHarness.Core.Git;
 /// submodule's state by its commit alone, on its command line (<see cref="Arguments"/>); on Windows, every path past 260
 /// characters reached as any other is (<see cref="LongPaths"/>); and, in a tree whose git directories were pinned before
 /// an agent's launch or an execution over its work (<see cref="GitDirectoryPins"/>) - a main checkout's as well as a
-/// linked worktree's - those directories, whatever the tree's own files say of them now.
+/// linked worktree's - those directories, whatever the tree's own files say of them now; and git's messages untranslated
+/// (<see cref="Locale"/>).
 /// </summary>
 /// <remarks>
 /// A submodule's repository is configuration of its own, and where it sits in a tree an isolated agent writes - a
@@ -24,6 +25,17 @@ namespace DssHarness.Core.Git;
 /// </remarks>
 public static class GitOwnSettings
 {
+    /// <summary>The variable that names the locale every git of the tool's runs under, which outranks every other.</summary>
+    public const string LocaleVariable = "LC_ALL";
+
+    /// <summary>
+    /// The locale every git of the tool's runs under: C, in which git says every message in its own words, untranslated -
+    /// set at the one place a git of the tool's starts, never by its caller, so no answer is read in a language the reading
+    /// does not match, and every message a person is shown of git's is in English. The hooks a commit or a push runs
+    /// inherit it, as they inherit every variable git runs with.
+    /// </summary>
+    public const string Locale = "C";
+
     /// <summary>The variable git reads its command line's settings from, and hands them on in.</summary>
     public const string ParametersVariable = "GIT_CONFIG_PARAMETERS";
 
@@ -99,7 +111,8 @@ public static class GitOwnSettings
     /// command <paramref name="arguments"/> run - no file-system monitor and no object replaced; where <paramref name="hooksRun"/> is
     /// false, no recursion into a submodule, and no hook where the command is no question (<see cref="GitHooks.Off"/>), while a
     /// command that runs the hooks, inside the isolation, runs as the user's configuration says; on Windows, long paths
-    /// (<see cref="LongPaths"/>), whether it runs the hooks or not - and the git directories pinned for
+    /// (<see cref="LongPaths"/>), whether it runs the hooks or not; the untranslated locale (<see cref="Locale"/>), whether
+    /// it runs the hooks or not - and the git directories pinned for
     /// <paramref name="directory"/>, where it is the root of a tree an isolated agent works over: its own git directory,
     /// its common one and its work tree.
     /// </summary>
@@ -126,6 +139,7 @@ public static class GitOwnSettings
         // Each as git itself writes one there: in single quotes, which hold every other character as it is.
         environment[ParametersVariable] = string.Join(' ', settings.Select(setting => $"'{setting}'"));
         environment[NoReplaceVariable] = "1";
+        environment[LocaleVariable] = Locale;
 
         if (pins?.Of(directory) is { } pin)
         {
