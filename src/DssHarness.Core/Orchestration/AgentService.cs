@@ -213,9 +213,9 @@ public sealed class AgentService(
     /// </summary>
     public const string ReadyLine = "reason";
 
-    /// <summary>The refusal of <see cref="RetiredNoWorktreeOption"/>, naming what took its place.</summary>
-    public static string RetiredNoWorktree
-        => $"{RetiredNoWorktreeOption} is retired: every agent has a tree of its own now, and an agent that only reads is made with "
+    /// <summary>The refusal of <see cref="RetiredNoWorktreeOption"/>, naming what took its place: a constant, as the option's own name is.</summary>
+    public const string RetiredNoWorktree
+        = $"{RetiredNoWorktreeOption} is retired: every agent has a tree of its own now, and an agent that only reads is made with "
             + $"{ReadsOnlyOption}, its tree brought to the main checkout's HEAD as each of its steps starts. Nothing was changed.";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
