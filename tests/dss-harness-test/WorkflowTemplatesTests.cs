@@ -612,7 +612,8 @@ public sealed class WorkflowTemplatesTests
     /// <summary>
     /// The method this build ships plans and reviews by (user, 2026-10-17): a plan's items are sized to one builder's
     /// cycle each, every item - a further round's and a recovery's too - and the plan itself carry a definition of
-    /// done, and the review loop stands while a critical, high or medium finding does: three rounds, three more while
+    /// done, an item's said in statements that hold whatever the run's other work does beside it, and the review loop
+    /// stands while a critical, high or medium finding does: three rounds, three more while
     /// one stands, and what is left then is carried to the end of the run, written down for the person who reads the
     /// pull request, rather than stopping the run. Held on the shipped files that say it, so a change of method is a
     /// change of those files and of this test together.
@@ -636,6 +637,18 @@ public sealed class WorkflowTemplatesTests
         Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "noClass");
         Assert.Equal("string", item.GetProperty("properties").GetProperty("done").GetProperty("type").GetString());
         Assert.Equal("#/$defs/closureClass", item.GetProperty("properties").GetProperty("classes").GetProperty("items").GetProperty("$ref").GetString());
+
+        // The one description of an item's done every writer of one reads - the planner's, the self-audit's and the
+        // diagnostician's, whose items refer to it - says its statements hold whatever the run's other work, built beside
+        // the item, does to the same files: a remedy pinned to a count of lines its round's own item changed could never
+        // be met (live, 2026-11-26).
+        Assert.Equal(
+            "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - "
+                + "the behaviours built, the test that pins each, and what is true of the tree when the builder reports. Each statement says what "
+                + "this item makes true in a way that holds whatever the run's other work, built beside it, does to the same files: never a count "
+                + "of lines, a line number, a whole output, or a comparison of a whole file or the whole tree with the base, which that other work "
+                + "may change. The builder works to it, the review weighs it and the run's final audit checks it.",
+            item.GetProperty("properties").GetProperty("done").GetProperty("description").GetString());
 
         var piece = schema.GetProperty("properties").GetProperty("scope").GetProperty("items").GetProperty("properties").GetProperty("item");
 
