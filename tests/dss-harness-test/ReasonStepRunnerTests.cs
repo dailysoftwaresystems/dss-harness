@@ -2835,6 +2835,42 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// A raised step - the pre-existing triage, raised once for each issue a step reports and never scheduled - runs
+    /// wherever the run takes it, as the recovery does, upstream of no step it waits on: it is served the run's graph
+    /// once a graphify step of the run has ended done, and none before. With the graph read off its waits alone, it was
+    /// never served one.
+    /// </summary>
+    [Fact]
+    public async Task ARaisedStep_HasAGraphWhereAGraphifyStepOfTheRunHasEndedDone()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        var definition = Graphed(after: "  - name: triage\n    type: reason\n    raised: preExisting\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
+        var triage = Graphing(kit, definition, "triage");
+
+        var before = await runner.RunAsync(triage, Token);
+
+        Assert.True(before.Passed, before.Error);
+        Assert.Null(agents.Asked[0].Graph);
+        Assert.Null(before.Graph);
+
+        var now = DateTimeOffset.UtcNow;
+        kit.Harness.OrchestrationStore.WriteFlow(kit.Layout, new FlowFile(
+            1, "o1", "flow", "digest", new Dictionary<string, string>(), "Running", new FlowBudgetRecord(0, 0, 0), 0,
+            [new FlowStepRecord("codebase", "codebase", false, "Done", 1, 1, [], [], Type: "graphify-codebase", StartedAt: now, FinishedAt: now)],
+            [],
+            now));
+
+        var after = await runner.RunAsync(triage with { Visit = 2 }, Token);
+
+        Assert.True(after.Passed, after.Error);
+        Assert.NotNull(agents.Asked[1].Graph?.Tool);
+        Assert.Equal("tools", after.Graph!["mode"]!.GetValue<string>());
+    }
+
+    /// <summary>
     /// A step of the recovery taken for a failure inside a group runs with an id nested in the failing scope, but is
     /// declared at the recovery's own path, which the engine hands its runner: the work it goes on with resolves from
     /// there, so it works by the definition its chain began with.

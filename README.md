@@ -654,7 +654,9 @@ made. Every reason step after it is served from the graph as the twenty-run meas
 set each type's value (graph arm against `graph: off`, five requests on this repository and five on a
 small C repository, the same models and efforts): the steps that work on code keep the tool - the
 implementer and everything that resumes it, the six reviewers, the self-audit, the diagnosis, and the
-pre-existing-issue triage, which measured cheaper - the reviewers, the self-audit, the diagnosis and
+pre-existing-issue triage - which that measurement never served: raised outside every step's waits, it was given a
+graph only once a raised step was given the run's as the recovery is, where a graphify step of the run has ended done -
+the reviewers, the self-audit, the diagnosis and
 the steps that verify and fix starting their packs from their changes (`graphFrom: changes`); the
 request triage, whose work is text the map does not light, asks none, having measured costlier with
 no quality gained; the plan audit and the item audit, the plan audit's agent on a later round's items,

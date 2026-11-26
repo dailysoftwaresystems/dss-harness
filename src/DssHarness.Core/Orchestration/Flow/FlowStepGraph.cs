@@ -716,21 +716,32 @@ public sealed class FlowStepGraph
     /// <summary>
     /// Whether the step at <paramref name="path"/> has a graph to be given: a <c>graphify-codebase</c> step upstream of it
     /// - one its waits reach, through its own dependencies and those of every group around it (<see cref="FlowGraph.Waits"/>)
-    /// - or, where the step is the recovery's own, which runs wherever a failure is taken, a graphify step of the run that
-    /// has ended done, as the run's records hold it now. The definition's check (V53) approximates the second by a graphify
-    /// step being declared, for it has no run.
+    /// - or, where the step runs wherever the run takes it (<see cref="RunsWherever"/>) - the recovery's own, taken wherever
+    /// a failure is, and a step raised by what another reports, never scheduled - a graphify step of the run that has ended
+    /// done, as the run's records hold it now. The definition's check (V53) approximates the second by a graphify step being
+    /// declared, for it has no run.
     /// </summary>
     private static bool GraphifyUpstream(OrchestrationStore store, OrchestratorLayout layout, WorkflowDefinition definition, string path)
     {
         var graphify = FlowScope.Declared(definition).Where(one => one.Step.Type == "graphify-codebase").Select(one => one.Path).ToList();
 
-        if (path.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal))
+        if (RunsWherever(definition, path))
         {
             return NewestOf(store, layout, record => graphify.Contains(record.Step, StringComparer.Ordinal) && record.State == nameof(FlowInstanceState.Done)) is not null;
         }
 
         return graphify.Any(one => FlowGraph.Waits(definition, path, one));
     }
+
+    /// <summary>
+    /// Whether the step at <paramref name="path"/> runs wherever the run takes it, upstream of nothing it waits on: a step
+    /// of the recovery, taken wherever a failure is, or one raised by what another step reports (<c>raised</c>), never
+    /// scheduled. The one rule the graph a step is given and the definition's check (V53) read alike.
+    /// </summary>
+    /// <param name="definition">The workflow.</param>
+    /// <param name="path">The step's declaration path.</param>
+    internal static bool RunsWherever(WorkflowDefinition definition, string path)
+        => path.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal) || FlowScope.At(path, definition)?.Step.Raised is not null;
 
     /// <summary>
     /// What a step's reads are decided by beyond what every step of the run shares - the read rules of its ground, from the

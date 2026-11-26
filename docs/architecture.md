@@ -6167,8 +6167,9 @@ in. `FlowGraphSyncs.ChangesBase` names the base: an agent's recorded `Base`, the
 checkout. A pack keeps, beside its text, its seeds (each node once, by its heaviest seed - the one its line says), its
 nodes and each node line it wrote (`ContextPack.Lines`, what a delta gives of a pack a conversation was not given).
 A reason step that has a graph (`FlowStepGraph`, its `graph` `map` or `tools` with its default resolved - the mode
-the `graph` of the step its chain of work began with says, `ResumeChain.Root`, and for a step of the recovery a graph
-only where a graphify step of the run has ended done) is served through one request of its view
+the `graph` of the step its chain of work began with says, `ResumeChain.Root`, and for a step that runs wherever the run
+takes it - the recovery's, and a raised one such as the pre-existing triage (`FlowStepGraph.RunsWherever`, which the
+definition's check reads too) - a graph only where a graphify step of the run has ended done) is served through one request of its view
 (`FlowGraphSyncs.RequestOf`, the agent's worktree where it works in one - `FlowGraphSyncs.WorktreeOf` - so its changes,
 a check of a file the tool makes again and the view it is served are the worktree's, never the main checkout's). Its
 pack's own keys are its step's, the chain's root's where it says none, so a step that goes on with another's work

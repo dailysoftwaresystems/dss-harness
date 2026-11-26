@@ -1542,7 +1542,7 @@ public static class WorkflowValidator
             }
 
             // V53: the graph a step asks is the run's own, made by a graphify-codebase step upstream of the step that
-            // asks it - or, in the recovery, ended before it - and a step that goes on with another's work asks the
+            // asks it - or, in the recovery and in a raised step, ended before it - and a step that goes on with another's work asks the
             // graph that step's conversation holds, saying none of its own. V54: each graph key only where it does
             // something - the cap and the pack's seed only where a pack is given, the narrowing of reads only under the
             // tool, and the tool only where the step's agent reads.
@@ -1620,7 +1620,7 @@ public static class WorkflowValidator
 
         /// <summary>
         /// V53 and V54 over a reason step's four graph keys: the graph a step asks is the run's own, made by a
-        /// graphify-codebase step upstream of it - or, in the recovery, declared (<see cref="GraphifyUpstream"/>) - and a
+        /// graphify-codebase step upstream of it - or, in the recovery and in a raised step, declared (<see cref="GraphifyUpstream"/>) - and a
         /// step that goes on with another's work asks the graph that step's conversation holds, its mode that step's,
         /// saying none of its own while it may say <c>graphFrom</c> and <c>graphPromptTokens</c> for its own pack; each
         /// key only where it does something, judged by the mode the run resolves - the pack's cap and seed only where a
@@ -1638,7 +1638,7 @@ public static class WorkflowValidator
 
             if (step.Graph is "map" or "tools" && !upstream)
             {
-                _problems.Add($"{where} says graph: {step.Graph}, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery, ended before it");
+                _problems.Add($"{where} says graph: {step.Graph}, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery and in a raised step, ended before it");
             }
 
             if (resumesAnother && step.Graph is not null)
@@ -1722,7 +1722,7 @@ public static class WorkflowValidator
         /// </summary>
         /// <param name="entry">The step.</param>
         private bool GraphifyUpstream(Entry entry)
-            => InRecovery(entry)
+            => FlowStepGraph.RunsWherever(_definition, entry.Path)
                 ? _entries.Any(other => other.Step.Type == "graphify-codebase")
                 : _entries.Where(other => other.Step.Type == "graphify-codebase").Any(other => FlowGraph.Waits(_definition, entry.Path, other.Path));
 

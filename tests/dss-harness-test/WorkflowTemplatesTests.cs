@@ -123,7 +123,8 @@ public sealed class WorkflowTemplatesTests
     /// by the user's ruling: the graph stays where it costs equal or less, and where what it bought - correction
     /// rounds avoided, each worth more than the step's own overhead - outweighs its cost. The steps that work on code
     /// keep the tool - the implementer and everything that resumes it, the six reviewers, the self-audit, the
-    /// diagnosis, and the pre-existing-issue triage (it measured cheaper) - the reviewers, the self-audit, the
+    /// diagnosis, and the pre-existing-issue triage (which that measurement never served: raised outside every step's
+    /// waits, it is given the run's graph as the recovery is) - the reviewers, the self-audit, the
     /// diagnosis and the steps that verify and fix starting their packs from their changes (<c>graphFrom: changes</c>);
     /// the request triage, whose work is text the map does not light, asks none (measured costlier with no quality
     /// gained); the plan audit and the item audit - the plan audit's agent on a later round's items - are given the tool

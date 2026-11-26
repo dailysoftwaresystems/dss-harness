@@ -5422,7 +5422,7 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// V53 and V54: the graph a reason step asks is the run's own, made by a graphify-codebase step upstream of it - or,
-    /// in the recovery, ended before it - and a step that goes on with another's work asks the graph that step's
+    /// in the recovery and in a raised step, ended before it - and a step that goes on with another's work asks the graph that step's
     /// conversation holds, saying none of its own while it may say graphFrom and graphPromptTokens for its own pack;
     /// each key only where it does something, the tool only where its agent reads, the narrowing of reads only under it.
     /// </summary>
@@ -5446,7 +5446,7 @@ public sealed class WorkflowValidatorTests
 
         // With no graph made upstream, no step asks one.
         Assert.Equal(
-            ["step 'look' says graph: tools, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery, ended before it"],
+            ["step 'look' says graph: tools, and no graphify-codebase step is upstream of it; the graph a step asks is the run's own, made upstream of it - or, in the recovery and in a raised step, ended before it"],
             Checked(reason.Replace("prompt:", "graph: tools\n  prompt:")));
 
         // A graphify step upstream - however far - serves every step that waits for it, directly or through another.

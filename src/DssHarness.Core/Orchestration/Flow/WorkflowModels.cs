@@ -1012,8 +1012,9 @@ public sealed record WorkflowStep
     /// <param name="step">The reason step - for one that goes on with another's work, the step its chain began with, whose <c>graph</c> its conversation holds.</param>
     /// <param name="agent">The agent the step works as, where its definition was read.</param>
     /// <param name="graphUpstream">
-    /// Whether the step has a graph to be given: a graphify step upstream of it - or, for a step of the recovery, one of the
-    /// run that ended done before it, as the run stands; the definition's check, which has no run, asks whether one is declared.
+    /// Whether the step has a graph to be given: a graphify step upstream of it - or, for a step of the recovery and a raised
+    /// step, which run wherever the run takes them, one of the run that ended done before it, as the run stands; the
+    /// definition's check, which has no run, asks whether one is declared.
     /// </param>
     public static string GraphOf(WorkflowStep step, AgentDefinition? agent, bool graphUpstream)
         => step.Graph ?? (graphUpstream ? agent?.May.Contains("read") == false ? "map" : "tools" : "off");
