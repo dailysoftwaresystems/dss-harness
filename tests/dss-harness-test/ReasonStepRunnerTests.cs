@@ -3285,14 +3285,20 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// Plan shifted two lines down in the own tree of the reader <c>a9</c>, as an attempt of its writes its scratch: what an
-    /// answer that goes on with that attempt finds, and the reader's view is synced by - never the main checkout's.
+    /// Plan shifted two lines down in the own tree of the reader <c>a9</c>, as attempt 1 of <paramref name="instance"/>
+    /// writes its scratch - the tree brought for that very attempt, as its start brings it - so what an answer that goes on
+    /// with that attempt finds, and the reader's view is synced by, is that tree as it left it, never the main checkout's.
     /// </summary>
-    private static void MovePlanInReadersTree(OrchestrationKit kit)
-        => OrchestrationKit.Write(
+    /// <param name="kit">The run's kit.</param>
+    /// <param name="instance">The step instance whose attempt 1 the answer goes on with.</param>
+    private static void MovePlanInReadersTree(OrchestrationKit kit, string instance = "think")
+    {
+        OrchestrationKit.Write(
             kit.Record("a9").WorktreePath(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main))!,
             Path.Combine("src", "Planner.cs"),
             "namespace Demo;\n\npublic sealed class Planner\n{\n    // a line that moves what follows it\n    // and one more\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
+        kit.Harness.OrchestrationStore.UpdateAgent(kit.Layout, "a9", current => current with { ReadiedFor = new AgentReadiedFor(instance, 1) });
+    }
 
     /// <summary>The run's graph as <paramref name="view"/> holds it - the base where it names none.</summary>
     private static async Task<DssHarness.Core.Codebase.CodebaseGraphQueries> CodebaseGraphQueriesOf(DssHarness.Core.Codebase.ICodebaseGraphService graph, OrchestratorLayout layout, string? view = null)
@@ -3435,7 +3441,7 @@ public sealed class ReasonStepRunnerTests
         // Another step's conversation, which an earlier launch pushed a pack to - Plan's line where it stood - and Plan
         // moves two lines down in the reader's own tree, as that launch left it.
         await StoredLaunchesAsync(kit, "again", (false, AgentPromptParts.FirstMessage(launch with { Codebase = DssHarness.Core.Codebase.GraphLines.Of(plan) }, newConversation: true)));
-        MovePlanInReadersTree(kit);
+        MovePlanInReadersTree(kit, "again");
 
         var told = await runner.RunAsync(Graphing(kit, Graphed(), instance: "again", made: false, prompt: "Plan the work on the Planner.") with { Answers = [answered] }, Token);
 
