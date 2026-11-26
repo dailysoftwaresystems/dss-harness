@@ -3093,9 +3093,14 @@ allows - nothing runs while the host that would answer is silent or gone. The fi
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
 launch a new session (`ClaudeLaunch` builds its one argument list and its environment - what
 every child of an agent has (`AgentChildEnvironment`), nothing of a Claude Code session the tool
-was started in but a name `agentPolicy.keepEnvironment` gives back, the names `ClaudeSettings.Launched` sets -
+was started in but a name `agentPolicy.keepEnvironment` gives back, every name `ClaudeSettings.LaunchedWith`
+sets, in its settings' `env` as in its environment: the names `ClaudeSettings.Launched` sets -
 `MAX_MCP_OUTPUT_TOKENS` among them (`ClaudeSettings.McpOutputTokens`, three times `PageRoom.ModelAnswer`),
-so Claude Code never cuts a page of the engine's tool server's answer - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
+so Claude Code never cuts a page of the engine's tool server's answer - the two cache lifetimes
+(`ClaudeSettings.CacheTtlVariables`) at `agentClients.claude-code.cacheTtl` (`ClaudeSettings.CacheTtlOf`),
+and every other name Claude Code caches by (`ClaudeSettings.CacheOverrideVariables`) off, so the
+configured lifetime is the one say on a launch's caching whatever the person's environment or settings
+hold - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
 `ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
 `ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
 the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`

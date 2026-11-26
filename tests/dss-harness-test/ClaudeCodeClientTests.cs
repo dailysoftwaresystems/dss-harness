@@ -133,11 +133,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// What a launch is given of the environment: nothing of a Claude Code session the engine was started in - the fake
-    /// started as an engine started from the desktop app would hand it on, under <c>CLAUDE_CODE_ENTRYPOINT=claude-desktop</c>,
-    /// sees none of it - no name that says who it is but what its way of signing in gives, no name the configuration
-    /// appoints, the names the engine controls, and the Claude Code directory it reads - under a key, the entry's key and
-    /// the provider's address. Every other name of the tool's own reaches it as it was.
+    /// How long a launch's requests are cached is its client's entry's <c>cacheTtl</c>, in the launch's settings' env and
+    /// in its environment alike, and five minutes where the entry says none or the configuration declares no entry; a
+    /// person's <c>ENABLE_PROMPT_CACHING_1H</c>, which the lifetimes outrank, changes nothing.
     /// </summary>
     [Fact]
     public async Task TheCacheTtl_IsTheClientsEntrys_InTheSettingsAndTheEnvironment_FiveMinutesWhereItSaysNone()
@@ -168,6 +166,54 @@ public sealed class ClaudeCodeClientTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A launch's <c>cacheTtl</c> is the one say on how it caches: every other name Claude Code caches by is set off in
+    /// the launch's settings' env and in its environment, so a person's <c>FORCE_PROMPT_CACHING_5M</c> - which outranks the
+    /// lifetimes, and would cut the configured hour to five minutes - or a <c>DISABLE_PROMPT_CACHING</c> name - which would
+    /// turn caching off for every model, or for one family's - never reaches Claude Code, and the hour reaches it as
+    /// configured.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonsOwnCachingNames_NeverReachALaunch_ForItsCacheTtlIsTheOneSay()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        kit.Own["FORCE_PROMPT_CACHING_5M"] = "1";
+        kit.Own["DISABLE_PROMPT_CACHING"] = "1";
+        kit.Own["DISABLE_PROMPT_CACHING_SONNET"] = "true";
+        var run = kit.Run() with
+        {
+            Entries = new AgentEntries(
+                new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", Currency = "USD" },
+                new AgentModelConfig { Code = "claude-sonnet-5-5" },
+                new AgentClientConfig { CacheTtl = "1h" }),
+        };
+
+        Assert.Equal(AgentRunStatus.Completed, (await kit.Client().RunAsync(run, new Sink(), Token)).Status);
+
+        // What the launch was given, what its settings say, and what the program it started saw.
+        var given = Assert.Single(kit.Runner.Requests).Environment;
+        var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
+        var seen = Assert.Single(kit.Launches()).Environment;
+
+        foreach (var name in new[] { "FORCE_PROMPT_CACHING_5M", "DISABLE_PROMPT_CACHING", "DISABLE_PROMPT_CACHING_SONNET" })
+        {
+            Assert.Equal(("0", "0", "0"), (given[name], (string?)env[name], seen[name]));
+        }
+
+        foreach (var name in ClaudeSettings.CacheTtlVariables)
+        {
+            Assert.Equal(("1h", "1h", "1h"), (given[name], (string?)env[name], seen[name]));
+        }
+    }
+
+    /// <summary>
+    /// What a launch is given of the environment: nothing of a Claude Code session the engine was started in - the fake
+    /// started as an engine started from the desktop app would hand it on, under <c>CLAUDE_CODE_ENTRYPOINT=claude-desktop</c>,
+    /// sees none of it - no name that says who it is but what its way of signing in gives, no name the configuration
+    /// appoints, the names the engine controls, and the Claude Code directory it reads - under a key, the entry's key and
+    /// the provider's address. Every other name of the tool's own reaches it as it was.
+    /// </summary>
     [Fact]
     public async Task TheEnvironment_HoldsWhatItsWayOfSigningInGives_AndNothingOfAHostSession()
     {

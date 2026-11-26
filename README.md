@@ -1891,7 +1891,9 @@ read as its task alone, never the record it carried; a
 `claude-code` child is started with `DISABLE_COMPACT=1`, so it never compacts by itself and a full
 context ends the step `ContextExhausted`, and with `CLAUDE_CODE_PROMPT_CACHE_TTL` and
 `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` at `agentClients.claude-code.cacheTtl` (`5m` or `1h`, `5m` where nothing is
-said), so a login's own hour - a Claude subscription's main conversation caches an hour by default, each write priced
+said), the one say on its caching - `FORCE_PROMPT_CACHING_5M`, which would outrank them, and every
+`DISABLE_PROMPT_CACHING` name Claude Code reads set to `0`, off, whatever the person's environment or settings hold - so
+a login's own hour - a Claude subscription's main conversation caches an hour by default, each write priced
 at the hour's rate - is never paid for requests that come seconds apart.
 
 The requests of one provider and one key go through one lane of the gate: at most

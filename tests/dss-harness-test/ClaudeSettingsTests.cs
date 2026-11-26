@@ -71,7 +71,14 @@ public sealed class ClaudeSettingsTests
                 "CLAUDE_CODE_RETRY_WATCHDOG": "0",
                 "MAX_MCP_OUTPUT_TOKENS": "98304",
                 "CLAUDE_CODE_PROMPT_CACHE_TTL": "5m",
-                "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "5m"
+                "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "5m",
+                "FORCE_PROMPT_CACHING_5M": "0",
+                "DISABLE_PROMPT_CACHING": "0",
+                "DISABLE_PROMPT_CACHING_HAIKU": "0",
+                "DISABLE_PROMPT_CACHING_SONNET": "0",
+                "DISABLE_PROMPT_CACHING_OPUS": "0",
+                "DISABLE_PROMPT_CACHING_FABLE": "0",
+                "DISABLE_PROMPT_CACHING_MYTHOS": "0"
               },
               "permissions": {
                 "ask": [

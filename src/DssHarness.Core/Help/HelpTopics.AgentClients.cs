@@ -178,6 +178,7 @@ public static partial class HelpTopics
             + "with DISABLE_COMPACT=1, so it never compacts by itself and a full context ends the step ContextExhausted, and "
             + $"with {string.Join(" and ", Agents.Policy.ClaudeSettings.CacheTtlVariables)} at agentClients.claude-code.cacheTtl "
             + $"({string.Join(" or ", Agents.ClaudeApi.ClaudeApiRequest.CacheTtls)}, {Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} where nothing is said), "
+            + "the one say on its caching - every other name Claude Code caches by set off, as below - "
             + "so a login's own hour - a Claude subscription's main conversation caches an hour by default, each write priced "
             + "at the hour's rate - is never paid for requests that come seconds apart.");
         builder.AppendLine();

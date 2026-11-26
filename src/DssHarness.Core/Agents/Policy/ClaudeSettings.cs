@@ -73,6 +73,27 @@ public static class ClaudeSettings
     public static IReadOnlyList<string> CacheTtlVariables { get; } = ["CLAUDE_CODE_PROMPT_CACHE_TTL", "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"];
 
     /// <summary>
+    /// Every other name by which Claude Code caches a launch's requests: <c>FORCE_PROMPT_CACHING_5M</c>, which outranks
+    /// <see cref="CacheTtlVariables"/> and keeps every cache five minutes, and each <c>DISABLE_PROMPT_CACHING</c> name it
+    /// reads, which turns caching off for every model or for one family's. <c>agentClients.claude-code.cacheTtl</c> is the
+    /// one say on a launch's caching, so a launch sets each off - <c>0</c>, which Claude Code reads as false - as it sets
+    /// every name the engine controls, so neither the person's environment nor their settings' <c>env</c> turns one on.
+    /// </summary>
+    public static IReadOnlyList<string> CacheOverrideVariables { get; } =
+    [
+        "FORCE_PROMPT_CACHING_5M",
+        "DISABLE_PROMPT_CACHING",
+        "DISABLE_PROMPT_CACHING_HAIKU",
+        "DISABLE_PROMPT_CACHING_SONNET",
+        "DISABLE_PROMPT_CACHING_OPUS",
+        "DISABLE_PROMPT_CACHING_FABLE",
+        "DISABLE_PROMPT_CACHING_MYTHOS",
+    ];
+
+    /// <summary>What each of <see cref="CacheOverrideVariables"/> is set to in a launch: off, as Claude Code reads a flag.</summary>
+    public const string CacheOverrideOff = "0";
+
+    /// <summary>
     /// How long a launch's requests are cached: <c>agentClients.claude-code.cacheTtl</c> as the run's entries hold it, else
     /// <see cref="ClaudeApi.ClaudeApiRequest.FiveMinutes"/> - the same word and default the Claude API client's own
     /// <c>cacheTtl</c> takes. A step's requests come seconds apart, so five minutes keeps every read of the cache and an
@@ -83,15 +104,20 @@ public static class ClaudeSettings
 
     /// <summary>
     /// Every name a launch sets, with its value, in the order written: <see cref="Launched"/>, then each of
-    /// <see cref="CacheTtlVariables"/> at <paramref name="cacheTtl"/> - in the settings' <c>env</c> and in the child's
-    /// environment alike.
+    /// <see cref="CacheTtlVariables"/> at <paramref name="cacheTtl"/>, then each of <see cref="CacheOverrideVariables"/>
+    /// off (<see cref="CacheOverrideOff"/>) - in the settings' <c>env</c> and in the child's environment alike.
     /// </summary>
     /// <param name="cacheTtl">How long the launch's requests are cached (<see cref="CacheTtlOf"/>).</param>
     public static IReadOnlyList<KeyValuePair<string, string>> LaunchedWith(string cacheTtl)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cacheTtl);
 
-        return [.. Launched, .. CacheTtlVariables.Select(name => new KeyValuePair<string, string>(name, cacheTtl))];
+        return
+        [
+            .. Launched,
+            .. CacheTtlVariables.Select(name => new KeyValuePair<string, string>(name, cacheTtl)),
+            .. CacheOverrideVariables.Select(name => new KeyValuePair<string, string>(name, CacheOverrideOff)),
+        ];
     }
 
     /// <summary>

@@ -45,7 +45,16 @@ public static partial class HelpTopics
              + $", and a step whose agent runs commands, of a repository that declares legs, takes {Agents.ClaudeCode.ClaudeCodeTools.ServedName(Agents.AgentMeasureSupport.ToolName)}, which measures one cell of the universe a class of the item names on one of the run's legs";
         var own = string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Table.SelectMany(row => row.Tools).Select(tool => tool.Name));
         var ownWeb = string.Join(" and ", Agents.ClaudeCode.ClaudeCodeTools.OwnWeb.Select(tool => tool.Name));
-        var launched = string.Join(", ", Agents.Policy.ClaudeSettings.LaunchedWith(Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes).Select(name => $"{name.Key}={name.Value}"));
+        // Every name a launch sets, each with its value but the cache lifetimes, which carry the client's entry's.
+        var lifetimes = Agents.Policy.ClaudeSettings.CacheTtlVariables;
+        var launched = string.Join(
+                ", ",
+                Agents.Policy.ClaudeSettings.LaunchedWith(Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes)
+                    .Where(name => !lifetimes.Contains(name.Key, StringComparer.Ordinal))
+                    .Select(name => $"{name.Key}={name.Value}"))
+            + $", and {string.Join(" and ", lifetimes)} at agentClients.claude-code.cacheTtl "
+            + $"({Agents.ClaudeApi.ClaudeApiRequest.FiveMinutes} where nothing is said), so cacheTtl alone says how a launch caches "
+            + "whatever the person's environment or settings hold";
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
             + "and never continued, keeping no session file (one a launch leaves all the same is removed once it has ended, "
