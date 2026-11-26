@@ -133,11 +133,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// What a launch is given of the environment: nothing of a Claude Code session the engine was started in - the fake
-    /// started as an engine started from the desktop app would hand it on, under <c>CLAUDE_CODE_ENTRYPOINT=claude-desktop</c>,
-    /// sees none of it - no name that says who it is but what its way of signing in gives, no name the configuration
-    /// appoints, the names the engine controls, and the Claude Code directory it reads - under a key, the entry's key and
-    /// the provider's address. Every other name of the tool's own reaches it as it was.
+    /// How long a launch's requests are cached is its client's entry's <c>cacheTtl</c>, in the launch's settings' env and
+    /// in its environment alike, and five minutes where the entry says none or the configuration declares no entry; a
+    /// person's <c>ENABLE_PROMPT_CACHING_1H</c>, which the lifetimes outrank, changes nothing.
     /// </summary>
     [Fact]
     public async Task TheCacheTtl_IsTheClientsEntrys_InTheSettingsAndTheEnvironment_FiveMinutesWhereItSaysNone()
@@ -168,6 +166,54 @@ public sealed class ClaudeCodeClientTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A launch's <c>cacheTtl</c> is the one say on how it caches: every other name Claude Code caches by is set off in
+    /// the launch's settings' env and in its environment, so a person's <c>FORCE_PROMPT_CACHING_5M</c> - which outranks the
+    /// lifetimes, and would cut the configured hour to five minutes - or a <c>DISABLE_PROMPT_CACHING</c> name - which would
+    /// turn caching off for every model, or for one family's - never reaches Claude Code, and the hour reaches it as
+    /// configured.
+    /// </summary>
+    [Fact]
+    public async Task ThePersonsOwnCachingNames_NeverReachALaunch_ForItsCacheTtlIsTheOneSay()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        kit.Own["FORCE_PROMPT_CACHING_5M"] = "1";
+        kit.Own["DISABLE_PROMPT_CACHING"] = "1";
+        kit.Own["DISABLE_PROMPT_CACHING_SONNET"] = "true";
+        var run = kit.Run() with
+        {
+            Entries = new AgentEntries(
+                new AgentProviderConfig { Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", Currency = "USD" },
+                new AgentModelConfig { Code = "claude-sonnet-5-5" },
+                new AgentClientConfig { CacheTtl = "1h" }),
+        };
+
+        Assert.Equal(AgentRunStatus.Completed, (await kit.Client().RunAsync(run, new Sink(), Token)).Status);
+
+        // What the launch was given, what its settings say, and what the program it started saw.
+        var given = Assert.Single(kit.Runner.Requests).Environment;
+        var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
+        var seen = Assert.Single(kit.Launches()).Environment;
+
+        foreach (var name in new[] { "FORCE_PROMPT_CACHING_5M", "DISABLE_PROMPT_CACHING", "DISABLE_PROMPT_CACHING_SONNET" })
+        {
+            Assert.Equal(("0", "0", "0"), (given[name], (string?)env[name], seen[name]));
+        }
+
+        foreach (var name in ClaudeSettings.CacheTtlVariables)
+        {
+            Assert.Equal(("1h", "1h", "1h"), (given[name], (string?)env[name], seen[name]));
+        }
+    }
+
+    /// <summary>
+    /// What a launch is given of the environment: nothing of a Claude Code session the engine was started in - the fake
+    /// started as an engine started from the desktop app would hand it on, under <c>CLAUDE_CODE_ENTRYPOINT=claude-desktop</c>,
+    /// sees none of it - no name that says who it is but what its way of signing in gives, no name the configuration
+    /// appoints, the names the engine controls, and the Claude Code directory it reads - under a key, the entry's key and
+    /// the provider's address. Every other name of the tool's own reaches it as it was.
+    /// </summary>
     [Fact]
     public async Task TheEnvironment_HoldsWhatItsWayOfSigningInGives_AndNothingOfAHostSession()
     {
@@ -3634,6 +3680,53 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Single(sink.Of<MessagesDropped>());
         Assert.Equal(
             ["chat-interrupt"],
+            Control(kit)
+                .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
+                .Select(line => line["request_id"]!.GetValue<string>()));
+    }
+
+    /// <summary>
+    /// A turn begun once the person had left settles nothing. A line they typed once their interrupt was answered is
+    /// written after it, so it dropped nothing, and waits behind the cut turn; leaving then - by <c>/model</c> or
+    /// <c>/effort</c> as by <c>/exit</c> - asks no interrupt of its own, for the turn is cut already; Claude Code takes the
+    /// line once the cut turn's result is in, and the launch cuts that turn at once. No turn answered the line, so the run
+    /// never counts it among the messages it settled, and a chat that goes on gives it to its next launch.
+    /// </summary>
+    [Fact]
+    public async Task ATurnBegunOnceThePersonLeft_SettlesNothing()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first said" }, new JsonObject { ["hang"] = true, ["slowInterrupt"] = 1000 }, new JsonObject { ["hang"] = true }]);
+        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt() };
+        var sink = new Sink(@event =>
+        {
+            if (@event is AssistantMessage { Text: "first said" })
+            {
+                run.Messages.Post("and now?");
+            }
+            else if (@event is TurnStarted { Turn: 2 })
+            {
+                // A message waits behind the turn under way, and the person presses Ctrl+C.
+                run.Messages.Post("and then?");
+                run.Interrupt!.Interrupt();
+            }
+            else if (@event is MessagesDropped)
+            {
+                // Their interrupt answered, the cut turn's result still to come, the person types a line and leaves.
+                run.Messages.Post("typed once the interrupt was answered");
+                run.Messages.Complete();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        // Settled, in order: the prompt, the line the cut turn took, and the one the interrupt dropped - never the line
+        // the turn begun once the person left took.
+        Assert.Equal((AgentRunStatus.Completed, (int?)3, true), (result.Status, result.MessagesAnswered, result.EndedWithItsLastTurn));
+        Assert.Equal([1, 2, 3], sink.Of<TurnStarted>().Select(started => started.Turn));
+        Assert.Single(sink.Of<MessagesDropped>());
+        Assert.Equal(
+            ["chat-interrupt", "chat-leave"],
             Control(kit)
                 .Where(line => line["type"]?.GetValue<string>() == "control_request" && line["request"]?["subtype"]?.GetValue<string>() == "interrupt")
                 .Select(line => line["request_id"]!.GetValue<string>()));

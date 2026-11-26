@@ -3093,9 +3093,14 @@ allows - nothing runs while the host that would answer is silent or gone. The fi
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
 launch a new session (`ClaudeLaunch` builds its one argument list and its environment - what
 every child of an agent has (`AgentChildEnvironment`), nothing of a Claude Code session the tool
-was started in but a name `agentPolicy.keepEnvironment` gives back, the names `ClaudeSettings.Launched` sets -
+was started in but a name `agentPolicy.keepEnvironment` gives back, every name `ClaudeSettings.LaunchedWith`
+sets, in its settings' `env` as in its environment: the names `ClaudeSettings.Launched` sets -
 `MAX_MCP_OUTPUT_TOKENS` among them (`ClaudeSettings.McpOutputTokens`, three times `PageRoom.ModelAnswer`),
-so Claude Code never cuts a page of the engine's tool server's answer - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
+so Claude Code never cuts a page of the engine's tool server's answer - the two cache lifetimes
+(`ClaudeSettings.CacheTtlVariables`) at `agentClients.claude-code.cacheTtl` (`ClaudeSettings.CacheTtlOf`),
+and every other name Claude Code caches by (`ClaudeSettings.CacheOverrideVariables`) off, so the
+configured lifetime is the one say on a launch's caching whatever the person's environment or settings
+hold - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
 `ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
 `ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
 the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
@@ -5016,12 +5021,15 @@ last turn's only where the client says the run ended at that turn's own result
 nothing waiting as the person leaves), so a launch gone between turns, or in the middle of one, marks
 no finished turn with its failure. The person leaving while a turn runs or a line waits never drops
 that turn: Claude Code interrupts the turn under way with the waiting lines cancelled - unless the
-person's own interrupt is still unanswered - reads on to the cut turn's result within
-`ClaudeCodeClient.InterruptBound`, counts it and ends there, the lines it dropped never counted as
-answered, so what the turn used, cost and spent is kept and a line it never took goes on with the
-chat. `/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
-never took to the new launch (`GoneOnAsync`), each turn written on the entry of the launch that served
-it. One
+person's own interrupt cut it already, answered or not, for a turn cut is never interrupted again -
+reads on to the cut turn's result within `ClaudeCodeClient.InterruptBound`, counts it and ends there,
+the lines it dropped never counted as answered, so what the turn used, cost and spent is kept and a
+line it never took goes on with the chat. A turn begun once the person left - a line Claude Code took
+before the interrupt reached it, or one typed after the person's own interrupt was answered - is cut
+at once and settles nothing: its line is never counted as answered, and goes on with the chat too.
+`/model` or `/effort` typed while the launch works ends it the same way and carries the lines it
+never took, or took only once the person had left, to the new launch (`GoneOnAsync`), each turn
+written on the entry of the launch that served it. One
 request per message where the client stores them, each going on with the stored
 one. A side-task whose last run that worked - one that began a session - ended `ContextExhausted`, a
 chat's or a one shot's, has outgrown its context (`Working.Outgrown`, read from its stream): it keeps

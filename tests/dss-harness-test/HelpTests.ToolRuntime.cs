@@ -237,6 +237,13 @@ public sealed partial class HelpTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains($"the names `{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings)}.{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings.Launched)}` sets", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            $"the two cache lifetimes (`{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings)}.{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings.CacheTtlVariables)}`) at "
+                + $"`agentClients.claude-code.cacheTtl` (`{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings)}.{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings.CacheTtlOf)}`), "
+                + $"and every other name Claude Code caches by (`{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings)}.{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings.CacheOverrideVariables)}`) off, "
+                + "so the configured lifetime is the one say on a launch's caching whatever the person's environment or settings hold",
+            architecture,
+            StringComparison.Ordinal);
 
         // The orchestrators topic lists where a result's blocks are kept, beside its file.
         Assert.Contains(

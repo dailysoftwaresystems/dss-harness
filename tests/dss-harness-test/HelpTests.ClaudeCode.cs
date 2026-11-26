@@ -113,7 +113,11 @@ public sealed partial class HelpTests
         Assert.Contains("(CLAUDECODE, CLAUDE_PID and CLAUDE_EFFORT, and every name beginning CLAUDE_CODE_, CLAUDE_AGENT_SDK_, CLAUDE_PREVIEW_ or MCP_ but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is, and a name agentPolicy.keepEnvironment gives back), none of what every child of an agent loses (the tool runtime below)", prose, StringComparison.Ordinal);
         Assert.Contains(
             "and the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0, "
-                + "MAX_MCP_OUTPUT_TOKENS=98304, CLAUDE_CODE_PROMPT_CACHE_TTL=5m, CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=5m. A key Claude Code reports invalid is passed over",
+                + "MAX_MCP_OUTPUT_TOKENS=98304, FORCE_PROMPT_CACHING_5M=0, DISABLE_PROMPT_CACHING=0, DISABLE_PROMPT_CACHING_HAIKU=0, "
+                + "DISABLE_PROMPT_CACHING_SONNET=0, DISABLE_PROMPT_CACHING_OPUS=0, DISABLE_PROMPT_CACHING_FABLE=0, DISABLE_PROMPT_CACHING_MYTHOS=0, "
+                + "and CLAUDE_CODE_PROMPT_CACHE_TTL and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL at agentClients.claude-code.cacheTtl "
+                + "(5m where nothing is said), so cacheTtl alone says how a launch caches whatever the person's environment or settings hold. "
+                + "A key Claude Code reports invalid is passed over",
             prose,
             StringComparison.Ordinal);
         Assert.DoesNotContain("BASH_DEFAULT_TIMEOUT_MS", prose, StringComparison.Ordinal);
