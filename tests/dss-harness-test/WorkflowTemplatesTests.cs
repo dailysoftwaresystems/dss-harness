@@ -587,6 +587,29 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The shipped triage agent says every course its schema lets it answer, each where it is chosen - read from the
+    /// schema's own list, so a course added there is never one the agent was not told of - and what becomes of each: a
+    /// fix built by the recovery, a join with the fix it joins, a next by the first work item of the next round, sized.
+    /// </summary>
+    [Fact]
+    public void TheTriageAgent_SaysEveryCourseItsSchemaHas()
+    {
+        var courses = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/pre-existing.schema.json")!)!["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()).ToList();
+        var agent = Prose.Words(WorkflowTemplates.TextOf("agents/pre-existing-triage.md")!);
+        var work = agent[agent.IndexOf("## How you work", StringComparison.Ordinal)..agent.IndexOf("## What you do not do", StringComparison.Ordinal)];
+
+        // Each course is said where the agent works out which to answer.
+        Assert.Equal([], courses.Where(course => !work.Contains($"course `{course}`", StringComparison.Ordinal) && !work.Contains($"course is `{course}`", StringComparison.Ordinal)));
+        Assert.Contains("description: Checks an issue a step met that was there before the run, and decides what the run does with it - fixes it now, joins it to a fix, sends it to the next round, or lists it for the person", agent, StringComparison.Ordinal);
+        Assert.Contains(
+            "Where none holds and it is a defect in code this run's change does not touch, worth a round of its own, the course is `next`: it becomes the first work item of the run's next round, and nothing of this round waits for it. "
+                + "Size it - the files the fix touches, one at least, what must be built and what must be measured first - for its item is built to that size; for every other course the size is empty. Where none of these holds, the course is `list`.",
+            agent,
+            StringComparison.Ordinal);
+        Assert.Contains("You fix nothing. A `fix` is built by the run's recovery, as a failure's fix is, a `join` with the fix it joins, and a `next` by the first work item of the run's next round; a listed issue is shown to the person at the end.", agent, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// No shipped agent file names a model, a tier or an effort: which model a step runs on is the step's to say, in the
     /// workflow's yml, so an agent file a repository reuses in a workflow of its own brings no choice of model with it.
     /// </summary>

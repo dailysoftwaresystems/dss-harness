@@ -123,8 +123,9 @@ public static partial class HelpTopics
         builder.AppendLine("of its own work, past its steps' retries, does what its onFailure says: pause or stop; the");
         builder.AppendLine("recovery never calls itself. A step that fails again goes to the recovery again by its own");
         builder.AppendLine("onFailure, until it");
-        builder.AppendLine($"passes, a person is asked, or maxVisits is met (absent, the engine's bound of {FlowRecover.MostVisits}");
-        builder.AppendLine("visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix:");
+        builder.AppendLine($"passes, a person is asked, or maxVisits is met (absent, {FlowRecover.MostVisits} visits of one step's");
+        builder.AppendLine("failures, or of one issue's, each counted on its own); past it the run asks (recoveryBound),");
+        builder.AppendLine("with the advisor's recommendation of a fix:");
         builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();
@@ -268,7 +269,11 @@ public static partial class HelpTopics
         builder.AppendLine("visit has read the remedy items its diagnosis gives, the paths those items own: an instance of");
         builder.AppendLine("the work-item group that has not begun and owns one of them starts once that visit has ended,");
         builder.AppendLine("building on the tree the fix leaves, its record waiting for the fix of the issue, by its title");
-        builder.AppendLine("and its visit, and the files it holds; every other item goes on at once.");
+        builder.AppendLine("and its visit, and the files it holds; every other item goes on at once. run.preExisting says");
+        builder.AppendLine("each issue in the order it was taken - the order its triage ended, a resume's as before it -");
+        builder.AppendLine("and an always step starts once no issue's triage or fix is at work beside it, one the always");
+        builder.AppendLine("phase raised among them, so what it is told of the issues is true when it is told; one that");
+        builder.AppendLine("waits on a person is said as it stands.");
         builder.AppendLine();
         builder.AppendLine("An issue joined to another, being triaged or being fixed, takes no visit of its own: it goes");
         builder.AppendLine("with that issue's fix - waiting for its triage, where it is still triaged - and a visit whose");

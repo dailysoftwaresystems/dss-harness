@@ -2365,7 +2365,7 @@ public sealed class FlowCoordinator
         // One visit is made once: a session that takes an entry again - its record written, its raise cut off - finds
         // the visit the raise made, and a crash between the two leaves it to be found by id.
         var raised = _created.FirstOrDefault(visit => visit.RaisedByUpdate == update.Id)
-            ?? NewVisit(scope, declaration, FlowInstanceState.NotStarted, made: visit => visit.RaisedByUpdate = update.Id);
+            ?? Create(scope, declaration, FlowInstanceState.NotStarted, made: visit => visit.RaisedByUpdate = update.Id);
 
         if ((raised.WorksIn ?? NamedAgentOf(raised)) is { } named
             && (_deletedAgents.Contains(named) || _agentLive?.Invoke(named) == false)
@@ -3193,7 +3193,7 @@ public sealed class FlowCoordinator
     private void RevisitPause(FlowInstance paused, string answer, string? text)
     {
         var scope = paused.DeclaredScope ?? _top;
-        var visit = NewVisit(scope, paused.Step, FlowInstanceState.Running, made: visit =>
+        var visit = Create(scope, paused.Step, FlowInstanceState.Running, made: visit =>
         {
             visit.Output = new JsonObject { ["answer"] = answer, ["text"] = text ?? string.Empty };
             visit.WorksIn = paused.WorksIn;
@@ -3374,8 +3374,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Grants what <paramref name="answer"/> to <paramref name="asked"/> grants past a bound, as <see cref="FlowGrants.Of"/>
     /// says each answer grants: one more iteration of the repeat it is about, one more visit of the handler it names in
-    /// the scope its source ended in, or one more visit of the recovery for the step it is about. Every answer is granted
-    /// here - as it is carried out, and counted back from <c>questions.json</c> at a resume - and nowhere else.
+    /// the scope that handler's loop goes round in (<see cref="LoopScopeOf"/>), or one more visit of the recovery for the
+    /// step it is about. Every answer is granted here - as it is carried out, and counted back from <c>questions.json</c>
+    /// at a resume - and nowhere else.
     /// </summary>
     /// <param name="about">The instance the question is about.</param>
     /// <param name="asked">The question.</param>
@@ -3387,8 +3388,12 @@ public sealed class FlowCoordinator
             case FlowGrant.Iteration:
                 about.ExtraIterations++;
                 break;
-            case FlowGrant.Visit when about.DeclaredScope is { } scope && asked.Handler is { Length: > 0 } handler:
-                scope.ExtraVisits[handler] = scope.ExtraVisits.GetValueOrDefault(handler) + 1;
+            case FlowGrant.Visit when about.DeclaredScope is { } scope
+                && asked.Handler is { Length: > 0 } named
+                && DeclarationsOf(scope).FirstOrDefault(declaration => declaration.Name == named) is { } handler:
+                var loop = LoopScopeOf(scope, handler);
+                var path = PathOf(scope, handler);
+                loop.ExtraVisits[path] = loop.ExtraVisits.GetValueOrDefault(path) + 1;
                 break;
             case FlowGrant.Recovery:
                 var key = RecoveryOf(about).Key;
@@ -5265,14 +5270,6 @@ public sealed class FlowCoordinator
 
             scope.Instantiated.Add(declaration.Name);
 
-            if (scope.Visits.GetValueOrDefault(declaration.Name) >= FlowRecover.MostVisits)
-            {
-                // A step the run was sent back to once past the engine's bound in one scope fails, saying so.
-                _ = NewVisit(scope, declaration, FlowInstanceState.NotStarted);
-                changed = true;
-                continue;
-            }
-
             if (declaration.When is { } when)
             {
                 // A handler's or a recovery's steps read the source that raised them, in a when as anywhere else: the
@@ -5402,13 +5399,6 @@ public sealed class FlowCoordinator
         if (waiting.Count > 0)
         {
             return false;
-        }
-
-        if (scope.Visits.GetValueOrDefault(three.Add.Name) >= FlowRecover.MostVisits)
-        {
-            // The place was visited as often as the engine's bound allows in this scope: the next visit fails, as any step's does.
-            _ = NewVisit(scope, three.Add, FlowInstanceState.NotStarted);
-            return true;
         }
 
         if (three.Add.When is { } when)
@@ -6964,7 +6954,8 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What keeps <paramref name="instance"/> from starting before any claim or limit is asked: a hard stop or a pause
     /// under way (it runs at the resume; in a pause's always phase only an always step that is a machine step starts),
-    /// an always step before the session's always phase (one carried into this session as well as one drawn in it),
+    /// an always step before the session's always phase (one carried into this session as well as one drawn in it) or
+    /// while an issue's triage or fix is at work in it (<see cref="IssueWorkOf"/>),
     /// a stopping run (only always steps start), an advice of its own question that was ended and whose runner has not
     /// yet (it would work beside the step's next attempt), a plan update under way (nothing starts outside the scope it is
     /// planned in - and a step the hold keeps back reserves no claim, so nothing it waited for stands in the way of
@@ -6986,6 +6977,14 @@ public sealed class FlowCoordinator
             // The always steps run once the rest is quiescent: one a pause stopped in the last session's always phase
             // waits for this one's, as the ones this session draws do.
             return [FlowWaits.Always];
+        }
+
+        if (instance.IsAlways && IssueWorkOf(instance, holds) is not null)
+        {
+            // An issue's triage or fix at work beside the always phase - raised in it by another always step's report, or
+            // let go on by an answer given while it ran - is the rest not yet quiescent: the always step starts once it
+            // has ended, so what it is told of the run's issues is true when it is told.
+            return [FlowWaits.IssueWork];
         }
 
         if (_stopping && !instance.IsAlways)
@@ -7054,6 +7053,44 @@ public sealed class FlowCoordinator
         // A work item that has not begun and owns a file an issue being fixed holds starts once the fix's visit has
         // ended, building on the tree the fix leaves: a hold, reserving no claim, so every other item goes on beside it.
         return waiting.Count > 0 ? waiting : FixHoldOf(instance, holds);
+    }
+
+    /// <summary>
+    /// The work on the run's issues that an always step not started, <paramref name="always"/>, waits for (<see cref="HoldOf"/>):
+    /// the first step - no always one, which runs in the phase itself - of a triage or of a visit of the recovery fixing
+    /// an issue (<see cref="SettlesAnIssue"/>) that runs, or that has not started and that nothing but room holds, so it
+    /// will run in this session without a person. One that waits on a person, or on the session's end, is no work going
+    /// on: what the always step is told says it as it stands - being triaged, being fixed - and is true. Null where none is.
+    /// </summary>
+    /// <param name="always">An always step not started.</param>
+    /// <param name="holds">The issues being fixed, read once for the walk or the pass that asks.</param>
+    private FlowInstance? IssueWorkOf(FlowInstance always, Lazy<IReadOnlyList<FlowIssueHold>> holds)
+        => _created.FirstOrDefault(step => !step.Step.IsGroup
+            && !step.IsAlways
+            && step.State is FlowInstanceState.Running or FlowInstanceState.NotStarted
+            && SettlesAnIssue(step)
+            && (step.State is FlowInstanceState.Running || step.WaitingQuestion is null && HoldOf(step, holds).Count == 0));
+
+    /// <summary>
+    /// Whether <paramref name="step"/> works on an issue that was there before the run: a triage of one, or a step - at any
+    /// depth - of a visit of the recovery taken for an issue a triage sent to fix (<see cref="IssueSentToFix"/>).
+    /// </summary>
+    private static bool SettlesAnIssue(FlowInstance step)
+    {
+        if (step.Step.Raised == WorkflowStep.RaisedByPreExisting)
+        {
+            return true;
+        }
+
+        for (var at = step.DeclaredScope; at is not null; at = at.Parent)
+        {
+            if (at.OwnGroupInstance is { Step.Name: FlowScope.Recovery, RaisedBy: { } source } && IssueSentToFix(source) is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Admits every step the walk admits, in its order, and answers how many it started.</summary>
@@ -7898,7 +7935,7 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            _ = NewVisit(_top, declaration, FlowInstanceState.NotStarted, made: raised =>
+            _ = Create(_top, declaration, FlowInstanceState.NotStarted, made: raised =>
             {
                 raised.RaisedBy = reported;
                 raised.Issue = issue;
@@ -8632,7 +8669,7 @@ public sealed class FlowCoordinator
             switch (JoiningOf(joined))
             {
                 case (Joining.Again, var root) when !TriagedAgain(joined) && joined.Issue is { } issue:
-                    _ = NewVisit(_top, joined.Step, FlowInstanceState.NotStarted, made: again =>
+                    _ = Create(_top, joined.Step, FlowInstanceState.NotStarted, made: again =>
                     {
                         again.RaisedBy = joined.RaisedBy;
                         again.Issue = issue;
@@ -8688,16 +8725,17 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Whether the run's list holds the issue <paramref name="triage"/> answered <c>list</c> for: one the same in all
-    /// but its id and when it was found, for those are the list's own - two the same in all else are one issue.
+    /// The first of <paramref name="listed"/>, entries of the run's list, that holds the issue <paramref name="triage"/>
+    /// answered <c>list</c> for: one the same in all but its id and when it was found, for those are the list's own - two
+    /// the same in all else are one issue; null where none does.
     /// </summary>
-    private bool Listed(FlowInstance triage)
+    private PreExistingIssue? ListedAs(FlowInstance triage, IEnumerable<PreExistingIssue> listed)
     {
         var issue = IssueOf(triage);
 
-        return _issues.Any(listed => listed with { Id = issue.Id, FoundAt = issue.FoundAt, Where = issue.Where, Proof = issue.Proof } == issue
-            && listed.Where.SequenceEqual(issue.Where, StringComparer.Ordinal)
-            && listed.Proof == issue.Proof);
+        return listed.FirstOrDefault(held => held with { Id = issue.Id, FoundAt = issue.FoundAt, Where = issue.Where, Proof = issue.Proof } == issue
+            && held.Where.SequenceEqual(issue.Where, StringComparer.Ordinal)
+            && held.Proof == issue.Proof);
     }
 
     /// <summary>
@@ -8709,8 +8747,16 @@ public sealed class FlowCoordinator
     {
         var issue = IssueOf(instance);
         _issues.Add(issue);
-        _tally.Add(new PreExistingTally(issue.Id, "listed", $"{issue.Title} ({string.Join(", ", issue.Where)})"));
+        _tally.Add(ListedTally(issue));
     }
+
+    /// <summary>What an issue of the run's list is in its tally: listed, under the list's own id.</summary>
+    private static PreExistingTally ListedTally(PreExistingIssue issue)
+        => new(issue.Id, "listed", $"{issue.Title} ({string.Join(", ", issue.Where)})");
+
+    /// <summary>What an issue the run owes its next round is in its tally: owed, under that round's own id, which settles it.</summary>
+    private static PreExistingTally OwedTally(FlowNextIssue issue)
+        => new(issue.Id, FlowNextIssue.OwedState, $"{issue.Title} ({string.Join(", ", issue.Where)})", Next: issue.Id);
 
     /// <summary>
     /// Adds the issue a triage instance answered <c>next</c> for to the run's next round, sized - before the triage's
@@ -8721,7 +8767,7 @@ public sealed class FlowCoordinator
     {
         var issue = NextIssueOf(instance);
         _nextRound.Add(issue);
-        _tally.Add(new PreExistingTally(issue.Id, FlowNextIssue.OwedState, $"{issue.Title} ({string.Join(", ", issue.Where)})", Next: issue.Id));
+        _tally.Add(OwedTally(issue));
     }
 
     /// <summary>
@@ -8776,15 +8822,16 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Whether the run's next round holds the issue <paramref name="triage"/> answered <c>next</c> for: one the same in
-    /// all but its id and when it was found, as the listed issues are compared (<see cref="Listed"/>) - its lists and
-    /// its size read equal member by member, never as one object of another.
+    /// The first of <paramref name="owed"/>, entries of the run's next round, that holds the issue <paramref name="triage"/>
+    /// answered <c>next</c> for: one the same in all but its id and when it was found, as the listed issues are compared
+    /// (<see cref="ListedAs"/>) - its lists and its size read equal member by member, never as one object of another;
+    /// null where none does.
     /// </summary>
-    private bool NextListed(FlowInstance triage)
+    private FlowNextIssue? OwedAs(FlowInstance triage, IEnumerable<FlowNextIssue> owed)
     {
         var issue = NextIssueOf(triage);
 
-        return _nextRound.Any(held => held with { Id = issue.Id, FoundAt = issue.FoundAt, Where = issue.Where, Files = issue.Files, MeasureFirst = issue.MeasureFirst, SettledBy = issue.SettledBy } == issue
+        return owed.FirstOrDefault(held => held with { Id = issue.Id, FoundAt = issue.FoundAt, Where = issue.Where, Files = issue.Files, MeasureFirst = issue.MeasureFirst, SettledBy = issue.SettledBy } == issue
             && held.Where.SequenceEqual(issue.Where, StringComparer.Ordinal)
             && held.Files.SequenceEqual(issue.Files, StringComparer.Ordinal)
             && held.MeasureFirst.SequenceEqual(issue.MeasureFirst, StringComparer.Ordinal));
@@ -9290,7 +9337,7 @@ public sealed class FlowCoordinator
 
                 if (problem is not null)
                 {
-                    var unread = NewVisit(scope, handler, FlowInstanceState.Failed, made: unread =>
+                    var unread = Create(scope, handler, FlowInstanceState.Failed, made: unread =>
                     {
                         unread.RaisedBy = instance;
                         unread.Exit = HarnessExit.ConfigInvalid;
@@ -9310,7 +9357,7 @@ public sealed class FlowCoordinator
                 }
             }
 
-            if (RaisedVisits(scope, handler) >= handler.VisitsAllowed + scope.ExtraVisits.GetValueOrDefault(handler.Name))
+            if (RaisedVisits(scope, handler) >= handler.VisitsAllowed + VisitsGranted(scope, handler))
             {
                 if (failed && RecoveryReaching(scope) is not null)
                 {
@@ -9358,7 +9405,7 @@ public sealed class FlowCoordinator
             // made running, in its first record, as the recovery's own raise makes its (TakeRecoveryOf): no crash leaves
             // a record of it that never starts.
             var raised = RaisedFor(instance, handler, scope)
-                ?? NewVisit(scope, handler, handler.IsGroup ? FlowInstanceState.Running : FlowInstanceState.NotStarted, made: raised => raised.RaisedBy = instance);
+                ?? Create(scope, handler, handler.IsGroup ? FlowInstanceState.Running : FlowInstanceState.NotStarted, made: raised => raised.RaisedBy = instance);
 
             if (handler.IsGroup && raised.State is FlowInstanceState.NotStarted)
             {
@@ -9408,13 +9455,71 @@ public sealed class FlowCoordinator
         => _created.LastOrDefault(visit => ReferenceEquals(visit.DeclaredScope, scope) && visit.Step.Name == handler.Name && ReferenceEquals(visit.RaisedBy, source));
 
     /// <summary>
-    /// How many times <paramref name="handler"/> was raised in <paramref name="scope"/>: its visits an ending raised, and
-    /// never the place-holder a pass-by or a source that was not run leaves - what its bound counts.
+    /// How many times <paramref name="handler"/>, declared in <paramref name="scope"/>, was raised in the scope its loop
+    /// goes round in (<see cref="LoopScopeOf"/>): its visits an ending raised, and never the place-holder a pass-by or a
+    /// source that was not run leaves - what its bound counts.
     /// </summary>
     private int RaisedVisits(Scope scope, WorkflowStep handler)
-        => _created.Count(visit => ReferenceEquals(visit.DeclaredScope, scope)
-            && visit.Step.Name == handler.Name
-            && (visit.RaisedBy is not null || visit.RaisedByRecord is not null));
+    {
+        var loop = LoopScopeOf(scope, handler);
+        var path = PathOf(scope, handler);
+
+        return _created.Count(visit => visit.Path == path
+            && (visit.RaisedBy is not null || visit.RaisedByRecord is not null)
+            && visit.DeclaredScope is { } declared
+            && Within(declared, loop));
+
+        static bool Within(Scope declared, Scope loop)
+        {
+            for (var at = declared; at is not null; at = at.World)
+            {
+                if (ReferenceEquals(at, loop))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The scope the visits of <paramref name="handler"/>, declared in <paramref name="scope"/>, are counted in against its
+    /// <c>maxVisits</c> and the visits answers grant past it: the scope its loop goes round in. That is its own - the
+    /// item's, the iteration's, the group visit's - save where its <c>then</c> sends the run back over a group around it
+    /// (the step it names, or one that depends on it, is that group): each such redirect makes the group anew, its new
+    /// visit holding the handler again with none of its visits counted, so the loop through it is counted in the scope that
+    /// <c>then</c> goes back to, which its turns leave standing - the loop's own bound, and no other, ends it.
+    /// </summary>
+    private Scope LoopScopeOf(Scope scope, WorkflowStep handler)
+    {
+        if (ThenOf(handler, scope, scope, reader: null, PathOf(scope, handler), out _) is not { } target || ReferenceEquals(target.Scope, scope))
+        {
+            return scope;
+        }
+
+        for (var at = scope; at is not null; at = at.World)
+        {
+            if (ReferenceEquals(at.World, target.Scope))
+            {
+                // The scope declared in the target's: a block's own, or an item or an iteration of a loop - the group around
+                // the handler that the target's scope holds.
+                return at.Group is { } around
+                    && FlowResets.Of(DeclarationsOf(target.Scope), target.Declaration, AlwaysAround(target.Scope)).Any(reset => reset.Name == around.Name)
+                    ? target.Scope
+                    : scope;
+            }
+        }
+
+        return scope;
+    }
+
+    /// <summary>
+    /// How many more visits than its <c>maxVisits</c> answers granted <paramref name="handler"/>, declared in
+    /// <paramref name="scope"/>, in the scope its loop goes round in (<see cref="LoopScopeOf"/>), by its declaration's path.
+    /// </summary>
+    private int VisitsGranted(Scope scope, WorkflowStep handler)
+        => LoopScopeOf(scope, handler).ExtraVisits.GetValueOrDefault(PathOf(scope, handler));
 
     /// <summary>Passes a handler by: one never raised before is Skipped, with the reason, which satisfies what depends on it; one raised before keeps its last visit.</summary>
     private void PassBy(WorkflowStep handler, FlowInstance source, Scope scope, string reason)
@@ -9654,17 +9759,29 @@ public sealed class FlowCoordinator
     /// with why in <paramref name="problem"/>: a fill that reads nothing, or a name no scope around the handler declares.
     /// </summary>
     private (Scope Scope, WorkflowStep Declaration)? ResolveThen(FlowInstance handler, out string? problem)
+        => ThenOf(handler.Step, handler.DeclaredScope, DeclaringScopeOf(handler), handler, handler.Id, out problem);
+
+    /// <summary>
+    /// The step the <c>then</c> of <paramref name="step"/>, a handler declared in <paramref name="from"/>, names - the one
+    /// reading of a <c>then</c> (<see cref="ResolveThen"/>), for a visit of the handler and for one not raised yet alike.
+    /// </summary>
+    /// <param name="step">The handler's declaration.</param>
+    /// <param name="from">The scope it is declared in, where the walk outward begins.</param>
+    /// <param name="declaring">The scope a <c>then</c> read from an input is filled in.</param>
+    /// <param name="reader">The visit that reads it; null for a handler not raised yet.</param>
+    /// <param name="who">The handler, as a problem names it.</param>
+    /// <param name="problem">Why it names none; null where it names one, or says no <c>then</c>.</param>
+    private (Scope Scope, WorkflowStep Declaration)? ThenOf(WorkflowStep step, Scope? from, Scope declaring, FlowInstance? reader, string who, out string? problem)
     {
         problem = null;
 
-        if (handler.Step.Then is not { } written)
+        if (step.Then is not { } written)
         {
             return null;
         }
 
-        var declaring = DeclaringScopeOf(handler);
         var then = written.Contains('{')
-            ? FlowTemplate.Fill(written, path => Read(path, declaring, reader: handler), out problem)
+            ? FlowTemplate.Fill(written, path => Read(path, declaring, reader: reader), out problem)
             : written;
 
         if (then is null)
@@ -9672,7 +9789,7 @@ public sealed class FlowCoordinator
             return null;
         }
 
-        for (var at = handler.DeclaredScope; at is not null; at = at.World)
+        for (var at = from; at is not null; at = at.World)
         {
             if (DeclarationsOf(at).FirstOrDefault(declaration => declaration.Name == then) is { } declaration)
             {
@@ -9680,7 +9797,7 @@ public sealed class FlowCoordinator
             }
         }
 
-        problem = $"'{written}' names '{then}', which no scope around '{handler.Id}' declares";
+        problem = $"'{written}' names '{then}', which no scope around '{who}' declares";
         return null;
     }
 
@@ -9875,30 +9992,6 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Makes a new visit of <paramref name="declaration"/> in <paramref name="scope"/>, and fails it where the run would
-    /// visit a step more often in one scope than the engine's bound of visits allows (<see cref="FlowRecover.MostVisits"/>,
-    /// the one owner of that bound, which the recovery's maxVisits is held to as well).
-    /// </summary>
-    private FlowInstance NewVisit(Scope scope, WorkflowStep declaration, FlowInstanceState state, Action<FlowInstance>? made = null)
-    {
-        if (scope.Visits.GetValueOrDefault(declaration.Name) + 1 > FlowRecover.MostVisits)
-        {
-            var most = FlowRecover.MostVisits.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var bound = Create(scope, declaration, FlowInstanceState.Failed, made: bound =>
-            {
-                made?.Invoke(bound);
-                bound.Exit = HarnessExit.Refused;
-                bound.Error = $"'{declaration.Name}' was visited {most} times in its scope; at most {most} visits of one step in one scope are allowed";
-            });
-            End(bound, FlowInstanceState.Failed, bound.Exit, bound.Error);
-            HandleFailure(bound);
-            return bound;
-        }
-
-        return Create(scope, declaration, state, made: made);
-    }
-
-    /// <summary>
     /// Takes a failure to the workflow's recovery: one visit of it for that step, in the scope the step failed in,
     /// admitted against the limits and the claims like any other step. Where its bound is met the run asks, with the
     /// advisor's recommendation as every question carries one.
@@ -9978,7 +10071,7 @@ public sealed class FlowCoordinator
         // recovery's own, read from where its workflow declares them: the flow's root, or the step that uses the
         // workflow whose recovery it is, however deep the failure it was taken for.
         var declaration = recover.Declaration;
-        var instance = NewVisit(scope, declaration, FlowInstanceState.Running, made: visit =>
+        var instance = Create(scope, declaration, FlowInstanceState.Running, made: visit =>
         {
             visit.RaisedBy = source;
             visit.Visit = visits;
@@ -11179,19 +11272,24 @@ public sealed class FlowCoordinator
         }
 
         var stalled = AdmissionWalk().Where(decision => !decision.Starts).ToList();
+        var failed = 0;
 
         foreach (var (instance, _, waitsOn, _) in stalled)
         {
-            if (instance.State is not FlowInstanceState.NotStarted)
+            // An always step that waits for an issue's work alone waits for a step this very walk found stalled - one
+            // that will run waits on nothing else, so the walk would have started it - which fails now: it is free once
+            // that has ended, and is never failed for it.
+            if (instance.State is not FlowInstanceState.NotStarted || waitsOn is [FlowWaits.IssueWork])
             {
                 continue;
             }
 
             End(instance, FlowInstanceState.Failed, HarnessExit.Refused, $"it could not start: it waits on {string.Join(", ", waitsOn)}, and nothing left in the run frees it");
             HandleFailure(instance);
+            failed++;
         }
 
-        return stalled.Count > 0;
+        return failed > 0;
     }
 
     /// <summary>
@@ -14765,26 +14863,40 @@ public sealed class FlowCoordinator
                 _affected.AddRange(kept);
             }
 
-            foreach (var listedIssue in _issues)
-            {
-                _tally.Add(new PreExistingTally(listedIssue.Id, "listed", $"{listedIssue.Title} ({string.Join(", ", listedIssue.Where)})"));
-            }
+            // The tally is rebuilt in the order its issues were taken - the order their triages ended, which each one's
+            // record keeps (endedIn; one a record written before the order was kept says none of ended before every one
+            // that does, in the order the run made them) - so a step that reads {run.preExisting} after the resume reads
+            // it as one before it did. A listed issue and one owed the next round take their place from the triage that
+            // took them, under their files' own ids, each entry of a file taken once.
+            var listedLeft = new List<PreExistingIssue>(_issues);
+            var owedLeft = new List<FlowNextIssue>(_nextRound);
 
-            foreach (var owedIssue in _nextRound)
-            {
-                _tally.Add(new PreExistingTally(owedIssue.Id, FlowNextIssue.OwedState, $"{owedIssue.Title} ({string.Join(", ", owedIssue.Where)})", Next: owedIssue.Id));
-            }
-
-            foreach (var triage in _created.Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting && created.State == FlowInstanceState.Done))
+            foreach (var triage in _created
+                .Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting && created.State == FlowInstanceState.Done)
+                .OrderBy(created => created.EndedIn))
             {
                 switch (CourseOf(triage))
                 {
-                    case "list" when !Listed(triage):
+                    case "list":
+                        if (ListedAs(triage, listedLeft) is { } listedIssue)
+                        {
+                            _ = listedLeft.Remove(listedIssue);
+                            _tally.Add(ListedTally(listedIssue));
+                            break;
+                        }
+
                         // Its end is written, and the run's file of issues - written after it in the same change - is
                         // not: the issue is listed from its answer, as the end listed it, and the next write writes it.
                         ListIssue(triage);
                         break;
-                    case "next" when !NextListed(triage):
+                    case "next":
+                        if (OwedAs(triage, owedLeft) is { } owedIssue)
+                        {
+                            _ = owedLeft.Remove(owedIssue);
+                            _tally.Add(OwedTally(owedIssue));
+                            break;
+                        }
+
                         // The same crash, beside the next round's own file: the issue is owed from its answer.
                         AddNextIssue(triage);
                         break;
@@ -14812,6 +14924,11 @@ public sealed class FlowCoordinator
                         break;
                 }
             }
+
+            // An entry of either file that no triage's answer reads back as is said all the same, after the rest, in its
+            // file's order: no issue the run listed or owes is ever left out of its words.
+            _tally.AddRange(listedLeft.Select(ListedTally));
+            _tally.AddRange(owedLeft.Select(OwedTally));
 
             // Each work item the records say ended done settles what it names again, as its end did: that end is
             // written, and the run's file of the issues - written after it in the same change - may not be.
@@ -15364,7 +15481,11 @@ internal sealed class Scope(
     /// <summary>How many visits of each member the scope has made: the newest is what the member's name resolves to.</summary>
     public Dictionary<string, int> Visits { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>How many more visits of each member an answer granted past the bound its declaration names.</summary>
+    /// <summary>
+    /// How many more visits of each handler whose loop goes round in this scope answers granted past the bound its
+    /// declaration names, by the handler's declaration path - a handler declared in a group inside, whose then sends the
+    /// run back over that group, among them.
+    /// </summary>
     public Dictionary<string, int> ExtraVisits { get; } = new(StringComparer.Ordinal);
 
     /// <summary>

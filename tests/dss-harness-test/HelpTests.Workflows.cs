@@ -723,7 +723,7 @@ public sealed partial class HelpTests
                 + "went wrong and put it right; then the run goes where its onSuccess says - failed-step, the step that gave it its failure, which runs again "
                 + "from where it stopped - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
                 + "never calls itself. A step that fails again goes to the recovery again by its own onFailure, until it passes, a person is asked, or maxVisits is met (absent, "
-                + $"the engine's bound of {FlowRecover.MostVisits} visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix: "
+                + $"{FlowRecover.MostVisits} visits of one step's failures, or of one issue's, each counted on its own); past it the run asks (recoveryBound), with the advisor's recommendation of a fix: "
                 + "more, one more recovery; direct, with the fix in words, for the next one; skip, where the step is skippable; or abort.",
             prose,
             StringComparison.Ordinal);
