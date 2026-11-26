@@ -142,6 +142,18 @@ public sealed partial class IsolationPlatform(
     /// <summary><see cref="PreferredRemedy"/> as the last of more than one remedy.</summary>
     private const string OrPreferred = ", or " + PreferredRemedy;
 
+    /// <summary>
+    /// <paramref name="remedy"/> as a notice under <c>preferred</c> says it: the configuration's own way past -
+    /// <see cref="PreferredRemedy"/>, the mode the run is under already - left out of it; null where that was its only remedy.
+    /// </summary>
+    /// <param name="remedy">A remedy, as an availability or a ground gave it.</param>
+    public static string? UnderPreferred(string remedy)
+    {
+        ArgumentNullException.ThrowIfNull(remedy);
+
+        return remedy == PreferredRemedy ? null : remedy.EndsWith(OrPreferred, StringComparison.Ordinal) ? remedy[..^OrPreferred.Length] : remedy;
+    }
+
     /// <inheritdoc/>
     public Task<IsolationAvailability> ProbeAsync(string tree, CancellationToken cancellationToken)
     {

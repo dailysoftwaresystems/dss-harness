@@ -156,7 +156,8 @@ public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mecha
 
     /// <summary>
     /// What is said where it runs with no mechanism though it needs one, under <see cref="AgentIsolationMode.Preferred"/>:
-    /// why there is none, <paramref name="so"/>, and what would give one; and where it runs under a mechanism that leaves
+    /// why there is none, <paramref name="so"/>, and what would give one - never the configuration's own way past, which is
+    /// the mode it runs under already (<see cref="Platform.IsolationPlatform.UnderPreferred"/>); and where it runs under a mechanism that leaves
     /// something reached (<see cref="IIsolationMechanism.Leaves"/>) - bubblewrap on a kernel with no Landlock scope -
     /// that <paramref name="runs"/> inside it and what it leaves. Null where it runs under one that leaves nothing, or needs
     /// none.
@@ -165,7 +166,7 @@ public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mecha
     /// <param name="runs">What runs inside a mechanism, as the sentence's opening says it.</param>
     protected string? NoticeSaying(string so, string runs)
         => Mechanism is null && Remedy is not null && !Refused
-            ? $"agentPolicy.isolation is \"{AgentIsolationMode.Preferred}\" and {Without}, so {so}; {Remedy}"
+            ? $"agentPolicy.isolation is \"{AgentIsolationMode.Preferred}\" and {Without}, so {so}{(Platform.IsolationPlatform.UnderPreferred(Remedy) is { } way ? $"; {way}" : string.Empty)}"
             : Mechanism is { Leaves: { } leaves }
                 ? $"{runs} inside {Mechanism.Name}, which leaves {leaves} reached"
                 : null;
