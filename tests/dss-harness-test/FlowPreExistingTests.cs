@@ -832,6 +832,104 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
+    /// A step that reports issues is told, at the end of its prompt, every issue the run holds where it starts - what
+    /// became of each, its title and where it is, a duplicate left out for its issue is there under its own, and one
+    /// whose triage has not ended being triaged - so a repeat it would word its own way raises no triage to merge it;
+    /// a step the run holds none for, and the triage itself, which reports nothing, are given their prompts as filled.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatReportsIssues_IsToldEveryIssueTheRunHoldsWhereItStarts()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: gate
+                type: orient
+                dependsOn: [think]
+              - name: later
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+                dependsOn: [gate]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var prompts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var laterStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var twoTriaged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watched = new Watched(null, BothTriaged);
+        _ = watched.Seen.ContinueWith(_ => twoTriaged.TrySetResult(), TaskScheduler.Default);
+        string PromptOf(FlowStepRun run)
+        {
+            lock (prompts)
+            {
+                return prompts[run.Instance] = FlowTemplate.Joined(run.Prompts!["prompt"]);
+            }
+        }
+
+        var runner = new FakeRunner()
+            .On("think", run =>
+            {
+                _ = PromptOf(run);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test"), Issue("a stale document"), Issue("a dead link")]);
+            })
+            .OnAsync("gate", async _ =>
+            {
+                await twoTriaged.Task;
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .On("later", run =>
+            {
+                _ = PromptOf(run);
+                laterStarted.TrySetResult();
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .OnAsync("triage", async run =>
+            {
+                _ = PromptOf(run);
+
+                switch (run.Issue!.Title)
+                {
+                    case "a broken test":
+                        return Course("list", run.Issue.Title);
+                    case "a stale document":
+                        return Course("duplicate", run.Issue.Title);
+                    default:
+                        await laterStarted.Task;
+                        return Course("unproven", run.Issue.Title);
+                }
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched, workflowFile: (_, named) => named == "work.md" ? "Do the work." : "Triage it.");
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("Do the work.", prompts["think"]);
+        Assert.Equal(
+            "Do the work.\n\n<pre-existing>\nThe issues that were there before this run which its steps have reported already, each with what became of it, its title and where it is:\n\n"
+                + "- listed - a broken test (src/Parser.cs)\n- being triaged - a dead link (src/Parser.cs)\n\n"
+                + "Report none of these again under preExisting, however you would word it, unless it stops your own work: a step of the run holds each one already.\n</pre-existing>\n",
+            prompts["later"]);
+        Assert.All(prompts.Where(prompt => prompt.Key.StartsWith("triage", StringComparison.Ordinal)), prompt => Assert.Equal("Triage it.", prompt.Value));
+    }
+
+    /// <summary>
     /// The same title at another place is another issue, and raises its own triage: an issue is the same one only where
     /// its title and where it is both are.
     /// </summary>

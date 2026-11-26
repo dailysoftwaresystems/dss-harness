@@ -237,7 +237,9 @@ public static partial class HelpTopics
         builder.AppendLine("item did; one that ends done with nothing committed - an item a person skipped - settles nothing,");
         builder.AppendLine("and the issue stays owed. It lists the rest, proven, with a title and a description, in the run's");
         builder.AppendLine("pre-existing-issues.json, shown in the pull request's body and the handoff. Where a workflow has");
-        builder.AppendLine("such a step, every other reasoning step names it, so no issue is lost.");
+        builder.AppendLine("such a step, every other reasoning step names it, so no issue is lost; and each is told, at the end");
+        builder.AppendLine("of its prompt, every issue the run holds where it starts - what became of each, its title and");
+        builder.AppendLine("where it is - and reports one again only where it stops its own work.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
         builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");

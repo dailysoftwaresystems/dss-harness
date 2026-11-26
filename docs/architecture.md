@@ -2472,7 +2472,11 @@ the recovery counted against `maxVisits` by the issue, whichever triage sent it 
 configured answer to that bound counted there too, so a fix that never holds ends in `recoveryBound`;
 steps the one issue stopped side by side, each reporting it before its fix, each have it fixed with
 none spending another's bound - and keeps the list; `issue` is read only by the
-triage and the recovery, and `source` by them and by a handler.
+triage and the recovery, and `source` by them and by a handler. A reason step that names a triage is told, where it starts, every issue the
+run holds then (`FlowPreExistingReport.Known`, the part `<pre-existing>` wraps at the end of its prompt, read from
+`FlowCoordinator.IssuesHeld`): the tally's lines as `{run.preExisting}` words them, a duplicate left out, and each
+issue whose triage has not ended, being triaged - so a repeat it would word its own way, which `HolderOf` cannot
+match, is reported again only where it stops its own work, and raises no triage only to be merged as a duplicate.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help

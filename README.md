@@ -683,7 +683,9 @@ failed, or met again after its fix was done, is raised anew), never scheduled, a
 gives the recovery one that is in a step's way, related to the work or critical, to fix at its root,
 and lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`,
 shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. The
-engine raises the triage for each issue a reasoning step's answer reports under `preExisting`, as the shipped schemas spell it, and keeps the list.
+engine raises the triage for each issue a reasoning step's answer reports under `preExisting`, as the shipped schemas spell it, and keeps the list. A
+reasoning step that names one is told, at the end of its prompt, every issue the run holds where it starts -
+what became of each, its title and where it is - and reports one again only where it stops its own work.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one; the shipped workflow runs its heaviest steps at

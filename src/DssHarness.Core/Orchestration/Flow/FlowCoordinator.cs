@@ -7218,6 +7218,11 @@ public sealed class FlowCoordinator
                 var prompts = new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal);
                 var promptValues = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
+                // A step that reports issues is told, at the end of its prompt, every issue the run holds already, as
+                // the run holds them where it starts (FlowPreExistingReport.Known): a repeat it would word its own way is
+                // reported again only where it stops its work, so no triage is raised to merge it.
+                var known = step.Type == "reason" && step.OnPreExisting is not null ? FlowPreExistingReport.Known(IssuesHeld()) : null;
+
                 if (step.Type == "reason" && _workflowFile is { } readFile)
                 {
                     foreach (var (promptKey, promptFileNamed) in new[] { ("prompt", step.Prompt), ("resumePrompt", step.ResumePrompt) })
@@ -7265,7 +7270,7 @@ public sealed class FlowCoordinator
                             return;
                         }
 
-                        prompts[promptKey] = promptPieces;
+                        prompts[promptKey] = known is null ? promptPieces : [.. promptPieces, new FlowTemplate.Piece(raw.Length, known, FlowTemplate.PieceKind.Text)];
                         promptValues[promptKey] = filledWith;
                     }
                 }
@@ -7945,6 +7950,20 @@ public sealed class FlowCoordinator
 
         TakeRecoveryOf(instance);
     }
+
+    /// <summary>
+    /// Every issue that was there before the run which the run holds now, as a reporting step is told them
+    /// (<see cref="FlowPreExistingReport.Known"/>): the tally's, as <c>{run.preExisting}</c> words each - save a
+    /// duplicate, whose issue is there under its own - and then each a triage holds that has not ended, being triaged.
+    /// </summary>
+    private List<string> IssuesHeld()
+        =>
+        [
+            .. _tally.Where(entry => !entry.State.StartsWith("duplicate", StringComparison.Ordinal)).Select(entry => $"{StateOf(entry)} - {entry.Line}"),
+            .. _created
+                .Where(triage => triage.Step.Raised == WorkflowStep.RaisedByPreExisting && triage.Issue is not null && HoldsIssue(triage) && triage.State != FlowInstanceState.Done)
+                .Select(triage => $"being triaged - {triage.Issue!.Title} ({triage.Issue.Where})"),
+        ];
 
     /// <summary>The issue a triage instance was raised for, as the tally names it.</summary>
     private static string TitleOf(FlowInstance instance)

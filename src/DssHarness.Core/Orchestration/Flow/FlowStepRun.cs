@@ -59,6 +59,24 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
                     issue["blocks"] is JsonValue blocks && blocks.TryGetValue<bool>(out var stops) && stops)),
         ];
     }
+
+    /// <summary>The tag the part of a reporting step's prompt that names the issues the run holds already is wrapped in, as the first user message wraps its own parts.</summary>
+    public const string KnownTag = "pre-existing";
+
+    /// <summary>
+    /// The part a reason step that reports issues - its <c>onPreExisting</c> names a triage - is given at the end of
+    /// its prompt: the issues that were there before the run which its steps reported already, each line what became
+    /// of one, its title and where it is, so the step reports again only one that stops its own work, and a repeat
+    /// worded differently raises no triage of its own. Null where the run holds none, and the prompt is as its
+    /// template fills.
+    /// </summary>
+    /// <param name="held">Each issue the run holds, as <c>{run.preExisting}</c> words it: what became of it, then its title and where it is.</param>
+    public static string? Known(IReadOnlyList<string> held)
+        => held.Count == 0
+            ? null
+            : $"\n\n<{KnownTag}>\nThe issues that were there before this run which its steps have reported already, each with what became of it, its title and where it is:\n\n"
+                + string.Concat(held.Select(line => $"- {line}\n"))
+                + $"\nReport none of these again under preExisting, however you would word it, unless it stops your own work: a step of the run holds each one already.\n</{KnownTag}>\n";
 }
 
 /// <summary>
