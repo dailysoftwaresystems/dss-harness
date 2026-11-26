@@ -175,9 +175,10 @@ public sealed class AdvisorRunnerTests
         Assert.Null(asked.Workspace.Worktree);
         Assert.Equal(Path.Combine(directory, "work"), asked.Workspace.WorkDirectory);
 
-        // An agent with no worktree starts the advice in the advice's own work directory, which is there before its
-        // client is handed it: a program is never started in a directory that is not there.
-        Assert.Equal((Path.Combine(directory, "work"), true), startsIn);
+        // An agent with no worktree starts the advice in the main checkout it reads, as its step starts there; the advice's
+        // own work directory is there before its client is handed it, all the advice writes.
+        Assert.Equal((kit.Main, true), startsIn);
+        Assert.True(Directory.Exists(asked.Workspace.WorkDirectory));
         Assert.Equal(
             "Question of\nthink\nkind\nturnLimit\nproblem\n'think' reached its turns (12 turns)\nTried: attempt 1 of the step\nThe answers:\n- more: one more of what was bounded\n- retry: the step runs again as a new attempt\nThe bar:\nPrefer the cheaper answer.\n\nThe input:\nbuild the login\n",
             asked.Prompt);

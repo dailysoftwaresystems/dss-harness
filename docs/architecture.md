@@ -2640,7 +2640,9 @@ domain and every name under it, or `Web(*)` the web whole). Built in, not config
 actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot or a
-Claude Code directory of the run's and every search over one (`AgentPolicy.Search`), and any command
+Claude Code directory of the run's and every search over one (`AgentPolicy.Search`, which a client's own search
+tool is asked by; the tool runtime's `find_files` and `search_files` ask a read of the directory and decide each file
+beneath it as its own read, so a slot beneath is left out, counted, never read), and any command
 naming one - by `~` or `$HOME`, against every directory a `cd` of it reached, by every path a word
 may name to its program, read by one owner for the places no command reaches and the places a
 command writes alike (`CommandAnalysis.PathsNamed`: the word, the value after its `=` or a
@@ -4263,7 +4265,12 @@ is made, so `AgentService.CreateAsync` makes an agent in a directory that holds 
 program a launch starts is found ready where the step starts (`ClaudeCodeUpdateService.ReadyAsync`, wired into the
 reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
 each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
-`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), where the child is started; the continuation's copies and the
+`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), the one place an agent with no worktree writes; the child is
+started in the tree it works on (`ReasonLaunch.Workspace`) - its worktree, else the main checkout it reads, so a path
+relative to where it starts, its tools', its commands' and those its prompt writes from the repository's root, names
+what the repository holds, and a command over that tree names the working directory, which the policy never refuses
+for the slots beneath it (`AgentPolicy.ThroughWorkingDirectory`) - and the reporter, which works as no agent of the
+run's, in its own scratch; the continuation's copies and the
 skills are put in the step's own `handed/` (`OrchestratorLayout.HandedDirectory`), which no command writes.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a

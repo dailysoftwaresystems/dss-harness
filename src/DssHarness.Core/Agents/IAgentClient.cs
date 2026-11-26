@@ -161,7 +161,7 @@ public sealed record AgentRoot(string Path, bool Writable);
 /// <param name="WorkDirectory">The agent's own <c>work/&lt;agent&gt;/</c>, which it reads and writes either way.</param>
 /// <param name="MainCheckout">The main checkout.</param>
 /// <param name="ExtraRoots">The extra roots, each readable, writable where its definition says.</param>
-/// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else the work directory.</param>
+/// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else the main checkout it reads - its work directory for a run of no agent's, the reporter.</param>
 /// <param name="RunDirectory">The run's directory: the reporter's, and where a step's web search keeps the run's record, <c>web/searches.jsonl</c>.</param>
 public sealed record AgentWorkspace(
     string? Worktree,

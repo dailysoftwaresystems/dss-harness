@@ -1675,8 +1675,10 @@ mark, a line wider than a page given in pieces - and edited, copied through a bl
 the edit made on the way; `search_files` reads every file whatever its size, a line at a time, its
 pattern matched in time linear in each line, so one that needs backtracking - a backreference, a
 lookaround, an atomic group - is refused, naming what it holds. Every file `find_files` matches and
-every line `search_files` matches is given, with as many lines of context as are asked; its
-`max_results` is refused, naming `page`. A replace or an insert needs
+every line `search_files` matches is given, with as many lines of context as are asked - each file
+beneath the directory searched decided as its own read, so one that holds a credential slot (the main
+checkout a read-only agent starts in holds the tool's own) is searched with the slot's files left out
+and counted, never read; its `max_results` is refused, naming `page`. A replace or an insert needs
 its file viewed first, by its content - one that changed since is refused, nothing written - and an
 edit keeps the file's encoding, its line endings and whether it ends with a newline. A command is
 an argument list, never a shell string, decided whole where it starts and run as a phase is -
@@ -2320,7 +2322,8 @@ one item sharing one as they may; `create-agent`, which makes the agent the engi
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one;
 `reason`, which works the step's agent - the one its `in` names or the work it goes on with (`resume`), or, where it
 names neither, the engine's own read-only agent, with no worktree, made before the step runs and deleted once no step
-can go on with its work: the step's model resolved with its agent definition below its own and its order built as
+can go on with its work, the agent starting in the main checkout it reads - a path relative to where it starts names
+what the repository holds, as in a worktree - and writing its work directory alone: the step's model resolved with its agent definition below its own and its order built as
 entries of a model and one of its provider's keys, each entry's credential read from the slot; its prompt file read
 and filled where the step starts, each skill it names looked up again and the folder handed over in the agent's work
 directory; the work it goes on with rendered as its continuation record, and its going on by the client's kind - the

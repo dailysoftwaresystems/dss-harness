@@ -102,8 +102,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// until then nothing builds one but a test.
 /// </summary>
 /// <param name="WorkingDirectory">
-/// Where the agent's commands and relative paths resolve: its worktree, its work directory, or the
-/// run's directory for the reporter.
+/// Where the agent's commands and relative paths resolve: its worktree, the main checkout an agent
+/// with none reads, or its own work directory for the reporter.
 /// </param>
 /// <param name="ReadRoots">
 /// Every root the agent reads from, its working directory among them: a <c>Read</c> rule's pattern is

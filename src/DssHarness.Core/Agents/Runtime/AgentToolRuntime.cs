@@ -697,8 +697,13 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <summary>A place a read reaches, decided: held to the roots, then asked of the policy.</summary>
     private Decided ReadPlace(string path) => Decide(_paths.Read(path), full => _policy.Read(full));
 
-    /// <summary>A directory a search reaches, decided: held to the roots, then asked of the policy as a search.</summary>
-    private Decided SearchPlace(string path) => Decide(_paths.Read(path), full => _policy.Search(full));
+    /// <summary>
+    /// A directory a search reaches, decided: held to the roots, then asked of the policy as a read of it - never as a
+    /// search (<see cref="AgentPolicy.Search"/>), which refuses one that holds a place no action reaches: these tools
+    /// decide each file beneath it as its own read (<c>MayRead</c>), so such a place is left out and counted, never read,
+    /// and a read-only agent's main checkout, which holds the tool's own credential slots, is searched for the rest.
+    /// </summary>
+    private Decided SearchPlace(string path) => Decide(_paths.Read(path), full => _policy.Read(full));
 
     /// <summary>A place a write reaches, decided: held to the writable roots and through no link, then asked of the policy.</summary>
     private Decided WritePlace(string path) => Decide(_paths.Write(path), full => _policy.Write(full));

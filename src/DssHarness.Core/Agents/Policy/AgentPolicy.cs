@@ -586,10 +586,11 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// Whether a directory an agent would search may be searched: as a read of it, and never where a
-    /// credential slot, a Claude Code directory or a place the user keeps credentials in lies
-    /// beneath it, for a search reads what is beneath. What a <c>Read</c> rule refuses beneath it is left out by the client's own deny rules,
-    /// which this tool writes for each launch.
+    /// Whether a directory a client's own search tool would search may be searched - Claude Code's Grep and Glob, which
+    /// read what is beneath it unseen by this tool: as a read of it, and never where a credential slot, a Claude Code
+    /// directory or a place the user keeps credentials in lies beneath it. What a <c>Read</c> rule refuses beneath it is
+    /// left out by the client's own deny rules, which this tool writes for each launch. This tool's own search tools ask
+    /// a read of the directory instead, for they decide each file beneath it as its own read.
     /// </summary>
     /// <param name="path">The directory as the agent's tool asks it, relative to its working directory or absolute.</param>
     public AgentPolicyAnswer Search(string path)

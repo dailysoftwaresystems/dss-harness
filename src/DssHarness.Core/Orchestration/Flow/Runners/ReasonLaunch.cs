@@ -26,10 +26,13 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
     /// <summary>
     /// Where an agent's run works: its agent's worktree where it has one - at the path its record resolves under the
     /// worktrees root it was made under, never the record's address - which is also where it starts; else, for an agent
-    /// that reads the main tree or none at all, the main checkout, which it only reads, starting in its own work
-    /// directory. Its work directory and the run's directory either way. The work directory is made here, before any
-    /// client is handed the workspace: a run that starts in it - the advisor's and the reporter's, whose directories no
-    /// agent of the run's made - starts nowhere else, and a program is never started in a directory that is not there.
+    /// that reads the main tree, the main checkout, which it only reads and starts in too, so every path relative to where
+    /// it starts - its tools' and its commands', and those its prompts write, from the repository's root - names what the
+    /// repository holds, as a worktree's does, and a command over the tree it reads names its own working directory, which
+    /// the policy never refuses for the credential slots beneath it; and for a run of no agent's - the reporter, which
+    /// reads the run's records alone - its own work directory. Its work directory and the run's directory either way. The
+    /// work directory is made here, before any client is handed the workspace: a run that starts in it starts nowhere
+    /// else, and a program is never started in a directory that is not there.
     /// </summary>
     /// <param name="record">The agent's record; null where the run works as no agent of the run's.</param>
     /// <param name="repository">The repository's layout, the main checkout's.</param>
@@ -44,7 +47,7 @@ public sealed class ReasonLaunch(IFileSystem fileSystem, IHostPlatform platform,
         var worktree = record?.WorktreePath(repository);
         fileSystem.CreateDirectory(workDirectory);
 
-        return new AgentWorkspace(worktree, workDirectory, repository.MainCheckoutRoot, [], worktree ?? workDirectory, runDirectory);
+        return new AgentWorkspace(worktree, workDirectory, repository.MainCheckoutRoot, [], worktree ?? (record is null ? workDirectory : repository.MainCheckoutRoot), runDirectory);
     }
 
     private readonly ClaudeCodeDirectories _claudeCode = new(fileSystem, platform, keys);

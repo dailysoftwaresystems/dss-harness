@@ -848,6 +848,27 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// A step that works as an agent with no worktree starts in the main checkout it reads, as one with a worktree starts
+    /// in its worktree: a path relative to where it starts - its tools', its commands', those its prompt writes from the
+    /// repository's root - names what the repository holds. It still writes its work directory alone.
+    /// </summary>
+    [Fact]
+    public async Task AStepWorkingAsAnAgentWithNoWorktree_StartsInTheMainCheckoutItReads_AndWritesItsWorkDirectoryAlone()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+
+        await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+
+        var asked = agents.Asked.Single();
+        Assert.Null(asked.Workspace.Worktree);
+        Assert.Equal(kit.Main, asked.Workspace.WorkingDirectory);
+        Assert.Equal(kit.Main, asked.Ground!.WorkingDirectory);
+        Assert.Equal([kit.Layout.WorkDirectory("reader")], asked.Ground.WritableRoots);
+    }
+
+    /// <summary>
     /// Where the configuration balances a provider's keys, the step's order runs each model's keys by least spent in
     /// the last seven days - the repository's key-spend record read where the step starts - a tie in the list's order.
     /// </summary>

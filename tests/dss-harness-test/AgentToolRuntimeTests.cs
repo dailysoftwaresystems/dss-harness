@@ -937,6 +937,28 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// A find and a search over a directory that holds a credential slot - a read-only agent's main checkout holds the
+    /// tool's own - give every file beneath it the agent may read, the slot's left out and counted, never read: each file
+    /// is decided as its own read, so the search is never refused whole for what lies beneath it; the slot itself is
+    /// still never searched.
+    /// </summary>
+    [Fact]
+    public async Task AFindAndASearchOverADirectoryHoldingASlot_LeaveTheSlotOut_AndGiveTheRest()
+    {
+        Write("src/a.cs", "beta\n");
+        Write("slot/keys.env", "beta=secret\n");
+        var slot = Path.Combine(_worktree, "slot");
+        var runtime = Open(slots: [slot]);
+
+        Assert.Equal("src/a.cs\n[1 file(s) you may not read were left out]", (await Call(runtime, AgentTools.FindFiles, ("pattern", "*"))).Text);
+        Assert.Equal("src/a.cs:1: beta\n[1 file(s) you may not read were left out]", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"))).Text);
+
+        var inside = await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"), ("path", "slot"));
+        Assert.False(inside.Ok);
+        Assert.DoesNotContain("secret", inside.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A listing gives every file it matches - none left out past a count - its answer kept whole in the call's file and
     /// given a page at a time where it passes one, each page by read_result with the call's id.
     /// </summary>
@@ -2705,13 +2727,14 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Func<string?>? liveRun = null,
         AgentGraphSupport? graph = null,
         AgentMeasureSupport? measure = null,
-        Func<string, CancellationToken, Task<DssHarness.Core.Platform.MachineWideHold?>>? treeLock = null)
+        Func<string, CancellationToken, Task<DssHarness.Core.Platform.MachineWideHold?>>? treeLock = null,
+        IReadOnlyList<string>? slots = null)
     {
         var ground = PolicyGrounds.Of(
             _worktree,
             [_main],
             writable ?? [_worktree],
-            [],
+            slots ?? [],
             claudeCodeDirectories ?? [],
             restrictions ?? [],
             capabilities,
