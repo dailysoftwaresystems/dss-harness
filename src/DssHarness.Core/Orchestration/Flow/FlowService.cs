@@ -1740,7 +1740,7 @@ public sealed class FlowService(
                 async (run, agent, token) =>
                 {
                     // The engine's own deleting of a read-only agent whose work is over: applied, with nothing to fold
-                    // and no worktree to remove, and its failure - refused, or thrown - said in the run's log, for the
+                    // and its tree removed, and its failure - refused, or thrown - said in the run's log, for the
                     // run goes on whatever it did. An agent with no record is deleted already, by an earlier session of
                     // the run's or by its person, and nothing is left to delete or to say.
                     CommandOutcome outcome;

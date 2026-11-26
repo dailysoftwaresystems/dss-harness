@@ -87,11 +87,11 @@ public sealed class CommandWordsPolicyTests
             step.Run($"tar czf /tmp/x.tgz {tree.Slash}"));
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(step.Run($"cd {tree.Slash} && tar czf /tmp/x.tgz .")).Rule);
 
-        // A read-only step reads the main tree but works in its work directory: the main tree is not its working directory,
-        // and is refused whole.
+        // A step with no tree - its agent's record one an older tool wrote - reads the main tree but works in its work
+        // directory: the main tree is not its working directory, and is refused whole.
         Assert.Equal(
             new AgentPolicyAnswer.Denied("the credential slots", AgentPolicySource.Builtin, $"'{tree.Slash}' names '{tree.Main}', which holds a credential slot of this tool, '{sshItems}': a command over it may read one, and no command of an agent touches one"),
-            tree.ReadOnlyStep().Run($"tar czf /tmp/x.tgz {tree.Slash}"));
+            tree.TreelessStep().Run($"tar czf /tmp/x.tgz {tree.Slash}"));
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(step.Run($"env -C {tree.Slash} tar czf /tmp/x.tgz .")).Rule);
 
         foreach (var (policy, command) in new[]
@@ -1535,8 +1535,11 @@ public sealed class CommandWordsPolicyTests
         public AgentPolicy Side(PlatformId platform = PlatformId.Linux, string? programPath = null)
             => Policy(platform, SideTaskPolicy.Ground(new HarnessLayout(Main, Main), new HarnessConfig { Worktrees = new WorktreeSettings() }, [_claude.Path], []), programPath);
 
-        /// <summary>A reason step's policy with no worktree: it reads the main tree and works in its work directory.</summary>
-        public AgentPolicy ReadOnlyStep()
+        /// <summary>
+        /// A reason step's policy with no tree - an agent whose record an older tool wrote, its tree not made yet: it reads
+        /// the main tree and works in its work directory.
+        /// </summary>
+        public AgentPolicy TreelessStep()
             => Policy(
                 PlatformId.Linux,
                 AgentStepGround.Of(

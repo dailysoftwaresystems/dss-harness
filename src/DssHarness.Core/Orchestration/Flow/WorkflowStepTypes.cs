@@ -199,7 +199,7 @@ public static class WorkflowStepTypes
             ],
             [],
             null,
-            "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
+            "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, a tree of its own), and each brings that tree to the main checkout's HEAD (IAgentService.ReadyAsync)",
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
         new("build", [.. LegKeys, KeepGoingKey], [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),

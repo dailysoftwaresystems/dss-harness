@@ -999,8 +999,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// A find and a search over a directory that holds a credential slot - a read-only agent's main checkout holds the
-    /// tool's own - give every file beneath it the agent may read, the slot's left out and counted, never read: each file
+    /// A find and a search over a directory that holds a credential slot - the main checkout, which an agent that only
+    /// reads reads beside its own tree, holds the tool's own - give every file beneath it the agent may read, the slot's
+    /// left out and counted, never read: each file
     /// is decided as its own read, so the search is never refused whole for what lies beneath it; the slot itself is
     /// still never searched.
     /// </summary>

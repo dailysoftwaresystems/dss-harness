@@ -24,7 +24,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// The test is one critical section for the whole repository, <see cref="AcrossRuns"/>: <see cref="OrchestrationStore.Exclusively"/>
 /// will not do, since it is a section for one orchestrator's record, and two runs - two orchestrators - would take two
 /// different ones and both pass. A session is refused (13) while any other run of the repository is unfinished and has
-/// work in the tree: a live owner, or - paused, stopped or failed - an agent with a worktree still open or a fold in
+/// work in the tree: a live owner, or - paused, stopped or failed - an agent with a worktree still open, whose work is
+/// folded (an agent that only reads folds nothing of its own tree, and holds no work of the tree's), or a fold in
 /// its ledger not yet committed - an intent nobody settled, or a path it changed that the main tree still holds
 /// otherwise than its HEAD (<see cref="FoldLedger.Uncommitted"/>), so a commit made by hand ends it as the run's own
 /// does. Two would fold into one main tree, and that is as true of a run waiting on an answer
@@ -345,7 +346,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             return $"{status}, and whether its agent '{unreadable.Name}' holds a worktree cannot be told: {unreadable.Problem!.TrimEnd('.')}";
         }
 
-        var open = agents.Count(entry => entry.Record is { State: AgentStates.Live } record && record.Worktree is not null);
+        // An agent that only reads holds a tree of its own, and nothing in it is ever folded: no work of the tree's is in it.
+        var open = agents.Count(entry => entry.Record is { State: AgentStates.Live, Reads: false } record && record.Worktree is not null);
         int uncommitted;
 
         try

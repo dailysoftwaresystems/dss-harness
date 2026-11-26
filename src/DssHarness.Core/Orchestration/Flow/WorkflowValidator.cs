@@ -1591,7 +1591,7 @@ public static class WorkflowValidator
             {
                 if (step.In is not null)
                 {
-                    _problems.Add($"{where} reads and names 'in'; a reading step has no worktree to work in, and reads the main tree");
+                    _problems.Add($"{where} reads and names 'in'; a reading step works as an agent of its own that only reads, never in a worktree a create-agent step made");
                 }
 
                 if (step.Writes is not null)

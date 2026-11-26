@@ -143,9 +143,10 @@ public sealed class AdvisorRunner(
 
         order = program.Order;
 
-        // The asking step's agent decides where the advice works: its worktree where it has one - at the path its record
-        // resolves, as every launch's is - else the main tree; the advice only reads either way, its own work directory
-        // the one place it writes. Its records sit under the asking step's own directory, whichever agent it names, in
+        // The asking step's agent decides where the advice works: its tree - at the path its record resolves, as every
+        // launch's is, an agent that only reads having one of its own as every agent has - else the advice's own work
+        // directory; the advice only reads either way, the main checkout too, its own work directory the one place it
+        // writes. The tree is never brought to the main checkout's HEAD here: the asking step's attempt is going on in it. Its records sit under the asking step's own directory, whichever agent it names, in
         // the next number after the advices that directory holds already: a session before this one may have left some.
         var working = call.Agent;
         var agentRecord = working is null ? null : store.ReadAgent(layout, working);

@@ -27,10 +27,11 @@ public interface IOrchestratorService : IUseCase
     Task<CommandOutcome> CreateAsync(string startDirectory, string name, string model, int? parallel, string? session, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Deletes an orchestrator, once none of its agents with a worktree is live or closed and no worktree is left below its
-    /// directory under the worktrees root; an agent with no worktree holds nothing but records, and goes with it whatever
-    /// its state. The evidence, transcripts, steps and sessions its agents kept - each agent's, of either kind, deleted or
-    /// not - go with it only with <paramref name="deleteEvidence"/>.
+    /// Deletes an orchestrator, once none of its agents whose work is folded is live or closed and no worktree of theirs is
+    /// left below its directory under the worktrees root; an agent that only reads holds nothing but records and its tree,
+    /// which is removed as deleting the agent removes it, nothing folded, and goes with it whatever its state. The evidence,
+    /// transcripts, steps and sessions its agents kept - each agent's, of either kind, deleted or not - go with it only with
+    /// <paramref name="deleteEvidence"/>.
     /// </summary>
     /// <param name="startDirectory">A directory in the repository.</param>
     /// <param name="name">The orchestrator's name.</param>
@@ -297,10 +298,10 @@ public sealed class OrchestratorService(
                     + "Nothing was changed.");
             }
 
-            // An agent that reads the main tree holds nothing but records: it does not stand in the way, and goes with
-            // the orchestrator. What it kept of the steps that ran as it and of its sessions is counted below with every
-            // agent's, under the guard --delete-evidence gives. What git lists below is refused on its own below, so the
-            // open agents are asked of the records alone.
+            // An agent that only reads holds nothing but records and its tree, scratch nothing folds: it does not stand in
+            // the way, and goes with the orchestrator, its tree removed below. What it kept of the steps that ran as it and
+            // of its sessions is counted below with every agent's, under the guard --delete-evidence gives. What git lists
+            // below is refused on its own below, so the open agents are asked of the records alone.
             var open = OrchestrationRules.OpenAgents(name, agents, []);
 
             if (open.Count > 0)
@@ -310,10 +311,18 @@ public sealed class OrchestratorService(
                     + $"Delete each with {OrchestrationReports.DeleteAgentLine(name, "<agent>")}. Nothing was changed.");
             }
 
-            if (below.Worktrees.Count > 0)
+            // The trees below that are those of its live agents that only read are theirs to lose; every other is refused.
+            var readers = agents
+                .Where(agent => agent.Record is { Reads: true, State: AgentStates.Live })
+                .Select(agent => agent.Record!)
+                .Where(record => below.Worktrees.Contains(WorktreeAddress.Nested(name, record.Name).Name, StringComparer.Ordinal))
+                .ToList();
+            var left = below.Worktrees.Where(worktree => !readers.Any(record => WorktreeAddress.Nested(name, record.Name).Name == worktree)).ToList();
+
+            if (left.Count > 0)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {Names.Line(below.Worktrees, "git worktree list")}. Delete each with "
+                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {Names.Line(left, "git worktree list")}. Delete each with "
                     + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, "<address>")} first. Nothing was changed.");
             }
 
@@ -374,26 +383,50 @@ public sealed class OrchestratorService(
                 return CommandOutcome.Refused(holding);
             }
 
+            // The trees of its agents that only read go first, each as deleting the agent removes it - the one owner of how
+            // such a tree goes - and the records stay until every one is gone, so one that stays finishes when run again.
+            var trees = new List<string>();
+
+            foreach (var reader in readers)
+            {
+                var removal = AgentService.RemoveReadingTreeAsync(_worktrees, layout.MainCheckoutRoot, reader).GetAwaiter().GetResult();
+                var address = WorktreeAddress.Nested(name, reader.Name);
+
+                trees.Add($"{WorktreeService.DeleteCommand} {address.Name}: {removal.Outcome.Message}");
+
+                if (_fileSystem.DirectoryExists(address.PathUnder(worktreesDirectory)))
+                {
+                    return CommandOutcome.Failed(
+                        HarnessExit.Incomplete,
+                        $"Orchestrator '{name}' is not deleted yet: the tree of its agent '{reader.Name}', which only reads, is still at "
+                        + $"'{address.PathUnder(worktreesDirectory)}' - {removal.Outcome.Message.TrimEnd('.')}. Its record is kept, so "
+                        + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again once that is dealt with finishes it.",
+                        [.. trees, .. (removal.Outcome.Details ?? []).Select(detail => $"  {detail}")]);
+                }
+            }
+
             if (Remove(orchestrator) is { } stopped)
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
                     $"Orchestrator '{name}' is not deleted yet: {stopped}. Its record is kept, so "
-                    + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again finishes it.");
+                    + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again finishes it.",
+                    trees);
             }
 
-            // Every agent left is deleted, or has no worktree and was not: each is counted as what it is.
+            // Every agent left is deleted, or only reads and was not: each is counted as what it is.
             var deleted = agents.Count(agent => agent.Record!.State == AgentStates.Deleted);
             var reading = agents.Count - deleted;
             string[] went =
             [
                 .. deleted == 0 ? [] : new[] { ReportText.Counted(deleted, "deleted agent") },
-                .. reading == 0 ? [] : new[] { $"{ReportText.Counted(reading, "agent")} with no worktree, not deleted" },
+                .. reading == 0 ? [] : new[] { $"{ReportText.Counted(reading, "agent")} that only read, not deleted" },
             ];
 
             return CommandOutcome.Ok(
                 $"deleted orchestrator '{name}'",
                 [
+                    .. trees,
                     $"removed {orchestrator.Directory}",
                     .. went.Length == 0 ? [] : new[] { $"with the history of {string.Join(" and ", went)}" },
                     .. kept.Count == 0 ? [] : new[] { $"and {KeptOf.Said(kept)}" },
@@ -623,15 +656,16 @@ public sealed class OrchestratorService(
     /// <summary>
     /// One agent as the listing reports it: where its worktree is, from its own record - the worktrees root it was made
     /// under - and whether anything is there, asked of that path; for a record that does not read, the configured root.
-    /// An agent that reads the main tree has no worktree, so it names none. A live agent's worktree that is there is asked
-    /// of git as every agent command asks it (<see cref="AgentWorktrees.StandingAsync"/>), and why it cannot be worked on is
-    /// said where it cannot: a live agent is never said to stand at a worktree git cannot open.
+    /// An agent that only reads has a tree of its own too; one whose record an older tool wrote names none, so it names
+    /// none either. A live agent's worktree that is there is asked of git as every agent command asks it
+    /// (<see cref="AgentWorktrees.StandingAsync"/>), and why it cannot be worked on is said where it cannot: a live agent is
+    /// never said to stand at a worktree git cannot open.
     /// </summary>
     private async Task<AgentInventory> InventoryAsync(HarnessContext context, OrchestratorLayout orchestrator, AgentEntry agent, CancellationToken cancellationToken)
     {
         var layout = context.Layout;
-        var path = agent.Record is { Reads: true }
-            ? null
+        var path = agent.Record is { Reads: true } reading
+            ? reading.WorktreePath(layout)
             : agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root));
         var exists = path is not null && WorktreeExists(path);
         string? problem = null;
@@ -780,7 +814,7 @@ public sealed record FlowEngineState(string State, string? Process, IReadOnlyLis
 /// <summary>One agent, as list-orchestrator reports it.</summary>
 /// <param name="Entry">Its directory's record, or why it has none that reads.</param>
 /// <param name="WorktreeExists">Whether anything is at its worktree's path.</param>
-/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under; null where it reads the main tree and has none.</param>
+/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under; null for an agent that only reads whose record an older tool wrote, naming no tree.</param>
 /// <param name="Evidence">The evidence directories kept for it, relative to its directory.</param>
 /// <param name="Transcripts">How many transcript files are kept for it.</param>
 public sealed record AgentInventory(

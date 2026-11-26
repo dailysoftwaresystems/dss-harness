@@ -1474,28 +1474,50 @@ stops part way (exit 21) leaves only records that read, and run again it finishe
 orchestrator's open agents as create-agent does (`OrchestrationRules.OpenAgents`), and says where each agent's
 worktree is from its own record, the worktrees root it was made under.
 
-An agent can also be made with no worktree (`create-agent --no-worktree`): a record and the two directories every
-agent gets outside a worktree - `work/<agent>/` and `plans/<agent>/` - and nothing in the tree. Its record says
-`"access": "read"` (`AgentRecord.Access`); a record that says nothing is an agent with a worktree, which is every
-record an older tool wrote and what the tool still writes for one, so those records read as they always did. The
-engine makes one for a read-only reason step, and nothing else does - the option's help says a person has no use for
-one by hand. It counts against no limit, the limit being a limit on worktrees: `OrchestrationRules.OpenAgents` leaves
-it out, and so do list-orchestrator's open agents and delete-orchestrator's way, since a live one holds nothing but
-records and goes with the orchestrator; what every agent's directory keeps of the steps that ran as it and of its
-sessions with an API client is counted with its evidence and transcripts, and goes only with `--delete-evidence`,
-whatever the agent's kind or state. It is never seeded, refreshed, rebased or folded - each refuses, exit 13, once the
-repository is found and before git is asked anything about the agent - and deleting it is one write, `live` to `deleted`, the path the states already have
-for an agent whose worktree was never made; its directory stays, as every deleted agent's does. It records no session:
-`--session` beside `--no-worktree` is a usage error, and such an agent's record that names one does not read
-(`AgentRecord.Problem`), so deleting it says no session is recorded and looks for no transcript, and keeps no evidence
-either, having no worktree. `--discard-uncommitted` and the allowances have nothing to act on there; delete-agent says
-so, line by line, and its dry run's line for `--apply` leaves them out.
+An agent can also be made to only read (`create-agent --reads-only`): a record, the two directories every agent gets
+outside its tree - `work/<agent>/` and `plans/<agent>/` - and a tree of its own, made by the one making of every
+agent's tree (`IWorktreeService.CreateAtAsync`, a repository of its own borrowing the main checkout's objects,
+detached at the main checkout's HEAD, its commit kept alive by `WorktreeKeepalive`), never a second way of making
+trees. Its record says `"access": "read"` (`AgentRecord.Access`) beside the tree's `worktree`, `tree` and
+`worktreesRoot` and the commit it stands on as `base`; a record that says no access is an agent whose work is folded,
+which is every record an older tool wrote of one and what the tool still writes for one, so those records read as they
+always did. The engine makes one for a read-only reason step, and nothing else does - the option's help says a person
+has no use for one by hand. As every step that works as it starts - each attempt of its first, and of each that goes
+on with its work - the engine brings its tree to the main checkout's HEAD then (`IAgentService.ReadyAsync`, asked by
+`CreateAgentRunner.ReadyAsync` before anything of the step reads the tree): held as every agent's worktree is while it
+is written, its commit kept alive first, then a forced detached checkout of that commit and a clean of every file git
+does not track - ignored ones and repositories of their own included (`git clean -ffdx`) - proved after by its HEAD and
+by git listing nothing in it the commit does not hold as it is, so the tree is exactly what the main checkout committed
+at the step's start, whatever the agent wrote there before; the record then names that commit. An attempt that goes on
+with an answer in its own conversation - a person's, a limit's `more` or `compact` - is the same start going on, and
+finds the tree as its attempt left it. A tree that is not there - a record an older tool wrote, saying `"access":
+"read"` and naming no tree, or a making that failed - is made at the step's start, and the record given its three facts;
+anything else at its path is refused, nothing touched. The agent may write its tree, where it builds and tests, and its
+work directory - whatever its definition's `writes` says, since nothing it writes is ever folded, committed or pushed.
+It counts against no limit, the limit being a limit on the worktrees whose work is folded: `OrchestrationRules.OpenAgents`
+leaves it out, its tree listed or not, and so do list-orchestrator's open agents and delete-orchestrator's way, which
+removes a live one's tree as deleting it does and lets it go with the orchestrator, and a paused run holding one is not
+unfinished on its account (`FlowSessions`), its tree holding no work of the tree's; delete-worktree refuses its tree as
+any live agent's, naming delete-agent; what every agent's directory keeps
+of the steps that ran as it and of its sessions with an API client is counted with its evidence and transcripts, and
+goes only with `--delete-evidence`, whatever the agent's kind or state. It is never seeded, refreshed, rebased or folded -
+each refuses, exit 13, once the repository is found and before git is asked anything about the agent - and deleting it
+(`AgentService.RemoveReadingTreeAsync`, the one owner of how such a tree goes, which delete-agent, the engine's deletion
+of it once its work is over and delete-orchestrator all ask) removes its tree through delete-worktree as the agent's,
+never forced, its uncommitted changes and evidence roots going with it - every other check of a removal standing - and
+then marks it `deleted`, the path the states already have for an agent with nothing to close; its directory stays, as
+every deleted agent's does. It records no session: `--session` beside `--reads-only` is a usage error, and such an
+agent's record that names one does not read (`AgentRecord.Problem`), so deleting it says no session is recorded and
+looks for no transcript, and keeps no evidence either. `--discard-uncommitted` and the allowances have nothing to act on
+there; delete-agent says so, line by line, and its dry run's line for `--apply` leaves them out. `--no-worktree`, which
+made such an agent with no tree before every agent had one, is retired: it is refused, a usage error, naming
+`--reads-only` (`AgentService.RetiredNoWorktree`), and kept hidden from the command's help.
 
-A `dssharness` from before the agent with no worktree reads its record strictly, finds no worktree in it, and cannot
-tell what the agent is: its list-orchestrator prints the agent as one whose record does not read, and its
-delete-orchestrator refuses that orchestrator and changes nothing. As across the tool's rename, update while no
-`dssharness` is running, and do not go back. An agent with a worktree is not touched by this - the tool writes no
-`access` for one, so its record is what an older tool reads.
+A `dssharness` from before the agent that only reads reads its record strictly and cannot tell what the agent is: its
+list-orchestrator prints the agent as one whose record does not read, and its delete-orchestrator refuses that
+orchestrator and changes nothing. As across the tool's rename, update while no `dssharness` is running, and do not go
+back. An agent whose work is folded is not touched by this - the tool writes no `access` for one, so its record is what
+an older tool reads.
 
 ### Seeding and folding
 
@@ -3471,7 +3493,9 @@ tools given `run` - that the engine gives it by, the tool runtime offers it by a
 so no launch is told to take a tool its server does not list; its every call - a leg, its variant, a filter, the cell
 measured - runs through `ITestLegs` as a leg step's legs are (`FlowStepLegs`, the one owner of a step's legs: the
 isolation decided first, the process scope over the step's directory, the ledger kept), in the agent's worktree where
-it has one and in a local copy of the main tree where it does not (`ReasonStepRunner.MeasuredAsync`), read by
+it has one - an agent that only reads measures its own tree, at the main checkout's HEAD, which no fold moves and the
+start of its next step takes back - and in a local copy of the main tree where it does not
+(`ReasonStepRunner.MeasuredAsync`), read by
 `FlowLegVerdicts.ClassOf` - a red leg failed, a leg that passed passed, every other verdict unmeasured with the leg's
 words as why - and answered with the verdict as the ledger spells it, the run's directory and the call's own records,
 `measures/<call id>/` of the step's directory (`AgentMeasureSupport.RecordsOf`: the ledger, a red leg's log in an
@@ -3619,11 +3643,14 @@ written to `step.json` before `IAgentService.CreateAsync` is called; run again i
 drops a making cut part way - one whose hand-over of the main tree's uncommitted state stopped part way
 (`SeedRecord.HandOverStopped`) seeded again with the rest - and finishes the removal of one found closed
 (`FlowStepResult.NameSpent`); a refusal it meets keeps its cause (`FlowStepResult.Failed`), so a main tree another run
-holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., NoWorktree: true))`
-makes a read-only reason step's agent the same way. `ReasonStepRunner` works the reason step itself: the agent it is
-given - the one its `in` names, the work a `resume` goes on with (`FlowCoordinator.NamedAgentOf` walks the chain), or
-the engine's own read-only one, named with its model before its record (`FlowCoordinator.Start`) and made through
-`CreateAgentRunner.MakeAsync(noWorktree: true)` where the step names none - the definition it works by read where
+holds is waited out as a held lock is; and `IAgentService.CreateAsync(new AgentCreateRequest(..., ReadsOnly: true))`
+makes a read-only reason step's agent the same way, its tree by the same making. `ReasonStepRunner` works the reason
+step itself: the agent it is given - the one its `in` names, the work a `resume` goes on with
+(`FlowCoordinator.NamedAgentOf` walks the chain), or the engine's own read-only one, named with its model before its
+record (`FlowCoordinator.Start`) and made through `CreateAgentRunner.MakeAsync(readsOnly: true)` where the step names
+none, and its tree brought to the main checkout's HEAD by `CreateAgentRunner.ReadyAsync` as every step that works as it
+starts, before the step's ground and its record of what the tree held untracked (`AgentStepStart`) are taken - the
+definition it works by read where
 the chain of work it goes on with began (`ResumeChain.Root`, the one owner the validator reads it by too: a step that
 goes on with another's work is the same agent going on, and works by that step's definition, client, tier, model,
 writes and web search - its system prompt sent, its limits held, its capabilities and `writes: false` on the ground,
@@ -3636,7 +3663,9 @@ as every launch builds them (`ReasonLaunch`, shared with the advisor and the rep
 path its record resolves, the run's work directory made before any client is handed it - the advisor's and the
 reporter's, which no agent of the run made, among them - the tool's own `~/.claude` always among the directories,
 every secret the slot answers in the mask), the policy's ground by `AgentStepGround.Of` (a
-read-only agent reading the main tree and writing its work directory alone; the tool's state guarded under each
+read-only agent working in its own tree, `AgentWorkspace.OnlyReads`, writing it and its work directory whatever its
+definition's `writes` says, and reading the main checkout beside it - its run records and logs are there - its
+`Trees` its tree and the main checkout as a builder's are; the tool's state guarded under each
 tree the agent touches - its worktree, and always the main checkout, whose run records and other worktrees a command
 reaches from the worktree - and git's own files beneath both, `AgentPolicyGround.Trees`), each skill its prompt names
 looked up
@@ -3976,8 +4005,8 @@ What the step claimed is held through the turn and let go of after it by one rul
 in its place starts beside a runner still writing; else it is given back.
 The coordinator deletes the read-only agent once no step can go on with its work (`FlowCoordinator.ReadOnlyAgentsOver`,
 over the declarations that resume its maker and the instances drawn of them, each agent once - `_deletedAgents` - through
-the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which writes a refusal and a throw alike in the
-agent's log and takes an agent with no record as deleted already).
+the `deleteAgent` the service wires to `IAgentService.DeleteAsync`, which removes its tree and folds nothing, writes a
+refusal and a throw alike in the agent's log and takes an agent with no record as deleted already).
 The key a step starts on is chosen with the order (`balanceKeyUsage`): the resolution's entries built by
 `AgentStepOrder.Of` keep the list's order, or - where the configuration balances the keys - each model's keys run by
 least spent in the last seven days (a tie in the list's order, for `OrderBy` keeps it), the week read by
@@ -4272,7 +4301,7 @@ yielded, none refused for an empty list would read as no narrowing), and narrows
 The continuation record says each step of the chain as its own record states it ended
 (`ReasonStepRunner.EndedOf`), the files changed the paths this agent's folds wrote into the main tree (`FoldLedger`)
 and the paths its worktree holds that no fold has taken (`AgentFold.WeighedAsync`, the fold's own rule of what an
-agent's change is, opened to the record), and the red legs of the agent's newest red build or test with where the
+agent's change is, opened to the record) - none for an agent that only reads, whose tree nothing folds - and the red legs of the agent's newest red build or test with where the
 copied ledger and its logs are (`ReasonStepRunner.RedLegsOf` over the run's own index). The engine stores the agent it names for a read-only step as the
 one the step works in, so the runner makes it on that name (`ReasonStepRunner`'s making, `CreateAgentRunner.MakeAsync`
 answering a live one as already made); the run places the step's records under the agent's directory before the agent
@@ -4280,12 +4309,12 @@ is made, so `AgentService.CreateAsync` makes an agent in a directory that holds 
 program a launch starts is found ready where the step starts (`ClaudeCodeUpdateService.ReadyAsync`, wired into the
 reason step runner, its answer carrying the program and the version it answered; a step's mask holding every form of
 each web-search key it was given, built of `Runners.ActionValues`); and the agent's scratch is the run's own
-`work/<agent>/` (`OrchestratorLayout.WorkDirectory`), the one place an agent with no worktree writes; the child is
-started in the tree it works on (`ReasonLaunch.Workspace`) - its worktree, else the main checkout it reads, so a path
-relative to where it starts, its tools', its commands' and those its prompt writes from the repository's root, names
-what the repository holds, and a command over that tree names the working directory, which the policy never refuses
-for the slots beneath it (`AgentPolicy.ThroughWorkingDirectory`) - and the reporter, which works as no agent of the
-run's, in its own scratch; the continuation's copies and the
+`work/<agent>/` (`OrchestratorLayout.WorkDirectory`); the child is started in the tree it works on
+(`ReasonLaunch.Workspace`) - its worktree, a read-only agent's own tree among them, brought to the main checkout's HEAD
+as the step started, so a path relative to where it starts, its tools', its commands' and those its prompt writes from
+the repository's root, names what the repository holds, and a command over that tree names the working directory, which
+the policy never refuses for the slots beneath it (`AgentPolicy.ThroughWorkingDirectory`) - and the reporter, which
+works as no agent of the run's, in its own scratch; the continuation's copies and the
 skills are put in the step's own `handed/` (`OrchestratorLayout.HandedDirectory`), which no command writes.
 The two acts of a plan update and their record: `amend-orchestrator-request <run> "<text>"`
 amends the request a run was started with and `answer-orchestrator <run> <answer> --again` changes the last answer a
@@ -5904,7 +5933,9 @@ at all fails the sync. Extraction runs on one of every
 An agent's view is its worktree listed the same way and held against the base - the main checkout's manifest, synced
 first where the run has none - as the overlay of each file the worktree holds otherwise and each of the base's it does
 not hold, the digest of the base it stands on with it: a file whose extract the base or an earlier sync of the view made
-is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads. Each
+is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads,
+which is served the base: its own tree, the main checkout's HEAD as each of its steps starts, is never synced as a view
+(`FlowGraphSyncs.WorktreeOf`). Each
 tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
 as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
 (`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it

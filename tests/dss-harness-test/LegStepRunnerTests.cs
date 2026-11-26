@@ -811,8 +811,8 @@ public sealed class LegStepRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A step whose in names an agent the run made none for is the engine's fault (70), and one whose agent has no
-    /// worktree - read-only, or deleted - is refused (13): neither runs a leg.
+    /// A step whose in names an agent the run made none for is the engine's fault (70), and one whose agent has no live
+    /// record naming a worktree - none, or deleted - is refused (13): neither runs a leg.
     /// </summary>
     [Fact]
     public async Task AStepWorkingInNoWorktree_RunsNothing()

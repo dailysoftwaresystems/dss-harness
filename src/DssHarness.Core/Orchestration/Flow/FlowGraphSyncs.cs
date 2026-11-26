@@ -90,7 +90,8 @@ public sealed class FlowGraphSyncs(
 
     /// <summary>
     /// The worktree whose view <paramref name="agent"/>'s steps are served and synced: its own, where its record names one;
-    /// null for an agent that reads - whose view is the base - and for one whose worktree its record does not place.
+    /// null for an agent that only reads - whose view is the base, its own tree being the main checkout's HEAD as each of its
+    /// steps starts and never synced as a view - and for one whose worktree its record does not place.
     /// </summary>
     /// <param name="agent">The agent's name.</param>
     /// <param name="record">The agent's record.</param>
@@ -382,7 +383,7 @@ public sealed class FlowGraphSyncs(
         {
             if (agent is not null)
             {
-                // An agent that reads has no worktree: it reads the main tree, and its view is the base.
+                // An agent that only reads is served the base: its tree is never synced as a view of its own.
                 switch (store.ReadAgent(layout, agent))
                 {
                     case { State: AgentStates.Live } record when WorktreeOf(agent, record, context.Layout) is { } worktree:

@@ -138,7 +138,9 @@ public sealed class ReasonStepRunnerTests
 
     /// <summary>
     /// The kit's configuration with one leg declared, of the configuration <c>debug</c>: what a step's measure tool is
-    /// offered and answered over.
+    /// offered and answered over. The path limit is one a temporary directory's long name leaves room under for the copies
+    /// and workers a leg keeps inside an agent's tree, which every agent's tree is held to as it is made - the tree of an
+    /// agent that only reads as well.
     /// </summary>
     private static void WithLegs(OrchestrationKit kit)
     {
@@ -146,10 +148,12 @@ public sealed class ReasonStepRunnerTests
 
         File.WriteAllText(
             config,
-            File.ReadAllText(config).Replace(
-                "\"worktrees\":",
-                "\"legs\": {\"windows\": {\"os\": \"windows\", \"processor\": \"x86_64\", \"config\": \"debug\"}},\n  \"buildConfigs\": {\"debug\": {}},\n  \"worktrees\":",
-                StringComparison.Ordinal));
+            File.ReadAllText(config)
+                .Replace(
+                    "\"worktrees\":",
+                    "\"legs\": {\"windows\": {\"os\": \"windows\", \"processor\": \"x86_64\", \"config\": \"debug\"}},\n  \"buildConfigs\": {\"debug\": {}},\n  \"worktrees\":",
+                    StringComparison.Ordinal)
+                .Replace("\"root\": \".worktrees\" }", "\"root\": \".worktrees\", \"pathLimit\": 480 }", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -404,16 +408,18 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A step the engine named a read-only agent for is given one - made, with no worktree - and worked as: its
-    /// workspace reads the main tree, writes its work directory, and the request carries the agent's name. The engine
-    /// stores the agent it named as the one the step works in, so the run hands both: the making answers an agent
-    /// already live as already made, and the step works as it.
+    /// A step the engine named a read-only agent for is given one - made, with a tree of its own at the main checkout's
+    /// HEAD - and worked as: its workspace is that tree, it writes the tree and its work directory, reads the main
+    /// checkout besides, and the request carries the agent's name. The engine stores the agent it named as the one the
+    /// step works in, so the run hands both: the making answers an agent already live as already made, and the step works
+    /// as it.
     /// </summary>
     [Fact]
     public async Task AStepTheEngineNamedAnAgentFor_IsGivenItMadeReadOnly_AndWorkedAs()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
+        var tree = kit.Worktree("a9");
 
         // The engine stores the agent it named as the one the step works in, so the run hands both.
         var result = await Runner(kit, agents).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9" }, Token);
@@ -423,12 +429,13 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("a9", asked.Agent);
         Assert.NotNull(kit.Record("a9"));
         Assert.True(kit.Record("a9").Reads);
-        Assert.Null(asked.Workspace.Worktree);
+        Assert.Equal(tree, asked.Workspace.Worktree);
+        Assert.Equal(tree, asked.Workspace.WorkingDirectory);
         Assert.Equal(kit.Main, asked.Workspace.MainCheckout);
         Assert.Equal(kit.Layout.WorkDirectory("a9"), asked.Workspace.WorkDirectory);
         Assert.Null(asked.Ground!.ReporterRoot);
         Assert.Contains(kit.Main, asked.Ground!.ReadRoots);
-        Assert.Equal([kit.Layout.WorkDirectory("a9")], asked.Ground!.WritableRoots);
+        Assert.Equal([tree, kit.Layout.WorkDirectory("a9")], asked.Ground!.WritableRoots);
 
         var again = await Runner(kit, agents).RunAsync(Run(kit, made: new FlowMadeAgent("a9", "claude-opus-5-5")) with { WorksIn = "a9", Attempt = 2 }, Token);
 
@@ -458,7 +465,7 @@ public sealed class ReasonStepRunnerTests
 
         var (ground, launchDirectory) = Assert.Single(isolation.Asked);
 
-        Assert.Equal([kit.Layout.WorkDirectory("a9")], ground.WritableRoots);
+        Assert.Equal([kit.Worktree("a9"), kit.Layout.WorkDirectory("a9")], ground.WritableRoots);
         Assert.Equal(kit.Layout.InstanceDirectory("think", "a9"), launchDirectory);
 
         var preferred = new TestIsolation((_, _) => new DssHarness.Core.Agents.Isolation.LaunchIsolation("preferred", null, null, "bubblewrap is not here", "install it"));
@@ -848,24 +855,150 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A step that works as an agent with no worktree starts in the main checkout it reads, as one with a worktree starts
-    /// in its worktree: a path relative to where it starts - its tools', its commands', those its prompt writes from the
-    /// repository's root - names what the repository holds. It still writes its work directory alone.
+    /// A step that works as an agent that only reads starts in a tree of its own, as one with a worktree starts in its
+    /// worktree, the tree at the main checkout's HEAD: a path relative to where it starts - its tools', its commands',
+    /// those its prompt writes from the repository's root - names what the repository committed. It may write that tree and
+    /// its work directory, and reads the main checkout besides. What it wrote in its tree - a tracked file changed, a file
+    /// made, an ignored one built - is gone as its next step starts, the tree brought to the commit the main checkout has
+    /// made since, and none of the main checkout's uncommitted state in it; the record names the new commit.
     /// </summary>
     [Fact]
-    public async Task AStepWorkingAsAnAgentWithNoWorktree_StartsInTheMainCheckoutItReads_AndWritesItsWorkDirectoryAlone()
+    public async Task AStepWorkingAsAnAgentThatOnlyReads_StartsInItsOwnTreeAtTheMainCheckoutsHead_AndWhatItWroteIsGoneAsTheNextStarts()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await kit.CreateReadingAgentAsync("reader");
+        var tree = kit.Worktree("reader");
+        var work = kit.Layout.WorkDirectory("reader");
+        agents.Answer = step =>
+        {
+            OrchestrationKit.Write(step.Workspace.WorkingDirectory, "a.txt", "the agent's scratch edit\n");
+            OrchestrationKit.Write(step.Workspace.WorkingDirectory, "made.txt", "the agent made this\n");
+            OrchestrationKit.Write(step.Workspace.WorkingDirectory, Path.Combine("evidence", "built.log"), "ignored, built by the agent\n");
+            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "done");
+        };
 
-        await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+        Assert.True((await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token)).Passed);
 
         var asked = agents.Asked.Single();
-        Assert.Null(asked.Workspace.Worktree);
-        Assert.Equal(kit.Main, asked.Workspace.WorkingDirectory);
-        Assert.Equal(kit.Main, asked.Ground!.WorkingDirectory);
-        Assert.Equal([kit.Layout.WorkDirectory("reader")], asked.Ground.WritableRoots);
+        Assert.Equal(tree, asked.Workspace.Worktree);
+        Assert.Equal(kit.Main, asked.Workspace.MainCheckout);
+        Assert.Equal(tree, asked.Workspace.WorkingDirectory);
+        Assert.Equal(tree, asked.Ground!.WorkingDirectory);
+        Assert.Equal([tree, work], asked.Ground.WritableRoots);
+        Assert.Contains(kit.Main, asked.Ground.ReadRoots);
+        Assert.Equal("the agent's scratch edit\n", OrchestrationKit.Read(tree, "a.txt"));
+
+        // The main checkout moves on: a commit, and a change it holds uncommitted.
+        OrchestrationKit.Write(kit.Main, "c.txt", "committed since\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "since", Token);
+        OrchestrationKit.Write(kit.Main, "b.txt", "uncommitted in the main tree\n");
+        var head = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        var seen = new List<(string? A, string? B, string? C, bool Made, bool Built)>();
+        agents.Answer = step =>
+        {
+            var at = step.Workspace.WorkingDirectory;
+            seen.Add((
+                OrchestrationKit.Read(at, "a.txt"),
+                OrchestrationKit.Read(at, "b.txt"),
+                File.Exists(Path.Combine(at, "c.txt")) ? OrchestrationKit.Read(at, "c.txt") : null,
+                File.Exists(Path.Combine(at, "made.txt")),
+                File.Exists(Path.Combine(at, "evidence", "built.log"))));
+            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "done");
+        };
+
+        Assert.True((await Runner(kit, agents).RunAsync(Run(kit, agent: "reader") with { Instance = "next" }, Token)).Passed);
+
+        Assert.Equal(tree, agents.Asked[1].Workspace.WorkingDirectory);
+        Assert.Equal([("one\n", "two\n", "committed since\n", false, false)], seen);
+        Assert.Equal(head, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
+        Assert.Equal(head, kit.Record("reader").Base);
+        Assert.Equal("uncommitted in the main tree\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// An answer that goes on with an attempt goes on with the attempt's own tree: what the agent wrote there before it
+    /// asked is there still as the answer goes on, never discarded part way through the attempt - and gone as the next
+    /// attempt starts, which begins afresh.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerThatGoesOnWithAnAttempt_GoesOnInItsTreeAsTheAttemptLeftIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var tree = kit.Worktree("reader");
+        var seen = new List<bool>();
+        agents.Answer = step =>
+        {
+            seen.Add(File.Exists(Path.Combine(step.Workspace.WorkingDirectory, "made.txt")));
+            OrchestrationKit.Write(step.Workspace.WorkingDirectory, "made.txt", "the agent made this\n");
+            return new AgentRunResult(AgentRunStatus.Completed, FinalText: "done");
+        };
+        var runner = Runner(kit, agents);
+
+        await runner.RunAsync(Run(kit, agent: "reader"), Token);
+        await runner.RunAsync(Run(kit, agent: "reader", answers: [new FlowAnswerGiven("q1", "answer", "go on", "ask", Attempt: 1)]), Token);
+        await runner.RunAsync(Run(kit, agent: "reader", attempt: 2, answers: [new FlowAnswerGiven("q1", "answer", "go on", "ask", Attempt: 1)]), Token);
+
+        Assert.Equal([false, true, false], seen);
+        Assert.Equal("The person answered:\ngo on", agents.Asked[1].Prompt);
+        Assert.All(agents.Asked, asked => Assert.Equal(tree, asked.Workspace.WorkingDirectory));
+    }
+
+    /// <summary>
+    /// A record an older tool wrote of an agent that only reads - "access": "read" and no tree - is given its tree as the
+    /// agent's next step starts: made at the main checkout's HEAD by the making every agent's tree is made by, the step
+    /// started in it, and the record naming it.
+    /// </summary>
+    [Fact]
+    public async Task AStepWorkingAsAnAgentThatOnlyReads_WhoseRecordAnOlderToolWrote_IsGivenItsTreeAsItStarts()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/reader", force: true, deleteEvidence: true, cancellationToken: Token);
+        kit.Harness.OrchestrationStore.UpdateAgent(kit.Layout, "reader", current => current with { Worktree = null, Tree = null, WorktreesRoot = null, Base = null });
+        var tree = kit.Worktree("reader");
+        var head = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+
+        Assert.False(Directory.Exists(tree));
+
+        Assert.True((await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token)).Passed);
+
+        var asked = agents.Asked.Single();
+        Assert.Equal(tree, asked.Workspace.Worktree);
+        Assert.Equal(tree, asked.Workspace.WorkingDirectory);
+        Assert.Equal([tree, kit.Layout.WorkDirectory("reader")], asked.Ground!.WritableRoots);
+        Assert.Equal(head, await kit.Harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
+        Assert.Equal(("o1/reader", AgentRecord.TreeRepository, head), (kit.Record("reader").Worktree, kit.Record("reader").Tree, kit.Record("reader").Base));
+    }
+
+    /// <summary>
+    /// A step working as an agent that only reads whose writes narrow its tree records what the tree holds untracked as it
+    /// first starts after the tree is brought to the main checkout's HEAD: what an earlier step of the agent made there is
+    /// gone by then, so the record holds none of it, and a path the step's own commands make is one it may take back.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatOnlyReadsWhoseWritesNarrowItsTree_RecordsItsTreeAsTheResetLeftIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+        var tree = kit.Worktree("reader");
+        File.WriteAllText(Path.Combine(tree, "before.o"), "made by an earlier step of the agent");
+        var run = Run(kit, agent: "reader");
+        run = run with { Step = run.Step with { Writes = new FlowList(["Makefile"], Expression: null) } };
+
+        Assert.True((await Runner(kit, agents).RunAsync(run, Token)).Passed);
+
+        var record = Path.Combine(kit.Layout.InstanceDirectory("think", "reader"), OrchestratorLayout.StepUntrackedFileName);
+        var asked = agents.Asked.Single();
+
+        Assert.False(File.Exists(Path.Combine(tree, "before.o")));
+        Assert.Equal(tree, asked.Ground!.StepStart!.Worktree);
+        Assert.Empty(asked.Ground.StepStart.Untracked);
+        Assert.Equal(["{\"paths\":0}"], File.ReadAllLines(record));
     }
 
     /// <summary>
@@ -2011,8 +2144,8 @@ public sealed class ReasonStepRunnerTests
     /// <summary>
     /// A reason step of a repository that declares legs is given the measure tool: each call answered through the test
     /// service, as any leg is run - the leg it names, built as the variant it names, tested with the filter it names -
-    /// in a local copy of the main tree where the step's agent has no worktree of its own, so no fold in flight changes
-    /// what it measures; its verdict spelt as the ledger spells it, and its ledger kept in the call's own records of the
+    /// in the tree of its own the step's agent that only reads is given, at the main checkout's HEAD, so no fold in flight
+    /// changes what it measures and no copy is made; its verdict spelt as the ledger spells it, and its ledger kept in the call's own records of the
     /// step's directory, by the call's id, with where the run's records are. A call naming a configuration the leg does
     /// not build, or a leg that is not declared, is answered unmeasured with the reason, nothing run.
     /// </summary>
@@ -2044,13 +2177,13 @@ public sealed class ReasonStepRunnerTests
 
         var request = Assert.Single(tests.Asked);
 
-        Assert.Equal(kit.Main, request.Directory);
+        Assert.Equal(kit.Worktree("a9"), request.Directory);
         Assert.Equal(["windows"], request.LegNames);
         Assert.Equal(["TheShape"], request.Filters);
-        Assert.True(request.LocalCopy);
+        Assert.False(request.LocalCopy);
 
         // Where its run's records are, and its ledger kept in the call's own records under the step's directory, by the
-        // call's id - none of a red leg's logs, for the step works in no worktree of its own.
+        // call's id - none of a red leg's logs, for its one leg passed.
         var ledger = JsonNode.Parse(File.ReadAllText(Path.Combine(records, OrchestratorLayout.StepLedgerFileName)))!;
 
         Assert.StartsWith("/runs/", answer.RunDirectory, StringComparison.Ordinal);

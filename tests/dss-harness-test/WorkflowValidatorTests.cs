@@ -558,7 +558,7 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "step 'reads-but-names-in' reads and names 'in'; a reading step has no worktree to work in, and reads the main tree",
+                "step 'reads-but-names-in' reads and names 'in'; a reading step works as an agent of its own that only reads, never in a worktree a create-agent step made",
                 "step 'resumes' resumes 'implement' and names agent; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes",
                 "step 'resumes' is independent and resumes 'implement'; independence is never being given the author's work, and resuming is going on with exactly that",
                 "step 'makes-no-agent' names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes",

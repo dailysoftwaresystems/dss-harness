@@ -24,7 +24,7 @@ public sealed class WorkflowStepTypesTests
             [
                 ("orient", "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders"),
                 ("graphify-codebase", "GraphifyCodebaseRunner: ICodebaseGraphService.SyncAsync over IGitClient, CodeGraphExtractors and CodeGraphLinker, through OrchestrationStore"),
-                ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)"),
+                ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, a tree of its own), and each brings that tree to the main checkout's HEAD (IAgentService.ReadyAsync)"),
                 ("build", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync"),
                 ("test", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync"),
                 ("run", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync"),

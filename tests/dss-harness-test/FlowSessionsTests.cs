@@ -156,7 +156,10 @@ public sealed class FlowSessionsTests
         Assert.Contains("resume-orchestrator r1 or answer-orchestrator r1 goes on with it, delete-orchestrator r1 ends it", raised.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>A paused run whose agents still hold worktrees is unfinished; one whose agents hold none is not - an agent with no worktree has no work in the tree.</summary>
+    /// <summary>
+    /// A paused run whose agents still hold worktrees whose work is folded is unfinished; one whose agents hold none is not -
+    /// an agent that only reads has no work in the tree, its own tree there or not.
+    /// </summary>
     [Fact]
     public async Task APausedRunIsUnfinishedOnlyWhereItsAgentsHoldWorktrees()
     {
@@ -202,13 +205,22 @@ public sealed class FlowSessionsTests
 
         Assert.Contains("paused; 1 agent with worktree still open", held.Message, StringComparison.Ordinal);
 
-        // The agent closes its worktree: the run holds nothing in the tree, and a second run may start.
+        // The agent is one that only reads, its tree of its own still there: nothing in it is ever folded, so the run holds
+        // nothing in the tree, and a second run may start.
         var agent = harness.OrchestrationStore.ReadAgent(other, "a1")!;
-        harness.OrchestrationStore.WriteAgent(other, agent with { Access = AgentRecord.AccessRead, Worktree = null, WorktreesRoot = null });
+        harness.OrchestrationStore.WriteAgent(other, agent with { Access = AgentRecord.AccessRead, Tree = AgentRecord.TreeRepository });
 
         var second = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "second", cancellationToken: Token);
 
         Assert.Equal("second", second.Run.Name);
+
+        // One an older tool wrote, with no tree, holds nothing either.
+        harness.OrchestrationStore.WriteAgent(other, agent with { Access = AgentRecord.AccessRead, Worktree = null, WorktreesRoot = null });
+        Released(harness, second.Run);
+
+        var third = await sessions.CreateAsync(layout, definition, () => ChildSweep.None, FlowService.RunCommand, wantedName: "third", cancellationToken: Token);
+
+        Assert.Equal("third", third.Run.Name);
     }
 
     /// <summary>

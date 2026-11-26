@@ -67,7 +67,9 @@ public static partial class HelpTopics
         builder.AppendLine("  maxTurns, maxBudgetUsd, maxMinutes, stallSeconds");
         builder.AppendLine("                limits, each a positive number");
         builder.AppendLine("  capabilities  of read, write, run and web; all four where the definition names none");
-        builder.AppendLine("  writes        false makes its worktree read-only; true where nothing is said");
+        builder.AppendLine("  writes        false makes its worktree read-only; true where nothing is said. The");
+        builder.AppendLine("                tree of an agent that only reads is its own scratch, never folded, and");
+        builder.AppendLine("                written whatever this says");
         builder.AppendLine("  restrictions  rules added to the configured ones; never removing one");
         builder.AppendLine();
         builder.AppendLine("A fallback is no key of a definition or of a step: it is the order of the tier's models");

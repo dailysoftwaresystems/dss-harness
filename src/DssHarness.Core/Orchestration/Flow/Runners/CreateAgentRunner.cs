@@ -9,16 +9,17 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// The <c>create-agent</c> step, and the making of every agent a run makes: the agent the engine named for the step,
 /// made through <see cref="IAgentService.CreateAsync(AgentCreateRequest, CancellationToken)"/> for the model written beside its name, with a worktree - or, for
-/// a read-only reason step, with none (<see cref="AgentCreateRequest.NoWorktree"/>). A step run again is not simply
-/// made again: the agent's record and seed are read first - none, and it is made; whole, it is done; made part way
-/// with the commit its worktree was made from recorded, its seeding is finished; made part way with no such commit, it
+/// a read-only reason step, one that only reads (<see cref="AgentCreateRequest.ReadsOnly"/>), whose tree is made by the same
+/// making and brought to the main checkout's HEAD as each of its steps starts (<see cref="ReadyAsync"/>). A step run again
+/// is not simply made again: the agent's record and seed are read first - none, and it is made; whole, it is done; made part
+/// way with the commit its worktree was made from recorded, its seeding is finished; made part way with no such commit, it
 /// is deleted abandoned, and closed - its removal begun - its removal is finished, and the step fails either way, for
 /// the name it was given is then spent, as it is where the agent was deleted (part 04, "Resume").
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the agent's record and seed.</param>
-/// <param name="agents">Makes, seeds and deletes agents.</param>
+/// <param name="agents">Makes, seeds, readies and deletes agents.</param>
 public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents) : IFlowStepTypeRunner
 {
     /// <inheritdoc/>
@@ -26,17 +27,38 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
 
     /// <inheritdoc/>
     public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
-        => MakeAsync(run, noWorktree: false, cancellationToken);
+        => MakeAsync(run, readsOnly: false, cancellationToken);
+
+    /// <summary>
+    /// Brings the tree of <paramref name="agent"/>, an agent that only reads, to the main checkout's HEAD as a step that works
+    /// as it starts - its first, and every one that goes on with its work - made where it is not there, its earlier writes
+    /// discarded where it is (<see cref="IAgentService.ReadyAsync"/>), so the tree the step reads is exactly what the main
+    /// checkout committed at that moment. Null where it is; the step's ending, failed with why, where it is not.
+    /// </summary>
+    /// <param name="run">The step that starts.</param>
+    /// <param name="agent">The agent it works as.</param>
+    /// <param name="cancellationToken">Cancels what has not begun writing; the service sees a making or a bringing through once it has.</param>
+    public async Task<FlowStepResult?> ReadyAsync(FlowStepRun run, string agent, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        var (place, _) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+        var ready = await agents.ReadyAsync(new AgentReadyRequest(place.Repository, place.Run, agent), cancellationToken).ConfigureAwait(false);
+
+        return ready.Outcome.Succeeded
+            ? null
+            : FlowStepResult.Failed(ready.Outcome, $"the tree of agent '{agent}' of '{place.Run}', which only reads, was not brought to the main checkout's HEAD: {ready.Outcome.Message}");
+    }
 
     /// <summary>
     /// Makes the agent <paramref name="run"/>'s step was named (<see cref="FlowStepRun.Made"/>), or finishes making it:
-    /// with a worktree, handed nothing where the step says <c>empty</c>, or with none where <paramref name="noWorktree"/>.
+    /// with a worktree, handed nothing where the step says <c>empty</c>, or to only read where <paramref name="readsOnly"/>.
     /// Its output names the agent.
     /// </summary>
     /// <param name="run">The step, with the agent the engine named for it.</param>
-    /// <param name="noWorktree">Whether the agent reads the main tree and has no worktree, as a read-only reason step's does.</param>
+    /// <param name="readsOnly">Whether the agent only reads, its tree never folded, as a read-only reason step's does.</param>
     /// <param name="cancellationToken">Cancels what has not begun writing; the service sees a making through once it has.</param>
-    public async Task<FlowStepResult> MakeAsync(FlowStepRun run, bool noWorktree, CancellationToken cancellationToken)
+    public async Task<FlowStepResult> MakeAsync(FlowStepRun run, bool readsOnly, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);
 
@@ -96,7 +118,7 @@ public sealed class CreateAgentRunner(IHarnessContextLoader contextLoader, IHost
         // None, and it is made; one there, whole, is answered as already made where it is what the step asked for, and
         // refused, saying what it is, where it is not. A whole one is never handed anything again.
         var created = await agents.CreateAsync(
-            new AgentCreateRequest(place.Repository, place.Run, made.Name, model, Empty: record is null && empty, Session: null, NoWorktree: noWorktree),
+            new AgentCreateRequest(place.Repository, place.Run, made.Name, model, Empty: record is null && empty, Session: null, ReadsOnly: readsOnly),
             cancellationToken).ConfigureAwait(false);
 
         return created.Outcome.Succeeded

@@ -1231,7 +1231,7 @@ public sealed class WorktreeService(
                 + "put its record right, or pass --force to delete the worktree anyway.");
         }
 
-        return record is { State: Orchestration.AgentStates.Live, Reads: false } && record.WorktreePath(layout) is { } at && PathsEqual(at, path)
+        return record is { State: Orchestration.AgentStates.Live } && record.WorktreePath(layout) is { } at && PathsEqual(at, path)
             ? Refused(
                 $"Worktree '{address.Name}' is the worktree of agent '{agent}' of orchestrator '{orchestrator}', which is live, and is deleted with the agent: "
                 + $"{Orchestration.OrchestrationReports.DeleteAgentLine(orchestrator, agent, string.Empty)} says what deleting it keeps and removes, and with --apply "

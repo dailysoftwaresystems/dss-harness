@@ -20,7 +20,7 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The machine step runners of slice 20a, each over a real repository: orient's facts, the plan check and the machine's
 /// check of a plan's work items, and create-agent's making of the agent the engine named - none, whole, part made with
-/// and without its worktree's commit, deleted, and with no worktree - and the dispatcher that serves each type it has a
+/// and without its worktree's commit, deleted, and one that only reads - and the dispatcher that serves each type it has a
 /// runner for and refuses the rest.
 /// </summary>
 public sealed class FlowStepRunnerTests : IDisposable
@@ -185,7 +185,7 @@ public sealed class FlowStepRunnerTests : IDisposable
         harness.FileSystem.CreateDirectory(other.Directory);
         harness.OrchestrationStore.WriteOrchestrator(other, new OrchestratorRecord { Kind = OrchestratorRecord.KindName, Name = "r9", Model = "flow-engine", Parallel = 2, CreatedAt = DateTimeOffset.UnixEpoch });
         harness.OrchestrationStore.WriteAgent(other, new AgentRecord { Kind = AgentRecord.KindName, Name = "a4", Orchestrator = "r9", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, Worktree = WorktreeAddress.Nested("r9", "a4").Name, WorktreesRoot = context.Config.Worktrees.Root, State = AgentStates.Live });
-        harness.OrchestrationStore.WriteAgent(other, new AgentRecord { Kind = AgentRecord.KindName, Name = "a5", Orchestrator = "r9", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, Access = AgentRecord.AccessRead, State = AgentStates.Live });
+        harness.OrchestrationStore.WriteAgent(other, new AgentRecord { Kind = AgentRecord.KindName, Name = "a5", Orchestrator = "r9", Model = "m", CreatedAt = DateTimeOffset.UnixEpoch, Access = AgentRecord.AccessRead, Worktree = WorktreeAddress.Nested("r9", "a5").Name, Tree = AgentRecord.TreeRepository, WorktreesRoot = context.Config.Worktrees.Root, State = AgentStates.Live });
 
         var held = await harness.RunLock.TryAcquireAsync(
             context.Layout,
@@ -1228,16 +1228,26 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal(HarnessExit.InternalError, unnamed.Exit);
     }
 
-    /// <summary>The agent of a read-only reason step is made with no worktree, by the same making.</summary>
+    /// <summary>
+    /// The agent of a read-only reason step is made by the same making, as one that only reads: its tree a repository of
+    /// its own at the main checkout's HEAD, as every agent's is.
+    /// </summary>
     [Fact]
-    public async Task TheMaking_MakesAnAgentWithNoWorktree()
+    public async Task TheMaking_MakesAnAgentThatOnlyReads_ItsTreeAtTheMainCheckoutsHead()
     {
         var (harness, repository) = await RepositoryAsync();
         var layout = await RunAsync(harness, repository);
+        var head = (await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token))!;
 
-        var made = await Create(harness).MakeAsync(Run(new WorkflowStep { Name = "think", Type = "reason" }, repository.Path, made: new FlowMadeAgent("a2", "model-one")), noWorktree: true, Token);
+        var made = await Create(harness).MakeAsync(Run(new WorkflowStep { Name = "think", Type = "reason" }, repository.Path, made: new FlowMadeAgent("a2", "model-one")), readsOnly: true, Token);
 
         Assert.True(made.Passed, made.Error);
-        Assert.True(harness.OrchestrationStore.ReadAgent(layout, "a2")!.Reads);
+
+        var record = harness.OrchestrationStore.ReadAgent(layout, "a2")!;
+        var tree = record.WorktreePath(new HarnessLayout(repository.Path, repository.Path))!;
+
+        Assert.True(record.Reads);
+        Assert.Equal((AgentRecord.TreeRepository, head), (record.Tree, record.Base));
+        Assert.Equal(head, await harness.GitClient.ResolveCommitAsync(tree, "HEAD", Token));
     }
 }

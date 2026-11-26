@@ -100,19 +100,24 @@ public static partial class HelpTopics
             + $"{AnchorCellNames.Priority}{AgentRows.CellExtension} where it declares one, each read as write-anchor reads a cell file. "
             + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, a git repository of its own that borrows the main "
             + "checkout's objects ('help worktrees'), which list-worktree and delete-worktree name "
-            + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. An agent can also be made with no "
-            + $"worktree ({AgentService.CreateCommand} --no-worktree), reading the main tree and writing only its scratch: the engine "
-            + "makes one for a read-only reason step, and a person has no use for one by hand. It records no session - --session "
-            + "beside --no-worktree is a usage error - and delete-agent marks it deleted in one write, folding nothing, removing no "
-            + "worktree and looking for no transcript; --discard-uncommitted and the allowances have nothing to act on there, and "
-            + "it says so. Agents write their handoffs, pause "
+            + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. An agent can also be made to only "
+            + $"read ({AgentService.CreateCommand} {AgentService.ReadsOnlyOption}): the engine makes one for a read-only reason step, and a "
+            + "person has no use for one by hand. Its tree is made as every agent's is, at the main checkout's HEAD, and as each of "
+            + "its steps starts the engine brings it to the main checkout's HEAD then - a forced detached checkout of that commit "
+            + "and a clean of every file git does not track, ignored ones included - so whatever it wrote there before is gone; it "
+            + "may write its tree and its work directory, and nothing it writes is ever folded, committed or pushed. A record an "
+            + "older tool wrote, naming no tree, is given one as its next step starts. It records no session - --session beside "
+            + $"{AgentService.ReadsOnlyOption} is a usage error - and delete-agent removes its tree, folding nothing and looking for no "
+            + "transcript, and marks it deleted; --discard-uncommitted and the allowances have nothing to act on there, and it says "
+            + $"so. {AgentService.RetiredNoWorktreeOption}, which made an agent with no worktree, is retired, and refused naming "
+            + $"{AgentService.ReadsOnlyOption}. Agents write their handoffs, pause "
             + "and stop points as .md files in their own directory. Every command that writes an agent's records names where they are "
             + "on each way out once it has: its record, its seed, the directory of the bytes it shares where it keeps any, and the rows "
             + "its folds applied - each that is there.");
         builder.AppendLine();
         builder.AppendLine("Commands");
         builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
-        builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty | --no-worktree] [--session <id>]");
+        builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty | {AgentService.ReadsOnlyOption}] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]...");
         builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [{FoldAllowances.MergeOption} <path>]... [--apply] [--json]");
@@ -406,9 +411,10 @@ public static partial class HelpTopics
             builder,
             $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
             + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the "
-            + "next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
-            + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and nothing "
-            + "of an agent with no worktree; for an agent whose making stopped part way, it says so and names what finishes it. "
+            + "next, naming them, and list-orchestrator counts them. An agent that only reads is never open, its tree listed or "
+            + "not. Run again, create-orchestrator changes only the limit and the session, and create-agent records only the "
+            + "session, and nothing of an agent that only reads; for an agent whose making stopped part way, it says so and names "
+            + "what finishes it. "
             + "An agent's name is never used twice: a deleted agent's directory stays as its history.");
         builder.AppendLine();
         AppendWrapped(
@@ -709,11 +715,12 @@ public static partial class HelpTopics
             + "kept in it, and a mutation worker, each in its own words. delete-agent refuses to run from "
             + "inside the worktree it removes, and so does its dry run, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
-            + "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is "
-            + "left below its directory, nor any directory holding a .git of its own that git records no worktree at - until then "
-            + $"it refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents "
-            + "kept, whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but "
-            + "records, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever "
+            + "delete-orchestrator deletes the orchestrator once every agent of it whose work is folded is deleted and no worktree "
+            + "but a live read-only agent's is left below its directory, nor any directory holding a .git of its own that git "
+            + $"records no worktree at - until then it refuses ({HarnessExit.Refused}), naming each - and the evidence, "
+            + "transcripts, steps and sessions its agents kept, whatever their kind or state, only with --delete-evidence; an "
+            + "agent that only reads holds nothing but records and its tree, which is removed as delete-agent removes it, nothing "
+            + "folded, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever "
             + "asked - goes with it and is never counted among what --delete-evidence guards, as does a copy of a commit a run's "
             + "sweep made in its directory and was cut off before taking away, git's record of it with it. It "
             + "removes the record last, so one that stops part way finishes when run again.");

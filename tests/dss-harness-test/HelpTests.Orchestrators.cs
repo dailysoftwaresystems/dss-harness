@@ -251,8 +251,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The orchestrators topic says that delete-orchestrator refuses while a directory below the orchestrator's holds a
-    /// .git of its own that git records no worktree at, as it does while a worktree is left there, and that an agent with
-    /// no worktree never stands in its way.
+    /// .git of its own that git records no worktree at, as it does while a worktree is left there, and that an agent that
+    /// only reads never stands in its way, its tree removed as delete-agent removes it.
     /// </summary>
     [Fact]
     public async Task OrchestratorsTopic_SaysDeleteOrchestratorRefuses_WhileADirectoryGitRecordsNoWorktreeAtIsBelowIt()
@@ -260,11 +260,12 @@ public sealed partial class HelpTests
         var result = HelpText.Of("agents");
 
         Assert.Contains(
-            "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is left "
-                + "below its directory, nor any directory holding a .git of its own that git records no worktree at - until then it "
-                + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
-                + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
-                + "and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
+            "delete-orchestrator deletes the orchestrator once every agent of it whose work is folded is deleted and no worktree "
+                + "but a live read-only agent's is left below its directory, nor any directory holding a .git of its own that git "
+                + $"records no worktree at - until then it refuses ({HarnessExit.Refused}), naming each - and the evidence, "
+                + "transcripts, steps and sessions its agents kept, whatever their kind or state, only with --delete-evidence; an "
+                + "agent that only reads holds nothing but records and its tree, which is removed as delete-agent removes it, nothing "
+                + "folded, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
                 + "goes with it and is never counted among what --delete-evidence guards, as does a copy of a commit a run's sweep made "
                 + "in its directory and was cut off before taking away, git's record of it with it.",
             Prose.Words(result.StandardOutput),
@@ -272,25 +273,35 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The orchestrators topic says what an agent with no worktree is to the verbs a person types: never open, so the
-    /// limit leaves it out; nothing recorded of it when create-agent runs again; no session, --session beside
-    /// --no-worktree refused; and a deletion that is one write, saying what has nothing to act on.
+    /// The orchestrators topic says what an agent that only reads is to the verbs a person types: its tree made as every
+    /// agent's is, brought to the main checkout's HEAD as each of its steps starts by a forced checkout and a clean of what
+    /// git does not track, never folded; a record naming no tree given one; never open, so the limit leaves it out;
+    /// nothing recorded of it when create-agent runs again; no session, --session beside --reads-only refused; a deletion
+    /// that removes its tree, saying what has nothing to act on; and the retired option refused, naming its replacement.
     /// </summary>
     [Fact]
-    public async Task OrchestratorsTopic_SaysWhatTheVerbsDoWithAnAgentWithNoWorktree()
+    public async Task OrchestratorsTopic_SaysWhatTheVerbsDoWithAnAgentThatOnlyReads()
     {
         var text = Prose.Words(HelpText.Of("agents").StandardOutput);
 
         foreach (var said in new[]
         {
-            "It records no session - --session beside --no-worktree is a usage error - and delete-agent marks it deleted in one "
-                + "write, folding nothing, removing no worktree and looking for no transcript; --discard-uncommitted and the "
-                + "allowances have nothing to act on there, and it says so.",
+            "An agent can also be made to only read (create-agent --reads-only): the engine makes one for a read-only reason "
+                + "step, and a person has no use for one by hand. Its tree is made as every agent's is, at the main checkout's "
+                + "HEAD, and as each of its steps starts the engine brings it to the main checkout's HEAD then - a forced detached "
+                + "checkout of that commit and a clean of every file git does not track, ignored ones included - so whatever it "
+                + "wrote there before is gone; it may write its tree and its work directory, and nothing it writes is ever folded, "
+                + "committed or pushed. A record an older tool wrote, naming no tree, is given one as its next step starts.",
+            "It records no session - --session beside --reads-only is a usage error - and delete-agent removes its tree, folding "
+                + "nothing and looking for no transcript, and marks it deleted; --discard-uncommitted and the allowances have "
+                + "nothing to act on there, and it says so. --no-worktree, which made an agent with no worktree, is retired, and "
+                + "refused naming --reads-only.",
+            "create-agent <o> <a> --model <id> [--empty | --reads-only] [--session <id>]",
             $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
                 + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses "
-                + "the next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
-                + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and "
-                + "nothing of an agent with no worktree;",
+                + "the next, naming them, and list-orchestrator counts them. An agent that only reads is never open, its tree "
+                + "listed or not. Run again, create-orchestrator changes only the limit and the session, and create-agent records "
+                + "only the session, and nothing of an agent that only reads;",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);

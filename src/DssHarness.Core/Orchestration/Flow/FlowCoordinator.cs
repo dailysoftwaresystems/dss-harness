@@ -11925,8 +11925,8 @@ public sealed class FlowCoordinator
     /// <summary>One instance of a check, as <see cref="FlowChecks"/> reads it.</summary>
     private FlowCheck CheckOf(FlowInstance instance)
     {
-        // An engine-made agent is a read-only one, with no worktree: its step ran in the main tree, reading it, and
-        // the line says so - never that it ran in a worktree there is none of.
+        // An engine-made agent is a read-only one, whose tree is its own scratch at the main checkout's HEAD, and
+        // the line says no worktree - never that it ran in one whose work is folded.
         var worksIn = WorksInOf(instance) is { } named
             && _created.FirstOrDefault(made => made.Made is { } madeName && string.Equals(madeName, named, StringComparison.Ordinal)) is not { Step.Type: "reason" }
             ? named

@@ -14,13 +14,16 @@ namespace DssHarness.Core.Agents.Policy;
 public static class AgentStepGround
 {
     /// <summary>
-    /// The ground of a reason step working in <paramref name="workspace"/>: its agent's worktree where it has one -
-    /// which it writes below, unless its definition says <c>writes: false</c> or the run only reads, its work directory
-    /// always - or, for an agent with none, the main checkout, which it only reads. The tool's own state under each tree
-    /// it touches - its worktree, and always the main checkout, whose run records and other worktrees a command reaches
-    /// from the worktree - git's own files beneath both under the worktree rules, and every credential slot of the main
-    /// checkout (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the
-    /// user keeps credentials in, no action of the agent's reaches.
+    /// The ground of a reason step working in <paramref name="workspace"/>: its agent's worktree, where it starts and which
+    /// it writes below, unless its definition says <c>writes: false</c> or the run only reads, its work directory always.
+    /// An agent that only reads (<see cref="AgentWorkspace.OnlyReads"/>) writes its tree whatever its definition says - the
+    /// tree is its own scratch, the main checkout's HEAD as its step started, where it builds and tests, and nothing of it is
+    /// ever folded - and reads the main checkout besides, whose run records and logs it is pointed at; one whose record an
+    /// older tool wrote with no tree reads the main checkout alone. The tool's own state under each tree it touches - its
+    /// worktree, and always the main checkout, whose run records and other worktrees a command reaches from the worktree -
+    /// git's own files beneath both under the worktree rules, and every credential slot of the main checkout
+    /// (<see cref="HarnessLayout.SecretSlotDirectoriesUnder"/>), every Claude Code directory and every place the user keeps
+    /// credentials in, no action of the agent's reaches.
     /// </summary>
     /// <param name="config">The configuration, whose <c>agentPolicy</c> restricts and whose state paths are guarded.</param>
     /// <param name="definition">The agent definition the step works by, where there is one; null where it names none.</param>
@@ -81,11 +84,12 @@ public static class AgentStepGround
             .Concat(step.Restrictions.Select(one => new AgentRestriction(one, AgentPolicySource.Agent)))
             .ToList();
 
-        // An agent with no worktree reads the main tree; one with a worktree works in it alone, its view of the main
-        // tree coming by the engine.
+        // An agent that only reads reads the main checkout beside its own tree - the run's records and logs are there - and
+        // so does a run with no tree; one whose work is folded works in its worktree alone, its view of the main tree coming
+        // by the engine.
         var reads = new List<string> { workspace.WorkingDirectory, workspace.WorkDirectory };
 
-        if (workspace.Worktree is null)
+        if (workspace.Worktree is null || workspace.OnlyReads)
         {
             reads.Add(workspace.MainCheckout);
         }
@@ -96,8 +100,10 @@ public static class AgentStepGround
         }
 
         // A worktree is written only where the agent writes: a definition's `writes: false`, and a run that only reads,
-        // leave it to be read, and the work directory is all the agent writes.
-        var writable = workspace.Worktree is { Length: > 0 } && definition?.Writes != false && !readsOnly
+        // leave it to be read, and the work directory is all the agent writes. The tree of an agent that only reads is its
+        // own scratch, written whatever its definition says, since nothing of it is ever folded: only a run that only reads
+        // whatever its definition gives it - the advisor in that tree - leaves it to be read.
+        var writable = workspace.Worktree is { Length: > 0 } && (definition?.Writes != false || workspace.OnlyReads) && !readsOnly
             ? Distinct([workspace.Worktree, workspace.WorkDirectory])
             : [workspace.WorkDirectory];
 

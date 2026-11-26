@@ -221,21 +221,24 @@ public sealed class OrchestrationStoreTests
     }
 
     /// <summary>
-    /// A record that says it reads the main tree holds none of what a worktree's record does, nor a session, and a record
-    /// that says nothing - which is every record an older tool wrote - holds all of it: each is refused where it is not
-    /// so. An <c>access</c> that names no kind of agent is refused on any record, never read as the default kind.
+    /// A record that says it only reads names its tree - a repository of its own at its address, the worktrees root it was
+    /// made under - with the three together, or, written by an older tool before such an agent had a tree, none of them nor
+    /// a base; it never records a move of a base, nor a session. A record that says nothing - which is every record an
+    /// older tool wrote of an agent whose work is folded - holds all of its worktree's members. Each is refused where it is
+    /// not so. An <c>access</c> that names no kind of agent is refused on any record, never read as the default kind.
     /// </summary>
     [Theory]
-    [InlineData("worktree", "it reads the main tree, and records the worktree 'o1/ag'")]
-    [InlineData("worktrees root", "it reads the main tree, and records the worktrees root 'wt'")]
-    [InlineData("base", "it reads the main tree, and records the base")]
-    [InlineData("a move of its base", "it reads the main tree, and records a move of a base to")]
-    [InlineData("what a move of its base was told", "it reads the main tree, and records what a move of a base was told")]
-    [InlineData("what a move of its base removed", "it reads the main tree, and records what a move of a base removed")]
-    [InlineData("a session", "it reads the main tree, and records the session 'sess1'")]
+    [InlineData("no worktrees root", "it only reads, and records a worktree and no worktrees root it was made under")]
+    [InlineData("a linked worktree", "it only reads, and records its worktree as one of git's linked worktrees, and an agent that only reads is given a 'repository' of its own")]
+    [InlineData("a root and no worktree", "it only reads, records no worktree, and records the worktrees root '")]
+    [InlineData("a base and no tree", "it only reads, records no worktree, and records the base '")]
+    [InlineData("a move of its base", "it only reads, and records a move of a base to")]
+    [InlineData("what a move of its base was told", "it only reads, and records what a move of a base was told")]
+    [InlineData("what a move of its base removed", "it only reads, and records what a move of a base removed")]
+    [InlineData("a session", "it only reads, and records the session 'sess1'")]
     [InlineData("an access no agent has", "its access is 'banana', and an agent's is 'read' or 'write'")]
     [InlineData("closed with no closing", "it is closed, and records no closing, or records a deletion")]
-    public async Task ARecordThatReads_HoldingAnyOfAWorktreeRecordsMembers_IsRefused(string what, string why)
+    public async Task ARecordThatReads_HoldingWhatSuchAnAgentNeverHolds_IsRefused(string what, string why)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -243,11 +246,15 @@ public sealed class OrchestrationStoreTests
         var file = kit.Layout.AgentRecordFile("ag");
         var text = File.ReadAllText(file);
 
+        static string Without(string text, params string[] keys)
+            => keys.Aggregate(text, (left, key) => System.Text.RegularExpressions.Regex.Replace(left, $"\n  \"{key}\": [^\n]*,", string.Empty));
+
         File.WriteAllText(file, what switch
         {
-            "worktree" => text.Replace("{", "{\n  \"worktree\": \"o1/ag\",", StringComparison.Ordinal),
-            "worktrees root" => text.Replace("{", "{\n  \"worktreesRoot\": \"wt\",", StringComparison.Ordinal),
-            "base" => text.Replace("{", "{\n  \"base\": \"0123456789abcdef0123456789abcdef01234567\",", StringComparison.Ordinal),
+            "no worktrees root" => Without(text, "worktreesRoot"),
+            "a linked worktree" => Without(text, "tree"),
+            "a root and no worktree" => Without(text, "worktree"),
+            "a base and no tree" => Without(text, "worktree", "tree", "worktreesRoot"),
             "a move of its base" => text.Replace("{", "{\n  \"moving\": \"0123456789abcdef0123456789abcdef01234567\",", StringComparison.Ordinal),
             "what a move of its base was told" => text.Replace("{", "{\n  \"movingWith\": [ \"--merge\", \"a.txt\" ],", StringComparison.Ordinal),
             "what a move of its base removed" => text.Replace("{", "{\n  \"movingRemoved\": [ \"a.txt\" ],", StringComparison.Ordinal),
@@ -265,12 +272,35 @@ public sealed class OrchestrationStoreTests
     }
 
     /// <summary>
-    /// A record that does not say it reads the main tree names its worktree and the root it was made under, which were
+    /// A record an older tool wrote of an agent that only reads - <c>"access": "read"</c> and nothing of a tree, from
+    /// before such an agent had one - still reads, as an agent that only reads whose tree is not there: no worktree path,
+    /// for its next step's start makes the tree and records it.
+    /// </summary>
+    [Fact]
+    public async Task ARecordAnOlderToolWroteOfAnAgentThatOnlyReads_StillReads_NamingNoTree()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Directory.CreateDirectory(kit.Layout.AgentDirectory("ag"));
+        File.WriteAllText(
+            kit.Layout.AgentRecordFile("ag"),
+            "{\n  \"kind\": \"agent\",\n  \"name\": \"ag\",\n  \"orchestrator\": \"o1\",\n  \"model\": \"model-b\",\n  \"createdAt\": \"2026-11-01T00:00:00+00:00\",\n"
+                + "  \"access\": \"read\",\n  \"state\": \"live\"\n}\n");
+
+        var record = kit.Harness.OrchestrationStore.ReadAgent(kit.Layout, "ag")!;
+
+        Assert.True(record.Reads);
+        Assert.Equal((null, null, null, null), (record.Worktree, record.Tree, record.WorktreesRoot, record.Base));
+        Assert.Null(record.WorktreePath(new DssHarness.Core.Repository.HarnessLayout(kit.Main, kit.Main)));
+    }
+
+    /// <summary>
+    /// A record that does not say it only reads names its worktree and the root it was made under, which were
     /// members of the type before there was another kind and are now its own to require.
     /// </summary>
     [Theory]
-    [InlineData("worktree", "it records no worktree, and an agent that does not read the main tree has one of its own")]
-    [InlineData("worktrees root", "it records no worktrees root, and an agent that does not read the main tree was made under one")]
+    [InlineData("worktree", "it records no worktree, and an agent whose work is folded has one of its own")]
+    [InlineData("worktrees root", "it records no worktrees root, and an agent whose work is folded was made under one")]
     public async Task ARecordThatWrites_MissingItsWorktreeOrItsRoot_IsRefused(string what, string why)
     {
         using var temp = new TempDirectory();

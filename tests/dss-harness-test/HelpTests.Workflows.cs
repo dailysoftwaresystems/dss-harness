@@ -443,15 +443,17 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it names neither - the engine's own read-only agent, with no worktree, made before the step runs and deleted once no "
-                + "step can go on with its work, the agent starting in the main checkout it reads - so a path relative to where it starts names what the repository holds - and writing its work directory alone; "
+            "reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it names neither - the engine's own read-only agent, made before the step runs and deleted once no "
+                + "step can go on with its work, its tree removed and nothing folded: a tree of its own, made as every agent's is, which the start of every step that works as it - each attempt of its first, and of each that goes on "
+                + "with its work - brings to the main checkout's HEAD then, whatever it wrote there before discarded, so the step reads exactly what the main checkout committed, starts in it, and may write it and its work directory, "
+                + "never folded; an answer that goes on with an attempt finds the tree as the attempt left it; "
                 + "the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
                 + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
                 + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
                 + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
                 + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. Where the repository declares legs, a step whose agent runs commands (its capabilities hold run) is given the measure tool on every client: one call takes a leg, its "
                 + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe being measured, runs those tests of that leg through the test service as a test step's legs are run, in the agent's worktree "
-                + "where it has one and in a local copy of the main tree where it does not, under the agents' isolation and the step's own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
+                + "where it has one - an agent that only reads measures its own tree, at the main checkout's HEAD - and in a local copy of the main tree where it does not, under the agents' isolation and the step's own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
                 + "build or its tests failed, and unmeasured with why for anything else: a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not declared - the verdict as the ledger spells it, with the "
                 + "run's directory and the call's own records (measures/<call id>/ of the step's directory: the ledger, and what the call answered, which is what class-closure reads of what it measured); the call is a tool call of "
                 + "the step's stored stream, its id what a closure record's measuredBy cites. A failed "

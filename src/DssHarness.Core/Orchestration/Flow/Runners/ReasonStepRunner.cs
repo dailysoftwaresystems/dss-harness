@@ -20,8 +20,9 @@ using DssHarness.Core.Secrets;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// The <c>reason</c> step: the agent a reason step is given, made where the step names none (a read-only agent, with no
-/// worktree - <see cref="CreateAgentRunner.MakeAsync"/> over the one verb that makes agents), and its step worked
+/// The <c>reason</c> step: the agent a reason step is given, made where the step names none (a read-only agent, its tree
+/// made by the one making of every agent's - <see cref="CreateAgentRunner.MakeAsync"/> over the one verb that makes agents -
+/// and brought to the main checkout's HEAD as each step that works as it starts, <see cref="CreateAgentRunner.ReadyAsync"/>), and its step worked
 /// through <see cref="IAgentRunner"/> - the definition it works by read where the chain of work it goes on with began
 /// (<see cref="ResumeChain.Root"/>), the step's model resolved with that definition below its own, its order, workspace,
 /// ground and mask built as every launch builds them (<see cref="ReasonLaunch"/>), its prompt as the engine filled it
@@ -31,7 +32,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the agent's record, and guards the repository's key-spend record across runs.</param>
-/// <param name="create">Makes the read-only agent a step that names none is given.</param>
+/// <param name="create">Makes the read-only agent a step that names none is given, and brings its tree to the main checkout's HEAD as each step that works as it starts.</param>
 /// <param name="runner">Works the step, whatever the client is.</param>
 /// <param name="fileSystem">The file system the step's files are read on.</param>
 /// <param name="keys">The slot the entry's keys are read from.</param>
@@ -102,7 +103,7 @@ public sealed class ReasonStepRunner(
 
         if (run.Made is { } own && (working is null || string.Equals(working, own.Name, StringComparison.Ordinal)))
         {
-            var making = await create.MakeAsync(run, noWorktree: true, cancellationToken).ConfigureAwait(false);
+            var making = await create.MakeAsync(run, readsOnly: true, cancellationToken).ConfigureAwait(false);
 
             if (!making.Passed)
             {
@@ -122,6 +123,21 @@ public sealed class ReasonStepRunner(
         if (store.ReadAgent(layout, agent) is not { State: AgentStates.Live } agentRecord)
         {
             return FlowStepResult.Ended(passed: false, HarnessExit.Refused, $"agent '{agent}' of '{place.Run}' is not live, and the step cannot work as it");
+        }
+
+        // An agent that only reads works in a tree of its own that is exactly what the main checkout committed as the step
+        // starts - each attempt of its first step and of every one that goes on with its work: brought to the main
+        // checkout's HEAD now, whatever it wrote there before discarded, and made where it is not there, before anything of
+        // the step reads it. An attempt that goes on with an answer in its own conversation - a person's, a limit's more or
+        // compact - is the same start going on, and finds the tree as its attempt left it.
+        if (agentRecord.Reads && GoingOnOf(run) is null)
+        {
+            if (await create.ReadyAsync(run, agent, cancellationToken).ConfigureAwait(false) is { } unready)
+            {
+                return unready;
+            }
+
+            agentRecord = store.ReadAgent(layout, agent)!;
         }
 
         if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
@@ -480,8 +496,10 @@ public sealed class ReasonStepRunner(
     /// <summary>
     /// One measure call answered: the leg it names, built as the variant it names - the build configuration the leg's
     /// own configuration declares, the only one a measurement of the leg runs - tested with the filter it names through
-    /// the test service, in the tree the agent works in where it has a worktree of its own, else in a local copy of the
-    /// main tree the leg makes as a leg's local copy is, so no fold in flight changes what it measures; run as every step
+    /// the test service, in the tree the agent works in where it has one of its own - an agent that only reads has its tree
+    /// at the main checkout's HEAD, which the start of its next step takes back with whatever the measurement built - else
+    /// in a local copy of the main tree the leg makes as a leg's local copy is, so no fold in flight changes what it
+    /// measures; run as every step
     /// of the engine runs legs (<see cref="FlowStepLegs"/>) - the isolation decided first, under the step's process scope,
     /// the ledger kept in the call's own records. What it showed is read by the one owner of what a leg's verdict means
     /// (<see cref="FlowLegVerdicts.ClassOf"/>): a red leg - its build or its tests failed - is measured and failed, a leg
@@ -1102,7 +1120,8 @@ public sealed class ReasonStepRunner(
     /// <summary>
     /// The paths this agent changed, as the continuation record lists them: the paths its folds wrote into the main
     /// tree (the run's ledger of its folds) and the paths its worktree holds that no fold has taken - what a fold of
-    /// the agent would weigh, by the fold's own rule - an agent with no worktree having changed none beyond its folds.
+    /// the agent would weigh, by the fold's own rule - an agent that only reads having changed none: nothing of its tree
+    /// is ever folded, and what it wrote there is discarded as each of its steps starts.
     /// </summary>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as.</param>
@@ -1115,7 +1134,7 @@ public sealed class ReasonStepRunner(
 
         // The worktree as the repository holds it, resolved from the record's path under the worktrees root: the paths
         // it holds that no fold has taken are what a fold of the agent would weigh.
-        if (store.ReadAgent(layout, agent) is not { } record || record.WorktreePath(context.Layout) is not { } worktree)
+        if (store.ReadAgent(layout, agent) is not { Reads: false } record || record.WorktreePath(context.Layout) is not { } worktree)
         {
             return folded;
         }

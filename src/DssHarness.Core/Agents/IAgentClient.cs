@@ -154,14 +154,14 @@ public enum AgentToolsOwner
 public sealed record AgentRoot(string Path, bool Writable);
 
 /// <summary>
-/// Where a run works: its agent's worktree where it has one - else the main checkout, which it only reads - its work
-/// directory either way, the extra roots its definition names, and the working directory it starts from.
+/// Where a run works: its agent's worktree - an agent that only reads has one too, its own scratch - its work directory,
+/// the extra roots its definition names, and the working directory it starts from.
 /// </summary>
-/// <param name="Worktree">Its agent's worktree; null for an agent with none, which reads the main tree.</param>
+/// <param name="Worktree">Its agent's worktree; null for a run of no agent's, and for an agent whose record an older tool wrote with no tree.</param>
 /// <param name="WorkDirectory">The agent's own <c>work/&lt;agent&gt;/</c>, which it reads and writes either way.</param>
 /// <param name="MainCheckout">The main checkout.</param>
 /// <param name="ExtraRoots">The extra roots, each readable, writable where its definition says.</param>
-/// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else the main checkout it reads - its work directory for a run of no agent's, the reporter.</param>
+/// <param name="WorkingDirectory">Where the client starts the agent: the worktree, else its work directory - the reporter's, a run of no agent's.</param>
 /// <param name="RunDirectory">The run's directory: the reporter's, and where a step's web search keeps the run's record, <c>web/searches.jsonl</c>.</param>
 public sealed record AgentWorkspace(
     string? Worktree,
@@ -169,7 +169,15 @@ public sealed record AgentWorkspace(
     string MainCheckout,
     IReadOnlyList<AgentRoot> ExtraRoots,
     string WorkingDirectory,
-    string RunDirectory);
+    string RunDirectory)
+{
+    /// <summary>
+    /// Whether its agent only reads: its worktree is its own scratch, the main checkout's HEAD as its step started, which it
+    /// writes - nothing of it is ever folded - and the main checkout is a root it reads, the run's records and logs among
+    /// what it holds. False for an agent whose work is folded, and for a run of no agent's.
+    /// </summary>
+    public bool OnlyReads { get; init; }
+}
 
 /// <summary>
 /// The output a run is to produce, where its step names one: what its answer's envelope holds as its output
