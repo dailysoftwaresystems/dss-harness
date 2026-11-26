@@ -49,6 +49,9 @@ public sealed class ReasonStepRunnerTests
         /// <summary>The events the run says before it answers, as a client says them.</summary>
         public List<AgentEvent> Says { get; } = [];
 
+        /// <summary>What the run's agent does while it works, after its first message and before it answers - a call of its graph tool, recorded as the runtime records one; nothing unless a test says.</summary>
+        public Func<AgentStepRequest, Task>? Works { get; set; }
+
         public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
         {
             Asked.Add(step);
@@ -58,6 +61,11 @@ public sealed class ReasonStepRunnerTests
             step.CodebaseGiven?.Invoke(step.Compaction is { BeforeItsTask: false }
                 ? AgentCodebaseGiven.None
                 : AgentPromptParts.CodebaseOf(step.Map, step.Codebase, step.CodebaseChanges, newConversation: step.Conversation is null));
+
+            if (Works is { } works)
+            {
+                await works(step);
+            }
 
             foreach (var said in Says)
             {
@@ -2025,53 +2033,159 @@ public sealed class ReasonStepRunnerTests
         => kit.Harness.OrchestrationStore.ReadGraphStepLines(kit.Layout.InstanceDirectory(instance, agent));
 
     /// <summary>
-    /// A reason step that has a graph - a graphify-codebase step upstream of it, the run's graph made - is given its
-    /// context pack as its codebase section, which the one writer of a first message's parts wraps once in its
-    /// <c>&lt;codebase&gt;</c> tags, and the one tool <c>graph</c> under <c>read</c>, with the operations its agent's
-    /// capabilities give and the narrowing of its reads; its launch's first message is a line of its <c>graph.jsonl</c>,
-    /// its working set is written beside its output when it ends, and its figures are held in its result for its record.
+    /// Page 1 of the context pack the step's graph tool serves - what a step with the tool, pushed none, asks for.
+    /// </summary>
+    private static async Task<string> PulledPackAsync(AgentStepRequest asked)
+    {
+        var support = asked.Graph!;
+        var answer = await support.Tool!.RunAsync(new JsonObject { ["op"] = "pack", ["page"] = 1 }, support.Operations!, Token);
+
+        Assert.Equal(GraphToolOutcome.Answered, answer.Outcome);
+        return answer.Text;
+    }
+
+    /// <summary>
+    /// Pull, not push: a reason step whose graph is tools - a graphify-codebase step upstream of it, the run's graph made,
+    /// its graphPromptTokens unsaid - is pushed no repository map and no context pack, its first message its task alone,
+    /// and is given the one tool <c>graph</c> under <c>read</c>, with the operations its agent's capabilities give, the
+    /// narrowing of its reads, and <c>map</c> and <c>pack</c> from page 1 - a map and a pack of one page each here, which a
+    /// first message no longer holds. Its agent asks both: the map's page 1 is the run's kept map, the pack's the pack made
+    /// at its start; the launch's line says why it was given no pack, and its figures count nothing pushed and the two
+    /// pages pulled, apart. Red with the map or the pack pushed, or either operation offered only past page 1.
     /// </summary>
     [Fact]
-    public async Task AReasonStepThatHasAGraph_IsGivenItsPackAndItsTool_WithTheOperationsItsAgentGives()
+    public async Task AReasonStepThatHasTheTool_IsPushedNoMapAndNoPack_AndItsToolServesBothFromPageOne()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        GraphToolAnswer? map = null;
+        GraphToolAnswer? pack = null;
+
+        agents.Works = async step =>
+        {
+            var support = step.Graph!;
+            map = await support.Tool!.RunAsync(new JsonObject { ["op"] = "map", ["page"] = 1 }, support.Operations!, Token);
+            pack = await support.Tool.RunAsync(new JsonObject { ["op"] = "pack", ["page"] = 1 }, support.Operations!, Token);
+            support.Recorded!(GraphCallLine.Of("map", map));
+            support.Recorded!(GraphCallLine.Of("pack", pack));
+        };
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(), prompt: "Plan the work on the Planner."), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        // Nothing of the graph is pushed: the first message is the task alone.
+        Assert.Null(asked.Map);
+        Assert.Equal(string.Empty, asked.Codebase);
+        Assert.Null(asked.CodebaseChanges);
+        Assert.Equal(asked.Prompt, AgentPromptParts.FirstMessage(AgentRuns.Of(temp.Combine("step"), temp.Combine("work")) with { Codebase = asked.Codebase, Map = asked.Map, UserPrompt = asked.Prompt }, newConversation: true));
+
+        var support = asked.Graph;
+        Assert.NotNull(support);
+        Assert.NotNull(support.Tool);
+        Assert.True(support.Narrow);
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
+
+        // The map and the pack are one page each, so each is offered from page 1, never for pages past a pushed one.
+        var kept = File.ReadAllText(kit.Layout.GraphMapFile);
+        Assert.Equal(1, DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(kept));
+        Assert.Equal((GraphToolOutcome.Answered, kept), (map!.Outcome, map.Text));
+        Assert.Equal(GraphToolOutcome.Answered, pack!.Outcome);
+        Assert.Contains("member public int Plan() | src/Planner.cs", pack.Text, StringComparison.Ordinal);
+        Assert.Equal(GraphToolOutcome.Usage, (await support.Tool.RunAsync(new JsonObject { ["op"] = "pack", ["page"] = 2 }, support.Operations!, Token)).Outcome);
+
+        Assert.Equal(new GraphPromptLine(0, 0, 0, 0, 0, FlowStepGraph.NoPackPushed), LinesOf(kit, "think").OfType<GraphPromptLine>().Single());
+        Assert.True(File.Exists(Path.Combine(kit.Layout.InstanceDirectory("think", "a9"), "working-set.json")), "the working set was not written");
+
+        // Its figures: nothing pushed, the two pages pulled counted apart and among the served tokens.
+        var graph = result.Graph!;
+        var mapTokens = DssHarness.Core.Codebase.EstimatedTokens.Of(map.Text);
+        var packTokens = DssHarness.Core.Codebase.EstimatedTokens.Of(pack.Text);
+
+        Assert.Equal(("tools", "base", WorkflowStep.GraphFromTask), (graph["mode"]!.GetValue<string>(), graph["view"]!.GetValue<string>(), graph["from"]!.GetValue<string>()));
+        Assert.Equal(0, graph["mapTokens"]!.GetValue<int>());
+        Assert.Equal("""{"seeds":0,"nodes":0,"tokens":0,"used":0}""", graph["pack"]!.ToJsonString());
+        Assert.Equal($$$"""{"map":{"pages":1,"tokens":{{{mapTokens}}}},"pack":{"pages":1,"tokens":{{{packTokens}}}}}""", graph["pulled"]!.ToJsonString());
+        Assert.Equal((2, mapTokens + packTokens), (graph["calls"]!.GetValue<int>(), graph["servedTokens"]!.GetValue<int>()));
+    }
+
+    /// <summary>
+    /// A step whose graph is tools that says graphPromptTokens above 0 is pushed page 1 of its pack at that size, as the
+    /// codebase section the one writer of a first message's parts wraps once in its <c>&lt;codebase&gt;</c> tags - and never
+    /// the map, which its tool's <c>map</c> serves from page 1; <c>pack</c> is offered for the pages after the one pushed,
+    /// here a hub of 65 methods past it, and the launch's line and figures count the pack pushed. Red with the push
+    /// dropped for a step with the tool, or the map pushed with it.
+    /// </summary>
+    [Fact]
+    public async Task AStepWithTheToolThatSaysGraphPromptTokens_IsPushedItsPack_AndNeverTheMap()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(65)));
 
         // The task names the hub, so its pack - seeded from what the run handed the prompt - holds the hub's methods.
-        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(), prompt: "Plan the work on the Hub."), Token);
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(think: "    graphPromptTokens: 3000\n"), prompt: "Plan the work on the Hub."), Token);
 
         Assert.True(result.Passed, result.Error);
 
         var asked = agents.Asked.Single();
 
-        // The section is the pack's text, and the first message wraps it once.
-        Assert.False(asked.Codebase!.Contains("<codebase>", StringComparison.Ordinal), $"the section holds its own tags:\n{asked.Codebase}");
+        // The section is the pack's text, and the first message wraps it once; no map is pushed beside it.
+        Assert.Null(asked.Map);
+        Assert.False(string.IsNullOrEmpty(asked.Codebase));
+        Assert.False(asked.Codebase.Contains("<codebase>", StringComparison.Ordinal), $"the section holds its own tags:\n{asked.Codebase}");
         var first = AgentPromptParts.FirstMessage(AgentRuns.Of(temp.Combine("step"), temp.Combine("work")) with { Codebase = asked.Codebase, Map = asked.Map, UserPrompt = asked.Prompt }, newConversation: true);
         Assert.Equal(1, first.Split("<codebase>").Length - 1);
         Assert.Equal(asked.Codebase, AgentPromptParts.PartOf(first, AgentPromptParts.CodebaseTag));
+        Assert.Null(AgentPromptParts.PartOf(first, AgentPromptParts.MapTag));
+        Assert.Equal(asked.Codebase, await PulledPackAsync(asked));
 
-        var support = asked.Graph;
-        Assert.NotNull(support);
-        Assert.NotNull(support.Tool);
-        Assert.True(support.Narrow);
-
-        // The run's map of this tree - a hub of 65 methods, and its configuration's every member a declaration - goes on past its first page, so
-        // map is among the operations, as pack is for a pack that goes on past its message's page.
-        Assert.True(DssHarness.Core.Codebase.CodebaseRepositoryMap.PagesOf(asked.Map!) > 1, asked.Map);
+        var support = asked.Graph!;
         Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Around, GraphOp.Impact, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack, GraphOp.Map], support.Operations!.Order());
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
         Assert.Null(promptLine.Why);
+        Assert.Equal(0, promptLine.MapTokens);
         Assert.True(promptLine.Nodes > 0, $"the pack held nothing: {asked.Codebase}");
-        Assert.True(promptLine.Tokens > 0);
+        Assert.Equal(DssHarness.Core.Codebase.EstimatedTokens.Of(asked.Codebase), promptLine.Tokens);
         Assert.Equal(0, promptLine.ChangesTokens);
+        Assert.Equal((promptLine.Nodes, promptLine.Tokens, 0), (result.Graph!["pack"]!["nodes"]!.GetValue<int>(), result.Graph["pack"]!["tokens"]!.GetValue<int>(), result.Graph["mapTokens"]!.GetValue<int>()));
+    }
 
-        Assert.True(File.Exists(Path.Combine(kit.Layout.InstanceDirectory("think", "a9"), "working-set.json")), "the working set was not written");
-        Assert.Equal(promptLine.Nodes, result.Graph!["pack"]!["nodes"]!.GetValue<int>());
-        Assert.Equal("tools", result.Graph["mode"]!.GetValue<string>());
-        Assert.Equal("base", result.Graph["view"]!.GetValue<string>());
-        Assert.Equal(WorkflowStep.GraphFromTask, result.Graph["from"]!.GetValue<string>());
+    /// <summary>
+    /// A step whose graph is map - given no tool, its agent cannot read through it - is pushed both, as push is its one way
+    /// to see the graph: the run's kept map as the <c>&lt;repository-map&gt;</c> part ahead of its pack's page 1 at the
+    /// default size, the <c>&lt;codebase&gt;</c> part; its line and figures count both. Red with the map or the pack
+    /// left unpushed for a step at map.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhoseGraphIsMap_IsPushedTheMapAndItsPack()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+
+        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(think: "    graph: map\n"), prompt: "Plan the work on the Planner."), Token);
+
+        Assert.True(result.Passed, result.Error);
+
+        var asked = agents.Asked.Single();
+
+        Assert.Null(asked.Graph);
+        Assert.Equal(File.ReadAllText(kit.Layout.GraphMapFile), asked.Map);
+        Assert.Contains("member public int Plan() | src/Planner.cs", asked.Codebase, StringComparison.Ordinal);
+        Assert.True(DssHarness.Core.Codebase.EstimatedTokens.Of(asked.Codebase!) <= WorkflowStep.DefaultGraphPromptTokens);
+
+        // The map first of all, then the pack.
+        var first = AgentPromptParts.FirstMessage(AgentRuns.Of(temp.Combine("step"), temp.Combine("work")) with { Codebase = asked.Codebase, Map = asked.Map, UserPrompt = asked.Prompt }, newConversation: true);
+        Assert.StartsWith(AgentPromptParts.MapPart(asked.Map!) + AgentPromptParts.Part(AgentPromptParts.CodebaseTag, asked.Codebase!), first, StringComparison.Ordinal);
+
+        var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
+        Assert.Equal((DssHarness.Core.Codebase.EstimatedTokens.Of(asked.Map!), DssHarness.Core.Codebase.EstimatedTokens.Of(asked.Codebase!), (string?)null), (promptLine.MapTokens, promptLine.Tokens, promptLine.Why));
+        Assert.Equal(("map", promptLine.MapTokens, promptLine.Tokens), (result.Graph!["mode"]!.GetValue<string>(), result.Graph["mapTokens"]!.GetValue<int>(), result.Graph["pack"]!["tokens"]!.GetValue<int>()));
     }
 
     /// <summary>
@@ -2098,9 +2212,10 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(result.Passed, result.Error);
         var asked = agents.Asked.Single();
+        var pack = await PulledPackAsync(asked);
         Assert.Contains("Before anything, read how the Planner plans", asked.Prompt, StringComparison.Ordinal);
-        Assert.Contains("docs/ledger.md", asked.Codebase, StringComparison.Ordinal);
-        Assert.DoesNotContain("Planner", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("docs/ledger.md", pack, StringComparison.Ordinal);
+        Assert.DoesNotContain("Planner", pack, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2132,13 +2247,13 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(result.Passed, result.Error);
 
-        var asked = agents.Asked.Single();
+        var pack = await PulledPackAsync(agents.Asked.Single());
 
-        Assert.Contains("member public int Plan() | src/Planner.cs", asked.Codebase, StringComparison.Ordinal);
-        Assert.Contains("member public static string TokenOf(string key) | src/Keys.cs", asked.Codebase, StringComparison.Ordinal);
-        Assert.Contains("| the home of a class the item closes", asked.Codebase, StringComparison.Ordinal);
-        Assert.Contains("| a site of a class the item closes", asked.Codebase, StringComparison.Ordinal);
-        Assert.Contains("2 declaration(s) at the sites and homes of the classes it is to close", asked.Codebase, StringComparison.Ordinal);
+        Assert.Contains("member public int Plan() | src/Planner.cs", pack, StringComparison.Ordinal);
+        Assert.Contains("member public static string TokenOf(string key) | src/Keys.cs", pack, StringComparison.Ordinal);
+        Assert.Contains("| the home of a class the item closes", pack, StringComparison.Ordinal);
+        Assert.Contains("| a site of a class the item closes", pack, StringComparison.Ordinal);
+        Assert.Contains("2 declaration(s) at the sites and homes of the classes it is to close", pack, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2453,29 +2568,29 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(result.Passed, result.Error);
 
-        var asked = agents.Asked.Single();
+        var pack = await PulledPackAsync(agents.Asked.Single());
 
         Assert.Equal("a1", result.Graph!["view"]!.GetValue<string>());
-        Assert.True(asked.Codebase!.Contains("1 file(s) differing from its base", StringComparison.Ordinal), $"the pack does not lead with the worktree's change:\n{asked.Codebase}");
-        Assert.Contains("\nchanged:\n", asked.Codebase, StringComparison.Ordinal);
-        Assert.Contains("member public int Plan() | src/Planner.cs:5-8", asked.Codebase, StringComparison.Ordinal);
+        Assert.True(pack.Contains("1 file(s) differing from its base", StringComparison.Ordinal), $"the pack does not lead with the worktree's change:\n{pack}");
+        Assert.Contains("\nchanged:\n", pack, StringComparison.Ordinal);
+        Assert.Contains("member public int Plan() | src/Planner.cs:5-8", pack, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// A reason step that has a graph is given the run's repository map - made once, from the base as it stands when the
+    /// A reason step whose graph is map is given the run's repository map - made once, from the base as it stands when the
     /// first graphed reason step is given its prompt, kept in <c>graph/map.md</c> with what it was made from in
     /// <c>graph/map.json</c> - as the <c>&lt;repository-map&gt;</c> part ahead of its pack. The base moves - a fold lands
     /// - and the map does not: a step after it, the run resumed, is given the same bytes, so a client that caches a
     /// prefix reads the map from the cache.
     /// </summary>
     [Fact]
-    public async Task AReasonStepThatHasAGraph_IsGivenTheRunMap_MadeOnceAndReadAsItIs()
+    public async Task AReasonStepWhoseGraphIsMap_IsGivenTheRunMap_MadeOnceAndReadAsItIs()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit);
         var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
-        var run = Graphing(kit, Graphed());
+        var run = Graphing(kit, Graphed(think: "    graph: map\n"));
 
         var first = await runner.RunAsync(run, Token);
 
@@ -2508,20 +2623,21 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A run's map of several pages is made once and kept whole: every step of its ground is given its first page as it
-    /// was kept - the bytes a client caches, the same after the base moved - the pages after it are kept beside it, and
-    /// a step whose graph is tools is offered the graph's <c>map</c>, whose page 2 is the kept page 2, the step after the
-    /// first reading the count from the kept first page as the first was given it. Red where a step is given a map made
-    /// again, the pages after the first are not kept, or <c>map</c> is not offered.
+    /// A run's map of several pages is made once and kept whole: every step of its ground whose graph is map is given its
+    /// first page as it was kept - the bytes a client caches, the same after the base moved - the pages after it are kept
+    /// beside it, and a step whose graph is tools, pushed none of it, is offered the graph's <c>map</c>, whose page 1 is
+    /// the kept page 1 and page 2 the kept page 2, the step reading the count from the kept first page. Red where a step
+    /// is given a map made again, the pages after the first are not kept, or <c>map</c> is not offered.
     /// </summary>
     [Fact]
-    public async Task AMapOfSeveralPages_IsGivenEveryStepAsKept_ItsLaterPagesAskedOfTheGraphsMap()
+    public async Task AMapOfSeveralPages_IsGivenEveryStepAsKept_ItsPagesAskedOfTheGraphsMap()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit, (Path.Combine("src", "Alpha.cs"), "namespace Demo;\n\npublic sealed class Alpha\n{\n}\n"), (Path.Combine("src", "Beta.cs"), "namespace Demo;\n\npublic sealed class Beta\n{\n}\n"));
         var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
-        var run = Graphing(kit, Graphed(head: "codebaseGraph:\n  mapTokens: 30\n"));
+        var definition = Graphed(head: "codebaseGraph:\n  mapTokens: 30\n", think: "    graph: map\n", after: "  - name: look\n    type: reason\n    dependsOn: [codebase]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var run = Graphing(kit, definition);
 
         var first = await runner.RunAsync(run, Token);
 
@@ -2531,9 +2647,11 @@ public sealed class ReasonStepRunnerTests
         _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
 
         var second = await runner.RunAsync(run with { Visit = 2 }, Token);
+        var looked = await runner.RunAsync(Graphing(kit, definition, "look"), Token);
 
         Assert.True(first.Passed, first.Error);
         Assert.True(second.Passed, second.Error);
+        Assert.True(looked.Passed, looked.Error);
 
         // Every page of the map is kept, page 1 in map.md naming how many there are.
         var kept = File.ReadAllText(kit.Layout.GraphMapFile);
@@ -2543,18 +2661,21 @@ public sealed class ReasonStepRunnerTests
         Assert.True(pages > 1, kept);
         Assert.Equal(Enumerable.Range(1, pages).Select(page => kit.Layout.GraphMapPageFileOf(reads: null, page)).Order(StringComparer.Ordinal), files.Order(StringComparer.Ordinal));
         Assert.EndsWith($"\nmap page 1 of {pages} · the rest is on the pages after it, which a step whose graph is tools asks the graph for", kept, StringComparison.Ordinal);
-        Assert.Equal([kept, kept], agents.Asked.Select(asked => asked.Map));
-        Assert.All(agents.Asked, asked => Assert.Contains(GraphOp.Map, asked.Graph!.Operations!));
+        Assert.Equal([kept, kept, null], agents.Asked.Select(asked => asked.Map));
+        Assert.Equal([false, false, true], agents.Asked.Select(asked => asked.Graph?.Operations?.Contains(GraphOp.Map) ?? false));
 
         var later = agents.Asked[^1].Graph!;
-        var answer = await later.Tool!.RunAsync(new JsonObject { ["op"] = "map", ["page"] = 2 }, later.Operations!, Token);
+        var one = await later.Tool!.RunAsync(new JsonObject { ["op"] = "map", ["page"] = 1 }, later.Operations!, Token);
+        var answer = await later.Tool.RunAsync(new JsonObject { ["op"] = "map", ["page"] = 2 }, later.Operations!, Token);
 
+        Assert.Equal((GraphToolOutcome.Answered, kept), (one.Outcome, one.Text));
         Assert.Equal((GraphToolOutcome.Answered, File.ReadAllText(kit.Layout.GraphMapPageFileOf(reads: null, 2))), (answer.Outcome, answer.Text));
         Assert.StartsWith("repository map page 2\n", answer.Text, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// The map is made once for each ground of reads the run's steps share: a step whose read rules deny a file is given a
+    /// map - pushed, its graph map -
     /// map of its own, kept beside the run's and named by a digest of those rules, which holds no declaration of that
     /// file - while the steps no read rule narrows share the run's, which lists it.
     /// </summary>
@@ -2564,7 +2685,7 @@ public sealed class ReasonStepRunnerTests
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit, (Path.Combine("src", "Keys.cs"), "namespace Demo;\n\npublic static class Keys\n{\n    public const string Token = \"t\";\n}\n"));
-        var definition = Graphed(after: "  - name: look\n    type: reason\n    dependsOn: [codebase]\n    restrictions: [\"Read(src/Keys.cs)\"]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var definition = Graphed(think: "    graph: map\n", after: "  - name: look\n    type: reason\n    dependsOn: [codebase]\n    graph: map\n    restrictions: [\"Read(src/Keys.cs)\"]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
         var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
 
         var open = await runner.RunAsync(Graphing(kit, definition), Token);
@@ -2594,8 +2715,8 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A map that cannot be kept - its file in the way - never fails the step: it is said, and the step is served the
-    /// pack and the tool without a map; the next step tries again.
+    /// A map that cannot be kept - its file in the way - never fails the step: it is said, and a step whose graph is map
+    /// is pushed its pack without a map, and a step with the tool is offered no <c>map</c>; the next step tries again.
     /// </summary>
     [Fact]
     public async Task AMapThatCannotBeKept_IsSaid_AndTheStepGoesOnWithoutIt()
@@ -2604,41 +2725,53 @@ public sealed class ReasonStepRunnerTests
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit);
         Directory.CreateDirectory(kit.Layout.GraphMapFile);
+        var definition = Graphed(think: "    graph: map\n", after: "  - name: look\n    type: reason\n    dependsOn: [codebase]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
 
-        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed()), Token);
+        var result = await runner.RunAsync(Graphing(kit, definition), Token);
+        var looked = await runner.RunAsync(Graphing(kit, definition, "look"), Token);
 
         Assert.True(result.Passed, result.Error);
+        Assert.True(looked.Passed, looked.Error);
 
-        var asked = agents.Asked.Single();
+        var asked = agents.Asked[0];
 
         Assert.Null(asked.Map);
-        Assert.NotNull(asked.Codebase);
+        Assert.False(string.IsNullOrEmpty(asked.Codebase));
+        Assert.DoesNotContain(GraphOp.Map, agents.Asked[1].Graph!.Operations!);
         Assert.Contains($"the repository map of run 'o1' was not made or read for 'think': ", kit.Harness.StandardError.ToString() + kit.Harness.StandardOutput.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, result.Graph!["mapTokens"]!.GetValue<int>());
     }
 
     /// <summary>
-    /// A step that asks for no pack in a workflow that asks for no map - both valid - is served its tool and nothing in its
-    /// first message, its launch's line saying why it was given no pack; it never fails over it.
+    /// A step whose graph is map that asks for no pack, in a workflow that asks for no map - both valid - is given nothing
+    /// of the graph, its launch's line saying it asked for no pack; a step with the tool whose graphPromptTokens is 0, as
+    /// one that says none, is pushed nothing and still offered its pack's pages from page 1, its line saying it asks the
+    /// tool for them. Neither fails over it.
     /// </summary>
     [Fact]
-    public async Task AStepThatAsksForNoPackAndNoMap_IsServedItsTool_AndItsLineSaysWhy()
+    public async Task AStepThatAsksForNoPackAndNoMap_IsPushedNothing_AndItsLineSaysWhy()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit);
+        var definition = Graphed(head: "codebaseGraph:\n  mapTokens: 0\n", think: "    graph: map\n    graphPromptTokens: 0\n", after: "  - name: look\n    type: reason\n    dependsOn: [codebase]\n    graphPromptTokens: 0\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
 
-        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph)
-            .RunAsync(Graphing(kit, Graphed(head: "codebaseGraph:\n  mapTokens: 0\n", think: "    graphPromptTokens: 0\n")), Token);
+        var mapped = await runner.RunAsync(Graphing(kit, definition), Token);
+        var tooled = await runner.RunAsync(Graphing(kit, definition, "look", prompt: "Plan the work on the Planner."), Token);
 
-        Assert.True(result.Passed, result.Error);
+        Assert.True(mapped.Passed, mapped.Error);
+        Assert.True(tooled.Passed, tooled.Error);
 
-        var asked = agents.Asked.Single();
-
-        Assert.Null(asked.Map);
-        Assert.Equal(string.Empty, asked.Codebase);
-        Assert.NotNull(asked.Graph?.Tool);
+        Assert.All(agents.Asked, asked => Assert.Equal(((string?)null, (string?)string.Empty), (asked.Map, asked.Codebase)));
+        Assert.Null(agents.Asked[0].Graph);
         Assert.Equal(new GraphPromptLine(0, 0, 0, 0, 0, FlowStepGraph.NoPackAsked), Assert.Single(LinesOf(kit, "think")));
+
+        Assert.Contains(GraphOp.Pack, agents.Asked[1].Graph!.Operations!);
+        Assert.DoesNotContain(GraphOp.Map, agents.Asked[1].Graph!.Operations!);
+        Assert.Contains("member public int Plan() | src/Planner.cs", await PulledPackAsync(agents.Asked[1]), StringComparison.Ordinal);
+        Assert.Equal(new GraphPromptLine(0, 0, 0, 0, 0, FlowStepGraph.NoPackPushed), Assert.Single(LinesOf(kit, "look")));
     }
 
     /// <summary>
@@ -2761,10 +2894,10 @@ public sealed class ReasonStepRunnerTests
 
     /// <summary>
     /// An answer that goes on with a stored conversation of the attempt - one whose first message held the run's map ahead
-    /// of the pack - is told what changed of the codebase against that pack: the declarations that moved since, with their
-    /// new range and hash, and the nodes of its own pack it was not given. The step carries the map and the pack beside the
-    /// changes, for a launch that begins its own conversation is given them; this one goes on, so its line says it was told
-    /// the changes and no map and no pack, as its figures do.
+    /// of the pack - of a step that pushes its pack is told what changed of the codebase against that pack: the
+    /// declarations that moved since, with their new range and hash, and the nodes of its own pack it was not given. The
+    /// step carries the pack beside the changes, for a launch that begins its own conversation is given it; this one goes
+    /// on, so its line says it was told the changes and no map and no pack, as its figures do.
     /// </summary>
     [Fact]
     public async Task AnAnswerThatGoesOnWithAStoredConversation_IsToldWhatChangedOfTheCodebase()
@@ -2799,7 +2932,7 @@ public sealed class ReasonStepRunnerTests
         await kit.Harness.CommitAllAsync(kit.Main, "moved", Token);
         _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
 
-        var run = Graphing(kit, Graphed(), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "go on", "ask", Attempt: 1)] };
+        var run = Graphing(kit, Graphed(think: "    graphPromptTokens: 3000\n"), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "go on", "ask", Attempt: 1)] };
 
         var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);
 
@@ -2813,8 +2946,9 @@ public sealed class ReasonStepRunnerTests
         Assert.True(asked.CodebaseChanges.Contains("src/Planner.cs:7-10", StringComparison.Ordinal), $"the delta:\n{asked.CodebaseChanges}");
         Assert.DoesNotContain("src/Planner.cs:5-8", asked.CodebaseChanges, StringComparison.Ordinal);
 
-        // A launch that begins its own conversation is given the map and the pack: the step carries them all.
-        Assert.NotNull(asked.Map);
+        // A launch that begins its own conversation is given the pack its step pushes - a step with the tool is pushed
+        // no map: the step carries it.
+        Assert.Null(asked.Map);
         Assert.False(string.IsNullOrEmpty(asked.Codebase));
 
         // This launch went on: its line and its figures say the changes it was told, no map and no pack.
@@ -2831,9 +2965,13 @@ public sealed class ReasonStepRunnerTests
     /// handed the stored conversation or begun afresh, then its first message - the last launch's conversation held under
     /// the agent's sessions, for an answer to go on with.
     /// </summary>
-    private static async Task StoredLaunchesAsync(OrchestrationKit kit, params (bool Handed, string FirstMessage)[] launches)
+    private static Task StoredLaunchesAsync(OrchestrationKit kit, params (bool Handed, string FirstMessage)[] launches)
+        => StoredLaunchesAsync(kit, "think", launches);
+
+    /// <summary>Step instance <paramref name="instance"/>'s own stream, for agent <c>a9</c>, stored as <c>think</c>'s is.</summary>
+    private static async Task StoredLaunchesAsync(OrchestrationKit kit, string instance, params (bool Handed, string FirstMessage)[] launches)
     {
-        var directory = kit.Layout.InstanceDirectory("think", "a9");
+        var directory = kit.Layout.InstanceDirectory(instance, "a9");
         Directory.CreateDirectory(directory);
         var stream = StoredStream.Open(kit.Harness.FileSystem, directory, new Masking());
         string? session = null;
@@ -2915,7 +3053,7 @@ public sealed class ReasonStepRunnerTests
             (false, AgentPromptParts.FirstMessage(launch with { Map = "the run's map", Codebase = held }, newConversation: true)),
             (false, AgentPromptParts.FirstMessage(launch with { Map = "the run's map" }, newConversation: true)));
 
-        var run = Graphing(kit, Graphed(), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "go on with Plan", "ask", Attempt: 1)] };
+        var run = Graphing(kit, Graphed(think: "    graphPromptTokens: 3000\n"), made: false) with { Answers = [new FlowAnswerGiven("q1", "answer", "go on with Plan", "ask", Attempt: 1)] };
 
         var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(run, Token);
 
@@ -2925,6 +3063,51 @@ public sealed class ReasonStepRunnerTests
 
         Assert.NotNull(asked.CodebaseChanges);
         Assert.Matches("^0 declarations the conversation held: 0 moved or changed, 0 removed; [1-9][0-9]* nodes? of this step's pack added\n", asked.CodebaseChanges);
+    }
+
+    /// <summary>
+    /// A step that pushes no pack - its graph tools, its graphPromptTokens unsaid - is never pushed its pack by the back
+    /// door of the changes a conversation it goes on with is told: where that conversation holds a pack an earlier launch
+    /// was pushed, it is told what moved of it and nothing of its own pack added; where it holds no codebase part, it is
+    /// told nothing at all, and its line says it asks the tool for its pack. Red with the step's own pack's nodes told as
+    /// added to a conversation of a step that pushes none.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerOfAStepThatPushesNoPack_IsToldWhatMovedOfWhatItsConversationHeld_AndNothingOfItsOwnPack()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        await kit.CreateReadingAgentAsync("a9");
+        var plan = Assert.IsType<DssHarness.Core.Codebase.GraphResolve.Found>((await CodebaseGraphQueriesOf(kit.Harness.CodebaseGraph, kit.Layout)).Resolve("Plan")).Card;
+        var launch = AgentRuns.Of(kit.Layout.InstanceDirectory("think", "a9"), kit.Main) with { UserPrompt = "the task" };
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
+        var answered = new FlowAnswerGiven("q1", "answer", "go on with Plan", "ask", Attempt: 1);
+
+        // A conversation begun with no codebase part: nothing it was told can have moved, and nothing is pushed of the pack.
+        await StoredLaunchesAsync(kit, (false, AgentPromptParts.FirstMessage(launch, newConversation: true)));
+
+        var untold = await runner.RunAsync(Graphing(kit, Graphed(), made: false, prompt: "Plan the work on the Planner.") with { Answers = [answered] }, Token);
+
+        Assert.True(untold.Passed, untold.Error);
+        Assert.NotNull(agents.Asked[0].Conversation);
+        Assert.Null(agents.Asked[0].CodebaseChanges);
+        Assert.Equal(new GraphPromptLine(0, 0, 0, 0, 0, FlowStepGraph.NoPackPushed), Assert.Single(LinesOf(kit, "think")));
+
+        // Another step's conversation, which an earlier launch pushed a pack to - Plan's line where it stood - and Plan
+        // moves two lines down.
+        await StoredLaunchesAsync(kit, "again", (false, AgentPromptParts.FirstMessage(launch with { Codebase = DssHarness.Core.Codebase.GraphLines.Of(plan) }, newConversation: true)));
+        OrchestrationKit.Write(kit.Main, Path.Combine("src", "Planner.cs"), "namespace Demo;\n\npublic sealed class Planner\n{\n    // a line that moves what follows it\n    // and one more\n    public int Plan()\n    {\n        return 1;\n    }\n}\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "moved", Token);
+        _ = await kit.Harness.CodebaseGraph.SyncAsync(BaseSync(kit), Token);
+
+        var told = await runner.RunAsync(Graphing(kit, Graphed(), instance: "again", made: false, prompt: "Plan the work on the Planner.") with { Answers = [answered] }, Token);
+
+        Assert.True(told.Passed, told.Error);
+
+        var moved = Assert.IsType<DssHarness.Core.Codebase.GraphResolve.Found>((await CodebaseGraphQueriesOf(kit.Harness.CodebaseGraph, kit.Layout)).Resolve("Plan")).Card;
+        Assert.Equal($"1 declaration the conversation held: 1 moved or changed, 0 removed\n{DssHarness.Core.Codebase.GraphLines.Of(moved)}", agents.Asked[1].CodebaseChanges);
+        Assert.Equal(string.Empty, agents.Asked[1].Codebase);
     }
 
     /// <summary>
@@ -2949,8 +3132,8 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// A workflow that asks for no map - <c>codebaseGraph.mapTokens: 0</c> - gives no step one, and none is made: the
-    /// pack and the tool say what the tree is alone.
+    /// A workflow that asks for no map - <c>codebaseGraph.mapTokens: 0</c> - gives no step one, and none is made: a step
+    /// whose graph is map is pushed its pack alone, and a step with the tool is offered no <c>map</c>.
     /// </summary>
     [Fact]
     public async Task AWorkflowThatAsksForNoMap_GivesItsStepsNone()
@@ -2958,36 +3141,49 @@ public sealed class ReasonStepRunnerTests
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
         await GraphedTreeAsync(kit);
+        var definition = Graphed(head: "codebaseGraph:\n  mapTokens: 0\n", think: "    graph: map\n", after: "  - name: look\n    type: reason\n    dependsOn: [codebase]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
 
-        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed(head: "codebaseGraph:\n  mapTokens: 0\n")), Token);
+        var result = await runner.RunAsync(Graphing(kit, definition), Token);
+        var looked = await runner.RunAsync(Graphing(kit, definition, "look"), Token);
 
         Assert.True(result.Passed, result.Error);
-        Assert.Null(agents.Asked.Single().Map);
+        Assert.True(looked.Passed, looked.Error);
+        Assert.Null(agents.Asked[0].Map);
+        Assert.False(string.IsNullOrEmpty(agents.Asked[0].Codebase));
+        Assert.DoesNotContain(GraphOp.Map, agents.Asked[1].Graph!.Operations!);
         Assert.False(File.Exists(kit.Layout.GraphMapFile), "a map was made where the workflow asks for none");
         Assert.Equal(0, result.Graph!["mapTokens"]!.GetValue<int>());
     }
 
     /// <summary>
-    /// A reason step whose run's graph was never built - its graphify step left no output - is given the sentence for a
-    /// step that left no output in the place of its pack, and its <c>graph</c> tool, still offered, answers the same:
-    /// the run goes on from a missing graph as from any missing output.
+    /// A reason step whose run's graph was never built - its graphify step left no output - is told the sentence for a
+    /// step that left no output where it would be told its pack: by its <c>graph</c> tool, still offered, which answers
+    /// it, where its graph is tools and it pushes no pack, and in its first message where its graph is map. The run goes
+    /// on from a missing graph as from any missing output.
     /// </summary>
     [Fact]
     public async Task AReasonStepWhoseGraphifyStepLeftNoOutput_IsGivenTheSentenceForAStepThatLeftNoOutput()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
+        var definition = Graphed(after: "  - name: look\n    type: reason\n    dependsOn: [codebase]\n    graph: map\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n");
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
 
-        var result = await Runner(kit, agents, graphService: kit.Harness.CodebaseGraph).RunAsync(Graphing(kit, Graphed()), Token);
+        var result = await runner.RunAsync(Graphing(kit, definition), Token);
+        var looked = await runner.RunAsync(Graphing(kit, definition, "look"), Token);
 
         Assert.True(result.Passed, result.Error);
+        Assert.True(looked.Passed, looked.Error);
 
-        var asked = agents.Asked.Single();
+        var asked = agents.Asked[0];
 
-        Assert.Equal("(step 'codebase' left no output: it has not run)", asked.Codebase);
+        Assert.Equal(string.Empty, asked.Codebase);
         Assert.NotNull(asked.Graph);
         Assert.Null(asked.Graph.Tool);
         Assert.Equal("(step 'codebase' left no output: it has not run)", asked.Graph.Gone);
+        Assert.Equal("(step 'codebase' left no output: it has not run)", agents.Asked[1].Codebase);
+        Assert.Null(agents.Asked[1].Graph);
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
         Assert.Equal("(step 'codebase' left no output: it has not run)", promptLine.Why);
@@ -3133,7 +3329,7 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(result.Passed, result.Error);
 
-        var pack = agents.Asked.Single().Codebase!;
+        var pack = await PulledPackAsync(agents.Asked.Single());
         Assert.True(pack.Contains("class Alpha | src/Alpha.cs:3-5", StringComparison.Ordinal), $"the pack is not seeded from its own item's work:\n{pack}");
         Assert.DoesNotContain("src/Beta.cs", pack, StringComparison.Ordinal);
     }

@@ -83,8 +83,9 @@ public sealed partial class HelpTests
                 + "answers them on the API clients - its edit operation among them - and each recorded as a line of the step's graph - a step whose "
                 + "agent runs commands, of a repository that "
                 + "declares legs, takes the measure tool from the same server, by the one rule the tool runtime offers it by, its calls answered and "
-                + "recorded as every tool call is. A step's first user message holds the run's "
-                + "repository map first, then its context pack, then its task - every launch a conversation of its own, it is given them as every "
+                + "recorded as every tool call is. A step's first user message holds what of the graph it is pushed - the run's "
+                + "repository map first, then its context pack, a step at graph: map both and one with the tool neither, unless its graphPromptTokens pushes its pack - "
+                + "then its task - every launch a conversation of its own, it is given them as every "
                 + "launch is, and the order puts them at the head of the message so every turn after the first reads them from Claude Code's own "
                 + "cache; the engine sets no mark of its own. A launch whose init does not show that server "
                 + "connected with its tools taken, or that connects another, never started;",

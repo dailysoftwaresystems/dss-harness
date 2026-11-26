@@ -952,9 +952,11 @@ public sealed record WorkflowStep
     public const int MostBackoffSeconds = 900;
 
     /// <summary>
-    /// The step's use of the run's codebase graph: <c>off</c> (none), <c>map</c> (its context pack alone) or <c>tools</c>
-    /// (the pack and the one tool <c>graph</c>). Absent, <see cref="GraphOf"/> decides - <c>tools</c> where a graph is
-    /// made upstream and the step's agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is.
+    /// The step's use of the run's codebase graph: <c>off</c> (none), <c>map</c> (the run's repository map and its context
+    /// pack pushed into its first message, its one way to see the graph) or <c>tools</c> (the one tool <c>graph</c>, whose
+    /// <c>map</c> and <c>pack</c> serve their pages when asked, nothing pushed unless the step says
+    /// <see cref="GraphPromptTokens"/>). Absent, <see cref="GraphOf"/> decides - <c>tools</c> where a graph is made
+    /// upstream and the step's agent reads, <c>map</c> where one is and its agent does not, <c>off</c> where none is.
     /// </summary>
     public string? Graph { get; init; } = null;
 
@@ -982,15 +984,31 @@ public sealed record WorkflowStep
     public static readonly IReadOnlyList<string> GraphFromWords = [GraphFromTask, GraphFromChanges];
 
     /// <summary>
-    /// The size of the first page of the step's context pack - the page its prompt is given - in estimated tokens, from 0
-    /// to <see cref="MostGraphPromptTokens"/>: 0 asks for no pack; absent, <see cref="DefaultGraphPromptTokens"/>. What
-    /// the pack reaches past the first page is on the pages after it, never left out. A step that goes on with another's
-    /// work may say its own.
+    /// The size of page 1 of the step's context pack pushed into its first message, in estimated tokens, from 0 to
+    /// <see cref="MostGraphPromptTokens"/>: 0 pushes none. Absent, <see cref="GraphPromptTokensOf"/> decides by the step's
+    /// mode. What the pack reaches past page 1 is on the pages after it, never left out. A step that goes on with
+    /// another's work may say its own.
     /// </summary>
     public int? GraphPromptTokens { get; init; } = null;
 
-    /// <summary>The size of a context pack's first page where neither the step nor anything else says one.</summary>
-    public const int DefaultGraphPromptTokens = 3_000;
+    /// <summary>
+    /// The size of a context pack's pages where the step pushes none of its own size: page 1 pushed into the first message
+    /// of a step at <c>map</c> that says nothing, and every page of the pack a step at <c>tools</c> pushed none of asks of
+    /// the graph tool's <c>pack</c>.
+    /// </summary>
+    public const int DefaultGraphPromptTokens = Codebase.CodebaseContextPack.DefaultTokens;
+
+    /// <summary>
+    /// The size of page 1 of a step's context pack pushed into its first message - its <c>graphPromptTokens</c> with its
+    /// default resolved by its mode: what it says; absent, <see cref="DefaultGraphPromptTokens"/> for a step at
+    /// <c>map</c>, whose agent cannot read through the tool and so sees the graph only as it is pushed, and 0 for one at
+    /// <c>tools</c>, which asks the tool's <c>map</c> and <c>pack</c> for their pages, from page 1, where it needs them:
+    /// measured, a step that had the tool almost never used the map and the pack pushed to it, which only added to its
+    /// input.
+    /// </summary>
+    /// <param name="mode">The step's graph, its default resolved (<see cref="GraphOf"/>): <c>map</c> or <c>tools</c>.</param>
+    /// <param name="said">What the step - or, where it says none, the step its chain of work began with - says.</param>
+    public static int GraphPromptTokensOf(string mode, int? said) => said ?? (mode == "map" ? DefaultGraphPromptTokens : 0);
 
     /// <summary>The largest first page of its context pack a step may ask its prompt to be given.</summary>
     public const int MostGraphPromptTokens = 20_000;

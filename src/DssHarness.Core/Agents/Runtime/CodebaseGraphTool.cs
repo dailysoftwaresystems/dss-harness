@@ -316,15 +316,16 @@ public sealed partial class CodebaseGraphTool(
 
     /// <summary>
     /// The operations a step is given: the read ones always, <c>edit</c> where it may write, <c>wholeFile</c> where its
-    /// reads are narrowed, <c>pack</c> where its context pack goes on past its first message's page, <c>changes</c>
-    /// where the codebase changes it is told go on past its message's, and <c>map</c> where the repository map it is
-    /// given goes on past its first page.
+    /// reads are narrowed, <c>pack</c> where its context pack has a page its first message does not hold - every page,
+    /// from page 1, where none was pushed - <c>changes</c> where the codebase changes it is told go on past its
+    /// message's, and <c>map</c> where the repository map has a page its first message does not hold - every page, from
+    /// page 1, where none was pushed.
     /// </summary>
     /// <param name="write">Whether the step has the <c>write</c> capability.</param>
     /// <param name="narrow">Whether the step's reads are narrowed (<c>graphReads: narrow</c>).</param>
-    /// <param name="pack">Whether the step's context pack has a page after its first message's.</param>
+    /// <param name="pack">Whether the step's context pack has a page its first message does not hold.</param>
     /// <param name="changes">Whether the codebase changes the step is told have a page after its message's.</param>
-    /// <param name="map">Whether the repository map the step is given has a page after its first.</param>
+    /// <param name="map">Whether the repository map has a page the step's first message does not hold.</param>
     public static IReadOnlySet<GraphOp> Operations(bool write, bool narrow, bool pack = false, bool changes = false, bool map = false)
     {
         var ops = new HashSet<GraphOp>(Read);
@@ -513,9 +514,9 @@ public sealed partial class CodebaseGraphTool(
             [GraphOp.Sites] = $"sites - what decides this data? every place that decides data you name - a symbol (a handle, an id, a path:line or a name), a key path (dotted - a name holding a dot or a bracket quoted in brackets, A[\"B.C\"] or A['B.C'], or its dots as they are, A.B.C, asking of every key it may mean; or as .NET's configuration writes one: A:B, A__B), a rule's selector, a quoted literal or a diagnostic id: what defines, calls, uses, makes, references, inherits, implements or overrides it, every literal that holds it, every key it names - each place one card saying every way it decides, an edge's other than exact with how sure it is, its lines beneath it on the page it stands on, the cards grouped by file kind and tier, {RelatedLines} places a page; what the graph does not answer of it - files it does not hold, holds unread, no longer holds the extract of or is unsure of, files it outlines, files with a reference of its name it bound to nothing, and for a quoted literal every file - searched by text and said by the coverage lines that end every answer, with every limit of each language whose files it read - one some file shows the sign of in full, with how many show it, every other by its short name on one line a language, 'help {HelpTopics.CodebaseGraphLanguages}' saying each in full",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
-            [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
+            [GraphOp.Pack] = "pack - a page of your task's context pack - the part of the graph your task and the work before it reach - best first, from page 1 (where your first message holds a codebase part, that is page 1), its last line saying how to ask for the next",
             [GraphOp.Changes] = "changes - a page of the codebase changes your message began, its last line saying how to ask for the next",
-            [GraphOp.Map] = "map - a page of the repository map your first message began, by page, its last line saying where the rest is",
+            [GraphOp.Map] = "map - a page of the repository map - the tree at a glance: its projects and top directories, then its most central declarations - from page 1, its last line saying where the rest is",
         };
 
         // Said where the step may use all three: they are what saves the reads and searches an agent would make instead.

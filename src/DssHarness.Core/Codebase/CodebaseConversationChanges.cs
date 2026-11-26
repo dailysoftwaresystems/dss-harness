@@ -6,7 +6,8 @@ namespace DssHarness.Core.Codebase;
 /// The changes a conversation is told of the codebase ("Deltas, never a rewrite of what was sent"): a step that goes on
 /// with a stored conversation is given, in its one new user message, the declarations its view changed since what that
 /// conversation was told of them - its pack and every delta after it - moved or changed with the new range and hash,
-/// removed; and the nodes of its own pack the conversation was not given, added; never a map or a pack again whole, for
+/// removed; and, where the step pushes its pack, the nodes of its own pack the conversation was not given, added - a
+/// step that asks the graph tool's <c>pack</c> for its pages is pushed none of them; never a map or a pack again whole, for
 /// a conversation's prefix is never changed. A declaration is known by its handle in its file, so one that moved is told
 /// where it stands now and not named removed and added. Made by this one owner from the view, the step's own pack and
 /// the codebase parts the conversation holds, each line read back by the one reader of a node's line
@@ -34,38 +35,38 @@ public static class CodebaseConversationChanges
     /// the message holds. Never empty: where nothing changed and nothing is new, the first line alone says so.
     /// </summary>
     /// <param name="view">The step's view, as its start's sync left it.</param>
-    /// <param name="pack">The step's own context pack, made at its start.</param>
+    /// <param name="pack">The step's own context pack, made at its start, where it pushes it; null where it pushes none.</param>
     /// <param name="told">
     /// The codebase parts the conversation holds, in the order it was given them: its pack, then each delta after it;
     /// empty where it holds none.
     /// </param>
     /// <param name="tokens">The step's own size of a page (<see cref="Pages"/>).</param>
-    public static string Make(CodebaseGraphQueries view, ContextPack pack, IReadOnlyList<string> told, int tokens)
+    public static string Make(CodebaseGraphQueries view, ContextPack? pack, IReadOnlyList<string> told, int tokens)
         => Pages(view, pack, told, tokens).Page(1)!.Text;
 
     /// <summary>
     /// The pages the changes of <paramref name="view"/> are told in: the declarations the conversation holds that moved,
     /// changed or were removed - each with its new range and hash where it stands - and the nodes of
-    /// <paramref name="pack"/> it was not told of, added - every one, in pages of <paramref name="tokens"/> estimated tokens
-    /// each, laid whole (<see cref="GraphTextPages"/>), so every page's last line names the total. Page 1 is the message's;
-    /// where it holds them all it ends with its lines, and otherwise its last line says how to ask for the next, as each
-    /// later page's does.
+    /// <paramref name="pack"/> it was not told of, added, where the step pushes its pack - every one, in pages of
+    /// <paramref name="tokens"/> estimated tokens each, laid whole (<see cref="GraphTextPages"/>), so every page's last line
+    /// names the total. Page 1 is the message's; where it holds them all it ends with its lines, and otherwise its last
+    /// line says how to ask for the next, as each later page's does. A step that pushes no pack - it asks the graph tool's
+    /// <c>pack</c> for its pages - is pushed none of it here either: its first line ends with what was removed.
     /// A page is never less than what holds its own first and last lines and a line's room beside them - a size too small
     /// for that would tell nothing - so every change is told, however small the step's size.
     /// </summary>
     /// <param name="view">The step's view, as its start's sync left it.</param>
-    /// <param name="pack">The step's own context pack, made at its start.</param>
+    /// <param name="pack">The step's own context pack, made at its start, where it pushes it; null where it pushes none.</param>
     /// <param name="told">The codebase parts the conversation holds, in the order it was given them.</param>
     /// <param name="tokens">The step's own size of a page.</param>
     /// <param name="asks">Whether the step may ask the graph tool for the later pages - its graph is <c>tools</c> - which a page's last line then says how to.</param>
-    public static GraphTextPages Pages(CodebaseGraphQueries view, ContextPack pack, IReadOnlyList<string> told, int tokens, bool asks = true)
+    public static GraphTextPages Pages(CodebaseGraphQueries view, ContextPack? pack, IReadOnlyList<string> told, int tokens, bool asks = true)
     {
         ArgumentNullException.ThrowIfNull(view);
-        ArgumentNullException.ThrowIfNull(pack);
         ArgumentNullException.ThrowIfNull(told);
 
         var known = Known(told);
-        var own = pack.Lines.Where(line => line.Id is not null).Select(line => StoodOf(line.Text)).OfType<Stood>().ToList();
+        var own = (pack?.Lines ?? []).Where(line => line.Id is not null).Select(line => StoodOf(line.Text)).OfType<Stood>().ToList();
 
         var moved = new List<string>();
         var removed = new List<string>();
@@ -104,8 +105,8 @@ public static class CodebaseConversationChanges
             }
         }
 
-        var first = $"{known.Count} declaration{(known.Count == 1 ? string.Empty : "s")} the conversation held: {moved.Count} moved or changed, {removed.Count} removed; "
-            + $"{added.Count} node{(added.Count == 1 ? string.Empty : "s")} of this step's pack added";
+        var first = $"{known.Count} declaration{(known.Count == 1 ? string.Empty : "s")} the conversation held: {moved.Count} moved or changed, {removed.Count} removed"
+            + (pack is null ? string.Empty : $"; {added.Count} node{(added.Count == 1 ? string.Empty : "s")} of this step's pack added");
         List<GraphTextLine> lines =
         [
             .. moved.Select(line => new GraphTextLine(null, line)),

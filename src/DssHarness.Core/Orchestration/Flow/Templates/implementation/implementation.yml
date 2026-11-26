@@ -207,11 +207,11 @@ steps:
         scope: 'plan.latest.scope'
         onFailure: recover
       # The audits search a class's sites themselves: the graph's sites, beside their own text
-      # search, with no pack - a pack lights none of a plan's text.
+      # search; like every step with the tool, they are pushed no pack - a pack lights none of a
+      # plan's text - and ask the tool for one where they need it.
       - name: plan-audit
         type: reason
         graph: tools
-        graphPromptTokens: 0
         agent: plan-auditor
         tier: high
         effort: xhigh
@@ -290,7 +290,6 @@ steps:
       - name: item-audit
         type: reason
         graph: tools
-        graphPromptTokens: 0
         agent: plan-auditor
         tier: high
         effort: xhigh

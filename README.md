@@ -660,18 +660,27 @@ the reviewers, the self-audit, the diagnosis and
 the steps that verify and fix starting their packs from their changes (`graphFrom: changes`); the
 request triage, whose work is text the map does not light, asks none, having measured costlier with
 no quality gained; the plan audit and the item audit, the plan audit's agent on a later round's items,
-say `graph: tools` with `graphPromptTokens: 0` - measured with no graph before the graph's `sites` was
+say `graph: tools` - measured with no graph before the graph's `sites` was
 built, they are given the tool, for a class's sites they search are what `sites` answers, beside their
-own text search, and no pack, which lights none of a plan's text; the prioritiser and a review's scope are given the map alone
+own text search; the prioritiser and a review's scope are given the map alone
 (the scope's whole overhead a fifth of a cent beside the review rounds it steers); and the scribe's
 steps, which write the run's records, ask none of it (`dssharness help codebase-graph`). The planner
 keeps the tool, its default, as it was: the measurement found it costlier with the graph and did not
-move it. What a graphed step is given never cuts: the repository map of its ground of reads is paged
+move it. Pull, not push: a step with the tool is pushed nothing of the graph. A later measurement (the
+graph arm against `graph: off`, the same requests) found the repository map and the context pack pushed
+at the head of every graphed step's first message - some 4,000 tokens - all but unused: a step's work
+touched 0 to 2% of its pack's nodes in the triages, the reviews and fixes and the diagnosis, 10% in the
+planner and 35% only in the implementer, on three samples; no step asked the map for a page; and the
+two only added to the input, 60% to 98% more of it in those steps. The graph is given only where it saves money and
+time and raises quality, so the tool's `map` and `pack` serve their pages when asked, from page 1, and a
+step that wants its pack pushed says `graphPromptTokens`; a step at `graph: map`, which has no tool, is
+still pushed both, for push is its only way to see the graph. What a graphed step is given never cuts: the repository map of its ground of reads is paged
 whole under `codebaseGraph.mapTokens`, made once and read as it is by every step of the ground - page 1
 the header and the whole lines that fit that size, and, where more pages follow, a last line naming
-which page of how many and where the rest is, asked of the tool's `map` - and the pack is paged the same way under
-`graphPromptTokens`, every page's last line naming the total, the later pages asked of the tool's
-`pack` and `changes`.
+which page of how many and where the rest is, asked of the tool's `map` - and the pack is paged the same way, under
+`graphPromptTokens` where a step pushes it and 3,000 tokens a page where a step with the tool pushes none,
+every page's last line naming the total, its pages asked of the tool's `pack`, and the changes a
+conversation gone on with is told of its `changes`.
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
@@ -1948,7 +1957,7 @@ context fills (`clear_tool_uses_20250919`, under the `context-management-2025-06
 clearing said in a notice; and three cache marks of the client's lifetime for
 `agentClients.claude-api.cacheTtl` (`5m` or `1h`, `5m` where nothing is said) - on the system text,
 covering the tools and it, the same for every step of that agent with the same tools; on the run's
-repository map, the first block of the conversation's first user message, covering the tools, the
+repository map, where a step is pushed one (`graph: map`), the first block of the conversation's first user message, covering the tools, the
 system text and the map, the same for every such step of the run that reads alike; and the top-level mark, which
 moves with the conversation's last block - so a step's second request on reads the map from the
 cache, and so does the first request of the run's next step of the same agent - and a budget needs
