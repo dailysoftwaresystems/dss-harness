@@ -318,6 +318,23 @@ public sealed class CodebaseGraphQueries
     private readonly IReadOnlySet<string> _unheld;
 
     /// <summary>
+    /// The file at <paramref name="full"/> by the path the view names its files by - relative to the tree the view is of,
+    /// with forward separators - where it is beneath that tree; null where it is not, a file of another tree, which the view
+    /// says nothing of whatever path it has there. The one rule a file a step read, searched or wrote is matched to the view
+    /// by: the graph tool's, through which the runtime's reads are given their declarations and narrowed
+    /// (<c>CodebaseGraphTool.PathOf</c>), and a step's working set's, which places its reads and writes on the view of the
+    /// tree it read - so a file of the main checkout is never matched to the view of a reader's own tree, nor the reverse.
+    /// </summary>
+    /// <param name="full">The file, absolute.</param>
+    /// <param name="comparison">How the tree's file system compares names.</param>
+    public string? PathOf(string full, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(full);
+
+        return Agents.Policy.AgentPolicy.Beneath(Tree, full, comparison);
+    }
+
+    /// <summary>
     /// The path the view holds <paramref name="path"/> at - as given, or with its backslashes read as separators, as a path
     /// typed on Windows is - or null where it holds neither.
     /// </summary>

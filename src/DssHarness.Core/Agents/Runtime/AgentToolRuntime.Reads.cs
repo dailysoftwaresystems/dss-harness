@@ -151,7 +151,7 @@ public sealed partial class AgentToolRuntime
     /// <param name="cancellationToken">Stops the reading of the outline.</param>
     private async Task<string?> OutlinedAsync(string full, long lines, int tokens, CancellationToken cancellationToken)
     {
-        if (_run.Graph is not { Narrow: true, Tool: { } tool } graph || GraphPathOf(full) is not { } relative)
+        if (_run.Graph is not { Narrow: true, Tool: { } tool } graph || tool.PathOf(full) is not { } relative)
         {
             return null;
         }
@@ -174,25 +174,22 @@ public sealed partial class AgentToolRuntime
     }
 
     /// <summary>
-    /// The declarations of the file at <paramref name="full"/> as it stands now, where the run is given a graph that holds
-    /// it as a file it parsed (<see cref="CodebaseGraphTool.DeclarationsAsync"/>) - what a range of it is named by - the file
+    /// The declarations of the file at <paramref name="full"/> as it stands now, where the run is given a graph whose view -
+    /// of the tree that file is beneath, by the tool's own mapping (<see cref="CodebaseGraphTool.PathOf"/>) - holds it as a
+    /// file it parsed (<see cref="CodebaseGraphTool.DeclarationsAsync"/>) - what a range of it is named by - the file
     /// checked again by the graph where any moved, or, for a search that checks every moved file of its call together, those
     /// its lines confirm alone (<paramref name="again"/> false, <see cref="CodebaseGraphTool.ConfirmedDeclarationsAsync"/>);
-    /// null where the run has no graph, the file is outside the tree it works in, or the graph parsed no such file.
+    /// null where the run has no graph, the file is beneath no tree of the view's, or the graph parsed no such file.
     /// </summary>
     /// <param name="full">The file, absolute.</param>
     /// <param name="again">Whether a file whose declarations moved is checked again by the graph here, on its own.</param>
     /// <param name="cancellationToken">Stops the reading of the file.</param>
     private async Task<GraphFileDeclarations?> DeclarationsAsync(string full, bool again, CancellationToken cancellationToken)
-        => _run.Graph is { Tool: { } tool } && GraphPathOf(full) is { } relative
+        => _run.Graph is { Tool: { } tool } && tool.PathOf(full) is { } relative
             ? again
                 ? await tool.DeclarationsAsync(relative, cancellationToken).ConfigureAwait(false)
                 : await tool.ConfirmedDeclarationsAsync(relative, cancellationToken).ConfigureAwait(false)
             : null;
-
-    /// <summary>The file at <paramref name="full"/> as the run's graph names it - relative to the tree the run works in, with forward separators - where it is beneath it; null else.</summary>
-    private string? GraphPathOf(string full)
-        => AgentPolicy.Beneath(_run.Workspace.Worktree ?? _run.Workspace.MainCheckout, full, _host.Platform.PathComparison);
 
     /// <summary>
     /// The pages of the file at <paramref name="full"/> as a view gives them, numbered: those kept for it where it stands

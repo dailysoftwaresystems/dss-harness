@@ -1774,7 +1774,7 @@ public sealed partial class CodebaseGraphTool(
 
         // The file is written where the runtime's own tools may write it, and never through a link: one put along its path
         // since the view was read is refused as theirs is.
-        if (_paths.Write(Full(card.Path)).Denied is { } confined)
+        if (_paths.Write(FullOf(card.Path)).Denied is { } confined)
         {
             return new GraphToolAnswer(confined.Reason, GraphToolOutcome.Refused, card.Path, confined);
         }
@@ -1826,7 +1826,7 @@ public sealed partial class CodebaseGraphTool(
         var bytes = edited.Bytes();
 
         // Where it lands decided again before a byte is written, as the runtime's own writes are (AgentFiles.Write).
-        if (_files.Write(_paths.WritableRootOf(Full(card.Path)), Full(card.Path), bytes, landing => _paths.Opened(landing, write: true).Denied) is { } landed)
+        if (_files.Write(_paths.WritableRootOf(FullOf(card.Path)), FullOf(card.Path), bytes, landing => _paths.Opened(landing, write: true).Denied) is { } landed)
         {
             return new GraphToolAnswer(landed.Reason, GraphToolOutcome.Refused, card.Path, landed);
         }
@@ -2100,7 +2100,7 @@ public sealed partial class CodebaseGraphTool(
     /// <summary>The file at <paramref name="path"/> read as <see cref="ReadFileAsync"/> reads it, with the digest of the bytes it was read from.</summary>
     private async Task<(EncodedTextReading? Reading, string? Digest, string? Why)> ReadBytesAsync(string path, CancellationToken cancellationToken)
     {
-        var confined = _paths.Read(Full(path));
+        var confined = _paths.Read(FullOf(path));
 
         if (confined.Full is not { } full)
         {
@@ -2169,10 +2169,38 @@ public sealed partial class CodebaseGraphTool(
     /// <summary>Whether the hash a node's lines have <paramref name="now"/> is the one <paramref name="given"/>: never where the span is gone.</summary>
     private static bool Same(string now, string given) => now != Gone && string.Equals(now, given, StringComparison.OrdinalIgnoreCase);
 
-    private string Full(string path) => Path.Combine(_queries.Tree, path.Replace('/', Path.DirectorySeparatorChar));
+    /// <summary>
+    /// The file the path <paramref name="path"/> names - relative to the tree the tool's view is of, with forward separators,
+    /// as every answer of the tool names a file - as it stands in that tree, absolute: where an answer's file is read and
+    /// written, and what a caller of the tool records a file the answer read or wrote as (<see cref="PathOf"/> the other way).
+    /// </summary>
+    /// <param name="path">A file of the view, relative to its tree.</param>
+    public string FullOf(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        return Path.Combine(_queries.Tree, path.Replace('/', Path.DirectorySeparatorChar));
+    }
 
     /// <summary>
-    /// The path <paramref name="full"/> stands at relative to the tree, with forward separators: what <see cref="Full"/>
+    /// The file at <paramref name="full"/> by the path the tool's view names it by, relative to the tree the view is of
+    /// (<see cref="CodebaseGraphQueries.PathOf"/>, under the tree's own rule of case): what a read of the runtime's - a
+    /// range, a search's hits, a whole read the narrowing may take - asks the tool of the file it read, so the declarations it
+    /// is given and its narrowing are the view's of that very file. Null where the file is beneath no tree of the view's: a
+    /// file of another tree - the main checkout, for a reader whose view is its own tree - is no file the view says anything
+    /// of, and is read as a file the graph does not parse.
+    /// </summary>
+    /// <param name="full">The file, absolute.</param>
+    public string? PathOf(string full)
+    {
+        ArgumentNullException.ThrowIfNull(full);
+
+        var view = _queries;
+        return view.PathOf(full, _case ??= _paths.ComparisonIn(view.Tree));
+    }
+
+    /// <summary>
+    /// The path <paramref name="full"/> stands at relative to the tree, with forward separators: what <see cref="FullOf"/>
     /// makes of a path read back, and a listing's path as the listing names it - only the system's own separator read as one,
     /// so a backslash a file's name holds where it is no separator stays the name's.
     /// </summary>

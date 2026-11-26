@@ -155,6 +155,38 @@ public sealed partial class AgentToolRuntimeTests
     }
 
     /// <summary>
+    /// A read is matched to the graph's view by the tree that view is of, never by the tree the run works in: a run working
+    /// in another tree - a copy of the view's, as a reader's own tree is of the main checkout - is given no declarations for
+    /// its own copy of a file the view holds, whose lines the view says nothing of, and is given them for the view's tree's
+    /// file it reads beside it. Red with a read matched to the tree the run works in.
+    /// </summary>
+    [Fact]
+    public async Task ARead_IsMatchedToTheGraphsView_ByTheTreeTheViewIsOf_NeverTheTreeTheRunWorksIn()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync();
+        using var other = new TempDirectory();
+        var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
+        var tool = CodebaseGraphToolTests.Tool(tree, queries);
+        var geometry = Path.Combine(tree.Tree, "src", "Geometry.cs");
+        other.WriteFile(Path.Combine("src", "Geometry.cs"), File.ReadAllText(geometry));
+        var graphed = OverTree(tree, new AgentGraphSupport(tool, _ => { }, Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true), workingIn: other.Path);
+
+        var own = await Call(graphed, AgentTools.ViewFile, ("path", "src/Geometry.cs"), ("start_line", 15), ("end_line", 19));
+        var beside = await Call(graphed, AgentTools.ViewFile, ("path", geometry), ("start_line", 15), ("end_line", 19));
+
+        Assert.Equal(("src/Geometry.cs", (string?)null), (tool.PathOf(geometry), tool.PathOf(other.Combine("src", "Geometry.cs"))));
+        Assert.True(own.Ok, own.Text);
+        Assert.StartsWith("15\t\n16\t    public static double Twice(IShape shape)\n", own.Text, StringComparison.Ordinal);
+        Assert.Equal(
+            string.Join('\n', [
+                AgentToolRuntime.RangeDeclarations,
+                "  " + GraphLines.Of(Declared(queries, "Demo.Geometry")),
+                "  " + GraphLines.Of(Declared(queries, "Demo.Geometry.Twice")),
+                own.Text]),
+            beside.Text);
+    }
+
+    /// <summary>
     /// A range whose head of declarations would take the page past its room gives its lines only as far as the head and
     /// they fit, the first always given, and says where to ask again - its head naming exactly the declarations the lines
     /// given meet - so no answer passes a page however many declarations a range meets.

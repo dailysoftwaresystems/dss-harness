@@ -5992,12 +5992,17 @@ at all fails the sync. Extraction runs on one of every
 An agent's view is its worktree listed the same way and held against the base - the main checkout's manifest, synced
 first where the run has none - as the overlay of each file the worktree holds otherwise and each of the base's it does
 not hold, the digest of the base it stands on with it: a file whose extract the base or an earlier sync of the view made
-is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads,
-which is served the base: its own tree, the main checkout's HEAD as each of its steps starts, is never synced as a view
-(`FlowGraphSyncs.WorktreeOf`) - but by a step that names the commit its tree starts at (`commit`), whose tree then
-holds that commit and not the base: that tree's own view is the one it is served (`FlowGraphSyncs.ViewsOwnTree`),
-synced by a whole listing once the step's runner brought the tree there (`FlowGraphSyncs.ReadiedAsync`) and never at
-the step's start before it, when the tree stands as the agent's last step left it. Each tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
+is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads.
+Every agent with a tree of its own is served the view of the tree it reads (`FlowGraphSyncs.WorktreeOf`): an agent that
+only reads as well, whose tree holds what the main checkout committed - or the commit its step names (`commit`) - and not
+the main checkout's uncommitted changes nor a fold landed since, so its reason step is served its own tree's view
+(`FlowGraphSyncs.ViewsOwnTree`), synced by a whole listing once the step's runner brought the tree there - or, for an
+attempt an answer goes on with (`ReasonStepRunner.GoingOnOf`), found it as that attempt left it, what it wrote there among
+it (`FlowGraphSyncs.ReadiedAsync`) - held against the base, so it reads only what differs - and never at the step's start
+before it, when the tree may stand as the agent's last step left it. What its reads are told of a file, their narrowing and
+the working set its reads are placed by are then of the tree it reads: one rule matches a file to the view, relative to
+the tree the view is of (`CodebaseGraphQueries.PathOf`, which `CodebaseGraphTool.PathOf` and `FullOf` and the working
+set read), so a file of the main checkout a reader reads beside its tree is no file of its view. Each tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
 as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
 (`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it
 again under its gate with no file read, from the earlier manifest it stood on, until a newer sync of the base holds them
@@ -6031,7 +6036,8 @@ where nothing changed; a process begun again links its first sync whole, from th
 The engine syncs on its own, through `FlowGraphSyncs`, only where the run has a graph and under the claim its step already
 holds: `FlowStepRunners` syncs the view of a step that reads it where it starts (`FlowStepRunners.ReadsViewAtStart`: a
 reason step, and a `class-closure` check, which reads what the worktree still declares) - its agent's, the one the step it
-goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), the base for one that reads; `fold` and
+goes on with works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), and a reader's own tree's once
+its runner readied the tree or found it as the attempt an answer goes on with left it, never at its start; `fold` and
 `delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
 (`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
 fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one

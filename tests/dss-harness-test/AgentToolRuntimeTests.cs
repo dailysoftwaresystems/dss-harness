@@ -2723,8 +2723,12 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
     private AgentToolRuntime Narrowing(CodebaseGraphTree tree, CodebaseGraphTool tool, List<GraphStepLine> lines, IFileSystem? files = null)
         => OverTree(tree, new AgentGraphSupport(tool, line => lines.Add(line), Operations: CodebaseGraphTool.Operations(write: true, narrow: true), Narrow: true), files);
 
-    /// <summary>A step's runtime over <paramref name="tree"/>, reading and writing it, given <paramref name="graph"/> - none where it is null.</summary>
-    private AgentToolRuntime OverTree(CodebaseGraphTree tree, AgentGraphSupport? graph, IFileSystem? files = null)
+    /// <summary>
+    /// A step's runtime over <paramref name="tree"/>, reading and writing it, given <paramref name="graph"/> - none where it
+    /// is null - or, where <paramref name="workingIn"/> is given, working in that tree instead, reading it and the graph's tree
+    /// and writing only its own.
+    /// </summary>
+    private AgentToolRuntime OverTree(CodebaseGraphTree tree, AgentGraphSupport? graph, IFileSystem? files = null, string? workingIn = null)
     {
         var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page("page", "text/plain")));
         var host = new AgentToolHost(
@@ -2736,8 +2740,9 @@ public sealed partial class AgentToolRuntimeTests : IDisposable
             fetch,
             new RunningToolDouble("1.2.3"),
             TimeProvider.System);
-        var ground = PolicyGrounds.Of(tree.Tree, [tree.Tree], [tree.Tree], [], [], [], [AgentCapability.Read, AgentCapability.Write]);
-        var runtime = host.Open(AgentRuns.Of(_step, tree.Tree, ground: ground) with { Graph = graph }, _events);
+        var working = workingIn ?? tree.Tree;
+        var ground = PolicyGrounds.Of(working, workingIn is null ? [tree.Tree] : [working, tree.Tree], [working], [], [], [], [AgentCapability.Read, AgentCapability.Write]);
+        var runtime = host.Open(AgentRuns.Of(_step, working, ground: ground) with { Graph = graph }, _events);
 
         _opened.Add(fetch);
         _opened.Add(runtime);

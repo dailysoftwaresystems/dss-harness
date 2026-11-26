@@ -384,7 +384,7 @@ public static partial class HelpTopics
             + "names a commit of the repository or fails the step with nothing changed, and a step that writes or works in an "
             + "agent's worktree is refused one - whatever it wrote there before discarded, so the step reads exactly what that "
             + "commit holds, starts in it, and may write it and its work directory, never folded, and is served the graph's view "
-            + "of that tree where it names a commit, the base's where it names none; an answer that goes on with an "
+            + "of that tree; an answer that goes on with an "
             + "attempt finds the tree as the attempt left it; no two steps work in one agent's tree at once, for a reason step holds "
             + "write on the tree of the agent it works in whatever its access - of two that go on with one step's work, two visits "
             + "of one that goes on with its own among them, the second starts once the first has ended; the step's model resolved with its agent definition below its own and its order built "

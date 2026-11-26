@@ -53,7 +53,8 @@ public sealed class GraphifyCodebaseRunner(
         if (run.Step.In is { } named)
         {
             // The view of the worktree of the agent the step's create-agent made, which the step waited for; an agent that
-            // only reads is served the base, its own tree never synced as a view.
+            // only reads is synced the base here - its own tree's view is its reason step's, synced once that step readied
+            // the tree (FlowGraphSyncs.ViewsOwnTree).
             if (run.WorksIn is not { } agent)
             {
                 return FlowStepResult.Ended(passed: false, HarnessExit.InternalError, $"'{run.Instance}' syncs the view of the agent '{named}' makes, and the run has made none for it");

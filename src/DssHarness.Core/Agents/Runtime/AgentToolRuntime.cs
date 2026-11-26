@@ -601,12 +601,11 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         support.Recorded?.Invoke(GraphCallLine.Of(input["op"]?.GetValue<string>(), answer));
 
-        var tree = _run.Workspace.Worktree ?? _run.Workspace.MainCheckout;
-
+        // The files an answer names are its view's, relative to the tree it is of: each is that tree's, by the tool's own rule.
         if (answer.Outcome == GraphToolOutcome.Wrote && answer.Path is { } wrote)
         {
             // The graph is synced after each of the run's writes, an edit of its own among them.
-            await WroteAsync(AgentGraphSupport.ToolName, Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar))).ConfigureAwait(false);
+            await WroteAsync(AgentGraphSupport.ToolName, tool.FullOf(wrote)).ConfigureAwait(false);
         }
 
         // A file the answer's page served lines of is viewed as those lines were read - an edit's as it wrote it - never as
@@ -614,7 +613,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         // lines after the file changed is refused as changed since viewed.
         foreach (var viewed in answer.Viewed)
         {
-            _viewed[Path.Combine(tree, viewed.Path.Replace('/', Path.DirectorySeparatorChar))] = viewed.Digest;
+            _viewed[tool.FullOf(viewed.Path)] = viewed.Digest;
         }
 
         if (answer.Escape is { } escape)

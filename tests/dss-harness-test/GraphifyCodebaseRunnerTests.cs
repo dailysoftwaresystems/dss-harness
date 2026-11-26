@@ -106,9 +106,9 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
     /// <summary>
     /// With in, the step syncs the view of the worktree of the agent its create-agent made, held against the base - synced
     /// first where the run has none - as an overlay of each file the worktree holds otherwise and each of the base's it does
-    /// not hold, its output's view naming the agent; an agent that only reads has the base for its view, whatever its own
-    /// tree holds - that tree is never synced as a view - and an agent with no worktree to list is refused (13), syncing
-    /// nothing of it.
+    /// not hold, its output's view naming the agent; an agent that only reads has the base synced here, whatever its own
+    /// tree holds - that tree's view is its reason step's, synced once that step readied the tree - and an agent with no
+    /// worktree to list is refused (13), syncing nothing of it.
     /// </summary>
     [Fact]
     public async Task AStepNamingAnAgentsTree_SyncsThatAgentsView_HeldAgainstTheBase()

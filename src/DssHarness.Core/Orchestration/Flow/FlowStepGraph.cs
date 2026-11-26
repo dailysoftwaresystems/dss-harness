@@ -16,8 +16,9 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// A reason step's serving of the run's codebase graph: the view the engine syncs at the step's start - the agent's it
-/// works in, the base for one that reads - read whole, every call of the graph service made through a request of that
+/// A reason step's serving of the run's codebase graph: the view of the tree its agent reads - its worktree, the tree of an
+/// agent that only reads as well, synced at the step's start or once that tree was readied - read whole, every call of the
+/// graph service made through a request of that
 /// view (<see cref="FlowGraphSyncs.RequestOf"/>); its context pack made at its start and the run's repository map of its
 /// ground of reads - made once for each ground the run's steps share, from the base as it stands when the first graphed
 /// reason step of that ground is given its prompt, and read as it is by every one after. Pull, not push: a step at
@@ -213,10 +214,11 @@ public sealed class FlowStepGraph
         Execution.ILineMask? mask,
         CancellationToken cancellationToken)
     {
-        // The view the step is served: the agent's where it has a worktree, the base where it reads - its own tree's where
-        // the step names the commit that tree starts at (FlowGraphSyncs.ViewsOwnTree). The engine syncs it at the step's
-        // start (FlowGraphSyncs.AtStartAsync), or once its tree stands at that commit (FlowGraphSyncs.ReadiedAsync); what
-        // is read here is what that left, and every call made of the
+        // The view the step is served: its agent's own tree's - its worktree, or the tree of an agent that only reads
+        // (FlowGraphSyncs.ViewsOwnTree), at the main checkout's HEAD or the commit the step names - the base where its record
+        // places no tree. The engine syncs it at the step's start (FlowGraphSyncs.AtStartAsync), or once a reader's tree was
+        // readied or found as the attempt an answer goes on with left it (FlowGraphSyncs.ReadiedAsync); what is read here is
+        // what that left, and every call made of the
         // service for the step - its changes, a check of a file the tool makes again - acts on the tree that view is of.
         // The run's one shape, the same its syncs are made under (FlowUse.GraphOf).
         var worktree = FlowGraphSyncs.WorktreeOf(agent, record, context.Layout, run.Step);
