@@ -41,11 +41,11 @@ jobs:
       # the slowest, in eight. GitHub runs only so many macOS jobs at once and queues the
       # rest, so a macOS shard added shortens each shard more than it does the leg.
       #
-      # A class is atomic to a shard, and the dealing weighs a class by the tests it holds.
-      # That undercounts a class whose every test runs for minutes on the slow runners, as the
-      # implementation flow's do: one such class weighs what many of the suite's other classes
-      # do together, and the shard it lands in is dealt companions as though its tests were
-      # ordinary ones. So the flow's tests are held in batteries, each a class of its own
+      # A class is atomic to a shard, and the dealing weighs a class by the seconds its tests
+      # took when this runner last ran them (see the Test step). One class whose every test
+      # runs for minutes on the slow runners, as the implementation flow's do, still weighs what
+      # many of the suite's other classes do together, and no shard can be lighter than it; so
+      # the flow's tests are held in batteries, each a class of its own
       # (ImplementationFlowTests+Planning and its siblings), which the dealing spreads; when
       # one grows until its shard nears the step's limit, the answer is more shards, or that
       # battery split again - never a longer limit.
@@ -130,6 +130,16 @@ jobs:
             sudo apparmor_parser -r "$profile"
           fi
 
+      - name: Restore test times
+        # What each test class took when this runner last ran it, which the Test step deals the shards by: the newest
+        # file any shard of this runner saved, each holding every class's time - its own shard's measured anew, the rest
+        # as it found them. None the first time, and the dealing then weighs a class by the tests it holds.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/test-times
+          key: test-times-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          restore-keys: test-times-${{ matrix.os }}-
+
       - name: Test
         # The suite's own executable, which exits non-zero when any test fails: never through
         # dotnet, which the suite then finds running it and starts its children with by path.
@@ -144,11 +154,15 @@ jobs:
         # answer when a shard nears it.
         #
         # A shard is a set of whole test classes. The classes are dealt out heaviest first, each
-        # to the shard holding fewest tests so far - a class weighing the tests it holds, and
-        # one more for itself - in one order on every runner, so a runner's shards together
-        # run every class once. The suite's time is spread over its many small tests rather
-        # than held by a few long ones, so how many tests a shard holds stands for how long it
-        # runs. A shard that holds no class fails the step rather than running nothing green.
+        # to the shard lightest so far, in one order on every runner, so a runner's shards
+        # together run every class once. A class weighs the seconds its tests took when this
+        # runner last ran them (the Restore test times step): how many tests a class holds says
+        # nothing of how long they run - a class of rebases or of flows runs a minute a test where
+        # another runs a millisecond, and dealt by counts the heavy ones met in one shard, which
+        # ran past the step's limit while another of the same runner ended in twenty minutes. A
+        # class this runner never timed weighs its tests and one more for itself, at the seconds a
+        # test of the classes it timed took on average; where it timed none, counts alone. A
+        # shard that holds no class fails the step rather than running nothing green.
         timeout-minutes: 75
         shell: bash
         env:
@@ -177,8 +191,25 @@ jobs:
               }
               END { for (name in held) print held[name], name }' > "$RUNNER_TEMP/test-weights.txt"
 
-          awk 'FNR == NR { held[$2] = $1; next } { print held[$0] + 1, $0 }' \
-            "$RUNNER_TEMP/test-weights.txt" "$RUNNER_TEMP/test-classes.txt" \
+          # The seconds each class took when this runner last ran it, as the Keep test times step wrote them.
+          mkdir -p "$RUNNER_TEMP/test-times"
+          times="$RUNNER_TEMP/test-times/times.txt"
+          [ -f "$times" ] || : > "$times"
+
+          awk -v weights="$RUNNER_TEMP/test-weights.txt" -v times="$times" '
+            BEGIN {
+              while ((getline line < weights) > 0) { split(line, field, " "); held[field[2]] = field[1] }
+              while ((getline line < times) > 0) { split(line, field, " "); took[field[2]] = field[1] }
+            }
+            { classes[++n] = $0 }
+            END {
+              for (i = 1; i <= n; i++) if (classes[i] in took) { seconds += took[classes[i]]; counted += held[classes[i]] + 1 }
+              rate = seconds > 0 ? seconds / counted : 1
+              for (i = 1; i <= n; i++) {
+                class = classes[i]
+                printf "%.3f %s\n", (class in took ? took[class] : (held[class] + 1) * rate), class
+              }
+            }' "$RUNNER_TEMP/test-classes.txt" \
             | LC_ALL=C sort -k1,1nr -k2,2 \
             | awk -v n="$SHARDS" -v i="$SHARD" '{
                 least = 1
@@ -198,4 +229,53 @@ jobs:
           fi
 
           echo "Shard $SHARD of $SHARDS: $# of $(wc -l < "$RUNNER_TEMP/test-classes.txt" | tr -d ' ') test classes."
-          "$suite" --xunit-diagnostics on --long-running 120 --show-slowest-tests 20 --filter-class "$@"
+          # Bounded by the suite itself short of the step's limit, a shard past its time ends aborted with what it ran
+          # reported - its slowest tests among it - and the Keep test times step times its classes from that report.
+          "$suite" --xunit-diagnostics on --long-running 120 --show-slowest-tests 20 --timeout 70m \
+            --report-xunit-junit --report-xunit-junit-filename shard.xml --results-directory "$RUNNER_TEMP/test-report" \
+            --filter-class "$@"
+
+      - name: Keep test times
+        # What each class of this shard took, for the next run's dealing: written over the times this run was dealt by,
+        # each class the suite still lists kept - this shard's as the report says them, the rest as they were - so the
+        # file saved holds every class, and whichever shard's is restored next deals the whole suite. A class the suite's
+        # own bound cut short weighs as though the tests it never ran took what its others did; a shard that wrote no
+        # report leaves its classes the times they had.
+        id: keep
+        if: always()
+        shell: bash
+        run: |
+          set -eo pipefail
+          report="$RUNNER_TEMP/test-report/shard.xml"
+          times="$RUNNER_TEMP/test-times/times.txt"
+          [ -f "$report" ] && [ -f "$times" ] || exit 0
+
+          # The report is one line of XML: each test case's class and seconds, summed by class.
+          tr '<' '\n' < "$report" | awk -v times="$times" -v classes="$RUNNER_TEMP/test-classes.txt" -v weights="$RUNNER_TEMP/test-weights.txt" '
+            BEGIN {
+              while ((getline line < classes) > 0) listed[line] = 1
+              while ((getline line < weights) > 0) { split(line, field, " "); held[field[2]] = field[1] }
+              while ((getline line < times) > 0) { split(line, field, " "); took[field[2]] = field[1] }
+            }
+            /^testcase / {
+              if (!match($0, / time="[^"]*"/)) next
+              seconds = substr($0, RSTART + 7, RLENGTH - 8)
+              if (!match($0, / classname="[^"]*"/)) next
+              class = substr($0, RSTART + 12, RLENGTH - 13)
+              fresh[class] += seconds
+              ran[class]++
+            }
+            END {
+              for (class in fresh) took[class] = held[class] > ran[class] ? fresh[class] * held[class] / ran[class] : fresh[class]
+              for (class in took) if (class in listed) printf "%.3f %s\n", took[class], class
+            }' | LC_ALL=C sort -k2,2 > "$times.next"
+
+          mv "$times.next" "$times"
+          echo "kept=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save test times
+        if: always() && steps.keep.outputs.kept == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/test-times
+          key: test-times-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
