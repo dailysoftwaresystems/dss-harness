@@ -6394,9 +6394,12 @@ declaration's line a block's head (`ResultLines.HeadAsync`), each line beneath i
 every answer is, by `read_result`, each line whole, a page that begins among a declaration's lines beginning with its line
 again (`TextBlocks`). A range of `view_file` (`AgentToolRuntime.RangeAsync`) is headed
 (`AgentToolRuntime.RangeDeclarations`) by the declarations the lines it gives meet (`GraphFileDeclarations.Meeting`), each
-joining the head once a line given reaches its first line, the head held with the lines within a page's room
-(`KeptResults.Room`) - the lines stopping, the first always given, where the two would pass it, the rest asked for by its
-next start as any is. `AgentTools.InAGraphStep` says so in the two tools' own descriptions where the step's graph was
+joining the head once a line given reaches its first line, the head charged with the lines to a page's room
+(`KeptResults.Room`), the first line's among them - the lines stopping where the two would pass it, the rest asked for by
+its next start as any is, and a head that passes the room with the first line written with that line as the call's
+answer a line at a time, the head a block (`AgentToolRuntime.PagedRangeAsync`), kept and given a page at a time by
+`read_result` as every answer longer than a page is, so no range is sent over a page however many declarations begin on
+its first line. `AgentTools.InAGraphStep` says so in the two tools' own descriptions where the step's graph was
 built. Its reads narrowed (`graphReads: narrow`, the default) answer a whole `view_file` of a file the view holds as parsed
 over `CodebaseGraphTool.NarrowLines` lines with the file's outline in its place (`CodebaseGraphTool.WholeReadAsync`): a line
 saying how to read its lines - a range, a page, a body, or `wholeFile` with why - then the outline as `outline` with its

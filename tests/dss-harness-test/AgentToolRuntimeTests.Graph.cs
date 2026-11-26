@@ -144,6 +144,63 @@ public sealed partial class AgentToolRuntimeTests
     }
 
     /// <summary>
+    /// A range of one line that 800 declarations begin on - a file written on one line, as a bundled one is - has a head
+    /// that alone passes a page: it is charged to the room on the first line too, and never sent over it - the head and the
+    /// line are the call's answer, kept whole and given a page at a time by read_result, each page within a page's room,
+    /// a page that begins among the declarations giving the head's line again, said as going on - and the pages together
+    /// hold the head's line, every declaration once and in order, and the line. Red with the first line given whatever its
+    /// head, which sends the whole as one page several times a page's room.
+    /// </summary>
+    [Fact]
+    public async Task ARangeWhoseHeadAlonePassesAPage_IsPagedByReadResult_NeverSentOverTheRoom()
+    {
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Bundle.cs", OneLineMembers(800)));
+        var queries = await CodebaseGraphToolTests.QueriesAsync(tree);
+        var graphed = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, queries), []);
+        var plain = OverTree(tree, graph: null);
+        var met = queries.OutlineFile("src/Bundle.cs")!.Where(card => CodeNodeKinds.Declarations.Contains(card.Kind)).ToList();
+        var line = (await Call(plain, AgentTools.ViewFile, ("path", "src/Bundle.cs"), ("start_line", 1), ("end_line", 1))).Text;
+        List<string> expected = [AgentToolRuntime.RangeDeclarations, .. met.Select(card => "  " + GraphLines.Of(card)), line];
+
+        var found = await Call(graphed, AgentTools.ViewFile, "bundle", ("path", "src/Bundle.cs"), ("start_line", 1), ("end_line", 1));
+
+        // Every declaration begins on the line, and their head alone is more than a page.
+        Assert.Equal(801, met.Count);
+        Assert.All(met, card => Assert.Equal(1, card.Start));
+        Assert.InRange(met.Sum(card => GraphLines.Of(card).Length + 3), PageRoom.ModelAnswer + 1, int.MaxValue);
+        Assert.True(found.Ok, found.Text);
+        Assert.Equal(AgentCallRecords.ResultFile(_step, "bundle"), found.File);
+        Assert.Equal(string.Join('\n', expected), File.ReadAllText(found.File!));
+
+        var first = found.Text.Split('\n');
+        var pages = int.Parse(first[0].Split(' ')[3], CultureInfo.InvariantCulture);
+        List<string> given = [.. first.Skip(1)];
+
+        Assert.Equal($"page 1 of {pages.ToString(CultureInfo.InvariantCulture)} · {expected.Count.ToString(CultureInfo.InvariantCulture)} results · ask read_result with id: 'bundle', page: 2 for the next · the whole is '{found.File}'", first[0]);
+        Assert.InRange(pages, 2, int.MaxValue);
+        Assert.InRange(found.Text.Length, 1, PageRoom.ModelAnswer);
+
+        for (var page = 2; page <= pages; page++)
+        {
+            var next = (await Call(graphed, AgentTools.ReadResult, $"bundle_{page.ToString(CultureInfo.InvariantCulture)}", ("id", "bundle"), ("page", page))).Text;
+            var lines = next.Split('\n').Skip(1).ToList();
+
+            Assert.InRange(next.Length, 1, PageRoom.ModelAnswer);
+
+            // A page that begins among the declarations begins with the head's line again, said as going on.
+            if (expected[given.Count].StartsWith("  ", StringComparison.Ordinal))
+            {
+                Assert.Equal($"{AgentToolRuntime.RangeDeclarations} … goes on", lines[0]);
+                lines.RemoveAt(0);
+            }
+
+            given.AddRange(lines);
+        }
+
+        Assert.Equal(expected, given);
+    }
+
+    /// <summary>
     /// A search whose grouped answer passes a page is kept whole and given a page at a time by read_result, as every search
     /// is: each page begins with 'page k of n', each holds whole lines, a page that begins at a hit beneath a declaration
     /// begins with the declaration's line again, said as going on, and one that begins at a declaration's line begins with
@@ -352,6 +409,12 @@ public sealed partial class AgentToolRuntimeTests
         => "namespace Demo;\n\npublic static class Long\n{\n    public static int Sum()\n    {\n        var total = 0;\n"
             + string.Concat(Enumerable.Range(1, count).Select(at => $"        total += 1; // tally {at.ToString("D4", CultureInfo.InvariantCulture)}\n"))
             + "        return total;\n    }\n}\n";
+
+    /// <summary>A C# class of <paramref name="count"/> members written whole on its file's one line, as a bundled file is: every declaration begins on line 1.</summary>
+    private static string OneLineMembers(int count)
+        => "namespace Demo; public static class Bundle { "
+            + string.Concat(Enumerable.Range(0, count).Select(at => $"public static int M{at.ToString("D3", CultureInfo.InvariantCulture)}()=>{at.ToString(CultureInfo.InvariantCulture)}; "))
+            + "}\n";
 
     /// <summary>
     /// A C# class of <paramref name="count"/> one-line members, each its own line: a file of many declarations,

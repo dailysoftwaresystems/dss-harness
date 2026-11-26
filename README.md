@@ -1705,7 +1705,8 @@ hit `search_files` finds inside a declaration of a file the graph parsed is give
 declaration's line - its handle, kind, signature and `path:start-end #hash`, the innermost that holds
 the hit - with its hits and their context indented beneath it, a page of the answer that begins among
 them beginning with the declaration's line again, marked `… goes on` and counted as no result, a range
-`view_file` gives is headed by the declarations its lines meet, each checked against the file as it stands, and where the step's
+`view_file` gives is headed by the declarations its lines meet - a head that passes a page with the range's first line given with
+it a page at a time by `read_result`, never over a page - each checked against the file as it stands, and where the step's
 reads are narrowed (`graphReads: narrow`, the default) a whole `view_file` of a file the graph parsed
 over 200 lines is answered with the file's outline in its place, with how to read its lines - no
 wasted turn (`help codebase-graph`). A replace or an insert needs

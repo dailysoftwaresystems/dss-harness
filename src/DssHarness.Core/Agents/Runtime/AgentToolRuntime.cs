@@ -556,7 +556,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         return tool.Name switch
         {
-            AgentTools.ViewFile => await ViewAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.ViewFile => await ViewAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.FindFiles => await FindAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.SearchFiles => await SearchAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.ReadResult => await ReadResultAsync(input, cancellationToken).ConfigureAwait(false),

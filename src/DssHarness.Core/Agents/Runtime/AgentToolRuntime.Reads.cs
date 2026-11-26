@@ -26,7 +26,10 @@ public sealed partial class AgentToolRuntime
     /// for the rest; its digest recorded for an edit. A whole read the graph's narrowing takes is answered with the file's
     /// outline. A directory's entries.
     /// </summary>
-    private async Task<Answer> ViewAsync(JsonObject input, CancellationToken cancellationToken)
+    /// <param name="callId">The call's id, which a range whose head passes a page with its first line is kept and paged by.</param>
+    /// <param name="input">The call's input.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    private async Task<Answer> ViewAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
         var path = Text(input, "path")!;
         var start = Number(input, "start_line");
@@ -122,7 +125,7 @@ public sealed partial class AgentToolRuntime
         {
             return start is null && end is null
                 ? await PageOfAsync(kept, page ?? 1, note, cancellationToken).ConfigureAwait(false)
-                : await RangeAsync(full, kept, start ?? 1, end, note, await DeclarationsAsync(full, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
+                : await RangeAsync(callId, full, kept, start ?? 1, end, note, await DeclarationsAsync(full, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
         }
         catch (AgentReadRefusedException moved)
         {
@@ -218,10 +221,14 @@ public sealed partial class AgentToolRuntime
     /// rest: the next start, or the next page where the page ends inside a line wider than its room. Where the run's graph
     /// holds the file as parsed, the <paramref name="declarations"/> the lines given meet head them, each as the graph names
     /// a node - its handle, kind, signature and <c>path:start-end #hash</c> - so the agent can ask a body of one, or read the
-    /// lines beside it, exactly; the head is held within the page's room with the lines (<see cref="KeptResults.Room"/>), the
-    /// lines stopping, the first always given, where the two would pass it, and the rest asked for as any is.
+    /// lines beside it, exactly; the head is charged to the page's room with the lines (<see cref="KeptResults.Room"/>), the
+    /// first line's among them, the lines stopping where the two would pass it, the rest asked for as any is - and a head
+    /// that passes the room with the first line is never sent over it: the two are written as a call's answer a line at a
+    /// time (<see cref="ResultLines"/>), the head a block, kept and given a page at a time by <c>read_result</c> as every
+    /// answer longer than a page is, a later page that begins inside the head giving its first line again, the last line
+    /// saying how to ask for the lines after the first.
     /// </summary>
-    private async Task<Answer> RangeAsync(string full, TextPagesKept kept, long first, long? end, string? note, GraphFileDeclarations? declarations, CancellationToken cancellationToken)
+    private async Task<Answer> RangeAsync(string callId, string full, TextPagesKept kept, long first, long? end, string? note, GraphFileDeclarations? declarations, CancellationToken cancellationToken)
     {
         if (first > kept.Lines)
         {
@@ -250,6 +257,7 @@ public sealed partial class AgentToolRuntime
         var headCost = 0;
         var shown = first - 1;
         var goesOn = false;
+        var paged = false;
 
         // Entry k of the page is of line FirstLine + k: a page's entries are its lines in order, a piece one of its own.
         for (var at = 0; at < entries.Count; at++)
@@ -275,11 +283,17 @@ public sealed partial class AgentToolRuntime
                 joins++;
             }
 
-            // A line the page's room no longer holds beside the head and the lines before it is asked for again: the page's
-            // own lines fit its room, so a range with no head is given as its page holds it.
-            if (headed > 0 && shown >= first && headed + given.Length + entries[at].Text.Length + 1 > KeptResults.Room)
+            // The head is charged to the page's room with the lines, the first line's among them: a line the room no longer
+            // holds beside the head and the lines before it is asked for again, and a first line it does not hold beside the
+            // head is paged with it. The page's own lines fit its room, so a range with no head is given as its page holds it.
+            if (headed > 0 && headed + given.Length + entries[at].Text.Length + 1 > KeptResults.Room)
             {
-                break;
+                if (shown >= first)
+                {
+                    break;
+                }
+
+                paged = true;
             }
 
             joined = joins;
@@ -287,6 +301,20 @@ public sealed partial class AgentToolRuntime
             given.Append(entries[at].Text).Append('\n');
             shown = line;
             goesOn = cut && at == entries.Count - 1;
+
+            if (paged)
+            {
+                break;
+            }
+        }
+
+        var rest = goesOn ? $"[line {Count(shown)} goes on: ask again with page: {Count(holding + 1)}]"
+            : shown < last ? Rest("lines", first, shown, kept.Lines)
+            : null;
+
+        if (paged)
+        {
+            return await PagedRangeAsync(callId, note, meeting.Take(joined), given.ToString().TrimEnd('\n'), rest, cancellationToken).ConfigureAwait(false);
         }
 
         if (joined > 0)
@@ -299,18 +327,42 @@ public sealed partial class AgentToolRuntime
             }
         }
 
-        builder.Append(given);
-
-        if (goesOn)
-        {
-            builder.Append($"[line {Count(shown)} goes on: ask again with page: {Count(holding + 1)}]");
-        }
-        else if (shown < last)
-        {
-            builder.Append(Rest("lines", first, shown, kept.Lines));
-        }
+        builder.Append(given).Append(rest);
 
         return Answer.Page(builder.ToString().TrimEnd('\n'));
+    }
+
+    /// <summary>
+    /// A range whose head passes a page's room with its first line, as the call <paramref name="callId"/>'s answer: what
+    /// its view says, the head - <see cref="RangeDeclarations"/> heading a block of every declaration <paramref name="head"/>
+    /// says - the first line, and how to ask for the lines after it, written a line at a time and given as every answer
+    /// written so is: whole where it fits a page, else kept and given a page at a time by <c>read_result</c>, a page that
+    /// begins among the declarations giving the head's first line again.
+    /// </summary>
+    private async Task<Answer> PagedRangeAsync(string callId, string? note, IEnumerable<string> head, string line, string? rest, CancellationToken cancellationToken)
+    {
+        await using var lines = _records.Lines(callId);
+
+        if (note is not null)
+        {
+            await lines.LineAsync($"[{note}]", cancellationToken).ConfigureAwait(false);
+        }
+
+        await lines.HeadAsync(RangeDeclarations, cancellationToken).ConfigureAwait(false);
+
+        foreach (var said in head)
+        {
+            await lines.BlockLineAsync(said, cancellationToken).ConfigureAwait(false);
+        }
+
+        await lines.LineAsync(line, cancellationToken).ConfigureAwait(false);
+
+        if (rest is not null)
+        {
+            await lines.LineAsync(rest, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await EndedAsync(callId, lines, ok: true, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
