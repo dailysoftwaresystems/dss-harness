@@ -141,24 +141,32 @@ public static class FlowInputs
 
     /// <summary>
     /// The values a run's steps read for its inputs - <c>{input.&lt;name&gt;}</c> in every prompt and every expression - from
-    /// the values the run takes (<see cref="Resolve"/>): each as it is, but an input of the kind <c>file</c> that is not
-    /// empty, which reads the full path of the copy the run made of the file as it started
+    /// the values the run takes (<see cref="Resolve"/>): each as it is, but, in a run that keeps its file inputs' copies -
+    /// every run this build makes, its records say so (<see cref="FlowRunContext.InputCopies"/>) - an input of the kind
+    /// <c>file</c> that is not empty, which reads the full path of the copy the run made of the file as it started
     /// (<see cref="OrchestratorLayout.InputCopy"/>, <see cref="OpenFiles"/>). The one owner of what a step reads for an
     /// input: every step of every session of the run - a resume's included - reads the file the run was started with,
-    /// whatever became of the person's file since, and every agent reads it, wherever its own tree was cut from. The run's
-    /// records keep the values as the person gave them.
+    /// whatever became of the person's file since, and every agent reads it, wherever its own tree was cut from. A run an
+    /// older build made kept no copy, and its steps read each file input as it was given, in every session as in the ones
+    /// that build ran, never a copy that was never made. The run's records keep the values as the person gave them.
     /// </summary>
     /// <param name="definition">The workflow the run runs.</param>
     /// <param name="given">The inputs given, by name, as the run's records keep them; null where none was.</param>
     /// <param name="run">The run, whose directory keeps the copies.</param>
+    /// <param name="copies">Whether the run keeps its file inputs' copies, as its records say (<see cref="FlowRunContext.InputCopies"/>).</param>
     /// <returns>What the run's steps read, by input name.</returns>
-    public static IReadOnlyDictionary<string, string> AsRead(WorkflowDefinition definition, IReadOnlyDictionary<string, string>? given, OrchestratorLayout run)
+    public static IReadOnlyDictionary<string, string> AsRead(WorkflowDefinition definition, IReadOnlyDictionary<string, string>? given, OrchestratorLayout run, bool copies)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(run);
 
         var values = Resolve(definition, given);
         var read = new Dictionary<string, string>(values, StringComparer.Ordinal);
+
+        if (!copies)
+        {
+            return read;
+        }
 
         foreach (var input in Files(definition, values))
         {

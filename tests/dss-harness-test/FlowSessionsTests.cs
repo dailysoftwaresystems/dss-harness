@@ -181,9 +181,10 @@ public sealed class FlowSessionsTests
         Assert.Equal([copy], Directory.GetFiles(run.InputsDirectory, "*", SearchOption.AllDirectories));
         Assert.Equal("the plan as it was given\n", File.ReadAllText(copy));
         Assert.Equal(given, context.Inputs);
+        Assert.True(context.InputCopies);
         Assert.Equal(
             new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = copy, ["spec"] = string.Empty, ["request"] = "build it" },
-            FlowInputs.AsRead(definition, context.Inputs, run));
+            FlowInputs.AsRead(definition, context.Inputs, run, context.InputCopies));
     }
 
     /// <summary>

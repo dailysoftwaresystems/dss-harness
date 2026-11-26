@@ -4702,7 +4702,10 @@ since reaches nothing; anything else refused (13), naming the input and the path
 in every prompt and every expression, and a pull request's base - is the copy's full path (`FlowInputs.AsRead`, the
 one owner of what a step reads for an input, which every session hands the engine), so every step of every session,
 a resume's included, reads the file the run was started with, whatever the person did to it since; the run's records
-keep the value as it was given. Every agent of the run reads the run's `inputs/` as a root of its own
+keep the value as it was given. That the run keeps its copies is a fact of its own, recorded as it is made
+(`FlowRunContext.InputCopies`, `flow.json`'s `inputCopies`) and read back by every session: a run an older build made
+kept none and its `flow.json` says nothing of them, so its steps read each file input as it was given, as that build
+handed it to them, never the path of a copy that was never made. Every agent of the run reads the run's `inputs/` as a root of its own
 (`AgentStepGround`): an untracked or uncommitted file is in no agent's tree - a write agent's worktree is cut from the
 run's start commit, and an agent that only reads has its tree brought to the main checkout's HEAD - and reaches both
 alike. A used workflow's file input is no such thing: it names a file of that workflow's own directory, which the

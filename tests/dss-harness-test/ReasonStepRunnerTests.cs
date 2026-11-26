@@ -887,7 +887,7 @@ public sealed class ReasonStepRunnerTests
             files.Keep(kit.Harness.FileSystem, kit.Layout);
         }
 
-        var copy = FlowInputs.AsRead(definition, given, kit.Layout)["plan"];
+        var copy = FlowInputs.AsRead(definition, given, kit.Layout, copies: true)["plan"];
 
         Assert.Equal(kit.Layout.InputCopy("plan", "notes/plan.md"), copy);
 

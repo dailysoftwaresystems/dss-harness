@@ -3069,7 +3069,71 @@ public sealed class FlowServiceTests
         Assert.Equal(["read", "again"], reasoned.Select(asked => asked.Step.Name));
         Assert.All(reasoned, asked => Assert.Equal($"Read the plan at {copy}.\n", FlowTemplate.Joined(asked.Prompts!["prompt"])));
         Assert.Equal("the plan as it was given\n", File.ReadAllText(copy));
-        Assert.Equal("notes/plan.md", repository.Harness.OrchestrationStore.ReadFlow(run)!.Inputs["plan"]);
+        Assert.Equal(("notes/plan.md", true), (repository.Harness.OrchestrationStore.ReadFlow(run)!.Inputs["plan"], repository.Harness.OrchestrationStore.ReadFlow(run)!.InputCopies));
+    }
+
+    /// <summary>
+    /// A run an older build made kept no copy of its file inputs, and its records say nothing of copies: resumed by this
+    /// build, its steps read each file input as it was given - as that build handed it to them - never the path of a copy
+    /// that was never made, and nothing is copied for it now. A run this build makes says, in its records, that it keeps
+    /// its copies, and reads them in every session.
+    /// </summary>
+    [Fact]
+    public async Task ARunAnOlderBuildMadeWithAFileInput_IsResumedReadingTheInputAsGiven_NeverACopyThatWasNeverMade()
+    {
+        var (repository, service, runner) = await AmendedAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: read
+                type: reason
+                agent: planner
+                prompt: read.md
+                outputs: update.json
+              - name: hold
+                type: orient
+                dependsOn: [read]
+              - name: again
+                type: reason
+                agent: planner
+                prompt: read.md
+                outputs: update.json
+                dependsOn: [hold]
+            """);
+        using var disposed = repository;
+        repository.Tree.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/read.md", "Read the plan at {input.plan}.\n");
+        runner.Holds("hold", new TaskCompletionSource().Task);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: ["plan=notes/plan.md"], json: false, cancellationToken: Token);
+
+        await runner.WaitStartedAsync("hold");
+        Assert.Equal(HarnessExit.Success, (await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Cancelled, (await driving.WaitAsync(Bound, Token)).ExitCode);
+
+        // The run as an older build left it: no copies, and records that say nothing of them.
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        Assert.True(store.ReadFlow(run)!.InputCopies);
+        Assert.Contains("\"inputCopies\": true", File.ReadAllText(run.FlowFile), StringComparison.Ordinal);
+
+        store.WriteFlow(run, store.ReadFlow(run)! with { InputCopies = null });
+        Directory.Delete(run.InputsDirectory, recursive: true);
+
+        Assert.DoesNotContain("inputCopies", File.ReadAllText(run.FlowFile), StringComparison.Ordinal);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.True(resumed.ExitCode == HarnessExit.Success, $"{resumed.Message} {string.Join(" | ", resumed.Details ?? [])}");
+
+        var again = runner.Asked.Last(asked => asked.Step.Name == "again");
+
+        Assert.Equal("Read the plan at notes/plan.md.\n", FlowTemplate.Joined(again.Prompts!["prompt"]));
+        Assert.False(Directory.Exists(run.InputsDirectory));
+        Assert.Null(store.ReadFlow(run)!.InputCopies);
     }
 
     /// <summary>

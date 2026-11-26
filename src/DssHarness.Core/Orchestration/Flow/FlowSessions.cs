@@ -167,7 +167,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                     CreatedAt = _clock.GetUtcNow(),
                 });
 
-            var context = FlowRunContext.Of(name, definition, inputs, startCommit, branch, _clock.GetUtcNow());
+            var context = FlowRunContext.Of(name, definition, inputs, startCommit, branch, _clock.GetUtcNow(), inputCopies: true);
             new WorkflowStatusWriter(_store, run, context).Write(
                 new FlowSnapshot(
                     FlowRunStatus.Running,

@@ -341,7 +341,8 @@ public sealed class FlowService(
                 checkout.Branch,
                 refusal: name =>
                 {
-                    var (refused, lists) = Start(checkout, workflow, FlowInputs.AsRead(workflow, resolved, OrchestratorLayout.Of(context.Layout, name)), name);
+                    // The run this start makes keeps its file inputs' copies, as every run this build makes does.
+                    var (refused, lists) = Start(checkout, workflow, FlowInputs.AsRead(workflow, resolved, OrchestratorLayout.Of(context.Layout, name), copies: true), name);
                     named = lists;
                     return refused ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files);
                 },
@@ -366,7 +367,7 @@ public sealed class FlowService(
             context,
             layout,
             RunCommand,
-            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, FlowInputs.AsRead(workflow, resolved, layout), layout.Name, out _)),
+            checkout.BaseUnknown(FlowTemplate.PullRequestBase(workflow, FlowInputs.AsRead(workflow, resolved, layout, runContext.InputCopies), layout.Name, out _)),
             () =>
             {
                 WorkflowCache.OfRun(_fileSystem, layout).Keep(check.Remotes);
@@ -1720,13 +1721,14 @@ public sealed class FlowService(
             // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
             // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the
             // configuration's runners say a run of it writes there. The inputs are what the run's steps read - a file
-            // input the copy the run made of it as it started - in every session alike; its records keep them as given.
+            // input the copy the run made of it as it started, where its records say it keeps one, else as given - in
+            // every session alike; its records keep them as given.
             var coordinator = new FlowCoordinator(
                 definition,
                 _runner,
                 new ConfiguredRunnerFacts(context.Config),
                 _clock,
-                FlowInputs.AsRead(definition, runContext.Inputs, layout),
+                FlowInputs.AsRead(definition, runContext.Inputs, layout, runContext.InputCopies),
                 records,
                 resume,
                 layout.Name,

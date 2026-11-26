@@ -368,8 +368,11 @@ public sealed partial class HelpTests
             "What a step reads for such an input - `{input.<name>}` in every prompt and every expression, and a pull request's "
                 + $"base - is the copy's full path (`{nameof(FlowInputs)}.{nameof(FlowInputs.AsRead)}`, the one owner of what a step reads for an input, "
                 + "which every session hands the engine), so every step of every session, a resume's included, reads the file the run "
-                + "was started with, whatever the person did to it since; the run's records keep the value as it was given. Every "
-                + $"agent of the run reads the run's `{HarnessLayout.OrchestratorInputsDirectoryName}/` as a root of its own (`{nameof(DssHarness.Core.Agents.Policy.AgentStepGround)}`)",
+                + "was started with, whatever the person did to it since; the run's records keep the value as it was given. That the run "
+                + $"keeps its copies is a fact of its own, recorded as it is made (`{nameof(FlowRunContext)}.{nameof(FlowRunContext.InputCopies)}`, `flow.json`'s "
+                + "`inputCopies`) and read back by every session: a run an older build made kept none and its `flow.json` says nothing of "
+                + "them, so its steps read each file input as it was given, as that build handed it to them, never the path of a copy that "
+                + $"was never made. Every agent of the run reads the run's `{HarnessLayout.OrchestratorInputsDirectoryName}/` as a root of its own (`{nameof(DssHarness.Core.Agents.Policy.AgentStepGround)}`)",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
     }
