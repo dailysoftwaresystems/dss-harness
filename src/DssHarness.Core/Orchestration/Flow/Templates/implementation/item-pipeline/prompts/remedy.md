@@ -75,7 +75,9 @@ invariant, home, sites before and after, the searches, the universe covered, the
 its measurement, and the closing claim, which names the universe and never the case. Nothing is folded without the
 record. Beside the record, your answer's `arms` lists every arm the record names, and no other - the item's own
 sweep runs those alone, on the bytes your fold lands as, and none where the list is empty; the check before the fold
-refuses a list that is not the record's arms.
+refuses a list that is not the record's arms. That check reads your answer as you give it, over your tree as it then
+stands: what it finds wrong with the record is told you here, in this conversation, to put right in the answer you
+give again.
 
 ## What to do
 

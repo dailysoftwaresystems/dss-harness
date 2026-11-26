@@ -65,6 +65,14 @@ public static class WorkflowStepTypes
         public bool IsCheck => FailOnDefault is not null;
 
         /// <summary>
+        /// The key whose expression reads what a step of the type judges, where that is a reason step's answer - a plan
+        /// check's <c>items</c>, a class closure's <c>record</c>: a reason step declared beside such a step, whose answer
+        /// that key reads, is handed the step as its answer's check, so what the step would find is put right in the
+        /// agent's own conversation (<see cref="FlowStepRun.AnswerChecks"/>). Null for a type that judges no answer.
+        /// </summary>
+        public string? JudgesAnswer { get; init; }
+
+        /// <summary>
         /// Whether the type checks something it answers in its output and never as a failure, so it takes no <c>failOn</c>:
         /// <c>validate-plan</c>. A check all the same, which <see cref="Checks"/> counts.
         /// </summary>
@@ -275,7 +283,7 @@ public static class WorkflowStepTypes
             "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget",
             ["read main"],
             null,
-            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))) { ChecksAsOutput = true },
+            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))) { ChecksAsOutput = true, JudgesAnswer = "items" },
         new(
             "anchor-balance",
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
@@ -311,7 +319,7 @@ public static class WorkflowStepTypes
             "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, AgentMeasureSupport.RecordOf, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync",
             ["read main", "read the agent's tree where in names one"],
             null,
-            ClassClosureOutput),
+            ClassClosureOutput) { JudgesAnswer = "record" },
         new(
             "route-findings",
             [

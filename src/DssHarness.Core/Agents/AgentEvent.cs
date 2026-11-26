@@ -43,6 +43,7 @@ namespace DssHarness.Core.Agents;
 [JsonDerivedType(typeof(FallbackStarted), "fallbackStarted")]
 [JsonDerivedType(typeof(FallbackPassedOver), "fallbackPassedOver")]
 [JsonDerivedType(typeof(OutputRepair), "outputRepair")]
+[JsonDerivedType(typeof(OutputCorrection), "outputCorrection")]
 [JsonDerivedType(typeof(Compacted), "compacted")]
 [JsonDerivedType(typeof(HandoffAsked), "handoffAsked")]
 [JsonDerivedType(typeof(HandoffAnswered), "handoffAnswered")]
@@ -81,7 +82,7 @@ public enum AgentMessageKind
     /// <summary>The first prompt of the run.</summary>
     FirstPrompt,
 
-    /// <summary>A repair: the output's schema problems sent back.</summary>
+    /// <summary>A repair: the output's schema problems sent back - or, of an output that reads, what a step that reads it finds wrong.</summary>
     Repair,
 
     /// <summary>The handoff turn's question.</summary>
@@ -495,6 +496,14 @@ public sealed record FallbackPassedOver(string Model, string Why) : AgentEvent;
 /// <param name="Attempt">Which repair attempt this is.</param>
 /// <param name="Problems">The schema problems sent back.</param>
 public sealed record OutputRepair(int Attempt, IReadOnlyList<string> Problems) : AgentEvent;
+
+/// <summary>
+/// The output read against its schema, and a step that reads it found it wrong: it was handed back to be put right, in the
+/// same conversation, counted with no repair (<see cref="AgentOutput.Corrections"/>).
+/// </summary>
+/// <param name="Round">Which output of the run this is that was handed back so: 1 for the first.</param>
+/// <param name="Problems">What the step that reads it found wrong, as it words each.</param>
+public sealed record OutputCorrection(int Round, IReadOnlyList<string> Problems) : AgentEvent;
 
 /// <summary>The conversation was compacted.</summary>
 /// <param name="Why">Why it was compacted.</param>

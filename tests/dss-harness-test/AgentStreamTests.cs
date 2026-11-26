@@ -272,7 +272,7 @@ public sealed class AgentStreamTests
         Assert.Equal(
             ["sessionStarted", "messageSent", "messagesDropped", "turnStarted", "turnFinished", "textDelta", "thinkingDelta", "assistantMessage",
                 "toolCallStarted", "toolCallInputDelta", "toolCallFinished", "permissionDenied", "webRequested", "usageReported",
-                "waitingToRetry", "turnRestarted", "fallbackStarted", "fallbackPassedOver", "outputRepair", "compacted",
+                "waitingToRetry", "turnRestarted", "fallbackStarted", "fallbackPassedOver", "outputRepair", "outputCorrection", "compacted",
                 "handoffAsked", "handoffAnswered", "personAsked", "personAnswered", "notice", "runStarted", "runFinished"],
             kinds.Select(kind => (string)kind.TypeDiscriminator!));
 
@@ -305,7 +305,7 @@ public sealed class AgentStreamTests
         var lines = File.ReadAllLines(StreamFile(temp));
 
         Assert.Equal(stored.Count, lines.Length);
-        Assert.Equal(27 * 3, stored.Count + shown.Count);
+        Assert.Equal(28 * 3, stored.Count + shown.Count);
 
         foreach (var (@event, fill, line) in stored.Zip(lines, (one, line) => (one.Event, one.Fill, line)).Concat(shown))
         {
@@ -375,7 +375,7 @@ public sealed class AgentStreamTests
         // Every list there is was found: a walk that found none would pass having held nothing.
         Assert.Equal(
             [
-                "sessionStarted.tools", "sessionStarted.skills", "assistantMessage.calls", "outputRepair.problems",
+                "sessionStarted.tools", "sessionStarted.skills", "assistantMessage.calls", "outputRepair.problems", "outputCorrection.problems",
                 "personAsked.questions", "personAsked.questions[0].options", "result.json.usage.perModel", "result.json.assumptions",
                 "result.json.questions", "result.json.questions[0].options", "result.json.served", "result.json.files",
                 "result.json.keysRefused", "result.json.sessionFilesRemoved", "result.json.uncontained",

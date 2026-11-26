@@ -165,6 +165,10 @@ steps:
     graphFrom: changes
     prompt: prompts/mend.md
     outputs: schemas/implement.schema.json
+  # The closure's rules hold the builder's answer within its own step - implement, and each
+  # step that goes on with its work - and tell it there each problem they find of its record;
+  # this check, after the tests, is the record and the gate, and judges again what only its
+  # moment shows: a home audit the record lacks, and whatever a later step's work changed.
   - name: class-closure
     type: class-closure
     in: item-agent

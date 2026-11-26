@@ -260,6 +260,75 @@ public sealed record FlowStepRun(
     /// other step.
     /// </summary>
     public Func<JsonNode, IReadOnlyList<string>>? AnswerHolds { get; init; }
+
+    /// <summary>
+    /// A reason step's: the checks of the flow that will judge its answer - each step declared beside it of a type that
+    /// judges one (<see cref="WorkflowStepTypes.StepType.JudgesAnswer"/>), a plan check whose <c>items</c> or a class closure
+    /// whose <c>record</c> read its output - each run as the engine would run it, the run as it stands where this step
+    /// starts, save what it reads of the answer. What a check alone can know at its own moment - an issue owed meanwhile,
+    /// whether its <c>when</c> reads this answer at all, the run's history a home audit is asked for - stays with that check.
+    /// Empty for every other step.
+    /// </summary>
+    public IReadOnlyList<FlowAnswerCheck> AnswerChecks { get; init; } = [];
+
+    /// <summary>
+    /// A reason step's: what <see cref="AnswerChecks"/> find wrong with an output that reads, each asked of its own type's
+    /// runner at the answer (<see cref="IFlowAnswerCheckRunner"/>) - handed back to the agent in its own conversation until
+    /// it answers clean or gives an output it gave before, saying it cannot put right what is left, and never a failure of
+    /// the step (<see cref="Agents.AgentOutput.Corrections"/>). Null where no check judges the answer.
+    /// </summary>
+    public Func<JsonNode, Task<IReadOnlyList<string>>>? AnswerCorrections { get; init; }
+}
+
+/// <summary>
+/// A step of the flow that judges a reason step's answer - a plan check whose <c>items</c> read it, a class closure whose
+/// <c>record</c> does - as the engine would run it at its own moment, as far as the run knows that moment where the reason
+/// step starts: the check's run, its read holding everything the engine hands the check but what it reads of the answer,
+/// and the members of the answer's output each key it reads of the answer names.
+/// </summary>
+/// <param name="Run">The check's run, its read without the keys the answer fills.</param>
+/// <param name="Answered">
+/// Each key of the check's read that reads the answer, with the names that lead to what it reads in the answer's output,
+/// outermost first: a plan check's <c>items</c> under the plan's <c>items</c> and its <c>scope</c> under the plan's
+/// <c>scope</c>; a class closure's <c>record</c> under the builder's <c>closure</c> and its <c>arms</c> under its
+/// <c>arms</c>.
+/// </param>
+public sealed record FlowAnswerCheck(FlowStepRun Run, IReadOnlyDictionary<string, IReadOnlyList<string>> Answered)
+{
+    /// <summary>
+    /// What the check reads where the answer's output is <paramref name="output"/>: its run's read, and each key the answer
+    /// fills read from the output - Missing where the output holds nothing there.
+    /// </summary>
+    /// <param name="output">The answer's output, as its schema held it.</param>
+    public IReadOnlyDictionary<string, FlowValue> ReadOf(JsonNode output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        var read = new Dictionary<string, FlowValue>(Run.Read ?? new Dictionary<string, FlowValue>(), StringComparer.Ordinal);
+
+        foreach (var (key, names) in Answered)
+        {
+            JsonNode? at = output;
+            var there = true;
+
+            foreach (var name in names)
+            {
+                if (at is JsonObject members && members.TryGetPropertyValue(name, out var member))
+                {
+                    at = member;
+                }
+                else
+                {
+                    there = false;
+                    break;
+                }
+            }
+
+            read[key] = there ? FlowValue.Of(at) : FlowValue.Missing;
+        }
+
+        return read;
+    }
 }
 
 /// <summary>

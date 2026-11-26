@@ -209,6 +209,17 @@ public sealed record AgentOutput(string Name, string Schema, int MaxRepairs = 2,
     public Func<System.Text.Json.Nodes.JsonNode, IReadOnlyList<string>>? Holds { get; init; }
 
     /// <summary>
+    /// What a step that judges the answer finds wrong with an output that reads against the schema and holds to the step's
+    /// own rules - a plan's work items, held by the plan check that reads them; a builder's closing record, by the class
+    /// closure - each problem as that step words it; null where none judges it so. The gate hands each back to the agent in
+    /// the same conversation, as a schema's problem is, and counts none among its repairs: the agent answers again until its
+    /// output passes, or gives an output it gave already in this run, which says it cannot put right what is left - and the
+    /// run then completes with that output as given, for the step that judges it records what is still wrong and gates on
+    /// it (<see cref="StructuredOutputGate"/>).
+    /// </summary>
+    public Func<System.Text.Json.Nodes.JsonNode, Task<IReadOnlyList<string>>>? Corrections { get; init; }
+
+    /// <summary>
     /// Why <see cref="Schema"/> is no schema an answer can be held to, as <see cref="Schemas.JsonSchemaSubset.TextProblems"/>
     /// says it, or nothing where it is one: checked before any client is taken, so no model is paid for an answer
     /// nothing could read.

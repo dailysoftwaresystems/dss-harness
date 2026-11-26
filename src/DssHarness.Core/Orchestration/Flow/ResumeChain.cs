@@ -19,11 +19,27 @@ public static class ResumeChain
     /// <param name="path">The step's declaration path - an instance's is <see cref="FlowInstanceId.PathOf"/>.</param>
     /// <param name="step">The step, as declared at <paramref name="path"/>.</param>
     public static WorkflowStep Root(WorkflowDefinition definition, string path, WorkflowStep step)
+        => Walked(definition, path, step)[^1].Step;
+
+    /// <summary>
+    /// The declaration path of every step of <paramref name="step"/>'s chain, <paramref name="path"/> first and the step at
+    /// its root last: each step whose work its answer goes on with, so that a read of any one's latest output reads this
+    /// step's answer once it is the newest of that work. Walked as <see cref="Root"/> walks it.
+    /// </summary>
+    /// <param name="definition">The workflow the step is declared in.</param>
+    /// <param name="path">The step's declaration path - an instance's is <see cref="FlowInstanceId.PathOf"/>.</param>
+    /// <param name="step">The step, as declared at <paramref name="path"/>.</param>
+    public static IReadOnlyList<string> PathsOf(WorkflowDefinition definition, string path, WorkflowStep step)
+        => [.. Walked(definition, path, step).Select(found => found.Path)];
+
+    /// <summary>The one walk of the chain: <paramref name="step"/> at <paramref name="path"/>, then each step its resume names in turn, until one begins its own work.</summary>
+    private static IReadOnlyList<FlowScope.Located> Walked(WorkflowDefinition definition, string path, WorkflowStep step)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(step);
 
+        var walked = new List<FlowScope.Located> { new(path, step) };
         var seen = new HashSet<string>(StringComparer.Ordinal) { path };
 
         while (step.Resume is { } name
@@ -32,9 +48,10 @@ public static class ResumeChain
             && seen.Add(found.Path))
         {
             (path, step) = (found.Path, found.Step);
+            walked.Add(found);
         }
 
-        return step;
+        return walked;
     }
 
     /// <summary>

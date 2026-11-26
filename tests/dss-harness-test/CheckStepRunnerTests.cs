@@ -461,7 +461,8 @@ public sealed class CheckStepRunnerTests : IDisposable
     /// neighbour measured by no measure call, a deleted site that still declares its symbol, a site that reads its home
     /// where the agent changed nothing, a pin that names a test the worktree does not declare, a claim that names no
     /// axis, and a class with no entry at all - each a problem the fold waits behind, exit 1. A record that holds all of
-    /// it passes, its touches stated.
+    /// it passes, its touches stated. The builder's answer judged at the answer itself, before the check runs, meets the
+    /// very same problems, by the one judgement both make.
     /// </summary>
     [Fact]
     public async Task TheClassClosureCheck_JudgesTheRecordAgainstTheClassesTheStreamsAndTheTree()
@@ -498,8 +499,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             .Returns(DssHarness.Core.Application.UseCaseResult<DssHarness.Core.Orchestration.AgentVerbFacts>.From(
                 new CommandOutcome(HarnessExit.Success, "dry run") { Facts = new DssHarness.Core.Orchestration.AgentVerbFacts(0, "dry run", false, null, null, [], [], []) { Planned = new DssHarness.Core.Orchestration.AgentPlanned([], [], [], [], null) { Written = ["src/Home.cs"] } } }));
         var graphs = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
-
-        var result = await new ClassClosureStepRunner(
+        var judging = new ClassClosureStepRunner(
             kit.Harness.ContextLoader,
             kit.Harness.Platform,
             kit.Harness.OrchestrationStore,
@@ -507,40 +507,44 @@ public sealed class CheckStepRunnerTests : IDisposable
             agents,
             graphs,
             kit.Harness.GitClient,
-            new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
-            Run(
-                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
-                kit.Main,
-                read: new Dictionary<string, FlowValue>
-                {
-                    ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home", site: "src/Old.cs"))),
-                    ["record"] = FlowValue.Of(new JsonArray(
-                        Entry(
-                            "c-rate",
-                            home: "src/Home.cs",
-                            sites: [("src/Old.cs", "Old", "deleted"), ("src/MadeUp.cs", "Made", "reads-home")],
-                            searches: [("the turnover", "turnover:", "call-1"), ("the references", "Home", "call-9")],
-                            neighbours: [("turnover:x", "call-2", "passed", "")],
-                            tests: ["PlanTest", "NopeTest"],
-                            axes: ["formats"],
-                            claim: "The rate holds over every form"))),
-                },
-                worksIn: "builder",
-                instance: "rounds#1.items[0].class-closure",
-                run: OrchestrationKit.Orchestrator),
-            Token);
+            new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform));
+        var wrong = Run(
+            new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = "HEAD" },
+            kit.Main,
+            read: new Dictionary<string, FlowValue>
+            {
+                ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home", site: "src/Old.cs"))),
+                ["record"] = FlowValue.Of(new JsonArray(
+                    Entry(
+                        "c-rate",
+                        home: "src/Home.cs",
+                        sites: [("src/Old.cs", "Old", "deleted"), ("src/MadeUp.cs", "Made", "reads-home")],
+                        searches: [("the turnover", "turnover:", "call-1"), ("the references", "Home", "call-9")],
+                        neighbours: [("turnover:x", "call-2", "passed", "")],
+                        tests: ["PlanTest", "NopeTest"],
+                        axes: ["formats"],
+                        claim: "The rate holds over every form"))),
+            },
+            worksIn: "builder",
+            instance: "rounds#1.items[0].class-closure",
+            run: OrchestrationKit.Orchestrator);
+
+        var result = await judging.RunAsync(wrong, Token);
+        IReadOnlyList<string> expected =
+        [
+            "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'",
+            "class 'c-rate': the site 'src/MadeUp.cs' reads its home, but the agent changed nothing at it",
+            "class 'c-rate': the search for 'the references' cites the call 'call-9', which is not a tool call of this item's stored streams",
+            "class 'c-rate': the test 'NopeTest' of the pin is not declared in the worktree",
+            "class 'c-rate': the claim does not name the axis 'formats'",
+        ];
 
         Assert.False(result.Output!["passed"]!.GetValue<bool>());
         Assert.Equal(ClassClosureExit.Findings, result.Exit);
-        Assert.Equal(
-            [
-                "class 'c-rate': the site 'src/Old.cs' is deleted, but it still declares 'Old'",
-                "class 'c-rate': the site 'src/MadeUp.cs' reads its home, but the agent changed nothing at it",
-                "class 'c-rate': the search for 'the references' cites the call 'call-9', which is not a tool call of this item's stored streams",
-                "class 'c-rate': the test 'NopeTest' of the pin is not declared in the worktree",
-                "class 'c-rate': the claim does not name the axis 'formats'",
-            ],
-            [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Equal(expected, [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+
+        // The builder's answer, judged at the answer itself, meets the very problems the check would.
+        Assert.Equal(expected, await judging.AnswerProblemsAsync(wrong, Token));
         Assert.Empty(result.Output["hotspots"]!.AsArray());
         Assert.Equal("src/Home.cs", result.Output["touches"]!.AsArray()[0]!["path"]!.GetValue<string>());
 
@@ -627,7 +631,9 @@ public sealed class CheckStepRunnerTests : IDisposable
     /// The home's touches are counted since the base, the item's own commits left out - the fold ledger attributes them
     /// to instances of one item - so a rework of the item's own class after its first send-back is never a second hand,
     /// and another item's commit is. Where the record carries no home audit and the home was touched by other work, the
-    /// check fails as a home audit (exit 2), its repair <c>home-audit</c> and not a closing of the record.
+    /// check fails as a home audit (exit 2), its repair <c>home-audit</c> and not a closing of the record - which the
+    /// builder's answer, judged at the answer itself, is not held to: the audit is asked for the run's history of the home,
+    /// the check's own moment's.
     /// </summary>
     [Fact]
     public async Task TheClassClosureCheck_CountsAHomeSTouches_LeavingOutTheItemsOwnCommits()
@@ -668,6 +674,7 @@ public sealed class CheckStepRunnerTests : IDisposable
         Assert.Equal(
             ["class 'c-rate': home touched 1 times in this run by other work"],
             [.. result.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Empty(await AnsweredAsync(kit, agents, graphs, baseCommit));
         var touch = result.Output["touches"]!.AsArray().Single();
         Assert.Equal(("src/Home.cs", 1, 2), (touch!["path"]!.GetValue<string>(), touch["byOthers"]!.GetValue<int>(), touch["all"]!.GetValue<int>()));
 
@@ -689,6 +696,30 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         async Task<FlowStepResult> ClosureAsync(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs, string from, bool homeAudit = false, string instance = "rounds#1.items[0].class-closure")
         {
+            await WriteStreamAsync();
+            return await Judging(kit, agents, graphs).RunAsync(ClosureRun(kit, from, homeAudit, instance), Token);
+        }
+
+        // The same record, judged at the builder's answer rather than by the check's own run.
+        async Task<IReadOnlyList<string>> AnsweredAsync(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs, string from)
+        {
+            await WriteStreamAsync();
+            return await Judging(kit, agents, graphs).AnswerProblemsAsync(ClosureRun(kit, from, homeAudit: false, "rounds#1.items[0].class-closure"), Token);
+        }
+
+        ClassClosureStepRunner Judging(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService graphs)
+            => new(
+                kit.Harness.ContextLoader,
+                kit.Harness.Platform,
+                kit.Harness.OrchestrationStore,
+                kit.Harness.FileSystem,
+                agents,
+                graphs,
+                kit.Harness.GitClient,
+                new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform));
+
+        FlowStepRun ClosureRun(OrchestrationKit kit, string from, bool homeAudit, string instance)
+        {
             var entry = Entry("c-rate", home: "src/Home.cs", sites: [("src/Home.cs", "Home", "home")], searches: [("the data", "query", "call-1")], neighbours: [], tests: [], axes: ["formats"], claim: "The rate holds over all formats");
             var record = new JsonArray(entry);
 
@@ -697,38 +728,27 @@ public sealed class CheckStepRunnerTests : IDisposable
                 entry["homeAudit"] = new JsonObject { ["consolidated"] = new JsonArray("the rate"), ["invariants"] = new JsonArray("one place"), ["structural"] = new JsonArray("Home holds it") };
             }
 
-            await WriteStreamAsync();
-            return await new ClassClosureStepRunner(
-                kit.Harness.ContextLoader,
-                kit.Harness.Platform,
-                kit.Harness.OrchestrationStore,
-                kit.Harness.FileSystem,
-                agents,
-                graphs,
-                kit.Harness.GitClient,
-                new DssHarness.Core.Mutations.ArmListingReader(sync, kit.Harness.FileSystem, kit.Harness.Platform)).RunAsync(
-                Run(
-                    new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = from },
-                    kit.Main,
-                    read: new Dictionary<string, FlowValue>
-                    {
-                        ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home"))),
-                        ["record"] = FlowValue.Of(record),
-                    },
-                    worksIn: "builder",
-                    instance: instance,
-                    run: OrchestrationKit.Orchestrator),
-                Token);
+            return Run(
+                new WorkflowStep { Name = "class-closure", Type = "class-closure", In = "item-agent", Base = from },
+                kit.Main,
+                read: new Dictionary<string, FlowValue>
+                {
+                    ["classes"] = FlowValue.Of(new JsonArray(Class("c-rate", home: "src/Home.cs", symbol: "Home"))),
+                    ["record"] = FlowValue.Of(record),
+                },
+                worksIn: "builder",
+                instance: instance,
+                run: OrchestrationKit.Orchestrator);
+        }
 
-            async Task WriteStreamAsync()
-            {
-                Directory.CreateDirectory(layout.AgentStepDirectory("builder", "impl-1"));
-                await File.WriteAllTextAsync(
-                    Path.Combine(layout.AgentStepDirectory("builder", "impl-1"), DssHarness.Core.Agents.StoredStream.FileName),
-                    string.Join("\n",
-                        System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallStarted("call-1", "graph", DssHarness.Core.Agents.AgentToolRunner.Harness), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions),
-                        System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallFinished("call-1", Ok: true, TimeSpan.Zero, """{"query":"query"}""", "found"), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions)) + "\n");
-            }
+        async Task WriteStreamAsync()
+        {
+            Directory.CreateDirectory(layout.AgentStepDirectory("builder", "impl-1"));
+            await File.WriteAllTextAsync(
+                Path.Combine(layout.AgentStepDirectory("builder", "impl-1"), DssHarness.Core.Agents.StoredStream.FileName),
+                string.Join("\n",
+                    System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallStarted("call-1", "graph", DssHarness.Core.Agents.AgentToolRunner.Harness), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions),
+                    System.Text.Json.JsonSerializer.SerializeToNode(new DssHarness.Core.Agents.ToolCallFinished("call-1", Ok: true, TimeSpan.Zero, """{"query":"query"}""", "found"), typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions)) + "\n");
         }
     }
 

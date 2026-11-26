@@ -16,12 +16,13 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// round before built under those names, are held to none. An item's <c>settles</c> names one of the issues the run
 /// owes its next round whose ids the engine hands the check (<c>settleable</c>), or is refused; and a check that opens a
 /// round, handed those issues whole (<c>next</c>), holds its items to them as well - each settled, the settling items
-/// first.
+/// first. The same check reads the answer of a reason step whose items it will read, at the answer itself
+/// (<see cref="AnswerProblemsAsync"/>), so the agent puts right in its own conversation what this step would find.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="validator">Checks the items.</param>
-public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, PlanValidator validator) : IFlowStepTypeRunner
+public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, PlanValidator validator) : IFlowStepTypeRunner, IFlowAnswerCheckRunner
 {
     /// <inheritdoc/>
     public string Type => "validate-plan";
@@ -32,10 +33,58 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         ArgumentNullException.ThrowIfNull(run);
 
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+        var found = Checked(run, run.Read, context, place);
 
-        if (run.Read is not { } read || !read.TryGetValue("items", out var given) || given.IsMissing || given.ToNode() is not JsonArray items)
+        return found.Refused is { } refused
+            ? FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, refused)
+            : FlowStepResult.Ended(
+                passed: true,
+                HarnessExit.Success,
+                output: new JsonObject
+                {
+                    ["ok"] = found.Problems.Count == 0,
+                    ["problems"] = new JsonArray([.. found.Problems.Select(problem => (JsonNode)problem)]),
+                    ["items"] = found.Items!.DeepClone(),
+                });
+    }
+
+    /// <summary>
+    /// What this step, run as <paramref name="check"/> is with a reason step's answer in its read, would find wrong with that
+    /// answer - by the one check its own run makes. None where the answer gives no work item: whether a list of none is a
+    /// plan's problem is the check's own moment's, for its <c>when</c> and the loop around it decide whether it reads that
+    /// answer at all - a diagnosis that is no fix and a self-audit that leaves nothing give none. None, too, where the check
+    /// would refuse what it is handed, which it says at its own moment.
+    /// </summary>
+    /// <param name="check">The check's run, as the engine would hand it the run as it stands, with what it reads of the answer.</param>
+    /// <param name="cancellationToken">Stops the loading of the repository's context.</param>
+    public async Task<IReadOnlyList<string>> AnswerProblemsAsync(FlowStepRun check, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(check);
+
+        if (check.Read is not { } read || !read.TryGetValue("items", out var given) || given.ToNode() is not JsonArray { Count: > 0 })
         {
-            return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' checks the work items its items yields, and it yields no list");
+            return [];
+        }
+
+        var (place, context) = await FlowStepRunners.PlaceOf(check, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+
+        return Checked(check, read, context, place) is { Refused: null } found ? found.Problems : [];
+    }
+
+    /// <summary>
+    /// What the check finds of what <paramref name="given"/> hands it: every problem, and the items it checked - its own and
+    /// those plan updates owe the round it opens, the settling items first; or why it cannot check them at all, where its
+    /// items yield no list or its scope no pieces. The one check the step's own run and an answer read ahead of it make.
+    /// </summary>
+    /// <param name="run">The check's run, whose instance a refusal names.</param>
+    /// <param name="given">What the engine read for the check, by key.</param>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="place">The run the check belongs to.</param>
+    private (IReadOnlyList<string> Problems, JsonArray? Items, string? Refused) Checked(FlowStepRun run, IReadOnlyDictionary<string, FlowValue>? given, HarnessContext context, FlowRunPlace place)
+    {
+        if (given is not { } read || !read.TryGetValue("items", out var yielded) || yielded.IsMissing || yielded.ToNode() is not JsonArray items)
+        {
+            return ([], null, $"'{run.Instance}' checks the work items its items yields, and it yields no list");
         }
 
         var problems = new List<string>();
@@ -125,11 +174,11 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
 
         // The pieces of a plan update, checked with the items where the step names them: Missing, null or an empty
         // list is no update, and nothing more is checked; anything but a list is no pieces at all.
-        if (read.TryGetValue("scope", out var scope) && !scope.IsMissing && scope.ToNode() is { } yielded)
+        if (read.TryGetValue("scope", out var scope) && !scope.IsMissing && scope.ToNode() is { } update)
         {
-            if (yielded is not JsonArray pieces)
+            if (update is not JsonArray pieces)
             {
-                return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' is given the pieces of a plan update its scope yields, and it yields no list");
+                return ([], null, $"'{run.Instance}' is given the pieces of a plan update its scope yields, and it yields no list");
             }
 
             if (pieces.Count > 0)
@@ -140,15 +189,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
             }
         }
 
-        return FlowStepResult.Ended(
-            passed: true,
-            HarnessExit.Success,
-            output: new JsonObject
-            {
-                ["ok"] = problems.Count == 0,
-                ["problems"] = new JsonArray([.. problems.Select(problem => (JsonNode)problem)]),
-                ["items"] = checkedItems.DeepClone(),
-            });
+        return (problems, checkedItems, null);
     }
 
     /// <summary>The names the engine hands the step under <paramref name="key"/>, each a text; none where it hands none.</summary>

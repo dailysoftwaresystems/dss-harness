@@ -234,7 +234,11 @@ public static partial class HelpTopics
             + "message of its own after the step's first, in every conversation the step begins, and asks an answer that read "
             + "as no JSON again in JSON alone - no tool offered, "
             + "response_format a JSON object. An answer that does not read is sent back in the same conversation, "
-            + $"{output.MaxRepairs} times at most, and the step is then {nameof(Agents.AgentRunStatus.InvalidOutput)}.";
+            + $"{output.MaxRepairs} times at most, and the step is then {nameof(Agents.AgentRunStatus.InvalidOutput)}. "
+            + "An answer that reads, but that a check the engine runs on it next finds wrong - a plan check over the items it "
+            + "gives, a class closure over its record, each by that check's own rules - is sent back in the same conversation "
+            + "with what the check found, no repair counted, for as long as each answer is new; one that gives again an output "
+            + "it was sent back with is taken as given, for the check to record what is still wrong.";
     }
 
     /// <summary>What a failure of <paramref name="kind"/> is to a step, as the loop acts on it.</summary>

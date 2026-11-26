@@ -1024,6 +1024,10 @@ public sealed class WorkflowTemplatesTests
                 text,
                 StringComparison.Ordinal);
             Assert.Contains("Nothing is folded without the record.", text, StringComparison.Ordinal);
+            Assert.Contains(
+                "That check reads your answer as you give it, over your tree as it then stands: what it finds wrong with the record is told you here, in this conversation, to put right in the answer you give again.",
+                text,
+                StringComparison.Ordinal);
             Assert.Contains("{input.item.classes}", text, StringComparison.Ordinal);
             Assert.Contains("{input.item.noClass}", text, StringComparison.Ordinal);
             Assert.Contains("{text.closure}", text, StringComparison.Ordinal);
@@ -1519,8 +1523,13 @@ public sealed class WorkflowTemplatesTests
         unnamed["further"] = new JsonArray(new JsonObject { ["name"] = "", ["answer"] = Universes.Applies("eu") });
 
         Assert.Equal([$"{At}: 'configurations' is required and missing"], gate.Problems(Envelopes.Of(PlanAnswer(unanswered))));
-        Assert.Equal([$"{At}.forms: answers none of the 2 shapes its schema offers"], gate.Problems(Envelopes.Of(PlanAnswer(unreasoned))));
-        Assert.Equal([$"{At}.tiers: answers none of the 2 shapes its schema offers"], gate.Problems(Envelopes.Of(PlanAnswer(valueless))));
+        // Where neither shape of an axis answers, the problem says what each objected to, so the planner sees which it meant.
+        Assert.Equal(
+            [$"{At}.forms: answers none of the 2 shapes its schema offers - shape 1 ({At}.forms: 'values' is required and missing; {At}.forms: 'declaredIn' is required and missing; {At}.forms.why: is said by no property of the schema), shape 2 ({At}.forms.why: \" \" does not match its pattern)"],
+            gate.Problems(Envelopes.Of(PlanAnswer(unreasoned))));
+        Assert.Equal(
+            [$"{At}.tiers: answers none of the 2 shapes its schema offers - shape 1 ({At}.tiers.values: holds 0 items and at least 1 is asked), shape 2 ({At}.tiers: 'why' is required and missing; {At}.tiers.values: is said by no property of the schema; {At}.tiers.declaredIn: is said by no property of the schema)"],
+            gate.Problems(Envelopes.Of(PlanAnswer(valueless))));
         Assert.Equal([$"{At}.further[0].name: \"\" does not match its pattern"], gate.Problems(Envelopes.Of(PlanAnswer(unnamed))));
     }
 

@@ -573,6 +573,59 @@ public sealed class ImplementationFlowTests
         public Func<AgentStepRequest, AgentRunResult?>? Answer { get; set; }
 
         /// <summary>
+        /// The answers one agent gives within its own conversation, where a test sets it: asked of each request before
+        /// everything else, its null falling through. The first is its answer, and each after it its answer to what the
+        /// step's gate handed back - the real gate every client reads its answers by (<see cref="StructuredOutputGate"/>),
+        /// the step's own output, its rules and its corrections in it - until the gate ends the run; each message the gate
+        /// sent back is kept (<see cref="SentBack"/>).
+        /// </summary>
+        public Func<AgentStepRequest, IReadOnlyList<AgentRunResult>?>? Converse { get; set; }
+
+        private readonly List<(string? Definition, string Message)> _sentBack = [];
+
+        /// <summary>Every message a gate sent back into a conversation <see cref="Converse"/> answered, with the definition asked, in order.</summary>
+        public IReadOnlyList<(string? Definition, string Message)> SentBack
+        {
+            get
+            {
+                lock (_asked)
+                {
+                    return [.. _sentBack];
+                }
+            }
+        }
+
+        /// <summary>
+        /// The run's end as the step's gate reads <paramref name="answers"/> one after another, in one conversation: each
+        /// message it sends back kept, the next answer given to it, until it ends the run.
+        /// </summary>
+        private async Task<AgentRunResult> ConversedAsync(AgentStepRequest step, IReadOnlyList<AgentRunResult> answers, IAgentEventSink? events)
+        {
+            var gate = new StructuredOutputGate(step.Output!, step.Mask ?? new Masking());
+
+            foreach (var answer in answers)
+            {
+                var text = answer.StructuredOutput!;
+                var ended = await gate.CheckedAsync(Envelopes.Of(JsonNode.Parse(text)), text, events ?? new RecordedEvents(), message =>
+                {
+                    lock (_asked)
+                    {
+                        _sentBack.Add((step.AgentDefinition, message));
+                    }
+
+                    return Task.CompletedTask;
+                });
+
+                if (ended is not null)
+                {
+                    return ended;
+                }
+            }
+
+            throw new InvalidOperationException($"the conversation of '{step.AgentDefinition}' ran out of answers before its gate ended it");
+        }
+
+        /// <summary>
         /// Holds every agent of <paramref name="definition"/> - or those <paramref name="when"/> names - until the hold is
         /// opened: an agent whose work a test spans a question with, answered by its standard answer once opened.
         /// </summary>
@@ -605,9 +658,11 @@ public sealed class ImplementationFlowTests
                 held = _held.FirstOrDefault(entry => string.Equals(entry.Definition, step.AgentDefinition, StringComparison.Ordinal) && entry.When(step)).Hold;
             }
 
-            var result = AsTheGateEnds(step, held is { } waiting
-                ? await HeldAnswerAsync(waiting, step, cancellationToken)
-                : Answer?.Invoke(step) ?? Dequeued(step) ?? Standard(step));
+            var result = Converse?.Invoke(step) is { Count: > 0 } conversation
+                ? await ConversedAsync(step, conversation, events)
+                : AsTheGateEnds(step, held is { } waiting
+                    ? await HeldAnswerAsync(waiting, step, cancellationToken)
+                    : Answer?.Invoke(step) ?? Dequeued(step) ?? Standard(step));
 
             if (Events is { } says)
             {
@@ -1689,6 +1744,85 @@ public sealed class ImplementationFlowTests
             Assert.True(checks[1].Output!["ok"]!.GetValue<bool>());
         }
 
+        /// <summary>What the plan's check says of an item that reuses a path the tree does not hold.</summary>
+        private const string NotThere = "work item 'one' reuses 'src/not-there.cs', which is not in the main tree: a plan builds on what is there";
+
+        /// <summary>
+        /// A problem of the plan the machine sees - an item that reuses a path the tree does not hold - is put right within
+        /// the plan step: the plan's check, made at the planner's answer as the check after it would make it, hands the
+        /// problem back in the planner's own conversation, the planner answers again, and the check after it passes - the
+        /// planner asked once, the planning loop through one iteration, one audit, one check.
+        /// </summary>
+        [Fact]
+        public async Task APlansProblemTheMachineSees_IsPutRightWithinThePlanStep_AndThePlanningLoopRunsOnce()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("triage", Completed(Triage()));
+                    agents.Converse = step => step.AgentDefinition == "planner" ? [Completed(Plan(One(reuses: "src/not-there.cs"))), Completed(Plan(One()))] : null;
+                });
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var check = Assert.Single(flow.Steps, step => step.Step == "planning.check");
+
+            Assert.True(check.Output!["ok"]!.GetValue<bool>(), string.Join(" | ", check.Output["problems"]!.AsArray()));
+            Assert.Single(kit.Agents.Of("planner"));
+            Assert.Single(kit.Agents.Of("plan-auditor"));
+            Assert.Equal([("planner", StructuredOutputGate.Correction([NotThere]))], kit.Agents.SentBack);
+
+            // The check built the round from the corrected plan.
+            Assert.Equal("src/tool.cs", check.Output["items"]![0]!["reuses"]![0]!["path"]!.GetValue<string>());
+        }
+
+        /// <summary>
+        /// A planner that cannot put a problem right says so by answering its plan again: the plan step ends with the plan
+        /// as given, never failed, and the check after it records the problem and gates as it always did - the planning loop
+        /// runs again, the planner told what did not pass, and its second plan passes.
+        /// </summary>
+        [Fact]
+        public async Task APlanThePlannerCannotPutRight_EndsItsStepAsGiven_AndTheCheckRecordsTheProblem()
+        {
+            using var temp = new TempDirectory();
+            var asked = 0;
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("triage", Completed(Triage()));
+                    agents.Converse = step => step.AgentDefinition != "planner"
+                        ? null
+                        : ++asked == 1
+                            ? [Completed(Plan(One(reuses: "src/not-there.cs"))), Completed(Plan(One(reuses: "src/not-there.cs")))]
+                            : [Completed(Plan(One()))];
+                });
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var checks = flow.Steps.Where(step => step.Step == "planning.check").OrderBy(step => step.Instance, StringComparer.Ordinal).ToList();
+
+            // The first plan ended its step as given, and the check recorded what is still wrong with it; the second passed.
+            Assert.Equal([false, true], checks.Select(step => step.Output!["ok"]!.GetValue<bool>()));
+            Assert.Equal([NotThere], checks[0].Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>()));
+            Assert.All(flow.Steps.Where(step => step.Step == "planning.plan"), step => Assert.Equal(nameof(FlowInstanceState.Done), step.State));
+
+            // Handed back once, in the first conversation; the planner then told the problem on its resume prompt.
+            Assert.Equal([("planner", StructuredOutputGate.Correction([NotThere]))], kit.Agents.SentBack);
+            var plans = kit.Agents.Of("planner");
+            Assert.Equal(2, plans.Count);
+            Assert.StartsWith("Your plan did not pass.", plans[1].Prompt, StringComparison.Ordinal);
+            Assert.Contains("src/not-there.cs", plans[1].Prompt, StringComparison.Ordinal);
+        }
+
         /// <summary>
         /// Where the first provider's key is not in the slot, every step falls back to its tier's later models: a run with
         /// only the Z.AI key works every step of the shipped flow on glm-5.3, each with its own effort.
@@ -2221,54 +2355,8 @@ public sealed class ImplementationFlowTests
         public async Task TheProofRun_ConvergesFromThreeSitesOverTwoFormats_WithTheCountsInItsReport()
         {
             using var temp = new TempDirectory();
-            JsonObject Planned() => new()
-            {
-                ["name"] = "one",
-                ["title"] = "t",
-                ["instructions"] = "Close the rate class.",
-                ["done"] = "the rate holds",
-                ["ownedPaths"] = new JsonArray("src/**", "docs/**"),
-                ["forbiddenPaths"] = new JsonArray(),
-                ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/tool.cs", ["what"] = "it" }),
-                ["creates"] = new JsonArray(),
-                ["replaces"] = new JsonArray(),
-                ["tests"] = new JsonArray("ReportTests"),
-                ["noTests"] = "",
-                ["classes"] = new JsonArray(new JsonObject
-                {
-                    ["id"] = "c-rate",
-                    ["invariant"] = "the rate is decided in one place",
-                    ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["exists"] = true },
-                    ["sites"] = new JsonArray(
-                        new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["decides"] = "the rate", ["then"] = "home" },
-                        new JsonObject { ["path"] = "src/Old.cs", ["symbol"] = "Old", ["decides"] = "the rate", ["then"] = "deleted" },
-                        new JsonObject { ["path"] = "docs/old.md", ["symbol"] = "", ["decides"] = "the rate", ["then"] = "deleted" }),
-                    ["searches"] = new JsonArray(new JsonObject { ["data"] = "the rate", ["via"] = "graph", ["query"] = "rate:", ["hits"] = 3 }),
-                    ["universe"] = Universes.Of(("formats", ["cs", "md"])),
-                    ["action"] = "consolidate",
-                    ["notCovered"] = "none",
-                }),
-                ["noClass"] = "",
-            };
-            JsonObject Entry(params string[] sites) => new()
-            {
-                ["class"] = "c-rate",
-                ["invariant"] = "the rate is decided in one place",
-                ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home" },
-                ["sites"] = new JsonArray([.. sites.Select(site => (JsonNode)new JsonObject
-                {
-                    ["path"] = site,
-                    ["symbol"] = site.Contains("docs/", StringComparison.Ordinal) ? "" : site.Contains("Old", StringComparison.Ordinal) ? "Old" : "Home",
-                    ["before"] = "each file",
-                    ["after"] = site.Contains("Home", StringComparison.Ordinal) ? "home" : "deleted",
-                })]),
-                ["searches"] = new JsonArray(),
-                ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "formats", ["values"] = new JsonArray("cs", "md") }), ["cellsPinned"] = 2, ["cellsArmed"] = 0 },
-                ["pin"] = new JsonObject { ["tests"] = new JsonArray("ReportTests"), ["tableDriven"] = true, ["over"] = "the universe" },
-                ["arm"] = new JsonObject { ["why"] = "the repository keeps no arms" },
-                ["neighbours"] = new JsonArray(),
-                ["claim"] = "the rate holds over all formats",
-            };
+            static JsonObject Planned() => RatePlanned();
+            static JsonObject Entry(params string[] sites) => RateEntry(sites);
             var complete = Implement();
             complete["closure"] = new JsonArray(Entry("src/Home.cs", "src/Old.cs", "docs/old.md"));
             complete["arms"] = new JsonArray();
@@ -2394,6 +2482,180 @@ public sealed class ImplementationFlowTests
 
         /// <summary>What the class-closure check says of the proof run's record that closes two of the class's three sites.</summary>
         private const string ClosureProblem = "class 'c-rate': the site 'docs/old.md' has no after in the record";
+
+        /// <summary>The proof run's work item: the rate class, decided at its home, an old reader and a document, over two formats.</summary>
+        private static JsonObject RatePlanned() => new()
+        {
+            ["name"] = "one",
+            ["title"] = "t",
+            ["instructions"] = "Close the rate class.",
+            ["done"] = "the rate holds",
+            ["ownedPaths"] = new JsonArray("src/**", "docs/**"),
+            ["forbiddenPaths"] = new JsonArray(),
+            ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/tool.cs", ["what"] = "it" }),
+            ["creates"] = new JsonArray(),
+            ["replaces"] = new JsonArray(),
+            ["tests"] = new JsonArray("ReportTests"),
+            ["noTests"] = "",
+            ["classes"] = new JsonArray(new JsonObject
+            {
+                ["id"] = "c-rate",
+                ["invariant"] = "the rate is decided in one place",
+                ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["exists"] = true },
+                ["sites"] = new JsonArray(
+                    new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["decides"] = "the rate", ["then"] = "home" },
+                    new JsonObject { ["path"] = "src/Old.cs", ["symbol"] = "Old", ["decides"] = "the rate", ["then"] = "deleted" },
+                    new JsonObject { ["path"] = "docs/old.md", ["symbol"] = "", ["decides"] = "the rate", ["then"] = "deleted" }),
+                ["searches"] = new JsonArray(new JsonObject { ["data"] = "the rate", ["via"] = "graph", ["query"] = "rate:", ["hits"] = 3 }),
+                ["universe"] = Universes.Of(("formats", ["cs", "md"])),
+                ["action"] = "consolidate",
+                ["notCovered"] = "none",
+            }),
+            ["noClass"] = "",
+        };
+
+        /// <summary>The builder's record of the rate class, accounting for <paramref name="sites"/>: the home kept, every other site deleted.</summary>
+        private static JsonObject RateEntry(params string[] sites) => new()
+        {
+            ["class"] = "c-rate",
+            ["invariant"] = "the rate is decided in one place",
+            ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home" },
+            ["sites"] = new JsonArray([.. sites.Select(site => (JsonNode)new JsonObject
+            {
+                ["path"] = site,
+                ["symbol"] = site.Contains("docs/", StringComparison.Ordinal) ? "" : site.Contains("Old", StringComparison.Ordinal) ? "Old" : "Home",
+                ["before"] = "each file",
+                ["after"] = site.Contains("Home", StringComparison.Ordinal) ? "home" : "deleted",
+            })]),
+            ["searches"] = new JsonArray(),
+            ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "formats", ["values"] = new JsonArray("cs", "md") }), ["cellsPinned"] = 2, ["cellsArmed"] = 0 },
+            ["pin"] = new JsonObject { ["tests"] = new JsonArray("ReportTests"), ["tableDriven"] = true, ["over"] = "the universe" },
+            ["arm"] = new JsonObject { ["why"] = "the repository keeps no arms" },
+            ["neighbours"] = new JsonArray(),
+            ["claim"] = "the rate holds over all formats",
+        };
+
+        /// <summary>The builder's answer, its record accounting for <paramref name="sites"/> and arming nothing.</summary>
+        private static JsonObject RateWork(params string[] sites)
+        {
+            var work = Implement();
+            work["closure"] = new JsonArray(RateEntry(sites));
+            work["arms"] = new JsonArray();
+            return work;
+        }
+
+        /// <summary>The proof run's defect as the main tree holds it: the rate decided at its home, again in an old reader, and again in a document.</summary>
+        private static async Task SeedTheRateAsync(Kit kit)
+        {
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("src", "Home.cs"), "namespace Tool;\npublic static class Home { }\n");
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("src", "Old.cs"), "namespace Tool;\npublic static class Old { public static decimal Rate => 1m; }\n");
+            OrchestrationKit.Write(kit.Tree.Path, Path.Combine("docs", "old.md"), "The rate is one.\n");
+            await kit.Harness.CommitAllAsync(kit.Tree.Path, "the rate, decided at three sites", Token);
+        }
+
+        /// <summary>The builder's work in its worktree, as its record says it: the home decides the rate, the two other sites are deleted, the pin's test written beside the home.</summary>
+        private static void BuildTheRate(string tree)
+        {
+            OrchestrationKit.Write(tree, Path.Combine("src", "Home.cs"), "namespace Tool;\npublic static class Home { public static decimal Rate(string format) => 1m; }\n");
+            OrchestrationKit.Write(tree, Path.Combine("src", "ReportTests.cs"), "namespace Tool;\npublic static class ReportTests { }\n");
+            File.Delete(Path.Combine(tree, "src", "Old.cs"));
+            File.Delete(Path.Combine(tree, "docs", "old.md"));
+        }
+
+        /// <summary>
+        /// A problem of the builder's closing record the machine sees - a site of the class the record leaves without an
+        /// after - is put right within the builder's own step: the class closure, judged at its answer over its tree as it
+        /// stands, hands the problem back in its conversation, the builder answers again, and the check after it passes - no
+        /// close-class drawn, the builder asked once.
+        /// </summary>
+        [Fact]
+        public async Task AClosingRecordsProblemTheMachineSees_IsPutRightWithinTheBuildersStep_AndNoCloseClassIsDrawn()
+        {
+            using var temp = new TempDirectory();
+            var built = 0;
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("planner", Completed(Plan(RatePlanned())));
+                    agents.Converse = step =>
+                    {
+                        if (step.AgentDefinition != "implementer" || step.Workspace.Worktree is not { } tree || ++built > 1)
+                        {
+                            return null;
+                        }
+
+                        BuildTheRate(tree);
+                        return [Completed(RateWork("src/Home.cs", "src/Old.cs")), Completed(RateWork("src/Home.cs", "src/Old.cs", "docs/old.md"))];
+                    };
+                },
+                closures: true);
+
+            await SeedTheRateAsync(kit);
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var check = Assert.Single(flow.Steps, step => step.Type == FlowClosureRecords.CheckType);
+
+            Assert.Equal((HarnessExit.Success, 0), (check.Exit ?? HarnessExit.Success, check.Output!["problems"]!.AsArray().Count));
+            Assert.Equal(
+                [("rounds#1.items[0].close-class", nameof(FlowInstanceState.Skipped))],
+                flow.Steps.Where(step => step.Step.EndsWith(".close-class", StringComparison.Ordinal)).Select(step => (step.Instance, step.State)));
+            Assert.Single(kit.Agents.Of("implementer"));
+            Assert.Equal([("implementer", StructuredOutputGate.Correction([ClosureProblem]))], kit.Agents.SentBack);
+        }
+
+        /// <summary>
+        /// A builder that cannot put its record right says so by answering it again: its step ends with the record as given,
+        /// and the class closure records the problem and fails as it always did, its close-class extending the record.
+        /// </summary>
+        [Fact]
+        public async Task AClosingRecordTheBuilderCannotPutRight_EndsItsStepAsGiven_AndTheClassClosureRecordsTheProblem()
+        {
+            using var temp = new TempDirectory();
+            var built = 0;
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("planner", Completed(Plan(RatePlanned())));
+                    agents.Converse = step =>
+                    {
+                        if (step.AgentDefinition != "implementer" || step.Workspace.Worktree is not { } tree)
+                        {
+                            return null;
+                        }
+
+                        if (++built == 1)
+                        {
+                            BuildTheRate(tree);
+                            return [Completed(RateWork("src/Home.cs", "src/Old.cs")), Completed(RateWork("src/Home.cs", "src/Old.cs"))];
+                        }
+
+                        return built == 2 ? [Completed(RateWork("src/Home.cs", "src/Old.cs", "docs/old.md"))] : null;
+                    };
+                },
+                closures: true);
+
+            await SeedTheRateAsync(kit);
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!;
+            var checks = flow.Steps.Where(step => step.Type == FlowClosureRecords.CheckType).ToList();
+
+            Assert.Equal(
+                [(ClassClosureExit.Findings, ClosureProblem), (HarnessExit.Success, "")],
+                [.. checks.Select(step => (step.Exit ?? HarnessExit.Success, string.Join(" | ", (step.Output?["problems"] as JsonArray ?? []).Select(problem => problem!.GetValue<string>()))))]);
+            Assert.Single(flow.Steps, step => step.Step.EndsWith(".close-class", StringComparison.Ordinal));
+            Assert.Equal(2, kit.Agents.Of("implementer").Count);
+            Assert.Equal([("implementer", StructuredOutputGate.Correction([ClosureProblem]))], kit.Agents.SentBack);
+        }
 
         /// <summary>
         /// A finding the loop counts - critical, high or medium, in production code or out of it - keeps the loop going

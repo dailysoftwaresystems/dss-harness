@@ -125,7 +125,9 @@ public sealed class AnchorCitationsStepRunner(IHarnessContextLoader contextLoade
 /// could not be made fails the step with its own code and words, for nothing it would have answered is read as none.
 /// Its answer is an output - <c>{passed, problems, hotspots, touches}</c> - and a failure of its own kind: the record's
 /// problems (1), which <c>close-class</c> repairs, or a home audit it requires and lacks (2), which <c>home-audit</c>
-/// makes.
+/// makes. The same judgement reads the answer of a reason step whose record it will judge, at the answer itself
+/// (<see cref="AnswerProblemsAsync"/>), so the builder puts the record's problems right in its own conversation and no
+/// <c>close-class</c> is drawn for what it could see.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration, and the agent's worktree's.</param>
 /// <param name="platform">This machine.</param>
@@ -143,7 +145,7 @@ public sealed class ClassClosureStepRunner(
     IAgentService agents,
     ICodebaseGraphService graphs,
     IGitClient gitClient,
-    Mutations.ArmListingReader listings) : IFlowStepTypeRunner
+    Mutations.ArmListingReader listings) : IFlowStepTypeRunner, IFlowAnswerCheckRunner
 {
     /// <inheritdoc/>
     public string Type => "class-closure";
@@ -153,16 +155,88 @@ public sealed class ClassClosureStepRunner(
     {
         ArgumentNullException.ThrowIfNull(run);
 
+        var (judged, record, failed) = await JudgedAsync(run, cancellationToken).ConfigureAwait(false);
+
+        if (failed is not null)
+        {
+            return failed;
+        }
+
+        var output = new JsonObject
+        {
+            ["passed"] = judged!.Passed,
+            ["problems"] = new JsonArray([.. judged.Problems.Concat(judged.Audits).Select(problem => (JsonNode?)problem)]),
+            ["hotspots"] = new JsonArray([.. judged.Hotspots.Select(hotspot => new JsonObject
+            {
+                ["class"] = hotspot.Class,
+                ["path"] = hotspot.Path,
+                ["touches"] = hotspot.Touches,
+            })]),
+            ["touches"] = new JsonArray([.. judged.Touches.Select(touch => new JsonObject
+            {
+                ["class"] = touch.Class,
+                ["path"] = touch.Path,
+                ["byOthers"] = touch.ByOthers,
+                ["all"] = touch.All,
+            })]),
+
+            // The record judged, as it was read: what the run's words and its report gather of the item.
+            ["record"] = record!.DeepClone(),
+        };
+
+        if (judged.Problems.Count > 0)
+        {
+            return CheckResults.Checked(false, ClassClosureExit.Findings, $"the class closure found {ReportText.Counted(judged.Problems.Count, "problem")}", output);
+        }
+
+        return judged.Audits.Count > 0
+            ? CheckResults.Checked(false, ClassClosureExit.HomeAudit, $"the class closure requires {ReportText.Counted(judged.Audits.Count, "home audit")}", output)
+            : CheckResults.Checked(true, ClassClosureExit.Findings, string.Empty, output);
+    }
+
+    /// <summary>
+    /// What this step, run as <paramref name="check"/> is with a builder's answer in its read, would find wrong with the
+    /// record that answer gives - the record's problems (1), by the one judgement its own run makes, over the agent's work as
+    /// it stands at the answer: its tree, its streams, its fold weighed dry. A home audit the record lacks (2) is not among
+    /// them: it is asked for the run's history of the home, which another step's work wrote, and is the home audit's to make
+    /// at the check's own moment. None where the check could not judge now - its weighing failed, or what it reads did not
+    /// read - which its own run says.
+    /// </summary>
+    /// <param name="check">The check's run, as the engine would hand it the run as it stands, with what it reads of the answer.</param>
+    /// <param name="cancellationToken">Stops the judging.</param>
+    public async Task<IReadOnlyList<string>> AnswerProblemsAsync(FlowStepRun check, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(check);
+
+        try
+        {
+            return await JudgedAsync(check, cancellationToken).ConfigureAwait(false) is { Judged: { } judged } ? judged.Problems : [];
+        }
+        catch (HarnessException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The record <paramref name="run"/> reads judged by <see cref="ClassClosureRules"/> against the agent's work as it stands,
+    /// with the record as it was read; or the step's failure, where it cannot judge. The one judgement the step's own run and
+    /// an answer judged at the answer make.
+    /// </summary>
+    /// <param name="run">The step's run, with what the engine read for it.</param>
+    /// <param name="cancellationToken">Stops the judging.</param>
+    private async Task<(ClassClosureJudged? Judged, JsonArray? Record, FlowStepResult? Failed)> JudgedAsync(FlowStepRun run, CancellationToken cancellationToken)
+    {
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
 
         if ((run.WorksIn ?? run.Target) is not { } agent)
         {
-            return FlowStepResult.Ended(passed: false, HarnessExit.InternalError, $"'{run.Instance}' is a {Type} step, and the engine named no agent whose work it judges");
+            return (null, null, FlowStepResult.Ended(passed: false, HarnessExit.InternalError, $"'{run.Instance}' is a {Type} step, and the engine named no agent whose work it judges"));
         }
 
         if (run.Read is not { } read || !read.TryGetValue("classes", out var given) || given.IsMissing || given.ToNode() is not JsonArray declared)
         {
-            return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' checks the classes its classes yields, and it yields no list");
+            return (null, null, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' checks the classes its classes yields, and it yields no list"));
         }
 
         if (!read.TryGetValue("record", out var answered) || answered.IsMissing || answered.ToNode() is not JsonArray record)
@@ -182,7 +256,7 @@ public sealed class ClassClosureStepRunner(
 
         if (weighed.Failed is { } failed)
         {
-            return failed;
+            return (null, null, failed);
         }
 
         IReadOnlyList<string> changed =
@@ -298,36 +372,7 @@ public sealed class ClassClosureStepRunner(
             ListedArms = FlowStepKeys.NamesOf(run.Step.Arms, run, "arms"),
         });
 
-        var output = new JsonObject
-        {
-            ["passed"] = judged.Passed,
-            ["problems"] = new JsonArray([.. judged.Problems.Concat(judged.Audits).Select(problem => (JsonNode?)problem)]),
-            ["hotspots"] = new JsonArray([.. judged.Hotspots.Select(hotspot => new JsonObject
-            {
-                ["class"] = hotspot.Class,
-                ["path"] = hotspot.Path,
-                ["touches"] = hotspot.Touches,
-            })]),
-            ["touches"] = new JsonArray([.. judged.Touches.Select(touch => new JsonObject
-            {
-                ["class"] = touch.Class,
-                ["path"] = touch.Path,
-                ["byOthers"] = touch.ByOthers,
-                ["all"] = touch.All,
-            })]),
-
-            // The record judged, as it was read: what the run's words and its report gather of the item.
-            ["record"] = record.DeepClone(),
-        };
-
-        if (judged.Problems.Count > 0)
-        {
-            return CheckResults.Checked(false, ClassClosureExit.Findings, $"the class closure found {ReportText.Counted(judged.Problems.Count, "problem")}", output);
-        }
-
-        return judged.Audits.Count > 0
-            ? CheckResults.Checked(false, ClassClosureExit.HomeAudit, $"the class closure requires {ReportText.Counted(judged.Audits.Count, "home audit")}", output)
-            : CheckResults.Checked(true, ClassClosureExit.Findings, string.Empty, output);
+        return (judged, record, null);
     }
 
     /// <summary>
