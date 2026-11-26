@@ -387,6 +387,28 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The README and the architecture say that a start whose file input's copy cannot be made is refused, naming the
+    /// input, with what the start had made of the run taken back, so no directory is left holding no run's record.
+    /// </summary>
+    [Fact]
+    public void TheDocuments_SayAStartWhoseFileInputsCopyCannotBeMade_IsRefused_WhatItMadeTakenBack()
+    {
+        Assert.Contains(
+            $"which the run copies into its own `{HarnessLayout.OrchestratorInputsDirectoryName}/<input>/` as it starts, a copy that cannot be made refusing the start "
+                + $"({HarnessExit.Refused}) as well, what the start had made of the run taken back",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The file's bytes are first read there: a place of the run or a copy that cannot be made - a file on a share gone, a "
+                + "locked range, a full disk - takes back what the start had made of the run, or says what it could not, and refuses "
+                + $"the start ({HarnessExit.Refused}), naming the input and why and that no run was started (`{nameof(FlowInputFiles)}.{nameof(FlowInputFiles.Keep)}`, "
+                + $"`{nameof(FlowSessions)}.{nameof(FlowSessions.CreateAsync)}`), so no directory is left holding no run's record, which a start of "
+                + "that name would be refused over.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The help, the input's name key, the README and the architecture say that a workflow two of whose inputs differ by
     /// case alone is refused, on every system alike, since a run keeps a file input's copy in a directory of the input's
     /// name and a file system that folds case holds one for both.

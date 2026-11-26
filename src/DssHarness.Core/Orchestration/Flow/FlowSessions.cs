@@ -106,8 +106,9 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">
     /// Another run of the repository is unfinished, the sweep keeps a record whose session holds this very process, the name
-    /// is taken, <paramref name="refusal"/> refuses it, or a file input names no file inside the repository an agent may read
-    /// (<see cref="HarnessExit.Refused"/>).
+    /// is taken, <paramref name="refusal"/> refuses it, a file input names no file inside the repository an agent may read,
+    /// or the run's places or a file input's copy could not be made - what the start had made of the run then taken back,
+    /// and said (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public async Task<(OrchestratorLayout Run, FlowRunContext Context)> CreateAsync(
         HarnessLayout layout,
@@ -156,12 +157,24 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
             // life, its artifacts, kept for the run's life and copied wherever asked, and its inputs, where each file a
             // file input names is copied before the run's record is written, so a run that has a record has its copies -
-            // all taken away with the run.
-            _fileSystem.CreateDirectory(run.Directory);
-            _fileSystem.CreateDirectory(run.TempDirectory);
-            _fileSystem.CreateDirectory(run.ArtifactsDirectory);
-            _fileSystem.CreateDirectory(run.InputsDirectory);
-            files.Keep(_fileSystem, run);
+            // all taken away with the run. A place or a copy that cannot be made takes back what was made before it and
+            // refuses the start: no directory is left holding no run's record, which a later start of that name is
+            // refused over.
+            try
+            {
+                _fileSystem.CreateDirectory(run.Directory);
+                _fileSystem.CreateDirectory(run.TempDirectory);
+                _fileSystem.CreateDirectory(run.ArtifactsDirectory);
+                _fileSystem.CreateDirectory(run.InputsDirectory);
+                files.Keep(_fileSystem, run);
+            }
+            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+            {
+                var why = ex is HarnessException ? ex.Message : $"the places of run '{name}' could not be made: {ex.Message.TrimEnd('.')}";
+
+                throw new HarnessException(HarnessExit.Refused, $"{why}; {Unmade(run)} No run was started.", ex);
+            }
+
             _store.WriteOrchestrator(
                 run,
                 new OrchestratorRecord
@@ -191,6 +204,25 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             return (run, context);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Takes back what a start that did not get as far as its record made of <paramref name="run"/> - its directory, which
+    /// the start found not there, and everything in it - and says so, as a refusal's clause after its cause: removed, or
+    /// left where it could not be, naming it and what to do.
+    /// </summary>
+    /// <param name="run">The run the start was making.</param>
+    private string Unmade(OrchestratorLayout run)
+    {
+        try
+        {
+            _fileSystem.DeleteDirectory(run.Directory);
+            return $"what the start had made of run '{run.Name}' was removed.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"what the start had made of run '{run.Name}', '{run.Directory}', could not be removed ({ex.Message.TrimEnd('.')}): remove it, for a run of that name is refused while it stands.";
+        }
     }
 
     /// <summary>

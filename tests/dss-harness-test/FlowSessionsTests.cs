@@ -348,6 +348,102 @@ public sealed class FlowSessionsTests
         Assert.Equal("the plan outside\n", File.ReadAllText(opened));
     }
 
+    /// <summary>
+    /// A file input whose copy cannot be made as the run starts - its bytes first read there, a full disk refusing the
+    /// write - refuses the start, naming the input and why and saying no run was started, and takes back what the start had
+    /// made of the run: no directory is left holding no run's record, so a start of that name made after it is made.
+    /// </summary>
+    [Fact]
+    public async Task AFileInputWhoseCopyCannotBeMade_RefusesTheStart_AndTakesBackWhatItMade()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var run = OrchestratorLayout.Of(layout, "r1");
+        var sessions = new FlowSessions(harness.OrchestrationStore, new FullUnder(harness.FileSystem, run.InputsDirectory), harness.Identity, harness.GitClient, harness.Platform);
+        var given = new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = "notes/plan.md" };
+
+        temp.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(layout, WithFiles(), () => ChildSweep.None, FlowService.RunCommand, InputGround(layout), inputs: given, cancellationToken: Token));
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"input 'plan' is 'notes/plan.md', and the copy the run keeps of it could not be made: {FullUnder.Said}; what the start had made of run 'r1' was removed. No run was started."),
+            (raised.ExitCode, raised.Message));
+        Assert.False(Directory.Exists(run.Directory), "the start left a directory of the run it did not make");
+        Assert.False(File.Exists(run.OwnerFile));
+
+        // Nothing stands in the way of the next start of that name.
+        var (made, _) = await new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity, harness.GitClient, harness.Platform)
+            .CreateAsync(layout, WithFiles(), () => ChildSweep.None, FlowService.RunCommand, InputGround(layout), wantedName: "r1", inputs: given, cancellationToken: Token);
+
+        Assert.Equal("the plan as it was given\n", File.ReadAllText(made.InputCopy("plan", "notes/plan.md")));
+    }
+
+    /// <summary>
+    /// A start whose file input's copy cannot be made, and whose directory then cannot be taken back, says so in its
+    /// refusal - the directory it left and why, and what to do - never leaving it unsaid.
+    /// </summary>
+    [Fact]
+    public async Task AFileInputWhoseCopyCannotBeMade_WhereWhatTheStartMadeCannotBeRemoved_SaysWhatItLeft()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var run = OrchestratorLayout.Of(layout, "r1");
+        var sessions = new FlowSessions(harness.OrchestrationStore, new FullUnder(harness.FileSystem, run.InputsDirectory, removes: false), harness.Identity, harness.GitClient, harness.Platform);
+
+        temp.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => sessions.CreateAsync(
+            layout,
+            WithFiles(),
+            () => ChildSweep.None,
+            FlowService.RunCommand,
+            InputGround(layout),
+            inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["plan"] = "notes/plan.md" },
+            cancellationToken: Token));
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"input 'plan' is 'notes/plan.md', and the copy the run keeps of it could not be made: {FullUnder.Said}; what the start had made of run 'r1', '{run.Directory}', could not be removed ({FullUnder.Held}): remove it, for a run of that name is refused while it stands. No run was started."),
+            (raised.ExitCode, raised.Message));
+        Assert.True(Directory.Exists(run.Directory));
+        Assert.Null(harness.OrchestrationStore.ReadOrchestrator(run));
+    }
+
+    /// <summary>
+    /// A file system whose every whole write beneath <paramref name="under"/> fails as a full disk's does, and whose removal
+    /// of a directory fails as one held open does where <paramref name="removes"/> is false.
+    /// </summary>
+    private sealed class FullUnder(DssHarness.Core.FileSystem.IFileSystem inner, string under, bool removes = true) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the full disk says.</summary>
+        public const string Said = "There is not enough space on the disk";
+
+        /// <summary>What a directory held open says.</summary>
+        public const string Held = "the directory is held open by another process";
+
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            if (path.StartsWith(under + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new IOException($"{Said}.");
+            }
+
+            base.WriteAtomic(path, write);
+        }
+
+        public override void DeleteDirectory(string path)
+        {
+            if (!removes)
+            {
+                throw new IOException($"{Held}.");
+            }
+
+            base.DeleteDirectory(path);
+        }
+    }
+
     /// <summary>The refusal's clause for a file input an agent's read of which is refused for <paramref name="reason"/>.</summary>
     private static string ReadRefused(string reason) => $"which is refused as an agent's read of it would be: {reason}";
 

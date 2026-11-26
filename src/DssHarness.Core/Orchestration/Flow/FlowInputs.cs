@@ -339,9 +339,12 @@ public sealed class FlowInputFiles : IDisposable
     /// <summary>
     /// Copies each file, a little at a time and never held whole, to the copy the run keeps of it
     /// (<see cref="OrchestratorLayout.InputCopy"/>), written whole or not at all, its directory made where it is not there.
+    /// The bytes are read here for the first time: a file that cannot be read through - a share gone, a range locked - or a
+    /// copy that cannot be written - a full disk - stops the copying, refused (13) naming the input and why.
     /// </summary>
     /// <param name="fileSystem">Writes each copy.</param>
     /// <param name="run">The run, made: its directory keeps the copies.</param>
+    /// <exception cref="HarnessException">A copy could not be made (<see cref="HarnessExit.Refused"/>); the copies made before it stand.</exception>
     public void Keep(IFileSystem fileSystem, OrchestratorLayout run)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -349,7 +352,14 @@ public sealed class FlowInputFiles : IDisposable
 
         foreach (var (name, given, content) in _opened)
         {
-            fileSystem.WriteAtomic(run.InputCopy(name, given), copy => content.CopyTo(copy));
+            try
+            {
+                fileSystem.WriteAtomic(run.InputCopy(name, given), copy => content.CopyTo(copy));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new HarnessException(HarnessExit.Refused, $"input '{name}' is '{given}', and the copy the run keeps of it could not be made: {ex.Message.TrimEnd('.')}", ex);
+            }
         }
     }
 

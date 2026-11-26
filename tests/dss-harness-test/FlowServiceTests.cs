@@ -3221,6 +3221,57 @@ public sealed class FlowServiceTests
         Assert.Empty(runner.Started);
     }
 
+    /// <summary>
+    /// A start whose file input's copy cannot be made - a full disk - answers the command as every refused start does, the
+    /// person's exit and the --json one alike: refused (13), naming the input and why and saying no run was started, with
+    /// what the start had made of the run taken back - never a defect's exit, and never a directory left holding no record.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStartWhoseFileInputsCopyCannotBeMade_IsRefused_OnEveryExit_NothingOfTheRunLeft(bool json)
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            inputs:
+              - name: plan
+                kind: file
+            steps:
+              - name: one
+                type: orient
+            """);
+        using var disposed = repository;
+        var run = RunOf(repository);
+        var service = Service(repository.Harness, runner, fileSystem: new FullInputs(repository.Harness.FileSystem, run.InputsDirectory));
+
+        repository.Tree.WriteFile(Path.Combine("notes", "plan.md"), "the plan as it was given\n");
+
+        var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["plan=notes/plan.md"], json, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, $"input 'plan' is 'notes/plan.md', and the copy the run keeps of it could not be made: {FullInputs.Said}; what the start had made of run 'r1' was removed. No run was started."),
+            (refused.ExitCode, refused.Message));
+        Assert.False(Directory.Exists(run.Directory), "the start left a directory of the run it did not make");
+        Assert.Empty(runner.Started);
+    }
+
+    /// <summary>A file system whose every whole write beneath <paramref name="under"/> fails as a full disk's does.</summary>
+    private sealed class FullInputs(IFileSystem inner, string under) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the full disk says.</summary>
+        public const string Said = "There is not enough space on the disk";
+
+        public override void WriteAtomic(string path, Action<Stream> write)
+        {
+            if (path.StartsWith(under + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new IOException($"{Said}.");
+            }
+
+            base.WriteAtomic(path, write);
+        }
+    }
+
     /// <summary><c>--now</c> is refused for an engine on another machine: nothing here can end its process, and a process of this machine that carries its id is never ended for it.</summary>
     [Fact]
     public async Task StopNow_RefusesAnEngineOnAnotherMachine()

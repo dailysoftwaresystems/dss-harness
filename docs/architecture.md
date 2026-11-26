@@ -4702,7 +4702,11 @@ was opened, where it stands decided again before a byte passes (`AgentFiles.Open
 since reaches nothing; anything else refused (13), naming the input and the path, no run started
 (`FlowInputs.OpenFiles`) - makes the run's directory and copies each file into it, `inputs/<input>/<the file's name>`
 (`OrchestratorLayout.InputCopy`), before it makes the run's record, its status and its owner
-(`.orchestrators/<run>.owner.json`), and leaves the section. What a step reads for such an input - `{input.<name>}`
+(`.orchestrators/<run>.owner.json`), and leaves the section. The file's bytes are first read there: a place of the
+run or a copy that cannot be made - a file on a share gone, a locked range, a full disk - takes back what the start had
+made of the run, or says what it could not, and refuses the start (13), naming the input and why and that no run was
+started (`FlowInputFiles.Keep`, `FlowSessions.CreateAsync`), so no directory is left holding no run's record, which a
+start of that name would be refused over. What a step reads for such an input - `{input.<name>}`
 in every prompt and every expression, and a pull request's base - is the copy's full path (`FlowInputs.AsRead`, the
 one owner of what a step reads for an input, which every session hands the engine), so every step of every session,
 a resume's included, reads the file the run was started with, whatever the person did to it since; the run's records
